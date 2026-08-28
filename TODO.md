@@ -100,3 +100,19 @@
 - [x] OpenCode quick-action output parsed from `--format json` stream into a summary + PR link; raw JSONL collapsed behind disclosure
 - [x] Fixed: quick-action forks hijacked `.atelier-state/opencode-session` (sentinel file makes the plugin ignore quick-action subprocesses)
 - [ ] Future harnesses (e.g., Codex): add enum case + command builder branch + event mapper
+
+## Agent IPC follow-ups
+
+- **opencode support.** v1 wires Claude Code only, via `--mcp-config` in
+  `buildClaudeCommand()`. opencode reads MCP config from a file; the precedent
+  for writing one is `OpencodePluginInstaller` and `Resources/Scripts/atelier-opencode.js`.
+- **The nudge is unexercised.** `AgentNudge.shouldNudge` is tested; the injection
+  path (`sendText` + two-stage synthetic Return) needs a live surface and has
+  only been reasoned about. Watch the first real delivery.
+- **Cross-project messaging.** Peers are scoped to the caller's project with no
+  way to opt out. If that ever becomes a real need, it wants its own louder
+  switch, not a widening of `atelier.agentIPC`.
+- **Peer contexts are pruned only by `list_peers`.** A peer that expires while
+  nobody lists gets its `IPCService` context held until the next call. Harmless
+  today — the store's own liveness check still rejects the peer — but it is a
+  slow leak in a long session.

@@ -81,6 +81,23 @@ its entry point. `MCPHelper` must be added to that `excludes` list, the way
 `dependencies: - target: AtelierMCP` on the app, and copy+codesign lines into
 `Contents/Helpers/` alongside `atelier-run`. `xcodegen generate` after.
 
+## Status
+
+All six steps are implemented on `feat/agent-ipc`, one commit each. Suite: 512
+tests, 0 failures.
+
+Verified against a running app, not just in tests: enabling `atelier.agentIPC`
+brings up the listener and writes `ipc.json` at 0600; the bundled `atelier-mcp`
+registers and lists peers through it; and a real headless
+`claude --mcp-config … --strict-mcp-config` session loaded `atelier-ipc` and
+called `register_peer` and `list_peers`.
+
+**Not exercised end to end:** the terminal nudge itself. Its policy — who may be
+interrupted and when — is a pure function with tests, but the injection needs a
+live Ghostty surface with an agent sitting at a prompt, which no test can stand
+up. Turn on **Nudge idle agents**, message a workstream whose agent has finished
+its turn, and watch what lands.
+
 ## Order of work
 
 1. **`IPCStore` + tests.** Port `Calix/Features/IPC/IPCStore.swift` (375 lines)
