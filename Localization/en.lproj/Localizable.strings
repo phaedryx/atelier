@@ -96,9 +96,6 @@
 "Session" = "Session";
 "Tmux Mode" = "Tmux Mode";
 "Coding Agent sessions persist across app restarts. The Terminal tab is not affected. Sessions are lost on system restart." = "Coding Agent sessions persist across app restarts. The Terminal tab is not affected. Sessions are lost on system restart.";
-"Language" = "Language";
-"System Default" = "System Default";
-"Restart the app for the language change to take effect." = "Restart the app for the language change to take effect.";
 "Not found" = "Not found";
 "Authenticated" = "Authenticated";
 "Not authenticated" = "Not authenticated";

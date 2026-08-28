@@ -76,7 +76,7 @@ rewritten at build time and the bump is never committed.
 - `Sources/Models/` - Data models, git operations, tmux, name generator, app constants
 - `Sources/Terminal/` - Ghostty integration (TerminalApp singleton, TerminalView NSView)
 - `Sources/Views/` - SwiftUI views (sidebar, settings, project overview, workspace, browser, editor)
-- `Localization/` - lproj directories with Localizable.strings
+- `Localization/en.lproj/` - Localizable.strings and InfoPlist.strings (English only)
 - `Resources/` - Entitlements, bridging header, Assets.xcassets, CLI script
 - `Resources/MonacoEditor/` - Built Monaco editor bundle (gitignored, built by `scripts/build-editor.sh`)
 - `editor/` - Monaco editor Vite project (source for `Resources/MonacoEditor/`). Built with bun.
@@ -149,8 +149,10 @@ All user-facing strings MUST use localization. Never hardcode strings directly i
 - **SwiftUI Text/Button/Label**: Use string literals directly (e.g., `Text("Cancel")`). SwiftUI automatically treats these as `LocalizedStringKey`.
 - **AppKit APIs** (NSOpenPanel, NSAlert, etc.): Use `NSLocalizedString("string", comment: "")`.
 - **String interpolation with Images**: Split into `Text` concatenation. E.g., `(Text("Press ") + Text(Image(systemName: "command")) + Text(" N"))`.
-- **Every new user-facing string** must be added to all 5 locale files.
-- Current locales: English (en), Catalan (ca), German (de), Spanish (es), Swedish (sv).
+- **Every new user-facing string** must be added to `Localization/en.lproj/Localizable.strings`.
+- English (en) is the only locale. The indirection is kept deliberately: it keeps strings out of
+  call sites, so adding a locale later is a data-only change. Do not replace `NSLocalizedString`
+  with hardcoded strings.
 
 ## Keyboard Shortcuts
 When adding, removing, or changing keyboard shortcuts:
