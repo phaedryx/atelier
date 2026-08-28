@@ -314,6 +314,7 @@ struct TerminalContainerView: View {
     @AppStorage("atelier.agentTeams") private var agentTeams: Bool = false
     @AppStorage("atelier.autoRenameBranch") private var autoRenameBranch: Bool = false
     @AppStorage("atelier.allowOutsideWorktree") private var allowOutsideWorktree: Bool = false
+    @AppStorage("atelier.agentIPC") private var agentIPC: Bool = false
     @AppStorage("atelier.quickActionDebug") private var quickActionDebug: Bool = false
     @AppStorage("atelier.editorTabActive") private var editorTabActive: Bool = false
     @AppStorage("atelier.editorFileDirty") private var editorFileDirty: Bool = false
@@ -552,6 +553,12 @@ struct TerminalContainerView: View {
         }
         let combinedSystemPrompt = systemPromptParts.isEmpty ? nil : systemPromptParts.joined(separator: "\n\n")
 
+        // A file path rather than inline JSON, even though --mcp-config accepts
+        // both: LaunchLogger records finalCommand verbatim. --strict-mcp-config
+        // stays off, since turning it on would silently drop the user's own
+        // global MCP servers.
+        let mcpConfigPath = agentIPC ? IPCConfig.write(for: workstreamID) : nil
+
         var resume = CommandBuilder(basePath)
         resume.option("--resume", sessionID)
         if appEnv.toolStatus.claudeSupportsSessionName {
@@ -561,6 +568,9 @@ struct TerminalContainerView: View {
         if bypassPermissions { resume.flag("--dangerously-skip-permissions") }
         if let combinedSystemPrompt {
             resume.option("--append-system-prompt", combinedSystemPrompt)
+        }
+        if let mcpConfigPath {
+            resume.option("--mcp-config", mcpConfigPath)
         }
 
         var fresh = CommandBuilder(basePath)
@@ -572,6 +582,9 @@ struct TerminalContainerView: View {
         if bypassPermissions { fresh.flag("--dangerously-skip-permissions") }
         if let combinedSystemPrompt {
             fresh.option("--append-system-prompt", combinedSystemPrompt)
+        }
+        if let mcpConfigPath {
+            fresh.option("--mcp-config", mcpConfigPath)
         }
 
         let cmd = CommandBuilder.withFallback(
@@ -1636,16 +1649,21 @@ struct TerminalContainerView: View {
         return scriptCommand(script: setup, role: "setup")
     }
 
-    /// Env vars for plain terminal tabs. Clears tmux vars to prevent inheritance.
+    /// Env vars for plain terminal tabs. Clears tmux vars to prevent inheritance,
+    /// and the agent marker so a `claude` the user starts by hand here is not
+    /// mistaken for the Coding Agent surface when IPC decides where to deliver a
+    /// nudge.
     private var terminalEnvVars: [String: String] {
         var vars = envVars
         vars["TMUX"] = ""
         vars["TMUX_PANE"] = ""
+        vars.removeValue(forKey: "ATELIER_AGENT_SURFACE")
         return vars
     }
 
+    /// Env vars for the Coding Agent surface.
     private var envVars: [String: String] {
-        workspaceEnvironmentVariables(
+        var vars = workspaceEnvironmentVariables(
             workstreamID: workstreamID,
             projectName: projectName,
             workstreamName: workstreamName,
@@ -1657,6 +1675,8 @@ struct TerminalContainerView: View {
             scriptSource: scriptConfig.source,
             harness: harness
         )
+        vars["ATELIER_AGENT_SURFACE"] = "1"
+        return vars
     }
 
     private var setupApprovalView: some View {
