@@ -10,6 +10,10 @@ struct ReleaseInfo {
     let releaseNotes: String?
 }
 
+private let releasesURL = URL(
+    string: "https://api.github.com/repos/\(AppConstants.repositorySlug)/releases?per_page=20"
+)!
+
 @MainActor
 class UpdateChecker: ObservableObject {
     @Published var pendingReleases: [ReleaseInfo] = []
@@ -24,9 +28,6 @@ class UpdateChecker: ObservableObject {
 
     private let currentVersion: String
     private let logger = Logger(subsystem: AppConstants.appID, category: "UpdateChecker")
-    private static let releasesURL = URL(
-        string: "https://api.github.com/repos/\(AppConstants.repositorySlug)/releases?per_page=20"
-    )!
 
     init() {
         currentVersion = AppConstants.version
@@ -38,7 +39,7 @@ class UpdateChecker: ObservableObject {
         #else
             Task.detached { [currentVersion, logger] in
                 do {
-                    var request = URLRequest(url: Self.releasesURL)
+                    var request = URLRequest(url: releasesURL)
                     request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
                     let (data, _) = try await URLSession.shared.data(for: request)
                     let releases = Self.parseReleases(from: data)
