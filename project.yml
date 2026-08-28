@@ -205,3 +205,15 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.github.phaedryx.atelier.tests
         GENERATE_INFOPLIST_FILE: true
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Atelier.app/Contents/MacOS/Atelier"
+
+schemes:
+  Atelier:
+    build:
+      targets:
+        Atelier: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - AtelierTests

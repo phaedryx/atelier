@@ -6,7 +6,7 @@ set -e
 
 PROJECT="Atelier.xcodeproj"
 SCHEME="Atelier"
-TEST_SCHEME="AtelierTests"
+TEST_SCHEME="Atelier"
 APP_NAME="Atelier"
 BUILD_DIR="build/debug/derived"
 APP_PATH="$BUILD_DIR/Build/Products/Debug/$APP_NAME.app"
@@ -89,9 +89,22 @@ case "${1:-build}" in
     ensure_ghostty_resources
     ensure_monaco_editor
     xcodegen generate
+    # Tee the log so we can assert tests actually ran. xcodebuild exits 0 and
+    # prints "** TEST SUCCEEDED **" even when the scheme selects zero tests,
+    # which once let a broken scheme pass CI for four PRs.
+    TEST_LOG=$(mktemp)
+    trap 'rm -f "$TEST_LOG"' EXIT
+    set -o pipefail
     xcodebuild -project "$PROJECT" -scheme "$TEST_SCHEME" -configuration Debug \
       -derivedDataPath "$BUILD_DIR" -clonedSourcePackagesDirPath "$SPM_CACHE" \
-      -skipPackagePluginValidation test
+      -skipPackagePluginValidation test | tee "$TEST_LOG"
+    executed=$(grep -oE 'Executed [0-9]+ test' "$TEST_LOG" | grep -oE '[0-9]+' | sort -rn | head -1)
+    if [ -z "$executed" ] || [ "$executed" -eq 0 ]; then
+      echo "error: the test run executed 0 tests. The scheme is not selecting the" >&2
+      echo "       AtelierTests bundle -- check the 'schemes' block in project.yml." >&2
+      exit 1
+    fi
+    echo "Executed $executed tests."
     ;;
   release)
     RELEASE_DIR="build/release-local/derived"
