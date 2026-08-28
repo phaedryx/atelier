@@ -24,7 +24,7 @@ users download the new release manually.
 Releases are tag-driven. `CHANGELOG.md` is hand-maintained — nothing generates
 it, so add the new version's entries before tagging or it silently rots.
 
-1. Merge conventional commits into `main`
+1. Merge the work into `main`
 2. Update `CHANGELOG.md` for the new version and merge it
 3. Tag and push: `git tag v0.2.0 && git push origin v0.2.0`
 4. `.github/workflows/release.yml` runs the `build` job:

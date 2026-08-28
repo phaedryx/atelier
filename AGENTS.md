@@ -43,33 +43,6 @@ uvx prek run --all-files            # run hooks on all files (optional)
 
 ## Git Workflow
 
-### Conventional Commits
-All commits MUST use [Conventional Commits](https://www.conventionalcommits.org/) format. Release notes are generated from commit and PR titles, and `pr-title-check.yml` enforces the format on PRs.
-
-Format: `type(scope): description`
-
-Types:
-- `feat`: new feature
-- `fix`: bug fix
-- `refactor`: code change that neither fixes a bug nor adds a feature
-- `perf`: performance improvement
-- `docs`: documentation only
-- `ci`: CI/CD changes
-- `chore`: maintenance, dependencies, config
-
-Examples:
-```
-feat: add multiple terminal tabs with Cmd+T
-fix: resolve terminal freeze when opening second surface
-refactor: extract env var injection to WorkstreamEnvironment
-docs: update README with keyboard shortcuts
-ci: add GitHub Pages deploy workflow
-feat(website): add language switcher to footer
-fix(browser): auto-focus address bar on new tab
-```
-
-Breaking changes: add `!` after the type or include `BREAKING CHANGE:` in the footer.
-
 ### Branching
 - Work on feature branches, not directly on `main`
 - Branch names: `feat/description`, `fix/description`, `refactor/description`
