@@ -47,7 +47,7 @@ Open an issue describing the use case, not just the solution. Context about *why
 
 1. Fork the repository and create a feature branch (`feat/description`, `fix/description`)
 2. Follow the existing code style and conventions (see `CLAUDE.md` for details)
-3. Use [Conventional Commits](https://www.conventionalcommits.org/) for commit messages
+3. Write a commit message that says what changed and why
 4. Add localized strings in all 4 languages (en, ca, es, sv) for any new user-facing text
 5. Make sure `./scripts/dev.sh build` and `./scripts/dev.sh test` pass
 6. Open a PR against `main`
