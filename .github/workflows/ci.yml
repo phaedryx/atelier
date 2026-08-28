@@ -11,24 +11,11 @@ concurrency:
 
 jobs:
   build-and-test:
-    runs-on: macos-26
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: true
-
-      # The codebase needs Swift 6.2's actor-isolation rules; Xcode 16.4 (the
-      # macos-15 default) rejects ChangesView.swift. Select the newest Xcode on
-      # the image rather than pinning a point release that may age out.
-      - name: Select newest Xcode
-        run: |
-          latest=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
-          if [ -n "$latest" ]; then sudo xcode-select -s "$latest"; fi
-
-      - name: Log build environment
-        run: |
-          xcodebuild -version
-          swift --version
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -52,7 +39,7 @@ jobs:
       # whose contents never change when the pinned commit moves.
       - name: Compute Ghostty cache key
         id: ghostty-key
-        run: echo "key=ghostty-ci-$(git -C ghostty rev-parse HEAD)-zig-0.15.2-macos26" >> "$GITHUB_OUTPUT"
+        run: echo "key=ghostty-ci-$(git -C ghostty rev-parse HEAD)-zig-0.15.2-macos15" >> "$GITHUB_OUTPUT"
 
       # Deliberately a different key namespace from release.yml: CI builds a
       # host-arch-only xcframework, and a release must never restore it.
@@ -76,6 +63,24 @@ jobs:
           test -d ghostty/macos/GhosttyKit.xcframework
           test -d ghostty/zig-out/share/terminfo
           test -d ghostty/zig-out/share/ghostty
+
+      # Two toolchains, deliberately. zig 0.15.2 (required by ghostty v1.3.1)
+      # cannot link against the macOS 26 SDK — every libc symbol comes back
+      # undefined — so ghostty must build under the image's default Xcode 16.4
+      # and its macOS 15 SDK. The app is the opposite: ChangesView.swift relies
+      # on Swift 6.2 actor-isolation rules that 16.4 rejects. So switch only
+      # after the xcframework exists.
+      - name: Select newest Xcode for the Swift build
+        run: |
+          ls -d /Applications/Xcode_*.app
+          latest=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          echo "Selecting $latest"
+          sudo xcode-select -s "$latest"
+
+      - name: Log build environment
+        run: |
+          xcodebuild -version
+          swift --version
 
       # dev.sh runs xcodegen and builds the Monaco bundle itself.
       - name: Build
