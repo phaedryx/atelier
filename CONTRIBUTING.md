@@ -27,7 +27,7 @@ Do **not** edit `Atelier.xcodeproj` directly. It is generated from `project.yml`
 - `Sources/Models/` - Data models, git operations, tmux, app constants
 - `Sources/Terminal/` - Ghostty integration (TerminalApp singleton, TerminalView)
 - `Sources/Views/` - SwiftUI views (sidebar, settings, workspace, browser)
-- `Localization/` - Localized strings (en, ca, es, sv)
+- `Localization/` - Localized strings (en)
 - `Resources/` - Entitlements, assets, bridging header
 
 ## How to contribute
@@ -48,15 +48,9 @@ Open an issue describing the use case, not just the solution. Context about *why
 1. Fork the repository and create a feature branch (`feat/description`, `fix/description`)
 2. Follow the existing code style and conventions (see `CLAUDE.md` for details)
 3. Write a commit message that says what changed and why
-4. Add localized strings in all 4 languages (en, ca, es, sv) for any new user-facing text
+4. Add any new user-facing text to `Localization/en.lproj/Localizable.strings`
 5. Make sure `./scripts/dev.sh build` and `./scripts/dev.sh test` pass
 6. Open a PR against `main`
-
-### Translations
-
-Atelier is localized in English, Catalan, Spanish, and Swedish. You can contribute translations for both the app and the website.
-
-See [docs/TRANSLATING.md](docs/TRANSLATING.md) for the full guide, including how to improve existing translations, add new languages, and avoid common pitfalls.
 
 ### Website
 

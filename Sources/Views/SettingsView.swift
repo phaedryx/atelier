@@ -4,7 +4,6 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @AppStorage("atelier.languageOverride") private var languageOverride: String = ""
     @AppStorage("atelier.defaultHarness") private var defaultHarnessRaw: String = CodingHarness.claudeCode.rawValue
     private var defaultHarness: Binding<CodingHarness> {
         Binding(
@@ -139,21 +138,6 @@ struct SettingsView: View {
                 }
                 .onChange(of: appearance) { _, newValue in
                     applyAppearance(newValue)
-                }
-
-                Picker("Language", selection: $languageOverride) {
-                    ForEach(availableLanguages, id: \.code) { lang in
-                        Text(lang.name).tag(lang.code)
-                    }
-                }
-                .onChange(of: languageOverride) { _, newValue in
-                    applyLanguage(newValue)
-                }
-
-                if !languageOverride.isEmpty {
-                    Text("Restart the app for the language change to take effect.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
 
                 SettingToggle(
@@ -394,25 +378,6 @@ struct SettingsView: View {
         case "light": NSApp.appearance = NSAppearance(named: .aqua)
         case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
         default: NSApp.appearance = nil
-        }
-    }
-
-    private var availableLanguages: [(code: String, name: String)] {
-        var languages: [(String, String)] = [("", NSLocalizedString("System Default", comment: ""))]
-        let bundles = Bundle.main.localizations.filter { $0 != "Base" }.sorted()
-        for code in bundles {
-            let nativeLocale = Locale(identifier: code)
-            let name = nativeLocale.localizedString(forLanguageCode: code) ?? code
-            languages.append((code, name.capitalized))
-        }
-        return languages
-    }
-
-    private func applyLanguage(_ code: String) {
-        if code.isEmpty {
-            UserDefaults.standard.removeObject(forKey: "AppleLanguages")
-        } else {
-            UserDefaults.standard.set([code], forKey: "AppleLanguages")
         }
     }
 }

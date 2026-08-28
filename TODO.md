@@ -63,7 +63,7 @@
 - [x] Worktree path validation with visual feedback
 - [x] Archive warning for uncommitted changes
 - [x] Workstream sorting in project view (recent / A-Z)
-- [x] Localization: en, ca, es, sv (all strings translated)
+- [x] Localization: en only (other locales dropped; strings still go through `Localizable.strings`)
 - [x] Script config: .atelier.json
 - [x] Environment tab: setup (auto) / run (on-demand) with Rebuild and Start/Rerun shortcuts
 - [x] Port detection: atelier-run launcher with libproc process tree scanning and auto browser retarget
