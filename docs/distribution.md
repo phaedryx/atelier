@@ -60,11 +60,14 @@ release and re-uploads the DMG with `--clobber`.
 ## Local release (manual)
 
 ```bash
-./scripts/release.sh [version]
+./scripts/release.sh <version>
 ```
 
-Builds, signs, notarizes, and creates a DMG locally. Version defaults to the
-most recent `vX.Y.Z` tag reachable from HEAD. Uploading the DMG is manual; the
+Builds, signs, notarizes, and creates a DMG locally. The version argument is
+required — origin carries no tags to infer one from, and the local `v0.1.x`
+tags are leftovers from upstream `alltuner/factoryfloor`, so guessing would
+pick a version below what is actually shipped. The script stamps the version
+into `project.yml` and restores it on exit. Uploading the DMG is manual; the
 script prints the `gh release upload` command to run.
 
 ## Auto-update (not shipped)

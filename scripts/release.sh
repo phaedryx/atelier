@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ABOUTME: Builds, signs, notarizes, and packages Atelier as a DMG.
-# ABOUTME: Usage: ./scripts/release.sh [version]
+# ABOUTME: Usage: ./scripts/release.sh <version>   e.g. ./scripts/release.sh 0.2.0
 
 set -euo pipefail
 
@@ -19,10 +19,11 @@ NOTARIZE_PROFILE="atelier"
 APP_NAME="Atelier"
 SCHEME="Atelier"
 PROJECT="Atelier.xcodeproj"
-# The most recent vX.Y.Z tag is the source of truth, matching what CI ships.
-VERSION="${1:-$( (git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true) | sed 's/^v//')}"
+# The git tag is the source of truth for the version, and origin has none yet,
+# so there is nothing safe to infer from here. Make the caller say it.
+VERSION="${1:-}"
 if [ -z "$VERSION" ]; then
-  echo "Error: no vX.Y.Z tag found; pass a version explicitly: $0 0.2.0" >&2
+  echo "Error: pass the version explicitly: $0 0.2.0" >&2
   exit 1
 fi
 DMG_NAME="${SCHEME}.dmg"
@@ -30,6 +31,9 @@ BUILD_DIR="build/release"
 APP_PATH="${BUILD_DIR}/${APP_NAME}.app"
 
 echo "==> Building ${APP_NAME} v${VERSION}..."
+# set-version.sh rewrites the tracked project.yml, so put it back on the way out
+# rather than leaving a stray version bump staged in the working tree.
+trap 'git checkout -- project.yml 2>/dev/null || true' EXIT
 "$(dirname "${BASH_SOURCE[0]}")/set-version.sh" "$VERSION" >/dev/null
 xcodegen generate
 rm -rf "$BUILD_DIR/derived"

@@ -11,7 +11,7 @@
 ./scripts/dev.sh release            # release build matching CI (hardened runtime)
 ./scripts/dev.sh release --run      # release build and run
 ./scripts/dev.sh clean              # clean build artifacts
-./scripts/release.sh [version]      # release build: sign, notarize, create DMG
+./scripts/release.sh <version>      # release build: sign, notarize, create DMG
 ./scripts/set-version.sh 0.2.0      # stamp a version into project.yml (build-time only)
 ./scripts/build-editor.sh           # rebuild Monaco editor bundle (auto-run by dev.sh)
 ```
@@ -38,7 +38,7 @@ uvx prek run --all-files            # run hooks on all files (optional)
 
 ### Release build
 ```bash
-./scripts/release.sh [version]   # builds, signs, notarizes, creates DMG
+./scripts/release.sh <version>   # builds, signs, notarizes, creates DMG
 ```
 
 ## Git Workflow
