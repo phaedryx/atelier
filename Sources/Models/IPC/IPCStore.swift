@@ -28,17 +28,16 @@ enum IPCError: Error, LocalizedError {
     case peerNotFound(UUID)
     case contentTooLarge
 
+    /// Agent-facing protocol text, not UI: these travel over the wire to a
+    /// coding agent, so they are deliberately not localized.
     var errorDescription: String? {
         switch self {
         case .unregisteredPeer:
-            return NSLocalizedString("You must register_peer first.", comment: "IPC error: caller has no registered peer")
+            return "You must register_peer first."
         case let .peerNotFound(id):
-            return String(
-                format: NSLocalizedString("Peer not found: %@. Use list_peers to see available peers.", comment: "IPC error: unknown peer id"),
-                id.uuidString
-            )
+            return "Peer not found: \(id.uuidString). Use list_peers to see available peers."
         case .contentTooLarge:
-            return NSLocalizedString("Message content exceeds maximum size (64KB).", comment: "IPC error: oversized message")
+            return "Message content exceeds maximum size (64KB)."
         }
     }
 }

@@ -29,6 +29,8 @@ actor IPCService {
     // MARK: - Dispatch
 
     func handle(_ request: IPCRequest) async -> IPCResponse {
+        await touch(request.client)
+
         switch request.tool {
         case .registerPeer:
             return await registerPeer(for: request)
@@ -164,6 +166,29 @@ actor IPCService {
         return .success(id: request.id, .peer(await info(for: peer)))
     }
 
+    /// Treats any request from a registered peer as proof it is alive.
+    ///
+    /// Without this a well-behaved agent expires: `list_peers` and
+    /// `get_peer_status` are pure reads, so an agent that polls politely and
+    /// says nothing for ten minutes gets purged by the very call it was making,
+    /// and its next `send_message` is told to register first. The TTL is a
+    /// backstop for sessions that vanish, not a limit on quiet ones.
+    private func touch(_ client: IPCClientIdentity) async {
+        guard let id = client.peerID.flatMap(UUID.init(uuidString:)), contexts[id] != nil else { return }
+        if await store.updatePeer(id: id, name: nil, role: nil) == nil {
+            contexts.removeValue(forKey: id)
+        }
+    }
+
+    /// Drops a peer whose helper has gone away. Called when its connection
+    /// closes — the socket a helper holds open for its whole session is a far
+    /// better liveness signal than the TTL, which would otherwise leave a ghost
+    /// that `list_peers` advertises and `send_message` reports delivering to.
+    func release(peerID: UUID) async {
+        await store.removePeer(id: peerID)
+        contexts.removeValue(forKey: peerID)
+    }
+
     // MARK: - Nudging
 
     /// Asks the terminal nudge to tell each recipient a message arrived.
@@ -242,6 +267,10 @@ actor IPCService {
         let peer = await store.registerPeer(name: name, role: role)
         contexts[peer.id] = context
         return peer
+    }
+
+    func _testBackdate(peerID: UUID, to date: Date) async {
+        await store._testSetPeerLastSeen(peerId: peerID, date: date)
     }
 
     func _testReset() async {

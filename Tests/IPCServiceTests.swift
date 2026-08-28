@@ -155,6 +155,22 @@ final class IPCServiceTests: XCTestCase {
         XCTAssertTrue(none.isEmpty)
     }
 
+    // MARK: - Liveness
+
+    func test_anyRequest_countsAsAHeartbeat() async throws {
+        let poller = try await register(name: "poller", project: projectA)
+        let observer = try await register(name: "observer", project: projectA)
+        await service._testBackdate(peerID: try XCTUnwrap(UUID(uuidString: poller)), to: Date().addingTimeInterval(-540))
+
+        // A pure read is still proof the agent is there; without it a polite
+        // agent that only ever lists peers expires while it is asking.
+        _ = await call(.listPeers, as: client(project: projectA, peerID: poller))
+
+        let response = await call(.getPeerStatus, ["peer_id": poller], as: client(project: projectA, peerID: observer))
+        guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
+        XCTAssertLessThan(peer.lastSeenSecondsAgo, 5, "the poll should have refreshed lastSeen")
+    }
+
     // MARK: - Status
 
     func test_getPeerStatus_acrossProjects_isRefused() async throws {

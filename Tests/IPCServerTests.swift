@@ -140,6 +140,37 @@ final class IPCServerTests: XCTestCase {
         XCTAssertNil(try roundTrip(second, on: fd).error)
     }
 
+    func test_closingAConnection_retiresItsPeer() async throws {
+        let endpoint = try waitForEndpoint()
+        let caller = identity(project: "/repos/atelier")
+
+        let fd = try connect(to: endpoint)
+        let registration = try roundTrip(
+            IPCRequest(token: endpoint.token, tool: .registerPeer, arguments: ["name": "departing"], client: caller),
+            on: fd
+        )
+        guard case let .peer(peer) = registration.payload else {
+            return XCTFail("expected a peer, got \(String(describing: registration.error))")
+        }
+
+        // The helper exits; the socket it held for the session goes with it.
+        close(fd)
+
+        let observer = try connect(to: endpoint)
+        defer { close(observer) }
+        let deadline = Date().addingTimeInterval(5)
+        var listed: [IPCPeerInfo] = [IPCPeerInfo(id: peer.id, name: peer.name, role: "", workstream: nil, lastSeenSecondsAgo: 0, pendingMessages: 0)]
+        while Date() < deadline, !listed.isEmpty {
+            let response = try roundTrip(
+                IPCRequest(token: endpoint.token, tool: .listPeers, client: identity(project: "/repos/atelier")),
+                on: observer
+            )
+            guard case let .peers(peers) = response.payload else { return XCTFail("expected peers") }
+            listed = peers
+        }
+        XCTAssertTrue(listed.isEmpty, "a peer whose helper exited must not linger for the rest of its TTL")
+    }
+
     // MARK: - End to end
 
     /// Two helper processes, two registered peers, one message between them —

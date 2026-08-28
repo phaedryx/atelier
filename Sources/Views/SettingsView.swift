@@ -201,7 +201,7 @@ struct SettingsView: View {
                 SettingToggle(
                     "Agent messaging",
                     isOn: $agentIPC,
-                    description: String(format: NSLocalizedString("Lets coding agents in this project see and message each other. Messages are delivered when the recipient checks its inbox. Only applies to %@.", comment: "Agent IPC setting description; %@ is a coding-agent name"), CodingHarness.claudeCode.displayName)
+                    description: String(format: NSLocalizedString("Lets coding agents in this project see and message each other. Messages are delivered when the recipient checks its inbox. Takes effect the next time a Coding Agent starts. Only applies to %@.", comment: "Agent IPC setting description; %@ is a coding-agent name"), CodingHarness.claudeCode.displayName)
                 )
                 .onChange(of: agentIPC) { _, _ in
                     AgentIPCSettings.apply()

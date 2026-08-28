@@ -21,6 +21,8 @@ final class IPCServer: @unchecked Sendable {
     private let service: IPCService
     private var listener: NWListener?
     private var connections: [ObjectIdentifier: NWConnection] = [:]
+    /// The peer each connection last spoke for, so closing the socket can retire it.
+    private var connectionPeers: [ObjectIdentifier: UUID] = [:]
     private var token: String = ""
 
     init(service: IPCService = .shared) {
@@ -44,6 +46,7 @@ final class IPCServer: @unchecked Sendable {
                 connection.cancel()
             }
             self.connections.removeAll()
+            self.connectionPeers.removeAll()
             try? FileManager.default.removeItem(at: IPCEndpoint.fileURL)
         }
     }
@@ -106,7 +109,7 @@ final class IPCServer: @unchecked Sendable {
         connection.stateUpdateHandler = { [weak self] state in
             switch state {
             case .failed, .cancelled:
-                self?.queue.async { self?.connections.removeValue(forKey: ObjectIdentifier(connection)) }
+                self?.queue.async { self?.forget(connection) }
             default:
                 break
             }
@@ -149,11 +152,35 @@ final class IPCServer: @unchecked Sendable {
             return
         }
 
+        remember(request.client.peerID, on: connection)
+
         let service = service
         Task { [weak self] in
             let response = await service.handle(request)
+            // register_peer is the one call whose peer id arrives in the reply
+            // rather than the request, and an agent that registers and then
+            // exits is exactly the case that would otherwise leave a ghost.
+            if case let .peer(peer) = response.payload {
+                self?.queue.async { self?.remember(peer.id, on: connection) }
+            }
             self?.send(response, on: connection)
         }
+    }
+
+    private func remember(_ peerID: String?, on connection: NWConnection) {
+        guard let peerID = peerID.flatMap(UUID.init(uuidString:)) else { return }
+        connectionPeers[ObjectIdentifier(connection)] = peerID
+    }
+
+    /// Retires the connection and the peer it spoke for: an agent whose helper
+    /// exited should stop appearing in `list_peers` immediately, not linger for
+    /// the rest of its TTL while messages pile up in an inbox nobody will read.
+    private func forget(_ connection: NWConnection) {
+        let key = ObjectIdentifier(connection)
+        connections.removeValue(forKey: key)
+        guard let peerID = connectionPeers.removeValue(forKey: key) else { return }
+        let service = service
+        Task { await service.release(peerID: peerID) }
     }
 
     private func send(_ response: IPCResponse, on connection: NWConnection) {
