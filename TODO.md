@@ -74,7 +74,7 @@
 - [x] App icon with Poblenou skyline
 - [x] Project icon detection (icon.svg, icon.png, logo.svg, logo.png)
 - [x] Ghostty submodule pinned to v1.3.1, weekly CI compatibility test
-- [x] Code signing, notarization, release-please, CI pipeline (security hardened)
+- [x] Code signing, notarization, tag-driven release CI pipeline (security hardened)
 - [x] Homebrew tap (phaedryx/homebrew-tap) with cask and CLI binary
 - [x] Website: Hugo + Tailwind, i18n (4 langs), sponsor page, privacy, SEO, OG image, /get page
 - [x] Distribution: docs/distribution.md with automated versions.json in release workflow
