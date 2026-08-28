@@ -88,16 +88,69 @@ struct ToolDefinition {
 
 let toolDefinitions: [ToolDefinition] = [
     ToolDefinition(
+        tool: .registerPeer,
+        description: """
+        Register yourself so other agents can reach you. Call this once, before         anything else. Calling it again renames you rather than creating a         second identity.
+        """,
+        properties: [
+            "name": ["type": "string", "description": "Short handle other agents will address you by. Defaults to your workstream name."],
+            "role": ["type": "string", "description": "One line on what you are working on, so others know what to send you."],
+        ],
+        required: []
+    ),
+    ToolDefinition(
         tool: .listPeers,
         description: """
-        List the other agents currently reachable over Atelier's IPC, with how \
-        long ago each was last heard from and how many messages are waiting for \
-        it. Only agents working in the same project are listed.
+        List the other agents currently reachable, with how long ago each was         last heard from and how many messages are waiting for it. Only agents         working in the same project are listed.
         """,
         properties: [:],
         required: []
     ),
+    ToolDefinition(
+        tool: .sendMessage,
+        description: """
+        Put a message in another agent's inbox. Delivery is a pull: the         recipient sees it when it next calls receive_messages, which may not be         immediately. Do not block waiting for a reply.
+        """,
+        properties: [
+            "to": ["type": "string", "description": "Peer id from list_peers."],
+            "content": ["type": "string", "description": "The message. Say who you are and what you need."],
+        ],
+        required: ["to", "content"]
+    ),
+    ToolDefinition(
+        tool: .receiveMessages,
+        description: """
+        Take everything waiting in your inbox. Messages are deleted as they are         returned, so act on what you get. Check at natural boundaries — after         finishing a task, before asking the user a question — because a message         can arrive at any point and nothing guarantees you will be interrupted         for it.
+        """,
+        properties: [:],
+        required: []
+    ),
+    ToolDefinition(
+        tool: .broadcast,
+        description: """
+        Send one message to every other agent in this project. Use it sparingly;         prefer send_message when you know who you need.
+        """,
+        properties: [
+            "content": ["type": "string", "description": "The message."],
+        ],
+        required: ["content"]
+    ),
+    ToolDefinition(
+        tool: .getPeerStatus,
+        description: "Check one agent: whether it is still registered, and how many messages are waiting for it.",
+        properties: [
+            "peer_id": ["type": "string", "description": "Peer id from list_peers."],
+        ],
+        required: ["peer_id"]
+    ),
 ]
+
+/// Shown to the agent once, at initialize.
+let serverInstructions = """
+Agent-to-agent messaging inside Atelier. Register once with register_peer, then use list_peers and send_message to coordinate with agents working in other workstreams of this project.
+
+Delivery is pull-based: a message sits in the recipient's inbox until it calls receive_messages. Atelier may nudge an idle agent's terminal, but that is best-effort and can be switched off, so check your inbox at natural boundaries rather than assuming you will be interrupted.
+"""
 
 // MARK: - JSON-RPC plumbing
 
@@ -161,8 +214,11 @@ final class IPCBridge {
         case failed(String)
     }
 
-    private let identity = IPCClientIdentity.fromEnvironment()
     private let transport = IPCTransport()
+    /// The identity `register_peer` handed this session. Sent with every later
+    /// request, so a reconnect renames the same peer instead of stranding its
+    /// inbox behind a dead id.
+    private var peerID: String?
     /// Resolved lazily and once: the app may not be listening when the agent
     /// starts, and exiting here would look like a broken MCP server rather than
     /// a recoverable tool error.
@@ -180,11 +236,15 @@ final class IPCBridge {
         }
         guard let endpoint else { return .failed("Not connected.") }
 
+        let identity = IPCClientIdentity.fromEnvironment(peerID: peerID)
         let request = IPCRequest(token: endpoint.token, tool: tool, arguments: arguments, client: identity)
         guard let response = transport.roundTrip(request) else {
             return .failed("Atelier closed the IPC connection.")
         }
         if let error = response.error { return .failed(error) }
+        if tool == .registerPeer, case let .peer(peer) = response.payload {
+            peerID = peer.id
+        }
         return .ok(response.payload)
     }
 }
@@ -207,6 +267,7 @@ while let line = readLine(strippingNewline: true) {
             "protocolVersion": requested ?? "2025-06-18",
             "capabilities": ["tools": [:] as [String: Any]],
             "serverInfo": ["name": "atelier-ipc", "version": "1"],
+            "instructions": serverInstructions,
         ])
 
     case "notifications/initialized", "notifications/cancelled":

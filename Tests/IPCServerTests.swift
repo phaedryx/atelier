@@ -142,6 +142,41 @@ final class IPCServerTests: XCTestCase {
 
     // MARK: - End to end
 
+    /// Two helper processes, two registered peers, one message between them —
+    /// the whole feature exercised through the real binaries.
+    func test_twoHelpers_exchangeAMessage() throws {
+        let helper = try XCTUnwrap(MCPHelperLauncher.executableURL(), "atelier-mcp was not found in the host app bundle")
+        _ = try waitForEndpoint()
+
+        func environment(workstream: String) -> [String: String] {
+            var environment = ProcessInfo.processInfo.environment
+            environment["ATELIER_PROJECT_DIR"] = "/repos/atelier"
+            environment["ATELIER_WORKSTREAM"] = workstream
+            environment["ATELIER_WORKSTREAM_ID"] = UUID().uuidString
+            environment["ATELIER_AGENT_SURFACE"] = "1"
+            return environment
+        }
+
+        let planner = try MCPProcess(helper: helper, environment: environment(workstream: "wry-amber-lexer"))
+        let builder = try MCPProcess(helper: helper, environment: environment(workstream: "bold-crimson-parser"))
+
+        XCTAssertNotNil(planner.callTool("register_peer", ["name": "planner", "role": "writes plans"]))
+        XCTAssertNotNil(builder.callTool("register_peer", ["name": "builder", "role": "writes code"]))
+
+        let listed = try XCTUnwrap(planner.callTool("list_peers"))
+        XCTAssertTrue(listed.contains("builder"), "planner should see builder, got: \(listed)")
+        let builderID = try XCTUnwrap(listed.split(separator: " ").first { $0.hasPrefix("id=") }?.dropFirst(3))
+
+        let sent = try XCTUnwrap(planner.callTool("send_message", ["to": String(builderID), "content": "plan is ready"]))
+        XCTAssertEqual(sent, "Delivered to builder's inbox.")
+
+        let inbox = try XCTUnwrap(builder.callTool("receive_messages"))
+        XCTAssertTrue(inbox.contains("plan is ready"), "builder should have the message, got: \(inbox)")
+        XCTAssertTrue(inbox.contains("planner"), "the message should name its sender, got: \(inbox)")
+
+        XCTAssertEqual(builder.callTool("receive_messages"), "No new messages.")
+    }
+
     /// Drives the built `atelier-mcp` over stdio exactly as Claude Code would.
     ///
     /// The helper resolves `ipc.json` through `AppConstants.cacheDirectory`,
@@ -172,6 +207,7 @@ final class IPCServerTests: XCTestCase {
         let output = Pipe()
         process.standardInput = input
         process.standardOutput = output
+        process.standardError = Pipe()
         try process.run()
         defer { process.terminate() }
 
@@ -201,7 +237,10 @@ final class IPCServerTests: XCTestCase {
         XCTAssertEqual(initialize["protocolVersion"] as? String, "2025-06-18")
 
         let tools = try XCTUnwrap((replies[1]["result"] as? [String: Any])?["tools"] as? [[String: Any]])
-        XCTAssertEqual(tools.map { $0["name"] as? String }, ["list_peers"])
+        XCTAssertEqual(
+            tools.map { $0["name"] as? String },
+            ["register_peer", "list_peers", "send_message", "receive_messages", "broadcast", "get_peer_status"]
+        )
 
         let call = try XCTUnwrap(replies[2]["result"] as? [String: Any])
         XCTAssertEqual(call["isError"] as? Bool, false)
@@ -209,5 +248,56 @@ final class IPCServerTests: XCTestCase {
         let text = try XCTUnwrap(content.first?["text"] as? String)
         XCTAssertTrue(text.contains("planner"), "expected the registered peer in: \(text)")
         XCTAssertTrue(text.contains("wry-amber-lexer"), "expected the peer's workstream in: \(text)")
+    }
+}
+
+/// Drives one `atelier-mcp` process over stdio, the way a coding agent does.
+private final class MCPProcess {
+    private let process = Process()
+    private let input = Pipe()
+    private let output = Pipe()
+    private var buffer = Data()
+    private var nextID = 0
+
+    init(helper: URL, environment: [String: String]) throws {
+        process.executableURL = helper
+        process.environment = environment
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = Pipe()
+        try process.run()
+    }
+
+    deinit { process.terminate() }
+
+    /// Sends one JSON-RPC request and blocks for the matching reply.
+    func send(method: String, params: [String: Any]? = nil, timeout: TimeInterval = 10) -> [String: Any]? {
+        nextID += 1
+        let id = nextID
+        var message: [String: Any] = ["jsonrpc": "2.0", "id": id, "method": method]
+        if let params { message["params"] = params }
+        guard let data = try? JSONSerialization.data(withJSONObject: message) else { return nil }
+        input.fileHandleForWriting.write(data)
+        input.fileHandleForWriting.write(Data([0x0A]))
+
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            buffer.append(output.fileHandleForReading.availableData)
+            let (lines, remainder) = IPCFraming.lines(from: buffer)
+            buffer = remainder
+            for line in lines {
+                guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
+                if object["id"] as? Int == id { return object }
+            }
+        }
+        return nil
+    }
+
+    /// Calls a tool and returns the text an agent would read.
+    func callTool(_ name: String, _ arguments: [String: String] = [:]) -> String? {
+        let reply = send(method: "tools/call", params: ["name": name, "arguments": arguments])
+        let result = reply?["result"] as? [String: Any]
+        let content = result?["content"] as? [[String: Any]]
+        return content?.first?["text"] as? String
     }
 }

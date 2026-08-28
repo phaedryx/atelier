@@ -163,14 +163,19 @@ actor IPCStore {
     }
 
     /// Delivers to every alive peer except the sender, returning what was sent.
-    func broadcast(from senderID: UUID, content: String) throws -> [Message] {
+    ///
+    /// `recipients` narrows the audience — the caller passes the peers the
+    /// sender is actually allowed to reach, since project scoping is the app's
+    /// business and not something this store can see.
+    func broadcast(from senderID: UUID, content: String, to recipients: [UUID]? = nil) throws -> [Message] {
         guard content.utf8.count <= maxContentSize else { throw IPCError.contentTooLarge }
         guard aliveOrPurge(senderID) != nil else { throw IPCError.unregisteredPeer }
 
         let now = Date()
         var messages: [Message] = []
+        let audience = recipients ?? Array(peers.keys)
 
-        for recipientID in Array(peers.keys) where recipientID != senderID {
+        for recipientID in audience where recipientID != senderID {
             guard aliveOrPurge(recipientID) != nil else { continue }
 
             let message = Message(id: UUID(), from: senderID, to: recipientID, content: content, timestamp: now)

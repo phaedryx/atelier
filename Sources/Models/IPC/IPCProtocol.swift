@@ -29,8 +29,17 @@ struct IPCEndpoint: Codable, Sendable {
 }
 
 /// The tools the helper exposes over MCP and forwards to the app.
+///
+/// Six, deliberately. Calix's IPC core is the same six; everything else it
+/// grew — pane/tab control, LSP, shell integration — is a different feature
+/// with a different trust story.
 enum IPCTool: String, Codable, Sendable, CaseIterable {
+    case registerPeer = "register_peer"
     case listPeers = "list_peers"
+    case sendMessage = "send_message"
+    case receiveMessages = "receive_messages"
+    case broadcast
+    case getPeerStatus = "get_peer_status"
 }
 
 /// One request from a helper to the app.

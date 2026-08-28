@@ -176,6 +176,9 @@ targets:
             codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY}" --timestamp --options=runtime --generate-entitlement-der "$dest"
           done
         name: Bundle helpers
+        inputFiles:
+          - $(BUILT_PRODUCTS_DIR)/atelier-run
+          - $(BUILT_PRODUCTS_DIR)/atelier-mcp
         outputFiles:
           - $(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Helpers/atelier-run
           - $(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Helpers/atelier-mcp
