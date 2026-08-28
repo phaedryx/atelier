@@ -314,7 +314,7 @@ struct TerminalContainerView: View {
     @AppStorage("atelier.agentTeams") private var agentTeams: Bool = false
     @AppStorage("atelier.autoRenameBranch") private var autoRenameBranch: Bool = false
     @AppStorage("atelier.allowOutsideWorktree") private var allowOutsideWorktree: Bool = false
-    @AppStorage("atelier.agentIPC") private var agentIPC: Bool = false
+    @AppStorage(AgentIPCSettings.enabledKey) private var agentIPC: Bool = false
     @AppStorage("atelier.quickActionDebug") private var quickActionDebug: Bool = false
     @AppStorage("atelier.editorTabActive") private var editorTabActive: Bool = false
     @AppStorage("atelier.editorFileDirty") private var editorFileDirty: Bool = false
@@ -2713,6 +2713,29 @@ final class TerminalSurfaceCache: ObservableObject {
         text.withCString { ptr in
             ghostty_surface_text(surface, ptr, UInt(text.utf8.count))
         }
+    }
+
+    /// Send a synthetic Return keypress to a terminal surface.
+    ///
+    /// A trailing newline inside `sendText` is not enough: a program reading
+    /// with bracketed paste enabled treats it as literal text in the buffer,
+    /// not as submit. Only a real key event ends the line.
+    func sendReturn(to surfaceID: UUID) {
+        guard let view = surfaces[surfaceID],
+              let surface = view.surface else { return }
+
+        var keyEvent = ghostty_input_key_s()
+        keyEvent.keycode = 0x24 // Return
+        keyEvent.mods = GHOSTTY_MODS_NONE
+        keyEvent.consumed_mods = GHOSTTY_MODS_NONE
+        keyEvent.text = nil
+        keyEvent.unshifted_codepoint = 0
+        keyEvent.composing = false
+
+        keyEvent.action = GHOSTTY_ACTION_PRESS
+        _ = ghostty_surface_key(surface, keyEvent)
+        keyEvent.action = GHOSTTY_ACTION_RELEASE
+        _ = ghostty_surface_key(surface, keyEvent)
     }
 
     // MARK: - Workspace tab snapshots

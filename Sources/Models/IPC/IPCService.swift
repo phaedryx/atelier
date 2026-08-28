@@ -96,6 +96,7 @@ actor IPCService {
         do {
             _ = try await store.sendMessage(from: sender, to: recipient, content: content)
             let name = await store.peerStatus(id: recipient)?.name ?? recipient.uuidString
+            await nudge([recipient], from: sender)
             return .success(id: request.id, .text("Delivered to \(name)'s inbox."))
         } catch {
             return .failure(id: request.id, error.localizedDescription)
@@ -116,6 +117,7 @@ actor IPCService {
 
         do {
             let delivered = try await store.broadcast(from: sender, content: content, to: audience)
+            await nudge(delivered.map(\.to), from: sender)
             return .success(id: request.id, .text("Delivered to \(delivered.count) peer\(delivered.count == 1 ? "" : "s")."))
         } catch {
             return .failure(id: request.id, error.localizedDescription)
@@ -160,6 +162,31 @@ actor IPCService {
             return .failure(id: request.id, IPCError.peerNotFound(peerID).localizedDescription)
         }
         return .success(id: request.id, .peer(await info(for: peer)))
+    }
+
+    // MARK: - Nudging
+
+    /// Asks the terminal nudge to tell each recipient a message arrived.
+    ///
+    /// Strictly best-effort, and separate from delivery: the message is already
+    /// in the inbox by the time this runs, so a nudge that is switched off,
+    /// aimed at a busy agent, or aimed at a session Atelier didn't launch costs
+    /// the sender nothing.
+    private func nudge(_ recipients: [UUID], from senderID: UUID) async {
+        guard AgentIPCSettings.nudgeEnabled else { return }
+        let senderName = await store.peerStatus(id: senderID)?.name ?? "another agent"
+
+        for recipient in recipients {
+            guard let context = contexts[recipient],
+                  context.isAgentSurface,
+                  let workstreamID = context.workstreamID.flatMap(UUID.init(uuidString:))
+            else { continue }
+
+            let waiting = await store.inboxCount(for: recipient)
+            await MainActor.run {
+                AgentNudge.shared.nudge(workstreamID: workstreamID, senderName: senderName, waiting: waiting)
+            }
+        }
     }
 
     // MARK: - Scoping

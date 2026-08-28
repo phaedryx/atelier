@@ -373,6 +373,9 @@ struct ContentView: View {
         .environmentObject(updater)
         .environmentObject(agentStateTracker)
         .onAppear {
+            // The nudge needs the live surfaces this cache owns; it is a
+            // @StateObject here rather than a singleton.
+            AgentNudge.shared.surfaceCache = surfaceCache
             appEnvironment.refresh()
             appEnvironment.refreshAllRepoInfo(projects: projects)
             appEnvironment.refreshPathValidity(projects: projects)
