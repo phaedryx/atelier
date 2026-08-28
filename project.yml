@@ -43,8 +43,8 @@ targets:
       path: Atelier/Info.plist
       properties:
         CFBundleDisplayName: $(PRODUCT_NAME)
-        CFBundleVersion: "0.1.79" # x-release-please-version
-        CFBundleShortVersionString: "0.1.79" # x-release-please-version
+        CFBundleVersion: "0.1.79"
+        CFBundleShortVersionString: "0.1.79"
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
         NSMainStoryboardFile: ""
         NSPrincipalClass: NSApplication

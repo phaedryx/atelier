@@ -21,18 +21,28 @@ users download the new release manually.
 
 ## Release flow
 
+Releases are tag-driven. `CHANGELOG.md` is hand-maintained — nothing generates
+it, so add the new version's entries before tagging or it silently rots.
+
 1. Merge conventional commits into `main`
-2. release-please opens or updates a version bump PR
-3. Merge the release PR
-4. CI runs the `build` job:
+2. Update `CHANGELOG.md` for the new version and merge it
+3. Tag and push: `git tag v0.2.0 && git push origin v0.2.0`
+4. `.github/workflows/release.yml` runs the `build` job:
+   - Derive the version from the tag (`vX.Y.Z` only; anything else fails fast)
    - Checkout with submodules, install XcodeGen
+   - Stamp the version into `project.yml` (`scripts/set-version.sh`), then
+     `xcodegen generate` — the bump is build-time only and never committed
    - Build release with xcodebuild
    - Create temporary keychain, import signing certificate
    - Notarize via stored keychain profile
    - Create and sign DMG
-   - Upload DMG to GitHub release
+   - Create the GitHub release as a draft, upload the DMG, then publish it, so
+     the update badge never points at a release with no asset
    - Update Homebrew cask in `phaedryx/homebrew-tap`
 5. Users see the update badge on next app launch
+
+Re-running the workflow (`workflow_dispatch` from the tag) reuses the existing
+release and re-uploads the DMG with `--clobber`.
 
 ## Required secrets
 
@@ -53,8 +63,9 @@ users download the new release manually.
 ./scripts/release.sh [version]
 ```
 
-Builds, signs, notarizes, and creates a DMG locally. Version defaults
-to the value in `.release-please-manifest.json` if not provided.
+Builds, signs, notarizes, and creates a DMG locally. Version defaults to the
+most recent `vX.Y.Z` tag reachable from HEAD. Uploading the DMG is manual; the
+script prints the `gh release upload` command to run.
 
 ## Auto-update (not shipped)
 

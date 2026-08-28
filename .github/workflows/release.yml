@@ -1,30 +1,14 @@
 name: Release
 
+# Releases are tag-driven: push a `vX.Y.Z` tag and this builds, signs,
+# notarizes, and publishes the DMG for it.
 on:
   push:
-    branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
 
 jobs:
-  release-please:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-    outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      version: ${{ steps.release.outputs.version }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
-    steps:
-      - uses: googleapis/release-please-action@v5
-        id: release
-        with:
-          config-file: .release-please-config.json
-          manifest-file: .release-please-manifest.json
-
   build:
-    needs: release-please
-    if: ${{ needs.release-please.outputs.release_created }}
     runs-on: macos-15
     permissions:
       contents: write
@@ -36,6 +20,19 @@ jobs:
       SCHEME: "Atelier"
       PROJECT: "Atelier.xcodeproj"
     steps:
+      - name: Derive version from tag
+        id: version
+        run: |
+          if [ "${{ github.ref_type }}" != "tag" ]; then
+            echo "::error::Run this workflow from a vX.Y.Z tag, not ${{ github.ref_name }}"
+            exit 1
+          fi
+          case "$GITHUB_REF_NAME" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::Tag $GITHUB_REF_NAME is not vX.Y.Z"; exit 1 ;;
+          esac
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v6
         with:
           submodules: true
@@ -81,6 +78,9 @@ jobs:
 
       - name: Build Monaco editor
         run: ./scripts/build-editor.sh
+
+      - name: Set version
+        run: ./scripts/set-version.sh "${{ steps.version.outputs.version }}"
 
       - name: Generate Xcode project
         run: xcodegen generate
@@ -140,7 +140,7 @@ jobs:
 
       - name: Package and sign
         env:
-          VERSION: ${{ needs.release-please.outputs.version }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           APP_BUILT=$(find build/derived -name "${APP_NAME}.app" -type d | head -1)
           if [ -z "$APP_BUILT" ]; then
@@ -229,11 +229,20 @@ jobs:
 
           xcrun stapler staple "build/release/$DMG_NAME"
 
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release create "$TAG_NAME" --draft --verify-tag --generate-notes --title "$TAG_NAME"
+          fi
+
       - name: Upload to release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.release-please.outputs.version }}
-          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG_NAME: ${{ github.ref_name }}
         run: |
           for attempt in 1 2 3 4 5; do
             if gh release upload --clobber "$TAG_NAME" "build/release/$DMG_NAME"; then
@@ -248,10 +257,16 @@ jobs:
             sleep 10
           done
 
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: gh release edit "$TAG_NAME" --draft=false
+
       - name: Update Homebrew cask
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          VERSION: ${{ needs.release-please.outputs.version }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           DMG_URL="https://github.com/phaedryx/atelier/releases/download/v${VERSION}/${DMG_NAME}"
           SHA256=$(shasum -a 256 "build/release/$DMG_NAME" | awk '{print $1}')

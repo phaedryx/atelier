@@ -12,6 +12,7 @@
 ./scripts/dev.sh release --run      # release build and run
 ./scripts/dev.sh clean              # clean build artifacts
 ./scripts/release.sh [version]      # release build: sign, notarize, create DMG
+./scripts/set-version.sh 0.2.0      # stamp a version into project.yml (build-time only)
 ./scripts/build-editor.sh           # rebuild Monaco editor bundle (auto-run by dev.sh)
 ```
 
@@ -43,13 +44,13 @@ uvx prek run --all-files            # run hooks on all files (optional)
 ## Git Workflow
 
 ### Conventional Commits
-All commits MUST use [Conventional Commits](https://www.conventionalcommits.org/) format. This is required for release-please to generate changelogs and version bumps.
+All commits MUST use [Conventional Commits](https://www.conventionalcommits.org/) format. Release notes are generated from commit and PR titles, and `pr-title-check.yml` enforces the format on PRs.
 
 Format: `type(scope): description`
 
 Types:
-- `feat`: new feature (triggers minor version bump)
-- `fix`: bug fix (triggers patch version bump)
+- `feat`: new feature
+- `fix`: bug fix
 - `refactor`: code change that neither fixes a bug nor adds a feature
 - `perf`: performance improvement
 - `docs`: documentation only
@@ -73,7 +74,18 @@ Breaking changes: add `!` after the type or include `BREAKING CHANGE:` in the fo
 - Work on feature branches, not directly on `main`
 - Branch names: `feat/description`, `fix/description`, `refactor/description`
 - Open PRs against `main`
-- release-please manages version bumps and changelogs via PR
+
+### Releasing
+Releases are tag-driven. There is no automatic version bump:
+
+1. Add the new version's entries to `CHANGELOG.md` by hand and merge them
+2. Tag `main`: `git tag v0.2.0 && git push origin v0.2.0`
+3. `.github/workflows/release.yml` derives the version from the tag, stamps it
+   into `project.yml` via `scripts/set-version.sh`, builds, signs, notarizes,
+   uploads the DMG, publishes the release, and updates the Homebrew cask
+
+The tag is the single source of truth for the version; `project.yml` is only
+rewritten at build time and the bump is never committed.
 
 ## Architecture
 

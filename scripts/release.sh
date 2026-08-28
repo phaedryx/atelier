@@ -19,12 +19,18 @@ NOTARIZE_PROFILE="atelier"
 APP_NAME="Atelier"
 SCHEME="Atelier"
 PROJECT="Atelier.xcodeproj"
-VERSION="${1:-$(python3 -c "import json; print(json.load(open('.release-please-manifest.json'))['.'])")}"
+# The most recent vX.Y.Z tag is the source of truth, matching what CI ships.
+VERSION="${1:-$( (git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true) | sed 's/^v//')}"
+if [ -z "$VERSION" ]; then
+  echo "Error: no vX.Y.Z tag found; pass a version explicitly: $0 0.2.0" >&2
+  exit 1
+fi
 DMG_NAME="${SCHEME}.dmg"
 BUILD_DIR="build/release"
 APP_PATH="${BUILD_DIR}/${APP_NAME}.app"
 
 echo "==> Building ${APP_NAME} v${VERSION}..."
+"$(dirname "${BASH_SOURCE[0]}")/set-version.sh" "$VERSION" >/dev/null
 xcodegen generate
 rm -rf "$BUILD_DIR/derived"
 xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
