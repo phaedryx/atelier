@@ -11,11 +11,19 @@ concurrency:
 
 jobs:
   build-and-test:
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: true
+
+      # The codebase needs Swift 6.2's actor-isolation rules; Xcode 16.4 (the
+      # macos-15 default) rejects ChangesView.swift. Select the newest Xcode on
+      # the image rather than pinning a point release that may age out.
+      - name: Select newest Xcode
+        run: |
+          latest=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$latest" ]; then sudo xcode-select -s "$latest"; fi
 
       - name: Log build environment
         run: |
@@ -44,7 +52,7 @@ jobs:
       # whose contents never change when the pinned commit moves.
       - name: Compute Ghostty cache key
         id: ghostty-key
-        run: echo "key=ghostty-ci-$(git -C ghostty rev-parse HEAD)-zig-0.15.2-macos15" >> "$GITHUB_OUTPUT"
+        run: echo "key=ghostty-ci-$(git -C ghostty rev-parse HEAD)-zig-0.15.2-macos26" >> "$GITHUB_OUTPUT"
 
       # Deliberately a different key namespace from release.yml: CI builds a
       # host-arch-only xcframework, and a release must never restore it.
