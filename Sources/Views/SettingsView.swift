@@ -4,39 +4,39 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @AppStorage("factoryfloor.languageOverride") private var languageOverride: String = ""
-    @AppStorage("factoryfloor.defaultHarness") private var defaultHarnessRaw: String = CodingHarness.claudeCode.rawValue
+    @AppStorage("atelier.languageOverride") private var languageOverride: String = ""
+    @AppStorage("atelier.defaultHarness") private var defaultHarnessRaw: String = CodingHarness.claudeCode.rawValue
     private var defaultHarness: Binding<CodingHarness> {
         Binding(
             get: { CodingHarness(rawValue: defaultHarnessRaw) ?? .claudeCode },
             set: { defaultHarnessRaw = $0.rawValue }
         )
     }
-    @AppStorage("factoryfloor.tmuxMode") private var tmuxMode: Bool = false
-    @AppStorage("factoryfloor.bypassPermissions") private var bypassPermissions: Bool = false
-    @AppStorage("factoryfloor.allowOutsideWorktree") private var allowOutsideWorktree: Bool = false
-    @AppStorage("factoryfloor.agentTeams") private var agentTeams: Bool = false
-    @AppStorage("factoryfloor.autoRenameBranch") private var autoRenameBranch: Bool = false
-    @AppStorage("factoryfloor.defaultTerminal") private var defaultTerminal: String = ""
-    @AppStorage("factoryfloor.defaultBrowser") private var defaultBrowser: String = ""
-    @AppStorage("factoryfloor.appearance") private var appearance: String = "system"
-    @AppStorage("factoryfloor.symlinkEnv") private var symlinkEnv: Bool = true
-    @AppStorage("factoryfloor.confirmQuit") private var confirmQuit: Bool = true
-    @AppStorage("factoryfloor.telemetryEnabled") private var telemetryEnabled: Bool = true
-    @AppStorage("factoryfloor.crashReportingEnabled") private var crashReportingEnabled: Bool = true
-    @AppStorage("factoryfloor.detailedLogging") private var detailedLogging: Bool = false
-    @AppStorage("factoryfloor.quickActionDebug") private var quickActionDebug: Bool = false
-    @AppStorage("factoryfloor.bleedingEdge") private var bleedingEdge: Bool = false
-    @AppStorage("factoryfloor.baseDirectory") private var baseDirectory: String = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first ?? ""
+    @AppStorage("atelier.tmuxMode") private var tmuxMode: Bool = false
+    @AppStorage("atelier.bypassPermissions") private var bypassPermissions: Bool = false
+    @AppStorage("atelier.allowOutsideWorktree") private var allowOutsideWorktree: Bool = false
+    @AppStorage("atelier.agentTeams") private var agentTeams: Bool = false
+    @AppStorage("atelier.autoRenameBranch") private var autoRenameBranch: Bool = false
+    @AppStorage("atelier.defaultTerminal") private var defaultTerminal: String = ""
+    @AppStorage("atelier.defaultBrowser") private var defaultBrowser: String = ""
+    @AppStorage("atelier.appearance") private var appearance: String = "system"
+    @AppStorage("atelier.symlinkEnv") private var symlinkEnv: Bool = true
+    @AppStorage("atelier.confirmQuit") private var confirmQuit: Bool = true
+    @AppStorage("atelier.telemetryEnabled") private var telemetryEnabled: Bool = true
+    @AppStorage("atelier.crashReportingEnabled") private var crashReportingEnabled: Bool = true
+    @AppStorage("atelier.detailedLogging") private var detailedLogging: Bool = false
+    @AppStorage("atelier.quickActionDebug") private var quickActionDebug: Bool = false
+    @AppStorage("atelier.bleedingEdge") private var bleedingEdge: Bool = false
+    @AppStorage("atelier.baseDirectory") private var baseDirectory: String = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first ?? ""
 
     @State private var launchAtLogin = LaunchAtLogin.isEnabled
 
     @EnvironmentObject private var appEnv: AppEnvironment
     @State private var showingClearConfirm = false
     #if DEBUG
-        private static let cliName = "ff-debug"
+        private static let cliName = "atelier-debug"
     #else
-        private static let cliName = "ff"
+        private static let cliName = "atelier"
     #endif
     @State private var cliInstalled = Self.isCliCorrectlyInstalled()
 
@@ -165,7 +165,7 @@ struct SettingsView: View {
                 SettingToggle(
                     "Launch at login",
                     isOn: $launchAtLogin,
-                    description: "Automatically open Factory Floor when you log in."
+                    description: "Automatically open Atelier when you log in."
                 )
                 .onChange(of: launchAtLogin) { _, newValue in
                     LaunchAtLogin.setEnabled(newValue)
@@ -276,7 +276,7 @@ struct SettingsView: View {
                 SettingToggle(
                     "Usage analytics",
                     isOn: $telemetryEnabled,
-                    description: "Send anonymous usage data to help improve Factory Floor. We collect: app version, build type, macOS version, locale, and screen resolution. No project names, file contents, or personal data."
+                    description: "Send anonymous usage data to help improve Atelier. We collect: app version, build type, macOS version, locale, and screen resolution. No project names, file contents, or personal data."
                 )
 
                 SettingToggle(

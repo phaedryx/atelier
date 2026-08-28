@@ -2,7 +2,7 @@
 // ABOUTME: Verifies only fixed tabs are restored and custom tabs reorder deterministically.
 
 import AppKit
-@testable import FactoryFloor
+@testable import Atelier
 import XCTest
 
 final class WorkspaceTabSnapshotTests: XCTestCase {
@@ -338,7 +338,7 @@ final class WorkspaceTabSnapshotTests: XCTestCase {
             scriptSource: "conductor.json"
         )
 
-        XCTAssertEqual(vars["FF_DEFAULT_BRANCH"], "develop")
+        XCTAssertEqual(vars["ATELIER_DEFAULT_BRANCH"], "develop")
         XCTAssertEqual(vars["CONDUCTOR_DEFAULT_BRANCH"], "develop")
     }
 }

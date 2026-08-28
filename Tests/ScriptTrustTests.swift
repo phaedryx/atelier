@@ -1,7 +1,7 @@
 // ABOUTME: Tests for approval of repository-provided setup/run/teardown commands.
 // ABOUTME: Covers fingerprinting, per-project scoping, and the teardown execution gate.
 
-@testable import FactoryFloor
+@testable import Atelier
 import XCTest
 
 final class ScriptTrustTests: XCTestCase {
@@ -57,7 +57,7 @@ final class ScriptTrustTests: XCTestCase {
     }
 
     func testSameCommandFromDifferentConfigFileRequiresReapproval() {
-        let approved = makeConfig(setup: "npm install", source: ".factoryfloor.json")
+        let approved = makeConfig(setup: "npm install", source: ".atelier.json")
         ScriptTrust.approve(approved, for: tmpDir.path)
 
         let fromFallback = makeConfig(setup: "npm install", source: "conductor.json")
@@ -147,13 +147,13 @@ final class ScriptTrustTests: XCTestCase {
         setup: String? = nil,
         run: String? = nil,
         teardown: String? = nil,
-        source: String = ".factoryfloor.json"
+        source: String = ".atelier.json"
     ) -> ScriptConfig {
         ScriptConfig(setup: setup, run: run, teardown: teardown, source: source, loadError: nil)
     }
 
     private func writeTeardownConfig(touching marker: URL) {
-        let path = tmpDir.appendingPathComponent(".factoryfloor.json").path
+        let path = tmpDir.appendingPathComponent(".atelier.json").path
         let data = try! JSONSerialization.data(withJSONObject: ["teardown": "touch \(marker.path)"])
         try! data.write(to: URL(fileURLWithPath: path))
     }

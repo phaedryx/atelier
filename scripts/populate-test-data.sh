@@ -6,7 +6,7 @@ set -e
 
 # Create temp directories
 for i in $(seq 1 30); do
-  mkdir -p "/tmp/ff2-test-project-$i"
+  mkdir -p "/tmp/atelier-test-project-$i"
 done
 
 # Build JSON array of projects
@@ -15,12 +15,12 @@ for i in $(seq 1 30); do
   ID=$(uuidgen)
   NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
   [ $i -gt 1 ] && PROJECTS="$PROJECTS,"
-  PROJECTS="$PROJECTS{\"id\":\"$ID\",\"name\":\"test-project-$i\",\"directory\":\"/tmp/ff2-test-project-$i\",\"workstreams\":[],\"lastAccessedAt\":\"$NOW\"}"
+  PROJECTS="$PROJECTS{\"id\":\"$ID\",\"name\":\"test-project-$i\",\"directory\":\"/tmp/atelier-test-project-$i\",\"workstreams\":[],\"lastAccessedAt\":\"$NOW\"}"
 done
 PROJECTS="$PROJECTS]"
 
 # Write to UserDefaults
-defaults write com.ff2.app ff2.projects -data "$(echo "$PROJECTS" | python3 -c 'import sys; sys.stdout.buffer.write(sys.stdin.read().encode())')"
+defaults write com.atelier.app atelier.projects -data "$(echo "$PROJECTS" | python3 -c 'import sys; sys.stdout.buffer.write(sys.stdin.read().encode())')"
 
-echo "Added 30 test projects. Restart ff2 to see them."
-echo "To remove: defaults delete com.ff2.app ff2.projects"
+echo "Added 30 test projects. Restart atelier to see them."
+echo "To remove: defaults delete com.atelier.app atelier.projects"

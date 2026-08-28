@@ -9,22 +9,31 @@ import os
 final class Telemetry {
     static let shared = Telemetry()
 
-    private let logger = Logger(subsystem: "com.alltuner.factoryfloor", category: "telemetry")
-    private let endpoint = URL(string: "https://meta.factory-floor.com/api/send")!
-    private let websiteID = "0ad50276-0a54-4b71-b3f2-b953326a9452"
-    private let hostname = "app.factory-floor.com"
+    private let logger = Logger(subsystem: AppConstants.appID, category: "telemetry")
+
+    /// Umami collector, injected at build time via the `ATELIER_TELEMETRY_*` build settings.
+    ///
+    /// Unset in a plain checkout, which is what disables telemetry: without a
+    /// destination there is nothing to report to, so no build ever sends usage
+    /// data to a host the person building it does not own.
+    private let endpoint: URL? = (Bundle.main.infoDictionary?["TelemetryEndpoint"] as? String)
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .flatMap { $0.isEmpty ? nil : URL(string: $0) }
+    private let websiteID: String = (Bundle.main.infoDictionary?["TelemetryWebsiteID"] as? String) ?? ""
+    private let hostname: String = "app.atelier.local"
 
     var isEnabled: Bool {
         #if DEBUG
             return false
         #else
-            return UserDefaults.standard.object(forKey: "factoryfloor.telemetryEnabled") as? Bool ?? true
+            guard endpoint != nil, !websiteID.isEmpty else { return false }
+            return UserDefaults.standard.object(forKey: "atelier.telemetryEnabled") as? Bool ?? true
         #endif
     }
 
     /// Anonymous installation identifier, generated on first launch.
     var installationID: String {
-        let key = "factoryfloor.installationID"
+        let key = "atelier.installationID"
         if let existing = UserDefaults.standard.string(forKey: key) {
             return existing
         }
@@ -43,6 +52,8 @@ final class Telemetry {
         let screen = NSScreen.main?.frame.size
         let userAgent = Self.userAgent
         let id = installationID
+
+        guard let endpoint else { return }
 
         Task.detached { [endpoint, websiteID, hostname, logger] in
             var payload: [String: Any] = [
@@ -111,6 +122,6 @@ final class Telemetry {
             let arch = "unknown"
         #endif
         let locale = Locale.current.identifier
-        return "FactoryFloor/\(AppConstants.version) (Macintosh; macOS \(osVersion); \(arch); \(locale))"
+        return "Atelier/\(AppConstants.version) (Macintosh; macOS \(osVersion); \(arch); \(locale))"
     }()
 }

@@ -1,7 +1,7 @@
 // ABOUTME: Tests for LaunchLogger per-workstream debug log file writing.
 // ABOUTME: Validates log entry serialization, gating on detailedLogging, append behavior, and cleanup.
 
-@testable import FactoryFloor
+@testable import Atelier
 import XCTest
 
 final class LaunchLoggerTests: XCTestCase {
@@ -14,12 +14,12 @@ final class LaunchLoggerTests: XCTestCase {
         // Ensure clean state
         try? FileManager.default.removeItem(at: testLogsDir)
         // Enable detailed logging for tests
-        UserDefaults.standard.set(true, forKey: "factoryfloor.detailedLogging")
+        UserDefaults.standard.set(true, forKey: "atelier.detailedLogging")
     }
 
     override func tearDown() {
         try? FileManager.default.removeItem(at: testLogsDir)
-        UserDefaults.standard.removeObject(forKey: "factoryfloor.detailedLogging")
+        UserDefaults.standard.removeObject(forKey: "atelier.detailedLogging")
         super.tearDown()
     }
 
@@ -31,7 +31,7 @@ final class LaunchLoggerTests: XCTestCase {
             event: "agent-start",
             finalCommand: "/bin/zsh -lic 'claude --resume abc'",
             intermediateCommands: ["claude --resume abc", "tmux new-session -A -s test claude --resume abc"],
-            environmentVariables: ["FF_PROJECT": "myproject"],
+            environmentVariables: ["ATELIER_PROJECT": "myproject"],
             workingDirectory: "/tmp/test",
             toolPaths: LaunchLogEntry.ToolPaths(claude: "/usr/local/bin/claude", tmux: "/usr/bin/tmux", ffRun: nil),
             settings: LaunchLogEntry.Settings(tmuxMode: true, bypassPermissions: false, agentTeams: false, autoRenameBranch: true, allowOutsideWorktree: false),
@@ -79,7 +79,7 @@ final class LaunchLoggerTests: XCTestCase {
     }
 
     func testLogSkipsWhenDisabled() {
-        UserDefaults.standard.set(false, forKey: "factoryfloor.detailedLogging")
+        UserDefaults.standard.set(false, forKey: "atelier.detailedLogging")
 
         let entry = makeEntry(event: "agent-start")
         LaunchLogger.log(entry)
@@ -177,7 +177,7 @@ final class LaunchLoggerTests: XCTestCase {
             event: event,
             finalCommand: "/bin/zsh -lic 'claude --resume abc'",
             intermediateCommands: ["claude --resume abc"],
-            environmentVariables: ["FF_PROJECT": "test"],
+            environmentVariables: ["ATELIER_PROJECT": "test"],
             workingDirectory: "/tmp/test",
             toolPaths: LaunchLogEntry.ToolPaths(claude: "/usr/local/bin/claude", tmux: nil, ffRun: nil),
             settings: LaunchLogEntry.Settings(tmuxMode: false, bypassPermissions: false, agentTeams: false, autoRenameBranch: false, allowOutsideWorktree: false),

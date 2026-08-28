@@ -30,21 +30,40 @@ func isRunningXCTest(environment: [String: String] = ProcessInfo.processInfo.env
 enum AppConstants {
     static let appID: String = {
         #if DEBUG
-            "factoryfloor-debug"
+            "atelier-debug"
         #else
-            "factoryfloor"
+            "atelier"
         #endif
     }()
 
     static let appName: String = {
-        "VibeFloor"
+        "Atelier"
     }()
+
+    /// GitHub `owner/repo` the update checker polls for new releases.
+    static let repositorySlug: String = "phaedryx/atelier"
+
+    /// Home of the project. The fork has no marketing site, so docs and
+    /// sponsorship links both point at GitHub.
+    static let repositoryURL = URL(string: "https://github.com/\(repositorySlug)")!
+    static let documentationURL = URL(string: "https://github.com/\(repositorySlug)#readme")!
+    static let sponsorURL = URL(string: "https://github.com/sponsors/phaedryx")!
+
+    /// Sentry DSN, injected at build time via the `ATELIER_SENTRY_DSN` build setting.
+    ///
+    /// Empty by default so a plain checkout never ships crash reports to someone
+    /// else's project; crash reporting simply stays off until a DSN is supplied.
+    static var sentryDSN: String? {
+        guard let dsn = Bundle.main.infoDictionary?["SentryDSN"] as? String else { return nil }
+        let trimmed = dsn.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
 
     static let urlScheme: String = {
         #if DEBUG
-            "factoryfloor-debug"
+            "atelier-debug"
         #else
-            "factoryfloor"
+            "atelier"
         #endif
     }()
 
@@ -64,24 +83,24 @@ enum AppConstants {
         #endif
     }
 
-    /// Config directory: ~/.config/factoryfloor/ (respects XDG_CONFIG_HOME).
-    /// XCTest uses ~/.config/factoryfloor-tests/ to keep test data isolated.
+    /// Config directory: ~/.config/atelier/ (respects XDG_CONFIG_HOME).
+    /// XCTest uses ~/.config/atelier-tests/ to keep test data isolated.
     static var configDirectory: URL {
         resolvedConfigDirectory(
-            configDirectoryName: "factoryfloor",
+            configDirectoryName: "atelier",
             environment: ProcessInfo.processInfo.environment,
             defaultConfigBase: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config"),
             isRunningTests: isRunningXCTest()
         )
     }
 
-    /// Cache directory: ~/Library/Caches/factoryfloor/.
+    /// Cache directory: ~/Library/Caches/atelier/.
     /// Used for transient files like run-state and tmux config.
     static var cacheDirectory: URL {
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
         let dirName = isRunningXCTest()
-            ? "factoryfloor-tests"
-            : "factoryfloor"
+            ? "atelier-tests"
+            : "atelier"
         return base.appendingPathComponent(dirName)
     }
 
@@ -96,7 +115,7 @@ enum AppConstants {
     /// Worktrees are always shared between debug and release builds.
     static var worktreesDirectory: URL {
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".factoryfloor")
+            .appendingPathComponent(".atelier")
             .appendingPathComponent("worktrees")
     }
 }

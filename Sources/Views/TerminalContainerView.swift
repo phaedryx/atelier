@@ -5,23 +5,23 @@ import os
 import SwiftUI
 import WebKit
 
-private let logger = Logger(subsystem: "factoryfloor", category: "surface-cache")
+private let logger = Logger(subsystem: "atelier", category: "surface-cache")
 
 extension Notification.Name {
-    static let terminalSurfaceClosed = Notification.Name("factoryfloor.terminalSurfaceClosed")
-    static let toggleInfo = Notification.Name("factoryfloor.toggleInfo")
-    static let toggleTerminal = Notification.Name("factoryfloor.toggleTerminal")
-    static let toggleBrowser = Notification.Name("factoryfloor.toggleBrowser")
-    static let focusAgent = Notification.Name("factoryfloor.focusAgent")
-    static let closeTerminal = Notification.Name("factoryfloor.closeTerminal")
-    static let nextTab = Notification.Name("factoryfloor.nextTab")
-    static let prevTab = Notification.Name("factoryfloor.prevTab")
-    static let terminalTitleChanged = Notification.Name("factoryfloor.terminalTitleChanged")
-    static let toggleEditor = Notification.Name("factoryfloor.toggleEditor")
-    static let toggleChanges = Notification.Name("factoryfloor.toggleChanges")
-    static let saveEditor = Notification.Name("factoryfloor.saveEditor")
-    static let saveEditorAs = Notification.Name("factoryfloor.saveEditorAs")
-    static let toggleFileFinder = Notification.Name("factoryfloor.toggleFileFinder")
+    static let terminalSurfaceClosed = Notification.Name("atelier.terminalSurfaceClosed")
+    static let toggleInfo = Notification.Name("atelier.toggleInfo")
+    static let toggleTerminal = Notification.Name("atelier.toggleTerminal")
+    static let toggleBrowser = Notification.Name("atelier.toggleBrowser")
+    static let focusAgent = Notification.Name("atelier.focusAgent")
+    static let closeTerminal = Notification.Name("atelier.closeTerminal")
+    static let nextTab = Notification.Name("atelier.nextTab")
+    static let prevTab = Notification.Name("atelier.prevTab")
+    static let terminalTitleChanged = Notification.Name("atelier.terminalTitleChanged")
+    static let toggleEditor = Notification.Name("atelier.toggleEditor")
+    static let toggleChanges = Notification.Name("atelier.toggleChanges")
+    static let saveEditor = Notification.Name("atelier.saveEditor")
+    static let saveEditorAs = Notification.Name("atelier.saveEditorAs")
+    static let toggleFileFinder = Notification.Name("atelier.toggleFileFinder")
 }
 
 enum RestorableWorkspaceTab: String, Codable {
@@ -54,7 +54,7 @@ enum RestorableWorkspaceTab: String, Codable {
 }
 
 enum SetupStateStore {
-    private static let userDefaultsKey = "factoryfloor.setupCompleted"
+    private static let userDefaultsKey = "atelier.setupCompleted"
 
     static func isCompleted(for workstreamID: UUID) -> Bool {
         guard let data = UserDefaults.standard.data(forKey: userDefaultsKey),
@@ -86,7 +86,7 @@ enum SetupStateStore {
 }
 
 enum WorkspaceStateStore {
-    private static let userDefaultsKey = "factoryfloor.workspaceTabs"
+    private static let userDefaultsKey = "atelier.workspaceTabs"
 
     static func load(for workstreamID: UUID) -> RestorableWorkspaceTab? {
         guard let data = UserDefaults.standard.data(forKey: userDefaultsKey),
@@ -309,14 +309,14 @@ struct TerminalContainerView: View {
 
     @EnvironmentObject var surfaceCache: TerminalSurfaceCache
     @EnvironmentObject var appEnv: AppEnvironment
-    @AppStorage("factoryfloor.defaultBrowser") private var defaultBrowser: String = ""
-    @AppStorage("factoryfloor.tmuxMode") private var tmuxMode: Bool = false
-    @AppStorage("factoryfloor.agentTeams") private var agentTeams: Bool = false
-    @AppStorage("factoryfloor.autoRenameBranch") private var autoRenameBranch: Bool = false
-    @AppStorage("factoryfloor.allowOutsideWorktree") private var allowOutsideWorktree: Bool = false
-    @AppStorage("factoryfloor.quickActionDebug") private var quickActionDebug: Bool = false
-    @AppStorage("factoryfloor.editorTabActive") private var editorTabActive: Bool = false
-    @AppStorage("factoryfloor.editorFileDirty") private var editorFileDirty: Bool = false
+    @AppStorage("atelier.defaultBrowser") private var defaultBrowser: String = ""
+    @AppStorage("atelier.tmuxMode") private var tmuxMode: Bool = false
+    @AppStorage("atelier.agentTeams") private var agentTeams: Bool = false
+    @AppStorage("atelier.autoRenameBranch") private var autoRenameBranch: Bool = false
+    @AppStorage("atelier.allowOutsideWorktree") private var allowOutsideWorktree: Bool = false
+    @AppStorage("atelier.quickActionDebug") private var quickActionDebug: Bool = false
+    @AppStorage("atelier.editorTabActive") private var editorTabActive: Bool = false
+    @AppStorage("atelier.editorFileDirty") private var editorFileDirty: Bool = false
     @State private var activeTab: WorkspaceTab = .info
     @State private var tabs: [WorkspaceTab] = [.info, .agent]
     @State private var terminalCount = 0
@@ -472,7 +472,7 @@ struct TerminalContainerView: View {
     }
 
     /// The dev server is coming up but has not exposed a port yet. Covers the
-    /// window between a browser-triggered start and the first ff-run state
+    /// window between a browser-triggered start and the first atelier-run state
     /// write, so the browser never navigates to the placeholder port.
     private var isWaitingForServer: Bool {
         portDetector.status == .starting || (portDetector.status == .none && browserStartPending)
@@ -505,12 +505,12 @@ struct TerminalContainerView: View {
         return appEnv.githubPR(for: projectDirectory, branch: branch)
     }
 
-    /// The Factory Floor state directory inside the worktree.
+    /// The Atelier state directory inside the worktree.
     private var factoryFloorStateDirectory: URL {
-        URL(fileURLWithPath: workingDirectory).appendingPathComponent(".factoryfloor-state", isDirectory: true)
+        URL(fileURLWithPath: workingDirectory).appendingPathComponent(".atelier-state", isDirectory: true)
     }
 
-    /// Session id recorded by the Factory Floor opencode plugin, if any.
+    /// Session id recorded by the Atelier opencode plugin, if any.
     private var trackedOpencodeSessionID: String? {
         let url = factoryFloorStateDirectory.appendingPathComponent("opencode-session")
         guard let raw = try? String(contentsOf: url, encoding: .utf8) else { return nil }
@@ -664,7 +664,7 @@ struct TerminalContainerView: View {
         cachedAgentCommand = buildAgentCommand()
         cachedCommandHarness = harness
         if let cmd = cachedAgentCommand {
-            logger.info("[FF] agent cmd rebuilt for \(self.harness.rawValue, privacy: .public): \(cmd.prefix(80), privacy: .public)")
+            logger.info("[Atelier] agent cmd rebuilt for \(self.harness.rawValue, privacy: .public): \(cmd.prefix(80), privacy: .public)")
         }
     }
 
@@ -1020,7 +1020,7 @@ struct TerminalContainerView: View {
                 }
             }
             .onChange(of: portDetector.status) { _, newStatus in
-                // Once the session materializes (ff-run wrote state), the
+                // Once the session materializes (atelier-run wrote state), the
                 // waiting overlay is driven by the status itself.
                 if newStatus != .none { browserStartPending = false }
             }
@@ -1297,7 +1297,7 @@ struct TerminalContainerView: View {
         )
     }
 
-    /// Assembles the final run command: ff-run wrap (port detection) + tmux wrap.
+    /// Assembles the final run command: atelier-run wrap (port detection) + tmux wrap.
     private func buildRunCommand(script: String) -> String {
         let baseCommand: String
         let ffRunPath = RunLauncher.executableURL()?.path
@@ -2461,7 +2461,7 @@ private struct QuickActionLogRow: View {
 // MARK: - Surface cache
 
 extension Notification.Name {
-    static let terminalTabExited = Notification.Name("factoryfloor.terminalTabExited")
+    static let terminalTabExited = Notification.Name("atelier.terminalTabExited")
 }
 
 @MainActor

@@ -1,6 +1,6 @@
-# Contributing to Factory Floor
+# Contributing to Atelier
 
-Thank you for your interest in contributing to Factory Floor! This document covers the basics of how to get started.
+Thank you for your interest in contributing to Atelier! This document covers the basics of how to get started.
 
 ## Getting started
 
@@ -20,7 +20,7 @@ xcodegen generate              # Generate the Xcode project from project.yml
 ./scripts/dev.sh test           # Run tests
 ```
 
-Do **not** edit `FactoryFloor.xcodeproj` directly. It is generated from `project.yml`.
+Do **not** edit `Atelier.xcodeproj` directly. It is generated from `project.yml`.
 
 ### Project structure
 
@@ -29,13 +29,12 @@ Do **not** edit `FactoryFloor.xcodeproj` directly. It is generated from `project
 - `Sources/Views/` - SwiftUI views (sidebar, settings, workspace, browser)
 - `Localization/` - Localized strings (en, ca, es, sv)
 - `Resources/` - Entitlements, assets, bridging header
-- `website/` - Hugo + Tailwind CSS site for factory-floor.com
 
 ## How to contribute
 
 ### Bug reports
 
-Open an [issue](https://github.com/alltuner/factoryfloor/issues) with:
+Open an [issue](https://github.com/phaedryx/atelier/issues) with:
 - Steps to reproduce
 - Expected vs actual behavior
 - macOS version and app version
@@ -55,7 +54,7 @@ Open an issue describing the use case, not just the solution. Context about *why
 
 ### Translations
 
-Factory Floor is localized in English, Catalan, Spanish, and Swedish. You can contribute translations for both the app and the website.
+Atelier is localized in English, Catalan, Spanish, and Swedish. You can contribute translations for both the app and the website.
 
 See [docs/TRANSLATING.md](docs/TRANSLATING.md) for the full guide, including how to improve existing translations, add new languages, and avoid common pitfalls.
 

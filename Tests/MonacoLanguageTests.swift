@@ -1,7 +1,7 @@
 // ABOUTME: Tests for MonacoLanguage.id(for:) filename → Monaco languageId mapping.
 // ABOUTME: Characterizes the contract shared by the Editor and the Changes (diff) view.
 
-@testable import FactoryFloor
+@testable import Atelier
 import XCTest
 
 final class MonacoLanguageTests: XCTestCase {

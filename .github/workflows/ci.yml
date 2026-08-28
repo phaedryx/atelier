@@ -30,7 +30,7 @@ jobs:
       - name: Cache SPM packages
         uses: actions/cache@v5
         with:
-          path: ~/Library/Caches/factoryfloor/spm
+          path: ~/Library/Caches/atelier/spm
           key: spm-ci-${{ hashFiles('project.yml') }}
           restore-keys: spm-ci-
 

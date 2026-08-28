@@ -26,7 +26,7 @@ struct EnvironmentTabView: View {
     let scriptConfig: ScriptConfig
     let useTmux: Bool
     let environmentVars: [String: String]
-    /// Final assembled run command (ff-run + tmux wrap), set once the session starts.
+    /// Final assembled run command (atelier-run + tmux wrap), set once the session starts.
     let runCommand: String?
     /// Whether the command comes from the repo config and needs approval.
     let runCommandIsGated: Bool
@@ -61,7 +61,7 @@ struct EnvironmentTabView: View {
                 configErrorBanner(error: error)
                 Divider()
             }
-            if let source = scriptConfig.source, source != ".factoryfloor.json" {
+            if let source = scriptConfig.source, source != ".atelier.json" {
                 configSourceBanner(source: source)
                 Divider()
             }
@@ -114,7 +114,7 @@ struct EnvironmentTabView: View {
                     Text("No port detection")
                         .font(.system(size: 9))
                         .foregroundStyle(.orange)
-                        .help("ff-run helper not found. Run scripts will work but port detection is unavailable.")
+                        .help("atelier-run helper not found. Run scripts will work but port detection is unavailable.")
                 }
 
                 Spacer()
@@ -254,7 +254,7 @@ struct EnvironmentTabView: View {
         let text: String
         switch source {
         case .configScript:
-            text = ".factoryfloor.json"
+            text = ".atelier.json"
         case .override:
             text = NSLocalizedString("Custom", comment: "")
         case .packageJSON:
@@ -274,7 +274,7 @@ struct EnvironmentTabView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.yellow)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Failed to load .factoryfloor.json")
+                Text("Failed to load .atelier.json")
                     .font(.system(size: 12, weight: .semibold))
                 Text(error)
                     .font(.system(size: 11, design: .monospaced))
@@ -307,7 +307,7 @@ struct EnvironmentTabView: View {
             Text(String(format: NSLocalizedString("No %@ script configured", comment: ""), title.lowercased()))
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
-            Text(String(format: NSLocalizedString("Add a %@ field to .factoryfloor.json:", comment: ""), title.lowercased()))
+            Text(String(format: NSLocalizedString("Add a %@ field to .atelier.json:", comment: ""), title.lowercased()))
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
             Text("{ \"\(title.lowercased())\": \"your-command\" }")
@@ -341,7 +341,7 @@ struct EnvironmentTabView: View {
 }
 
 extension Notification.Name {
-    static let rerunScript = Notification.Name("factoryfloor.rerunScript")
+    static let rerunScript = Notification.Name("atelier.rerunScript")
 }
 
 private struct EnvActionButton: View {

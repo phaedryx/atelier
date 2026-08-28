@@ -286,7 +286,7 @@ struct ChangesView: View {
     private static let changesSidebarMaxWidth: Double = 480
     /// Default width matching the pre-persistence behavior.
     private static let changesSidebarDefault: Double = 240
-    private static let changesSidebarWidthKey = "factoryfloor.changesSidebarWidth"
+    private static let changesSidebarWidthKey = "atelier.changesSidebarWidth"
 
     static func loadSidebarWidth() -> Double {
         let stored = UserDefaults.standard.double(forKey: changesSidebarWidthKey)

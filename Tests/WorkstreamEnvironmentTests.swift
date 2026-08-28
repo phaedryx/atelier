@@ -1,7 +1,7 @@
 // ABOUTME: Tests for WorkstreamEnvironment env var construction.
-// ABOUTME: Validates FF_* vars, default branch, and compatibility aliases for external tools.
+// ABOUTME: Validates ATELIER_* vars, default branch, and compatibility aliases for external tools.
 
-@testable import FactoryFloor
+@testable import Atelier
 import XCTest
 
 final class WorkstreamEnvironmentTests: XCTestCase {
@@ -10,12 +10,12 @@ final class WorkstreamEnvironmentTests: XCTestCase {
         "my-project",
         "coral-reef",
         "/Users/test/my-project",
-        "/Users/test/.factoryfloor/worktrees/my-project/coral-reef",
+        "/Users/test/.atelier/worktrees/my-project/coral-reef",
         42847,
         false
     )
 
-    // MARK: - Core FF_* variables
+    // MARK: - Core ATELIER_* variables
 
     func testCoreVariables() {
         let vars = WorkstreamEnvironment.variables(
@@ -29,13 +29,13 @@ final class WorkstreamEnvironmentTests: XCTestCase {
             defaultBranch: "main",
             scriptSource: nil
         )
-        XCTAssertEqual(vars["FF_WORKSTREAM_ID"], "12345678-1234-1234-1234-123456789abc")
-        XCTAssertEqual(vars["FF_PROJECT"], "my-project")
-        XCTAssertEqual(vars["FF_WORKSTREAM"], "coral-reef")
-        XCTAssertEqual(vars["FF_PROJECT_DIR"], "/Users/test/my-project")
-        XCTAssertEqual(vars["FF_WORKTREE_DIR"], "/Users/test/.factoryfloor/worktrees/my-project/coral-reef")
-        XCTAssertEqual(vars["FF_PORT"], "42847")
-        XCTAssertEqual(vars["FF_DEFAULT_BRANCH"], "main")
+        XCTAssertEqual(vars["ATELIER_WORKSTREAM_ID"], "12345678-1234-1234-1234-123456789abc")
+        XCTAssertEqual(vars["ATELIER_PROJECT"], "my-project")
+        XCTAssertEqual(vars["ATELIER_WORKSTREAM"], "coral-reef")
+        XCTAssertEqual(vars["ATELIER_PROJECT_DIR"], "/Users/test/my-project")
+        XCTAssertEqual(vars["ATELIER_WORKTREE_DIR"], "/Users/test/.atelier/worktrees/my-project/coral-reef")
+        XCTAssertEqual(vars["ATELIER_PORT"], "42847")
+        XCTAssertEqual(vars["ATELIER_DEFAULT_BRANCH"], "main")
         XCTAssertNil(vars["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"])
     }
 
@@ -70,7 +70,7 @@ final class WorkstreamEnvironmentTests: XCTestCase {
             harness: .opencode
         )
         XCTAssertNil(vars["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"])
-        XCTAssertEqual(vars["FF_HARNESS"], "opencode")
+        XCTAssertEqual(vars["ATELIER_HARNESS"], "opencode")
     }
 
     func testHarnessVariableDefaultsToClaudeCode() {
@@ -85,7 +85,7 @@ final class WorkstreamEnvironmentTests: XCTestCase {
             defaultBranch: "main",
             scriptSource: nil
         )
-        XCTAssertEqual(vars["FF_HARNESS"], "claudeCode")
+        XCTAssertEqual(vars["ATELIER_HARNESS"], "claudeCode")
     }
 
     // MARK: - Conductor aliases
@@ -104,7 +104,7 @@ final class WorkstreamEnvironmentTests: XCTestCase {
         )
         XCTAssertEqual(vars["CONDUCTOR_WORKSPACE_NAME"], "coral-reef")
         XCTAssertEqual(vars["CONDUCTOR_ROOT_PATH"], "/Users/test/my-project")
-        XCTAssertEqual(vars["CONDUCTOR_WORKSPACE_PATH"], "/Users/test/.factoryfloor/worktrees/my-project/coral-reef")
+        XCTAssertEqual(vars["CONDUCTOR_WORKSPACE_PATH"], "/Users/test/.atelier/worktrees/my-project/coral-reef")
         XCTAssertEqual(vars["CONDUCTOR_PORT"], "42847")
         XCTAssertEqual(vars["CONDUCTOR_DEFAULT_BRANCH"], "main")
     }
@@ -125,7 +125,7 @@ final class WorkstreamEnvironmentTests: XCTestCase {
         )
         XCTAssertEqual(vars["EMDASH_TASK_ID"], "12345678-1234-1234-1234-123456789abc")
         XCTAssertEqual(vars["EMDASH_TASK_NAME"], "coral-reef")
-        XCTAssertEqual(vars["EMDASH_TASK_PATH"], "/Users/test/.factoryfloor/worktrees/my-project/coral-reef")
+        XCTAssertEqual(vars["EMDASH_TASK_PATH"], "/Users/test/.atelier/worktrees/my-project/coral-reef")
         XCTAssertEqual(vars["EMDASH_ROOT_PATH"], "/Users/test/my-project")
         XCTAssertEqual(vars["EMDASH_PORT"], "42847")
         XCTAssertEqual(vars["EMDASH_DEFAULT_BRANCH"], "develop")
@@ -152,7 +152,7 @@ final class WorkstreamEnvironmentTests: XCTestCase {
 
     // MARK: - No aliases for native config
 
-    func testNoAliasesForFactoryFloorConfig() {
+    func testNoAliasesForAtelierConfig() {
         let vars = WorkstreamEnvironment.variables(
             workstreamID: baseParams.0,
             projectName: baseParams.1,
@@ -162,7 +162,7 @@ final class WorkstreamEnvironmentTests: XCTestCase {
             port: baseParams.5,
             agentTeams: baseParams.6,
             defaultBranch: "main",
-            scriptSource: ".factoryfloor.json"
+            scriptSource: ".atelier.json"
         )
         XCTAssertNil(vars["CONDUCTOR_WORKSPACE_NAME"])
         XCTAssertNil(vars["EMDASH_TASK_NAME"])
@@ -184,5 +184,43 @@ final class WorkstreamEnvironmentTests: XCTestCase {
         XCTAssertNil(vars["CONDUCTOR_WORKSPACE_NAME"])
         XCTAssertNil(vars["EMDASH_TASK_NAME"])
         XCTAssertNil(vars["SUPERSET_WORKSPACE_NAME"])
+    }
+
+    // MARK: - Legacy FF_* aliases
+
+    func testLegacyFFAliasesMirrorEveryAtelierVariable() {
+        let vars = WorkstreamEnvironment.variables(
+            workstreamID: baseParams.0,
+            projectName: baseParams.1,
+            workstreamName: baseParams.2,
+            projectDirectory: baseParams.3,
+            workingDirectory: baseParams.4,
+            port: baseParams.5,
+            agentTeams: baseParams.6,
+            defaultBranch: "main",
+            scriptSource: nil
+        )
+        let atelierKeys = vars.keys.filter { $0.hasPrefix("ATELIER_") }
+        XCTAssertFalse(atelierKeys.isEmpty)
+        for key in atelierKeys {
+            let legacy = "FF_" + key.dropFirst("ATELIER_".count)
+            XCTAssertEqual(vars[legacy], vars[key], "\(legacy) should mirror \(key)")
+        }
+    }
+
+    func testAgentTeamsFlagIsNotAliased() {
+        let vars = WorkstreamEnvironment.variables(
+            workstreamID: baseParams.0,
+            projectName: baseParams.1,
+            workstreamName: baseParams.2,
+            projectDirectory: baseParams.3,
+            workingDirectory: baseParams.4,
+            port: baseParams.5,
+            agentTeams: true,
+            defaultBranch: "main",
+            scriptSource: nil
+        )
+        XCTAssertEqual(vars["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"], "1")
+        XCTAssertNil(vars["FF_CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"])
     }
 }

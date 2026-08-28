@@ -6,7 +6,7 @@ set -euo pipefail
 
 SETTINGS="$HOME/.claude/settings.json"
 BACKUP="$HOME/.claude/settings.json.test-backup"
-FF_HOOK_PATH="/Applications/VibeFloor.app/Contents/Resources/Scripts/ff-hook"
+ATELIER_HOOK_PATH="/Applications/Atelier.app/Contents/Resources/Scripts/atelier-hook"
 PASS=0
 FAIL=0
 
@@ -66,7 +66,7 @@ entry = {'matcher': '', 'hooks': [{'type': 'command', 'command': '$hook_path', '
 for evt in events:
     event_entries = hooks.get(evt, [])
     already = any(
-        any('ff-hook' in h.get('command', '') for h in e.get('hooks', []))
+        any('atelier-hook' in h.get('command', '') for h in e.get('hooks', []))
         for e in event_entries
     )
     if not already:
@@ -100,7 +100,7 @@ events = ['PreToolUse', 'PostToolUse', 'Stop', 'SubagentStart', 'SubagentStop', 
 modified = False
 for evt in events:
     entries = hooks.get(evt, [])
-    filtered = [e for e in entries if not any('ff-hook' in h.get('command', '') for h in e.get('hooks', []))]
+    filtered = [e for e in entries if not any('atelier-hook' in h.get('command', '') for h in e.get('hooks', []))]
     if len(filtered) != len(entries):
         modified = True
         if not filtered:
@@ -122,17 +122,17 @@ if modified:
 echo ""
 echo "Test 1: Install when no settings.json exists"
 rm -f "$SETTINGS"
-simulate_install "$FF_HOOK_PATH"
+simulate_install "$ATELIER_HOOK_PATH"
 
 if [ -f "$SETTINGS" ]; then
-  # Check all 6 events have ff-hook
+  # Check all 6 events have atelier-hook
   count=$(python3 -c "
 import json
 with open('$SETTINGS') as f:
     d = json.load(f)
 hooks = d.get('hooks', {})
 events = ['PreToolUse', 'PostToolUse', 'Stop', 'SubagentStart', 'SubagentStop', 'UserPromptSubmit']
-count = sum(1 for e in events if any(any('ff-hook' in h.get('command','') for h in entry.get('hooks',[])) for entry in hooks.get(e, [])))
+count = sum(1 for e in events if any(any('atelier-hook' in h.get('command','') for h in entry.get('hooks',[])) for entry in hooks.get(e, [])))
 print(count)
 ")
   if [ "$count" = "6" ]; then
@@ -147,7 +147,7 @@ fi
 # --- Test 2: Install again (idempotent — no duplicates) ---
 echo ""
 echo "Test 2: Install again — should be idempotent"
-simulate_install "$FF_HOOK_PATH"
+simulate_install "$ATELIER_HOOK_PATH"
 
 dup_count=$(python3 -c "
 import json
@@ -158,8 +158,8 @@ events = ['PreToolUse', 'PostToolUse', 'Stop', 'SubagentStart', 'SubagentStop', 
 total = 0
 for e in events:
     entries = hooks.get(e, [])
-    ff_entries = [entry for entry in entries if any('ff-hook' in h.get('command','') for h in entry.get('hooks',[]))]
-    total += len(ff_entries)
+    atelier_entries = [entry for entry in entries if any('atelier-hook' in h.get('command','') for h in entry.get('hooks',[]))]
+    total += len(atelier_entries)
 print(total)
 ")
 if [ "$dup_count" = "6" ]; then
@@ -168,11 +168,11 @@ else
   check "No duplicate entries after second install (got $dup_count, expected 6)" "fail"
 fi
 
-# --- Test 3: Uninstall removes only ff-hook entries ---
+# --- Test 3: Uninstall removes only atelier-hook entries ---
 echo ""
-echo "Test 3: Uninstall removes ff-hook entries"
+echo "Test 3: Uninstall removes atelier-hook entries"
 
-# First add a non-ff-hook entry to PreToolUse to verify it is preserved
+# First add a non-atelier-hook entry to PreToolUse to verify it is preserved
 python3 -c "
 import json
 with open('$SETTINGS') as f:
@@ -193,31 +193,31 @@ with open('$SETTINGS') as f:
     d = json.load(f)
 hooks = d.get('hooks', {})
 events = ['PreToolUse', 'PostToolUse', 'Stop', 'SubagentStart', 'SubagentStop', 'UserPromptSubmit']
-ff_count = sum(1 for e in events for entry in hooks.get(e, []) if any('ff-hook' in h.get('command','') for h in entry.get('hooks',[])))
+atelier_count = sum(1 for e in events for entry in hooks.get(e, []) if any('atelier-hook' in h.get('command','') for h in entry.get('hooks',[])))
 other_count = sum(1 for entry in hooks.get('PreToolUse', []) if any('other-hook' in h.get('command','') for h in entry.get('hooks',[])))
-print(f'{ff_count},{other_count}')
+print(f'{atelier_count},{other_count}')
 ")
 
-ff_left=$(echo "$remaining" | cut -d, -f1)
+atelier_left=$(echo "$remaining" | cut -d, -f1)
 other_left=$(echo "$remaining" | cut -d, -f2)
 
-if [ "$ff_left" = "0" ]; then
-  check "All ff-hook entries removed" "pass"
+if [ "$atelier_left" = "0" ]; then
+  check "All atelier-hook entries removed" "pass"
 else
-  check "All ff-hook entries removed (still $ff_left left)" "fail"
+  check "All atelier-hook entries removed (still $atelier_left left)" "fail"
 fi
 
 if [ "$other_left" = "1" ]; then
-  check "Non-ff-hook entry preserved" "pass"
+  check "Non-atelier-hook entry preserved" "pass"
 else
-  check "Non-ff-hook entry preserved (found $other_left)" "fail"
+  check "Non-atelier-hook entry preserved (found $other_left)" "fail"
 fi
 
 # --- Test 4 (4.3): Multi-workstream routing (manual) ---
 echo ""
 echo "=== Multi-Workstream Routing (Manual Test) ==="
 echo "To test multi-workstream routing:"
-echo "  1. Open VibeFloor with a project that has 2+ workstreams"
+echo "  1. Open Atelier with a project that has 2+ workstreams"
 echo "  2. Run this script twice with different project_dir values:"
 echo "     ./scripts/test-hook-tracer.sh /path/to/worktree-A"
 echo "     ./scripts/test-hook-tracer.sh /path/to/worktree-B"

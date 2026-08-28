@@ -1,11 +1,11 @@
 // ABOUTME: Tests for the Space model and SpaceStore persistence.
 // ABOUTME: Validates creation, identity, equality, serialization, and UserDefaults round-trips.
 
-@testable import FactoryFloor
+@testable import Atelier
 import XCTest
 
 final class SpaceTests: XCTestCase {
-    private static let testSuiteName = "factoryfloor.space.tests"
+    private static let testSuiteName = "atelier.space.tests"
     private let testDefaults = UserDefaults(suiteName: testSuiteName)!
 
     override func tearDown() {

@@ -1,13 +1,13 @@
 // ABOUTME: Tests for the per-workstream agent roster and row-level state machine.
 // ABOUTME: Covers run lifecycle, activity text, permission handling, and stall sweeping.
 
-@testable import FactoryFloor
+@testable import Atelier
 import XCTest
 
 @MainActor
 final class WorkstreamAgentStateTrackerTests: XCTestCase {
     private let wsID = UUID()
-    private let projectDir = "/tmp/factoryfloor-test-worktree"
+    private let projectDir = "/tmp/atelier-test-worktree"
 
     private var tracker: WorkstreamAgentStateTracker { WorkstreamAgentStateTracker.shared }
 
@@ -538,7 +538,7 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
 
     private func tempTranscriptURL() -> URL {
         FileManager.default.temporaryDirectory
-            .appendingPathComponent("ff-tracker-tests-\(UUID().uuidString).jsonl")
+            .appendingPathComponent("atelier-tracker-tests-\(UUID().uuidString).jsonl")
     }
 
     private func writeTranscript(url: URL, usedTokens: Int, model: String = "claude-sonnet-4-5") throws {

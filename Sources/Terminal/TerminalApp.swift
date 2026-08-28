@@ -5,7 +5,7 @@ import Cocoa
 import os
 import UserNotifications
 
-private let logger = Logger(subsystem: "factoryfloor", category: "terminal-app")
+private let logger = Logger(subsystem: "atelier", category: "terminal-app")
 
 protocol NotificationRequestAdding {
     func add(
@@ -225,7 +225,7 @@ final class TerminalApp {
         // Enable left Option as Alt so Option+Backspace deletes words in terminal
         let appConfigStr = "macos-option-as-alt = left\n"
         let tmpFile = FileManager.default.temporaryDirectory
-            .appendingPathComponent("factoryfloor-ghostty.conf")
+            .appendingPathComponent("atelier-ghostty.conf")
         FileManager.default.createFile(atPath: tmpFile.path, contents: Data(appConfigStr.utf8))
         ghostty_config_load_file(config, tmpFile.path)
         try? FileManager.default.removeItem(at: tmpFile)

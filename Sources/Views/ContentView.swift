@@ -5,14 +5,14 @@ import AppKit
 import OSLog
 import SwiftUI
 
-private let logger = Logger(subsystem: "factoryfloor", category: "content-view")
+private let logger = Logger(subsystem: "atelier", category: "content-view")
 
 extension Notification.Name {
-    static let workstreamCreated = Notification.Name("factoryfloor.workstreamCreated")
-    static let workstreamWorktreeReady = Notification.Name("factoryfloor.workstreamWorktreeReady")
-    static let workstreamCreationFailed = Notification.Name("factoryfloor.workstreamCreationFailed")
-    static let projectCreated = Notification.Name("factoryfloor.projectCreated")
-    static let purgeWorkstream = Notification.Name("factoryfloor.purgeWorkstream")
+    static let workstreamCreated = Notification.Name("atelier.workstreamCreated")
+    static let workstreamWorktreeReady = Notification.Name("atelier.workstreamWorktreeReady")
+    static let workstreamCreationFailed = Notification.Name("atelier.workstreamCreationFailed")
+    static let projectCreated = Notification.Name("atelier.projectCreated")
+    static let purgeWorkstream = Notification.Name("atelier.purgeWorkstream")
 }
 
 final class ProjectList: ObservableObject {
@@ -103,7 +103,7 @@ struct ContentView: View {
     @State private var workstreamToPurge: UUID?
     @State private var purgeWarningMessage: String?
     @State private var removedProjectNames: [String] = []
-    @AppStorage("factoryfloor.currentSpace") private var currentSpaceID: String = ""
+    @AppStorage("atelier.currentSpace") private var currentSpaceID: String = ""
     @State private var keyMonitorInstalled = false
 
     private static func initialSelection() -> SidebarSelection? {
@@ -114,17 +114,17 @@ struct ContentView: View {
 
     private var activeProject: Project? {
         guard let selection else {
-            logger.warning("[FF] activeProject: selection is nil")
+            logger.warning("[Atelier] activeProject: selection is nil")
             return nil
         }
         switch selection {
         case let .project(id):
             let found = projects.first(where: { $0.id == id })
-            if found == nil { logger.warning("[FF] activeProject: project \(id, privacy: .public) not found in \(projects.count, privacy: .public) projects") }
+            if found == nil { logger.warning("[Atelier] activeProject: project \(id, privacy: .public) not found in \(projects.count, privacy: .public) projects") }
             return found
         case let .workstream(wsID):
             let found = projects.first(where: { $0.workstreams.contains(where: { $0.id == wsID }) })
-            if found == nil { logger.warning("[FF] activeProject: workstream \(wsID, privacy: .public) not found in any project") }
+            if found == nil { logger.warning("[Atelier] activeProject: workstream \(wsID, privacy: .public) not found in any project") }
             return found
         case .settings, .help:
             return nil
@@ -299,9 +299,9 @@ struct ContentView: View {
         navigationViewBase
             .onChange(of: appEnvironment.missingProjectIDs) { _, missing in
                 guard !missing.isEmpty else { return }
-                logger.warning("[FF] missingProjectIDs changed: \(missing.count, privacy: .public) missing, \(projects.count, privacy: .public) total projects")
+                logger.warning("[Atelier] missingProjectIDs changed: \(missing.count, privacy: .public) missing, \(projects.count, privacy: .public) total projects")
                 let names = projects.filter { missing.contains($0.id) }.map(\.name)
-                logger.warning("[FF] removing projects: \(names, privacy: .public)")
+                logger.warning("[Atelier] removing projects: \(names, privacy: .public)")
                 for id in missing {
                     if let project = projects.first(where: { $0.id == id }) {
                         for ws in project.workstreams {
@@ -321,7 +321,7 @@ struct ContentView: View {
                 removedProjectNames = names
             }
             .onChange(of: selection) { oldValue, newValue in
-                logger.warning("[FF] selection changed: \(String(describing: oldValue), privacy: .public) -> \(String(describing: newValue), privacy: .public)")
+                logger.warning("[Atelier] selection changed: \(String(describing: oldValue), privacy: .public) -> \(String(describing: newValue), privacy: .public)")
                 if newValue == .settings || newValue == .help {
                     selectionBeforeSettings = oldValue
                 }
@@ -391,7 +391,7 @@ struct ContentView: View {
         .environmentObject(updater)
         .environmentObject(agentStateTracker)
         .onAppear {
-            // Spaces migration runs in FF2App.init() before any view renders.
+            // Spaces migration runs in AtelierApp.init() before any view renders.
             alignCurrentSpaceWithSelection()
             appEnvironment.refresh()
             appEnvironment.refreshAllRepoInfo(projects: projects)
@@ -400,7 +400,7 @@ struct ContentView: View {
             updateChecker.check()
             refreshAgentStateLookup(projects: projects)
             // Apply saved appearance
-            switch UserDefaults.standard.string(forKey: "factoryfloor.appearance") ?? "system" {
+            switch UserDefaults.standard.string(forKey: "atelier.appearance") ?? "system" {
             case "light": NSApp.appearance = NSAppearance(named: .aqua)
             case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
             default: NSApp.appearance = nil
@@ -439,7 +439,7 @@ struct ContentView: View {
             projects[index].workstreams.append(workstream)
             selection = .workstream(workstream.id)
             ProjectStore.save(projects)
-            logger.warning("[FF] workstreamCreated notification handled: \(workstream.name, privacy: .public)")
+            logger.warning("[Atelier] workstreamCreated notification handled: \(workstream.name, privacy: .public)")
         }
         .onReceive(NotificationCenter.default.publisher(for: .workstreamWorktreeReady)) { notification in
             guard let info = notification.userInfo,
@@ -455,7 +455,7 @@ struct ContentView: View {
                     // the agent-state lookup explicitly so hook events for this new workstream
                     // can resolve to its UUID.
                     refreshAgentStateLookup(projects: projects)
-                    logger.warning("[FF] workstreamWorktreeReady: updated \(workstreamID, privacy: .public) with path \(worktreePath, privacy: .public)")
+                    logger.warning("[Atelier] workstreamWorktreeReady: updated \(workstreamID, privacy: .public) with path \(worktreePath, privacy: .public)")
                     // Trigger vibe background setup (env copy, symlinks, Claude settings, deps)
                     let projectPath = projects[pi].directory
                     Task {
@@ -480,7 +480,7 @@ struct ContentView: View {
                 selection = .project(projectID)
             }
             ProjectStore.save(projects)
-            logger.warning("[FF] workstreamCreationFailed: removed \(workstreamID, privacy: .public)")
+            logger.warning("[Atelier] workstreamCreationFailed: removed \(workstreamID, privacy: .public)")
         }
         .onReceive(NotificationCenter.default.publisher(for: .projectCreated)) { notification in
             guard var project = notification.userInfo?["project"] as? Project else { return }
@@ -495,7 +495,7 @@ struct ContentView: View {
             ProjectStore.save(projects)
             appEnvironment.refreshPathValidity(projects: projects)
             appEnvironment.refreshAllRepoInfo(projects: projects)
-            logger.warning("[FF] projectCreated notification handled: \(project.name, privacy: .public)")
+            logger.warning("[Atelier] projectCreated notification handled: \(project.name, privacy: .public)")
         }
         .onReceive(NotificationCenter.default.publisher(for: .purgeWorkstream)) { notification in
             if let wsID = notification.object as? UUID {
@@ -571,7 +571,7 @@ struct ContentView: View {
             dir = nil
         }
         guard let dir else { return }
-        let terminalBundleID = UserDefaults.standard.string(forKey: "factoryfloor.defaultTerminal") ?? ""
+        let terminalBundleID = UserDefaults.standard.string(forKey: "atelier.defaultTerminal") ?? ""
         if !terminalBundleID.isEmpty,
            let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: terminalBundleID)
         {
@@ -672,7 +672,7 @@ struct ContentView: View {
 }
 
 enum ProjectStore {
-    private static let userDefaultsKey = "factoryfloor.projects"
+    private static let userDefaultsKey = "atelier.projects"
 
     static func load(defaults: UserDefaults = .standard) -> [Project] {
         guard let data = defaults.data(forKey: userDefaultsKey),

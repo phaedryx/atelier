@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# ABOUTME: Development convenience script for VibeFloor.
+# ABOUTME: Development convenience script for Atelier.
 # ABOUTME: Usage: ./scripts/dev.sh [build|run|test|clean]
 
 set -e
 
-PROJECT="FactoryFloor.xcodeproj"
-SCHEME="FactoryFloor"
-TEST_SCHEME="FactoryFloorTests"
-APP_NAME="VibeFloor"
+PROJECT="Atelier.xcodeproj"
+SCHEME="Atelier"
+TEST_SCHEME="AtelierTests"
+APP_NAME="Atelier"
 BUILD_DIR="build/debug/derived"
 APP_PATH="$BUILD_DIR/Build/Products/Debug/$APP_NAME.app"
-SPM_CACHE="$HOME/Library/Caches/factoryfloor/spm"
+SPM_CACHE="$HOME/Library/Caches/atelier/spm"
 BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
 GHOSTTY_RESOURCES="ghostty/zig-out/share"
 MONACO_OUTPUT="Resources/MonacoEditor/index.html"
@@ -53,7 +53,7 @@ case "${1:-build}" in
     ;;
   full)
     shift 2>/dev/null || true
-    echo "==> Building and running VibeFloor..."
+    echo "==> Building and running Atelier..."
     xcodegen generate
     xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Debug \
       -derivedDataPath "$BUILD_DIR" -clonedSourcePackagesDirPath "$SPM_CACHE" \
@@ -105,15 +105,15 @@ case "${1:-build}" in
       CODE_SIGN_STYLE=Manual \
       ENABLE_HARDENED_RUNTIME=YES \
       CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
-      CODE_SIGN_ENTITLEMENTS=Resources/ff2-local.entitlements \
+      CODE_SIGN_ENTITLEMENTS=Resources/atelier-local.entitlements \
       OTHER_CODE_SIGN_FLAGS="--options=runtime" \
       build
-    APP_BUNDLE="$RELEASE_DIR/Build/Products/Release/VibeFloor.app"
+    APP_BUNDLE="$RELEASE_DIR/Build/Products/Release/Atelier.app"
     echo "==> Release build at: $APP_BUNDLE"
     if [ "${2:-}" = "--run" ]; then
-      pkill -xf ".*/Contents/MacOS/VibeFloor" 2>/dev/null || true
+      pkill -xf ".*/Contents/MacOS/Atelier" 2>/dev/null || true
       sleep 0.5
-      open "$RELEASE_DIR/Build/Products/Release/VibeFloor.app"
+      open "$RELEASE_DIR/Build/Products/Release/Atelier.app"
     fi
     ;;
   clean)

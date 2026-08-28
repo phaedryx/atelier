@@ -1,11 +1,11 @@
 // ABOUTME: Tests for Project and Workstream models.
 // ABOUTME: Validates creation, identity, equality, serialization, and workstream management.
 
-@testable import FactoryFloor
+@testable import Atelier
 import XCTest
 
 final class ProjectTests: XCTestCase {
-    private static let testSuiteName = "factoryfloor.tests"
+    private static let testSuiteName = "atelier.tests"
     private let testDefaults = UserDefaults(suiteName: testSuiteName)!
 
     override func tearDown() {

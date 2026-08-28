@@ -1,6 +1,6 @@
 # Building the Ghostty XCFramework
 
-Factory Floor depends on `libghostty` via an xcframework built from the [Ghostty](https://github.com/ghostty-org/ghostty) source. This document covers how to build it and known issues.
+Atelier depends on `libghostty` via an xcframework built from the [Ghostty](https://github.com/ghostty-org/ghostty) source. This document covers how to build it and known issues.
 
 ## Requirements
 
@@ -142,15 +142,15 @@ Zig's `zig build` produces `libghostty.a` plus ~15 dependency `.a` files in `.zi
 ### Step 3: Install into the project
 
 ```bash
-mkdir -p ~/Desktop/vibefloor/ghostty/macos/GhosttyKit.xcframework/macos-arm64_x86_64
+mkdir -p ~/Desktop/atelier/ghostty/macos/GhosttyKit.xcframework/macos-arm64_x86_64
 cp /tmp/libghostty-final.a \
-   ~/Desktop/vibefloor/ghostty/macos/GhosttyKit.xcframework/macos-arm64_x86_64/libghostty.a
+   ~/Desktop/atelier/ghostty/macos/GhosttyKit.xcframework/macos-arm64_x86_64/libghostty.a
 ```
 
-### Step 4: Build Factory Floor
+### Step 4: Build Atelier
 
 ```bash
-cd ~/Desktop/vibefloor
+cd ~/Desktop/atelier
 xcodegen generate
 ./scripts/dev.sh build
 ```

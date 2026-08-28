@@ -1,7 +1,7 @@
 // ABOUTME: Tests for transcript context-usage parsing, OpenCode token sums,
 // ABOUTME: and model-based context limit lookup.
 
-@testable import FactoryFloor
+@testable import Atelier
 import XCTest
 
 final class TranscriptContextReaderTests: XCTestCase {
@@ -86,7 +86,7 @@ final class TranscriptContextReaderTests: XCTestCase {
 
     func testReadsUsageFromTempFile() throws {
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ff-reader-tests-\(UUID().uuidString).jsonl")
+            .appendingPathComponent("atelier-reader-tests-\(UUID().uuidString).jsonl")
         defer { try? FileManager.default.removeItem(at: url) }
         try [userLine, sonnetLine].joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
 

@@ -66,7 +66,7 @@ final class MonacoDiffBridge: ObservableObject {
         if let resourceURL = Bundle.main.resourceURL {
             let bundleURL = resourceURL.appendingPathComponent("MonacoEditor")
             let handler = MonacoResourceSchemeHandler(baseURL: bundleURL)
-            config.setURLSchemeHandler(handler, forURLScheme: "ff-resource")
+            config.setURLSchemeHandler(handler, forURLScheme: "atelier-resource")
         }
 
         let wv = EditorWebView(frame: .zero, configuration: config)
@@ -75,7 +75,7 @@ final class MonacoDiffBridge: ObservableObject {
             wv.isInspectable = true
         #endif
 
-        if let url = URL(string: "ff-resource://monaco/diff.html") {
+        if let url = URL(string: "atelier-resource://monaco/diff.html") {
             wv.load(URLRequest(url: url))
         }
 

@@ -1,14 +1,24 @@
 #!/usr/bin/env bash
-# ABOUTME: Builds, signs, notarizes, and packages Factory Floor as a DMG.
+# ABOUTME: Builds, signs, notarizes, and packages Atelier as a DMG.
 # ABOUTME: Usage: ./scripts/release.sh [version]
 
 set -euo pipefail
 
-SIGNING_IDENTITY="Developer ID Application: ALL TUNER LABS S.L. (J5TAY75Q3F)"
-NOTARIZE_PROFILE="factoryfloor"
-APP_NAME="Factory Floor"
-SCHEME="FactoryFloor"
-PROJECT="FactoryFloor.xcodeproj"
+# Signing credentials belong to whoever ships the build, so they come from the
+# environment rather than being baked in. Export these before running:
+#   ATELIER_SIGNING_IDENTITY  e.g. "Developer ID Application: Your Name (TEAMID)"
+#   ATELIER_TEAM_ID           your Apple Developer Team ID
+SIGNING_IDENTITY="${ATELIER_SIGNING_IDENTITY:-}"
+TEAM_ID="${ATELIER_TEAM_ID:-}"
+if [ -z "$SIGNING_IDENTITY" ] || [ -z "$TEAM_ID" ]; then
+  echo "Error: set ATELIER_SIGNING_IDENTITY and ATELIER_TEAM_ID before releasing." >&2
+  echo "       Find them with: security find-identity -v -p codesigning" >&2
+  exit 1
+fi
+NOTARIZE_PROFILE="atelier"
+APP_NAME="Atelier"
+SCHEME="Atelier"
+PROJECT="Atelier.xcodeproj"
 VERSION="${1:-$(python3 -c "import json; print(json.load(open('.release-please-manifest.json'))['.'])")}"
 DMG_NAME="${SCHEME}.dmg"
 BUILD_DIR="build/release"
@@ -19,7 +29,7 @@ xcodegen generate
 rm -rf "$BUILD_DIR/derived"
 xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
   -derivedDataPath "$BUILD_DIR/derived" \
-  DEVELOPMENT_TEAM=J5TAY75Q3F \
+  DEVELOPMENT_TEAM="$TEAM_ID" \
   CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" \
   CODE_SIGN_STYLE=Manual \
   build
@@ -34,29 +44,24 @@ rm -rf "$APP_PATH"
 mkdir -p "$BUILD_DIR"
 cp -R "$APP_BUILT" "$APP_PATH"
 
-echo "==> Uploading debug symbols to Sentry..."
-if command -v sentry-cli &>/dev/null; then
-  sentry-cli --url https://de.sentry.io debug-files upload \
-    --org all-tuner-labs \
-    --project factory-floor \
-    "$BUILD_DIR/derived/Build/Products/Release/"
+# Symbol upload is opt-in: without a Sentry org and project there is nowhere
+# to send them, and the release is perfectly valid without it.
+if [ -n "${ATELIER_SENTRY_ORG:-}" ] && [ -n "${ATELIER_SENTRY_PROJECT:-}" ]; then
+  echo "==> Uploading debug symbols to Sentry..."
+  if command -v sentry-cli &>/dev/null; then
+    sentry-cli debug-files upload \
+      --org "$ATELIER_SENTRY_ORG" \
+      --project "$ATELIER_SENTRY_PROJECT" \
+      "$BUILD_DIR/derived/Build/Products/Release/"
+  else
+    echo "Warning: sentry-cli not found, skipping dSYM upload"
+    echo "Install with: brew install getsentry/tools/sentry-cli"
+  fi
 else
-  echo "Warning: sentry-cli not found, skipping dSYM upload"
-  echo "Install with: brew install getsentry/tools/sentry-cli"
+  echo "==> ATELIER_SENTRY_ORG/PROJECT unset, skipping dSYM upload"
 fi
 
 echo "==> Re-signing embedded frameworks and helpers..."
-# Sparkle framework components (XPC services, helpers, then framework itself)
-codesign --force --sign "$SIGNING_IDENTITY" --timestamp --options=runtime \
-  "$APP_PATH/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Downloader.xpc"
-codesign --force --sign "$SIGNING_IDENTITY" --timestamp --options=runtime \
-  "$APP_PATH/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Installer.xpc"
-codesign --force --sign "$SIGNING_IDENTITY" --timestamp --options=runtime \
-  "$APP_PATH/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate"
-codesign --force --sign "$SIGNING_IDENTITY" --timestamp --options=runtime \
-  "$APP_PATH/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app"
-codesign --force --sign "$SIGNING_IDENTITY" --timestamp --options=runtime \
-  "$APP_PATH/Contents/Frameworks/Sparkle.framework"
 
 # Re-sign all embedded frameworks with secure timestamp and hardened runtime
 find "$APP_PATH/Contents/Frameworks" -type f -perm +111 -o -name "*.dylib" | while read -r bin; do
@@ -70,7 +75,7 @@ done
 
 # Sign the main app binary (not --deep, nested code is already signed above)
 codesign --force --sign "$SIGNING_IDENTITY" --timestamp --options=runtime \
-  --entitlements Resources/ff2.entitlements "$APP_PATH"
+  --entitlements Resources/atelier.entitlements "$APP_PATH"
 
 echo "==> Verifying signature..."
 codesign --verify --verbose=2 --deep --strict "$APP_PATH"

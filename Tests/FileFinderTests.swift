@@ -1,6 +1,6 @@
 // ABOUTME: Tests for FileFinder: recursive scanning with skipped directories and fuzzy scoring.
 
-@testable import FactoryFloor
+@testable import Atelier
 import XCTest
 
 final class FileFinderTests: XCTestCase {

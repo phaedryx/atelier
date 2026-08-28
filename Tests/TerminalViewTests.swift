@@ -3,7 +3,7 @@
 
 import Cocoa
 import XCTest
-@testable import FactoryFloor
+@testable import Atelier
 
 @MainActor
 final class TerminalViewTests: XCTestCase {

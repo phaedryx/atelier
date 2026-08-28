@@ -89,7 +89,7 @@ window.MonacoEnvironment = {
 
 // --- Extension resource loader for WKWebView ---
 // The default readExtensionResource is "unsupported". We provide a simple
-// implementation that resolves extension-file:// URIs to ff-resource:// URLs
+// implementation that resolves extension-file:// URIs to atelier-resource:// URLs
 // using our captured mapping, then fetches via the WKURLSchemeHandler.
 class ExtensionResourceLoader {
   _serviceBrand = undefined
@@ -124,7 +124,7 @@ class ExtensionResourceLoader {
 // --- Initialize VS Code services ---
 // MUST be called once, BEFORE creating any editor instance.
 // Uses full VS Code service overrides for TextMate grammars and themes.
-// Resources are served via WKURLSchemeHandler (ff-resource://) so fetch() works.
+// Resources are served via WKURLSchemeHandler (atelier-resource://) so fetch() works.
 await initialize({
   ...getTextmateServiceOverride(),
   ...getThemeServiceOverride(),

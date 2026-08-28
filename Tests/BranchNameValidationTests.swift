@@ -1,7 +1,7 @@
 // ABOUTME: Tests for GitOperations.isValidBranchName.
 // ABOUTME: Validates git check-ref-format rules used by the workstream naming dialog.
 
-@testable import FactoryFloor
+@testable import Atelier
 import XCTest
 
 final class BranchNameValidationTests: XCTestCase {

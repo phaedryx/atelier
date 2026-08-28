@@ -6,7 +6,7 @@ import OSLog
 import SwiftUI
 import UniformTypeIdentifiers
 
-private let logger = Logger(subsystem: "factoryfloor", category: "sidebar")
+private let logger = Logger(subsystem: "atelier", category: "sidebar")
 
 func expandedProjectIDs(afterSelecting selection: SidebarSelection?, current: Set<UUID>, projectIDByWorkstreamID: [UUID: UUID]) -> Set<UUID> {
     guard let selection else { return current }
@@ -25,8 +25,8 @@ func expandedProjectIDs(afterSelecting selection: SidebarSelection?, current: Se
 }
 
 extension Notification.Name {
-    static let addProject = Notification.Name("factoryfloor.addProject")
-    static let addNew = Notification.Name("factoryfloor.addNew")
+    static let addProject = Notification.Name("atelier.addProject")
+    static let addNew = Notification.Name("atelier.addNew")
 }
 
 struct ProjectSidebar: View {
@@ -60,7 +60,7 @@ struct ProjectSidebar: View {
     @State private var pendingWorkstreamProjectID: UUID?
     @State private var pendingWorkstreamBypass: Bool?
     @State private var pendingWorkstreamHarness: CodingHarness = .claudeCode
-    @AppStorage("factoryfloor.defaultHarness") private var defaultHarnessRaw: String = CodingHarness.claudeCode.rawValue
+    @AppStorage("atelier.defaultHarness") private var defaultHarnessRaw: String = CodingHarness.claudeCode.rawValue
 
     private func recomputeSortedIDs() -> [UUID] {
         guard let space = UUID(uuidString: currentSpaceID) else {
@@ -185,7 +185,7 @@ struct ProjectSidebar: View {
                 } : nil,
                 isGitRepo: appEnv.isGitRepo(project.directory),
                 githubURL: appEnv.githubURL(for: project.directory),
-                onAdd: { logger.warning("[FF] onAdd button tapped for project \(project.name, privacy: .public)"); addWorkstream(for: project.id) },
+                onAdd: { logger.warning("[Atelier] onAdd button tapped for project \(project.name, privacy: .public)"); addWorkstream(for: project.id) },
                 onAddWithPermissions: { addWorkstream(for: project.id, bypassPermissions: true) },
                 onAddWithoutPermissions: { addWorkstream(for: project.id, bypassPermissions: false) },
                 onDelete: { projectToDelete = project.id },
@@ -516,24 +516,24 @@ struct ProjectSidebar: View {
 
     // MARK: - Workstream management
 
-    @AppStorage("factoryfloor.bypassPermissions") private var defaultBypass: Bool = false
-    @AppStorage("factoryfloor.symlinkEnv") private var symlinkEnv: Bool = true
+    @AppStorage("atelier.bypassPermissions") private var defaultBypass: Bool = false
+    @AppStorage("atelier.symlinkEnv") private var symlinkEnv: Bool = true
 
     private func addWorkstream(for projectID: UUID, bypassPermissions: Bool? = nil) {
-        logger.warning("[FF] addWorkstream called for projectID=\(projectID, privacy: .public)")
+        logger.warning("[Atelier] addWorkstream called for projectID=\(projectID, privacy: .public)")
         guard let index = projects.firstIndex(where: { $0.id == projectID }) else {
-            logger.warning("[FF] addWorkstream: project not found")
+            logger.warning("[Atelier] addWorkstream: project not found")
             return
         }
         let project = projects[index]
-        logger.warning("[FF] addWorkstream: project=\(project.name, privacy: .public) dir=\(project.directory, privacy: .public)")
+        logger.warning("[Atelier] addWorkstream: project=\(project.name, privacy: .public) dir=\(project.directory, privacy: .public)")
 
         guard GitOperations.isGitRepo(at: project.directory) else {
-            logger.warning("[FF] addWorkstream: not a git repo")
+            logger.warning("[Atelier] addWorkstream: not a git repo")
             showNotGitRepoError = true
             return
         }
-        logger.warning("[FF] addWorkstream: is git repo")
+        logger.warning("[Atelier] addWorkstream: is git repo")
 
         let existingNames = Set(project.workstreams.map(\.name))
         newWorkstreamName = ""
@@ -574,7 +574,7 @@ struct ProjectSidebar: View {
 
         let bypass = pendingWorkstreamBypass ?? defaultBypass
         let name = typedName.isEmpty ? NameGenerator.generate(avoiding: existingNames) : typedName
-        logger.warning("[FF] createWorkstream: \(typedName.isEmpty ? "generated" : "user") name=\(name, privacy: .public)")
+        logger.warning("[Atelier] createWorkstream: \(typedName.isEmpty ? "generated" : "user") name=\(name, privacy: .public)")
 
         showingNewWorkstreamName = false
         pendingWorkstreamProjectID = nil
@@ -587,7 +587,7 @@ struct ProjectSidebar: View {
             userInfo: ["projectID": projectID, "workstream": workstream]
         )
         rebuildIndices()
-        logger.warning("[FF] addWorkstream: posted notification (optimistic), starting background worktree creation")
+        logger.warning("[Atelier] addWorkstream: posted notification (optimistic), starting background worktree creation")
 
         let projectPath = project.directory
         let projectName = project.name
@@ -603,14 +603,14 @@ struct ProjectSidebar: View {
             )
             DispatchQueue.main.async {
                 if let worktreePath {
-                    logger.warning("[FF] addWorkstream: worktree created at \(worktreePath, privacy: .public)")
+                    logger.warning("[Atelier] addWorkstream: worktree created at \(worktreePath, privacy: .public)")
                     NotificationCenter.default.post(
                         name: .workstreamWorktreeReady,
                         object: nil,
                         userInfo: ["workstreamID": workstreamID, "worktreePath": worktreePath]
                     )
                 } else {
-                    logger.warning("[FF] addWorkstream: createWorktree FAILED, rolling back")
+                    logger.warning("[Atelier] addWorkstream: createWorktree FAILED, rolling back")
                     NotificationCenter.default.post(
                         name: .workstreamCreationFailed,
                         object: nil,
@@ -692,7 +692,7 @@ struct ProjectSidebar: View {
               let wi = projects[pi].workstreams.firstIndex(where: { $0.id == workstream.id })
         else { return }
 
-        logger.warning("[FF] switchHarness \(workstream.harness.rawValue, privacy: .public) -> \(harness.rawValue, privacy: .public) for \(workstream.name, privacy: .public)")
+        logger.warning("[Atelier] switchHarness \(workstream.harness.rawValue, privacy: .public) -> \(harness.rawValue, privacy: .public) for \(workstream.name, privacy: .public)")
 
         surfaceCache.removeSurface(for: workstream.id)
         let tmuxSession = TmuxSession.sessionName(project: projects[pi].name, workstream: workstream.name, role: "agent")
@@ -776,13 +776,9 @@ struct ProjectSidebar: View {
         return true
     }
 
-    private var sponsorURL: URL {
-        let lang = Locale.current.language.languageCode?.identifier ?? "en"
-        let path = lang == "en" ? "/sponsor" : "/\(lang)/sponsor"
-        return URL(string: "https://factory-floor.com\(path)")!
-    }
+    private var sponsorURL: URL { AppConstants.sponsorURL }
 
-    @AppStorage("factoryfloor.baseDirectory") private var baseDirectory: String = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first ?? ""
+    @AppStorage("atelier.baseDirectory") private var baseDirectory: String = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first ?? ""
 
     private func openDirectoryPicker() {
         let panel = NSOpenPanel()
@@ -863,7 +859,7 @@ func copyTextToPasteboard(_ text: String) {
 
 /// Opens a directory in the user's configured terminal, falling back to Apple Terminal.
 func openDirectoryInTerminal(_ directory: String) {
-    let terminalBundleID = UserDefaults.standard.string(forKey: "factoryfloor.defaultTerminal") ?? ""
+    let terminalBundleID = UserDefaults.standard.string(forKey: "atelier.defaultTerminal") ?? ""
     let appURL: URL?
     if !terminalBundleID.isEmpty {
         appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: terminalBundleID)

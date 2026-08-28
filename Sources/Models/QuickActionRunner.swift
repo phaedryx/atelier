@@ -4,7 +4,7 @@
 import Foundation
 import os
 
-private let logger = Logger(subsystem: "factoryfloor", category: "quick-action")
+private let logger = Logger(subsystem: "atelier", category: "quick-action")
 
 enum QuickAction: String, CaseIterable, Identifiable {
     case commit
@@ -222,7 +222,7 @@ final class QuickActionRunner: ObservableObject {
     /// The plugin-recorded session id for the worktree, if any.
     private nonisolated static func trackedSessionID(in directory: String) -> String? {
         let url = URL(fileURLWithPath: directory)
-            .appendingPathComponent(".factoryfloor-state/opencode-session")
+            .appendingPathComponent(".atelier-state/opencode-session")
         guard let raw = try? String(contentsOf: url, encoding: .utf8) else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
@@ -232,7 +232,7 @@ final class QuickActionRunner: ObservableObject {
 
     private nonisolated static func sentinelPath(workingDirectory dir: String) -> String {
         URL(fileURLWithPath: dir)
-            .appendingPathComponent(".factoryfloor-state/opencode-quickaction").path
+            .appendingPathComponent(".atelier-state/opencode-quickaction").path
     }
 
     private nonisolated static func writeSentinel(workingDirectory dir: String) {
@@ -348,7 +348,7 @@ final class QuickActionRunner: ObservableObject {
     }
 
     private func runClosePR(ghPath: String, branchName: String, workingDirectory: String) {
-        let command = "\(ghPath) pr close \(branchName) --comment 'Closed from Factory Floor'"
+        let command = "\(ghPath) pr close \(branchName) --comment 'Closed from Atelier'"
 
         appendLog(action: .closePR, command: command)
         logger.info("Quick action closePR starting in \(workingDirectory)")
@@ -360,7 +360,7 @@ final class QuickActionRunner: ObservableObject {
             let process = Process()
             let pipe = Pipe()
             process.executableURL = URL(fileURLWithPath: path)
-            process.arguments = ["pr", "close", branch, "--comment", "Closed from Factory Floor"]
+            process.arguments = ["pr", "close", branch, "--comment", "Closed from Atelier"]
             process.currentDirectoryURL = URL(fileURLWithPath: dir)
             process.standardOutput = pipe
             process.standardError = pipe

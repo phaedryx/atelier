@@ -4,7 +4,7 @@
 import OSLog
 import SwiftUI
 
-private let logger = Logger(subsystem: "factoryfloor", category: "environment")
+private let logger = Logger(subsystem: "atelier", category: "environment")
 
 struct WorktreeState {
     var hasUncommittedChanges: Bool = false
@@ -255,7 +255,7 @@ final class AppEnvironment: ObservableObject {
                 var isDir: ObjCBool = false
                 let exists = FileManager.default.fileExists(atPath: project.directory, isDirectory: &isDir) && isDir.boolValue
                 if !exists {
-                    logger.warning("[FF] refreshPathValidity: project \(project.name, privacy: .public) directory MISSING: \(project.directory, privacy: .public)")
+                    logger.warning("[Atelier] refreshPathValidity: project \(project.name, privacy: .public) directory MISSING: \(project.directory, privacy: .public)")
                     missing.insert(project.id)
                 }
 
@@ -273,7 +273,7 @@ final class AppEnvironment: ObservableObject {
                     if valid {
                         validPaths.append(path)
                         let descURL = URL(fileURLWithPath: path)
-                            .appendingPathComponent(".factoryfloor-state/description")
+                            .appendingPathComponent(".atelier-state/description")
                         if let data = try? Data(contentsOf: descURL),
                            let text = String(data: data, encoding: .utf8)
                         {

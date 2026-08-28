@@ -1,4 +1,8 @@
-# Factory Floor - Architecture, Code & Security Review
+# Atelier - Architecture, Code & Security Review
+
+> **Historical.** This review covers the upstream Factory Floor codebase before the
+> Atelier fork. Findings about update checking, analytics, crash reporting and code
+> signing were changed by the fork; see `docs/distribution.md` for current behaviour.
 
 **Date:** 2026-03-18 (initial), 2026-04-03 (updated)
 **Scope:** Full codebase review covering architecture, code quality, and security
@@ -24,7 +28,7 @@
 
 ## 1. Architecture Overview
 
-Factory Floor is a native macOS application that provides an integrated development environment for managing multiple parallel AI-assisted development workstreams. It combines SwiftUI (modern UI), AppKit (terminal views), and the Ghostty terminal engine (Metal GPU-rendered).
+Atelier is a native macOS application that provides an integrated development environment for managing multiple parallel AI-assisted development workstreams. It combines SwiftUI (modern UI), AppKit (terminal views), and the Ghostty terminal engine (Metal GPU-rendered).
 
 **Key architectural decisions:**
 - **Swift 6.0** with strict concurrency (`SWIFT_STRICT_CONCURRENCY: complete`)
@@ -33,7 +37,7 @@ Factory Floor is a native macOS application that provides an integrated developm
 - **Ghostty** as git submodule (pinned to stable release tag), xcframework built with `zig build`
 - **Single-window** app via `Window` (not `WindowGroup`)
 - **No sandbox** - intentional, needs full filesystem access for git worktrees and terminals
-- **Bundle ID:** `com.alltuner.factoryfloor` (release) / `com.alltuner.factoryfloor.debug` (debug)
+- **Bundle ID:** `com.github.phaedryx.atelier` (release) / `com.github.phaedryx.atelier.debug` (debug)
 
 ### View Hierarchy
 
@@ -69,9 +73,9 @@ TerminalSurfaceCache ──> TerminalView (Ghostty surface lifecycle)
 
 PortDetector (FSEvents) ──> BrowserView (auto-retarget on port change)
     ↑
-ff-run (helper binary) ──> run-state JSON files
+atelier-run (helper binary) ──> run-state JSON files
     ↑
-Run scripts (.factoryfloor.json)
+Run scripts (.atelier.json)
 ```
 
 ---
@@ -81,29 +85,29 @@ Run scripts (.factoryfloor.json)
 ### Application Entry Point
 | File | Lines | Purpose |
 |------|-------|---------|
-| `Sources/FF2App.swift` | 224 | @main app struct, Ghostty init, window config, keyboard shortcuts, URL scheme, Sentry setup, quit confirmation |
+| `Sources/AtelierApp.swift` | 224 | @main app struct, Ghostty init, window config, keyboard shortcuts, URL scheme, Sentry setup, quit confirmation |
 
 ### Models (Sources/Models/) - ~2,290 lines total
 
 | File | Lines | Purpose |
 |------|-------|---------|
 | `Project.swift` | 64 | Codable data structures for projects and workstreams |
-| `WorkstreamEnvironment.swift` | 28 | Builds env var maps for terminal sessions (FF_PROJECT, FF_WORKSTREAM, etc.) |
+| `WorkstreamEnvironment.swift` | 28 | Builds env var maps for terminal sessions (ATELIER_PROJECT, ATELIER_WORKSTREAM, etc.) |
 | `GitOperations.swift` | 263 | Git repo detection, worktree create/remove, branch info, .env symlink injection |
 | `GitHubOperations.swift` | 100 | Integrates with `gh` CLI for repo info, PR lists |
-| `RunLauncher.swift` | 29 | Locates ff-run helper, builds wrapped run-script commands |
+| `RunLauncher.swift` | 29 | Locates atelier-run helper, builds wrapped run-script commands |
 | `RunState.swift` | 147 | RunStateSnapshot encoding/decoding, port selection logic (PortSelectionTracker) |
 | `PortDetector.swift` | 98 | FSEvents watcher for run state files, publishes selectedPort |
 | `PortAllocator.swift` | 20 | Deterministic port allocation (40001-49999) using DJB2 hash |
 | `TmuxSession.swift` | 120 | Session naming, minimal config generation, command wrapping |
 | `TerminalApp.swift` | 192 | Ghostty C API integration: app lifecycle, surface callbacks, clipboard |
 | `FilePersistence.swift` | 26 | Atomic file writes via temp files with rename (crash-safe) |
-| `ScriptConfig.swift` | 65 | Loads .factoryfloor.json (setup/run/teardown scripts) |
+| `ScriptConfig.swift` | 65 | Loads .atelier.json (setup/run/teardown scripts) |
 | `SidebarSelection.swift` | — | Navigation state persistence |
 | `CommandBuilder.swift` | 49 | Shell command escaping (single-quote wrapping) |
 | `CommandLineTools.swift` | 41 | Tool discovery across homebrew, system, and user paths |
 | `Environment.swift` | 254 | @MainActor AppEnvironment: tool detection, git info caching, GitHub integration |
-| `UpdateChecker.swift` | 48 | Checks factory-floor.com/versions.json for updates |
+| `UpdateChecker.swift` | 48 | Polls the GitHub Releases API for updates |
 | `AppConstants.swift` | 54 | Centralized config: directories, app ID, URL scheme |
 | `PathUtilities.swift` | 42 | Path abbreviation, deterministic UUID derivation |
 | `NameGenerator.swift` | 62 | Generates unique workstream names (operation-adjective-component, 126k combos) |
@@ -114,14 +118,14 @@ Run scripts (.factoryfloor.json)
 | `QuickActionRunner.swift` | 293 | Runs setup/run/teardown scripts with process lifecycle management |
 | `SystemPrompts.swift` | 23 | Generates system prompt context for coding agents |
 | `Telemetry.swift` | 98 | Anonymous usage telemetry (opt-in) |
-| `Updater.swift` | 50 | Sparkle update integration |
+| `Updater.swift` | 22 | Stub; the fork ships no in-app updater |
 | `WorkstreamArchiver.swift` | 38 | Coordinates teardown, worktree removal, tmux cleanup, cache eviction |
 
 ### Launcher (Sources/Launcher/) - Helper binary
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `main.swift` | 277 | ff-run helper: spawns child processes, monitors process tree via `libproc`, detects listening TCP ports, signal forwarding, writes run state JSON |
+| `main.swift` | 277 | atelier-run helper: spawns child processes, monitors process tree via `libproc`, detects listening TCP ports, signal forwarding, writes run state JSON |
 
 ### Terminal (Sources/Terminal/)
 
@@ -153,21 +157,21 @@ Run scripts (.factoryfloor.json)
 
 Three targets defined in `project.yml`:
 
-### FactoryFloor (Main app)
+### Atelier (Main app)
 - Type: application
 - Dependencies: swift-cmark (v0.6.0+, markdown), Sentry (v9.7.0+, crash reporting)
 - Links: libghostty, libz, libc++, Metal, MetalKit, CoreGraphics, AppKit, IOKit, Carbon
 - Ghostty xcframework from: `ghostty/macos/GhosttyKit.xcframework/`
-- Entitlements: `Resources/ff2.entitlements` (no sandbox)
-- Post-build: copies ff-run to Contents/Helpers/, code-signs with hardened runtime
+- Entitlements: `Resources/atelier.entitlements` (no sandbox)
+- Post-build: copies atelier-run to Contents/Helpers/, code-signs with hardened runtime
 - Localization: en, ca, es, sv
 
-### FFRun (Helper tool)
+### AtelierRun (Helper tool)
 - Type: tool (command-line binary)
 - Links: libproc only
 - Sources: Launcher/main.swift + AppConstants.swift, FilePersistence.swift, RunState.swift
 
-### FactoryFloorTests (XCTest)
+### AtelierTests (XCTest)
 - 11 test files covering ports, git, tmux, environment, UI state
 
 ---
@@ -176,7 +180,7 @@ Three targets defined in `project.yml`:
 
 ### Directory Structure
 ```
-~/.config/factoryfloor/                    # Config (respects XDG_CONFIG_HOME)
+~/.config/atelier/                    # Config (respects XDG_CONFIG_HOME)
 ├── projects.json                          # ProjectStore persistence
 ├── sidebar.json                           # Sidebar expanded/collapsed state
 ├── workspace-tabs.json                    # Per-workstream active tab (legacy)
@@ -184,18 +188,18 @@ Three targets defined in `project.yml`:
 └── run-state/                             # Per-workstream JSON state files
     └── <workstream-uuid>.json             # PortSelectionResult, process status
 
-~/.factoryfloor/worktrees/                 # Git worktrees
+~/.atelier/worktrees/                 # Git worktrees
 └── <project-name>/<workstream-name>/      # Actual working directories
 ```
 
 ### Persistence Mechanisms
 | What | Where | Method |
 |------|-------|--------|
-| Projects/Workstreams | UserDefaults (`factoryfloor.projects`) | JSON (Codable), debounced saves |
-| Sidebar state | `~/.config/factoryfloor/sidebar.json` | JSON, atomic writes |
-| Workspace tabs | UserDefaults (`factoryfloor.workspaceTabs`) | JSON per workstream |
-| App settings | UserDefaults (`factoryfloor.*`) | @AppStorage |
-| Run state | `~/.config/factoryfloor/run-state/*.json` | Atomic writes, FSEvents watching |
+| Projects/Workstreams | UserDefaults (`atelier.projects`) | JSON (Codable), debounced saves |
+| Sidebar state | `~/.config/atelier/sidebar.json` | JSON, atomic writes |
+| Workspace tabs | UserDefaults (`atelier.workspaceTabs`) | JSON per workstream |
+| App settings | UserDefaults (`atelier.*`) | @AppStorage |
+| Run state | `~/.config/atelier/run-state/*.json` | Atomic writes, FSEvents watching |
 | Git info cache | In-memory | Throttled async refresh (5s/60s) |
 | Terminal surfaces | In-memory (TerminalSurfaceCache) | Keyed by UUID, evicted on archive |
 
@@ -262,7 +266,7 @@ Three targets defined in `project.yml`:
 | `ScriptConfig` | `Process()` with argument arrays for teardown | Safe |
 | `TmuxSession` | `shellEscape()` for session names and paths | Correct |
 | `RunLauncher` | `CommandBuilder.shellQuote()` for launcher and script paths | Correct |
-| `ff-run` (Launcher) | Validates `--workstream-id` UUID format | Correct |
+| `atelier-run` (Launcher) | Validates `--workstream-id` UUID format | Correct |
 
 **One area of note:**
 
@@ -270,7 +274,7 @@ Three targets defined in `project.yml`:
 
 ### 7.3 URL Scheme Handling
 
-**File:** `FF2App.swift` (lines 98-105)
+**File:** `AtelierApp.swift` (lines 98-105)
 
 **No injection vulnerabilities.** The handler:
 - Validates scheme matches `AppConstants.urlScheme`
@@ -295,9 +299,9 @@ Three targets defined in `project.yml`:
 
 | Endpoint | Protocol | Purpose |
 |----------|----------|---------|
-| `factory-floor.com/versions.json` | HTTPS | Update checking |
-| Sentry (EU) | HTTPS | Crash reporting |
-| `meta.factory-floor.com/meta.js` | HTTPS | Website analytics |
+| `api.github.com` | HTTPS | Update checking |
+| Sentry | HTTPS | Crash reporting (off unless a DSN is built in) |
+| Umami collector | HTTPS | Usage telemetry (off unless an endpoint is built in) |
 
 - No HTTP fallback anywhere
 - Default URLSession certificate validation (no custom bypasses)
@@ -319,25 +323,19 @@ Three targets defined in `project.yml`:
 
 ### 7.7 Credential & Secrets Handling
 
-**Sentry DSN hardcoded** in `FF2App.swift` (lines 46-58):
-```
-https://45310bb703b438b38aee17e84e10d32e@o4511060356956160.ingest.de.sentry.io/...
-```
-- Acceptable practice — DSNs are intentionally public (write-only ingest keys)
+**Sentry DSN** is no longer hardcoded. It comes from the `ATELIER_SENTRY_DSN`
+build setting and is empty by default, so a plain build reports nothing.
 - PII disabled: `sendDefaultPii = false`
 
-**GitHub signing identity** in `scripts/release.sh`:
-```
-Developer ID Application: ALL TUNER LABS S.L. (J5TAY75Q3F)
-```
-- Public information (visible in signed binaries)
+**Signing identity** comes from `ATELIER_SIGNING_IDENTITY` / `ATELIER_TEAM_ID`
+(locally) or repository secrets (in CI), rather than being committed.
 
 **No local credential storage** — GitHub auth delegated to `gh` CLI, no tokens stored in app.
 
 ### 7.8 Environment Variable Injection
 
 `WorkstreamEnvironment.variables()` builds a controlled set:
-- `FF_PROJECT`, `FF_WORKSTREAM`, `FF_PROJECT_DIR`, `FF_WORKTREE_DIR`, `FF_PORT`
+- `ATELIER_PROJECT`, `ATELIER_WORKSTREAM`, `ATELIER_PROJECT_DIR`, `ATELIER_WORKTREE_DIR`, `ATELIER_PORT`
 - Optional: `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`
 - No user input directly injected into env vars
 - C environment array properly lifetime-managed in TerminalView
@@ -362,11 +360,11 @@ Developer ID Application: ALL TUNER LABS S.L. (J5TAY75Q3F)
 - User-initiated only (not automatic)
 - Prompts system auth dialog
 - Properly shell-escaped
-- Scoped to only the `ff`/`ff-debug` CLI script with mode 755
+- Scoped to only the `ff`/`atelier-debug` CLI script with mode 755
 
 ### 7.11 Process Tree Monitoring
 
-**ff-run launcher** (`Launcher/main.swift`):
+**atelier-run launcher** (`Launcher/main.swift`):
 - Monitors child process tree via `libproc` (proc_listchildpids, proc_pidinfo)
 - Only examines listening TCP ports (TSI_S_LISTEN state check)
 - Filters IPv4/IPv6 sockets
@@ -534,7 +532,7 @@ All 4 locales (en, ca, es, sv) are complete with ~236 strings each. SwiftUI uses
 
 **Score: 8.5/10** (initial), **9/10** (updated)
 
-Factory Floor is a well-architected, production-ready macOS application with strong security practices. The codebase demonstrates:
+Atelier is a well-architected, production-ready macOS application with strong security practices. The codebase demonstrates:
 
 - **Excellent** shell injection prevention via `CommandBuilder.shellQuote()` and Process argument arrays
 - **Excellent** concurrency safety with Swift 6 strict concurrency and proper `@MainActor` isolation

@@ -5,12 +5,12 @@ import Foundation
 import Network
 import os
 
-private let logger = Logger(subsystem: "factoryfloor", category: "hook-receiver")
+private let logger = Logger(subsystem: "atelier", category: "hook-receiver")
 
 /// Receives Claude Code hook events over HTTP on a local NWListener.
 ///
 /// The listener binds to 127.0.0.1 on an OS-assigned port, writes the port
-/// number to `~/Library/Caches/factoryfloor/hook-port`, and routes incoming
+/// number to `~/Library/Caches/atelier/hook-port`, and routes incoming
 /// hook events to the `onEvent` callback.
 ///
 /// Thread safety: all mutable state is accessed on `self.queue`.
@@ -21,7 +21,7 @@ final class HookEventReceiver: @unchecked Sendable {
     /// Called on the main queue with (projectDir, event).
     var onEvent: ((String, AgentEvent) -> Void)?
 
-    private let queue = DispatchQueue(label: "factoryfloor.hook-receiver", qos: .utility)
+    private let queue = DispatchQueue(label: "atelier.hook-receiver", qos: .utility)
     private var listener: NWListener?
     private var connections: [NWConnection] = []
 
@@ -185,9 +185,9 @@ final class HookEventReceiver: @unchecked Sendable {
             return
         }
 
-        // The ff-hook script wraps the Claude Code input as:
+        // The atelier-hook script wraps the Claude Code input as:
         //   { "event_input": { ... }, "project_dir": "..." }
-        // The Factory Floor opencode plugin posts the same envelope plus
+        // The Atelier opencode plugin posts the same envelope plus
         //   "source": "opencode" with pre-digested event_input payloads.
         guard let projectDir = json["project_dir"] as? String else {
             logger.warning("Hook event missing project_dir")
@@ -371,7 +371,7 @@ final class HookEventReceiver: @unchecked Sendable {
 
     // MARK: - OpenCode Mapping
 
-    /// Maps a Factory Floor opencode plugin payload to zero or more `AgentEvent`s.
+    /// Maps a Atelier opencode plugin payload to zero or more `AgentEvent`s.
     /// Payload shape: `{ kind, agent_id, name?, tool?, file_path?, session_id?, parent_session_id? }`.
     /// Must be called on `self.queue`.
     private func mapOpencodeEvent(eventInput: [String: Any], projectDir: String) -> [AgentEvent] {
@@ -468,13 +468,13 @@ final class HookEventReceiver: @unchecked Sendable {
 
     private var portFilePath: String {
         let cacheDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Caches/factoryfloor")
+            .appendingPathComponent("Library/Caches/atelier")
         return cacheDir.appendingPathComponent("hook-port").path
     }
 
     private func writePortFile(port: UInt16) {
         let cacheDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Caches/factoryfloor")
+            .appendingPathComponent("Library/Caches/atelier")
         try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
         let portString = String(port)
         try? portString.write(toFile: portFilePath, atomically: true, encoding: .utf8)

@@ -1,11 +1,11 @@
-// ABOUTME: Watches ff-run state files and publishes the selected port for a workstream.
+// ABOUTME: Watches atelier-run state files and publishes the selected port for a workstream.
 // ABOUTME: Uses filesystem events instead of polling so browser targets update immediately.
 
 import Foundation
 
-/// Lifecycle of the ff-run session for a workstream.
+/// Lifecycle of the atelier-run session for a workstream.
 enum PortStatus: Equatable, Sendable {
-    /// No ff-run session is alive (server not running).
+    /// No atelier-run session is alive (server not running).
     case none
     /// A session is running but no port has been selected yet.
     case starting
@@ -24,7 +24,7 @@ final class PortDetector: ObservableObject, @unchecked Sendable {
 
     init(workstreamID: UUID) {
         self.workstreamID = workstreamID
-        self.queue = DispatchQueue(label: "factoryfloor.port-detector.\(workstreamID.uuidString.lowercased())")
+        self.queue = DispatchQueue(label: "atelier.port-detector.\(workstreamID.uuidString.lowercased())")
         start()
     }
 

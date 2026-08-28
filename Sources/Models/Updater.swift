@@ -1,50 +1,21 @@
-// ABOUTME: Sparkle-based auto-update controller for DMG-distributed builds.
-// ABOUTME: Provides check-for-updates action wired to the app menu.
+// ABOUTME: Placeholder auto-update controller; Atelier ships no Sparkle feed.
+// ABOUTME: Reports itself unconfigured so the UI falls back to UpdateChecker's Homebrew path.
 
-import Sparkle
+import Combine
 
-/// Suppresses modal error alerts from Sparkle update checks.
-/// Errors (e.g. network failures) are silently acknowledged instead of
-/// blocking the main thread with NSAlert.runModal(). (Fixes FACTORY-FLOOR-7)
-private class SilentErrorUserDriver: SPUStandardUserDriver {
-    override func showUpdaterError(_: Error, acknowledgement: @escaping () -> Void) {
-        acknowledgement()
-    }
-}
-
+/// Auto-updates are not wired up in Atelier.
+///
+/// The upstream project used Sparkle with a signing key and appcast feed this
+/// fork does not control. Rather than ship an update channel pointing at someone
+/// else's builds, the fork drops Sparkle entirely; `UpdateChecker` still surfaces
+/// new releases for Homebrew users. Restoring in-app updates means generating a
+/// new Ed25519 key pair, hosting an appcast, and reinstating the Sparkle package.
 @MainActor
 final class Updater: ObservableObject {
-    private var updater: SPUUpdater?
+    var canCheckForUpdates: Bool { false }
 
-    init() {
-        #if !DEBUG
-            let userDriver = SilentErrorUserDriver(hostBundle: .main, delegate: nil)
-            do {
-                let spuUpdater = SPUUpdater(
-                    hostBundle: .main,
-                    applicationBundle: .main,
-                    userDriver: userDriver,
-                    delegate: nil
-                )
-                try spuUpdater.start()
-                updater = spuUpdater
-            } catch {
-                // Sparkle failed to initialize; updates won't be available
-            }
-        #endif
-    }
+    /// Always false: no update feed is configured.
+    var isConfigured: Bool { false }
 
-    var canCheckForUpdates: Bool {
-        updater?.canCheckForUpdates ?? false
-    }
-
-    /// Whether Sparkle was successfully initialized (DMG installs).
-    /// Unlike `canCheckForUpdates`, this doesn't depend on transient Sparkle state.
-    var isConfigured: Bool {
-        updater != nil
-    }
-
-    func checkForUpdates() {
-        updater?.checkForUpdates()
-    }
+    func checkForUpdates() {}
 }

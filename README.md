@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/AndresGonzalez5/vibefloor/main/Resources/Assets.xcassets/AppIconDebug.appiconset/256.png" width="128" height="128" alt="VibeFloor">
+  <img src="https://raw.githubusercontent.com/phaedryx/atelier/main/Resources/Assets.xcassets/AppIconDebug.appiconset/256.png" width="128" height="128" alt="Atelier">
 </p>
 
-<h1 align="center">VibeFloor</h1>
+<h1 align="center">Atelier</h1>
 
 <p align="center">
   <strong>AI-powered development workspace for macOS</strong><br>
@@ -10,39 +10,43 @@
 </p>
 
 <p align="center">
-  <a href="https://factory-floor.com">Website</a> &middot;
-  <a href="https://factory-floor.com/get/">Download</a> &middot;
-  <a href="https://factory-floor.com/sponsor">Sponsor</a>
+  <a href="https://github.com/phaedryx/atelier/releases/latest">Download</a> &middot;
+  <a href="https://github.com/phaedryx/atelier/issues">Issues</a>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/github/license/alltuner/factoryfloor?color=5B2333" alt="License">
-  <img src="https://img.shields.io/github/stars/alltuner/factoryfloor?color=5B2333" alt="Stars">
+  <img src="https://img.shields.io/github/license/phaedryx/atelier?color=5B2333" alt="License">
+  <img src="https://img.shields.io/github/stars/phaedryx/atelier?color=5B2333" alt="Stars">
 </p>
 
 ---
+
+> Atelier is a hard fork of [Factory Floor](https://github.com/alltuner/factoryfloor)
+> by David Poblador i Garcia / All Tuner Labs, by way of
+> [VibeFloor](https://github.com/AndresGonzalez5/vibefloor). It is maintained
+> independently and is not affiliated with either project.
 
 ## Get Started
 
 Install via Homebrew:
 
 ```bash
-brew install --cask alltuner/tap/factoryfloor
+brew install --cask phaedryx/tap/atelier
 ```
 
-Or [download the latest release](https://factory-floor.com/get/).
+Or [download the latest release](https://github.com/phaedryx/atelier/releases/latest).
 
 Then:
 
-1. **Open Factory Floor** and add a project by clicking the `+` button in the sidebar, then selecting a repository directory.
-2. **Create a workstream** with `Cmd+N`. Factory Floor sets up a git worktree and launches a Claude Code agent automatically.
+1. **Open Atelier** and add a project by clicking the `+` button in the sidebar, then selecting a repository directory.
+2. **Create a workstream** with `Cmd+N`. Atelier sets up a git worktree and launches a Claude Code agent automatically.
 3. **Start building.** Add terminals (`Cmd+T`), browsers (`Cmd+B`), editors (`Cmd+O`), or configure [run scripts](#script-configuration) to auto-detect your dev server.
 
 ---
 
-## What is Factory Floor?
+## What is Atelier?
 
-Factory Floor is a native macOS app built on [Ghostty](https://ghostty.org)'s GPU-rendered terminal. It manages multiple parallel development tasks, each in its own git worktree with a dedicated Claude Code agent, terminal, and browser.
+Atelier is a native macOS app built on [Ghostty](https://ghostty.org)'s GPU-rendered terminal. It manages multiple parallel development tasks, each in its own git worktree with a dedicated Claude Code agent, terminal, and browser.
 
 **One project, many workstreams, all at native speed.**
 
@@ -51,7 +55,7 @@ Factory Floor is a native macOS app built on [Ghostty](https://ghostty.org)'s GP
 - **Git Worktrees** &mdash; Each workstream gets its own branch and worktree. Switch between tasks without stashing.
 - **Claude Code** &mdash; Integrated AI agent with session persistence. Resume conversations across app restarts.
 - **Tmux Persistence** &mdash; Agent sessions survive app restarts via tmux on a dedicated socket.
-- **Setup & Run Scripts** &mdash; Configure setup, run, and teardown scripts per project via `.factoryfloor.json`. Environment tab with split-pane terminals, Start/Rerun (⌘⇧⏎).
+- **Setup & Run Scripts** &mdash; Configure setup, run, and teardown scripts per project via `.atelier.json`. Environment tab with split-pane terminals, Start/Rerun (⌘⇧⏎).
 - **Embedded Browser** &mdash; WKWebView tab with automatic port detection. The browser navigates to the port your run script opens.
 - **Code Editor** &mdash; Built-in Monaco editor (same engine as VS Code) embedded via WKWebView. Syntax highlighting, IntelliSense, and file tree. One file per tab, shared undo history.
 - **GitHub Integration** &mdash; Repo info, open PRs, and branch PR status via the `gh` CLI.
@@ -61,28 +65,28 @@ Factory Floor is a native macOS app built on [Ghostty](https://ghostty.org)'s GP
 
 ### Tmux Mode
 
-When tmux mode is enabled (Settings > Terminal), Factory Floor wraps Coding Agent sessions in tmux using a dedicated socket (`factoryfloor`). This keeps sessions alive across app restarts without interfering with your personal tmux setup.
+When tmux mode is enabled (Settings > Terminal), Atelier wraps Coding Agent sessions in tmux using a dedicated socket (`atelier`). This keeps sessions alive across app restarts without interfering with your personal tmux setup.
 
-The tmux config strips all UI chrome (status bar, prefix key, keybindings) since Factory Floor manages the terminal directly. Sessions are still fully accessible from any external terminal:
+The tmux config strips all UI chrome (status bar, prefix key, keybindings) since Atelier manages the terminal directly. Sessions are still fully accessible from any external terminal:
 
 ```bash
 # List active sessions
-tmux -L factoryfloor list-sessions
+tmux -L atelier list-sessions
 
 # Attach to a session
-tmux -L factoryfloor attach-session -t <session-name>
+tmux -L atelier attach-session -t <session-name>
 ```
 
-Note that because keybindings are removed, you will need to detach with `tmux -L factoryfloor detach-client` from another terminal, or use the standard `kill-session` command.
+Note that because keybindings are removed, you will need to detach with `tmux -L atelier detach-client` from another terminal, or use the standard `kill-session` command.
 
 ### Script Configuration
 
-Add a `.factoryfloor.json` to your project root to automate your workstream lifecycle. All fields are optional.
+Add a `.atelier.json` to your project root to automate your workstream lifecycle. All fields are optional.
 
 ```json
 {
   "setup": "npm install",
-  "run": "PORT=$FF_PORT npm run dev",
+  "run": "PORT=$ATELIER_PORT npm run dev",
   "teardown": "docker-compose down"
 }
 ```
@@ -93,9 +97,9 @@ Add a `.factoryfloor.json` to your project root to automate your workstream life
 | `run` | On demand via the Environment tab | Start dev server, docker-compose up |
 | `teardown` | When a workstream is archived | docker-compose down, clean temp files |
 
-Scripts run in the workstream directory using your login shell. The `run` script is wrapped in the `ff-run` launcher for automatic port detection.
+Scripts run in the workstream directory using your login shell. The `run` script is wrapped in the `atelier-run` launcher for automatic port detection.
 
-These commands come from the repository, so Factory Floor asks you to approve them before it runs any of them. The workspace shows each command and the file it was read from, and nothing executes until you approve. Approval is remembered per repository and requested again whenever the commands change. You can withdraw it from the Info tab.
+These commands come from the repository, so Atelier asks you to approve them before it runs any of them. The workspace shows each command and the file it was read from, and nothing executes until you approve. Approval is remembered per repository and requested again whenever the commands change. You can withdraw it from the Info tab.
 
 ### Environment Variables
 
@@ -103,11 +107,11 @@ Every workstream terminal has access to:
 
 | Variable | Description |
 |---|---|
-| `FF_PROJECT` | Project name |
-| `FF_WORKSTREAM` | Workstream name |
-| `FF_PROJECT_DIR` | Main repository path |
-| `FF_WORKTREE_DIR` | Worktree path for this workstream |
-| `FF_PORT` | Deterministic port (40001-49999) |
+| `ATELIER_PROJECT` | Project name |
+| `ATELIER_WORKSTREAM` | Workstream name |
+| `ATELIER_PROJECT_DIR` | Main repository path |
+| `ATELIER_WORKTREE_DIR` | Worktree path for this workstream |
+| `ATELIER_PORT` | Deterministic port (40001-49999) |
 
 ### Keyboard Shortcuts
 
@@ -166,15 +170,15 @@ English, Catalan, Spanish, Swedish.
 ## Install
 
 ```bash
-brew install --cask alltuner/tap/factoryfloor
+brew install --cask phaedryx/tap/atelier
 ```
 
-Or [download the latest release](https://factory-floor.com/get/).
+Or [download the latest release](https://github.com/phaedryx/atelier/releases/latest).
 
 ### Upgrade
 
 ```bash
-brew upgrade --cask factoryfloor
+brew upgrade --cask atelier
 ```
 
 ### CLI
@@ -233,29 +237,24 @@ All strings are localized. To add a language:
 
 ## Credits
 
-Factory Floor is built on the shoulders of these projects:
+Atelier is built on the shoulders of these projects:
 
 - **[Ghostty](https://ghostty.org)** — GPU-accelerated terminal engine (Metal-rendered via libghostty)
 - **[Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview)** — AI coding agent by Anthropic
 - **[tmux](https://github.com/tmux/tmux/wiki)** — Terminal multiplexer for session persistence
 - **[XcodeGen](https://github.com/yonaskolb/XcodeGen)** — Xcode project generation from `project.yml`
 - **[cmark-gfm](https://github.com/github/cmark-gfm)** — GitHub Flavored Markdown rendering (via [swift-cmark](https://github.com/swiftlang/swift-cmark))
-- **[Hugo](https://gohugo.io)** + **[Tailwind CSS](https://tailwindcss.com)** — Website
-- **[Umami](https://umami.is)** — Privacy-friendly website analytics
 
 ## Support the project
 
-Factory Floor is an open source project built by [David Poblador i Garcia](https://davidpoblador.com/) through [All Tuner Labs](https://www.alltuner.com/).
+Atelier is a fork of [Factory Floor](https://github.com/alltuner/factoryfloor), built by [David Poblador i Garcia](https://davidpoblador.com/) through [All Tuner Labs](https://alltuner.com/) and extended by [Andrés González](https://github.com/AndresGonzalez5).
 
 If this project helped you ship faster, automate your workflow, or experiment with coding agents, consider supporting its development.
 
 ❤️ **Sponsor development**
-https://github.com/sponsors/alltuner
+https://github.com/sponsors/phaedryx
 
-☕ **One-time support**
-https://buymeacoffee.com/alltuner
-
-Your support helps fund the continued development of Factory Floor and other open source developer tools such as [VibeTuner](https://github.com/alltuner/vibetuner).
+If you would rather support the original authors, sponsor [All Tuner Labs](https://github.com/sponsors/alltuner) instead.
 
 ## License
 
@@ -264,6 +263,7 @@ Your support helps fund the continued development of Factory Floor and other ope
 ---
 
 <p align="center">
-  Built by <a href="https://davidpoblador.com">David Poblador i Garcia</a> with the support of <a href="https://alltuner.com">All Tuner Labs</a>.<br>
-  Made with ❤️ in Poblenou, Barcelona.
+  Forked from <a href="https://github.com/alltuner/factoryfloor">Factory Floor</a>, built by
+  <a href="https://davidpoblador.com">David Poblador i Garcia</a> with the support of
+  <a href="https://alltuner.com">All Tuner Labs</a>.<br>
 </p>

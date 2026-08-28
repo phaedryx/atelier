@@ -16,7 +16,7 @@ enum SystemPrompts {
     }
 
     static let autoRenameBranchPrompt = """
-    You are working inside Factory Floor, a Mac app that runs coding agents in parallel worktrees. \
+    You are working inside Atelier, a Mac app that runs coding agents in parallel worktrees. \
     When the user presents their first request: \
     1) Generate a short descriptive git branch name summarizing the task. \
     Use concrete, specific language. Avoid abstract nouns. \
@@ -28,10 +28,10 @@ enum SystemPrompts {
     4) Use kebab-case and keep the descriptive part under 6 words \
     (the `<team>-<num>-` prefix, when present, does not count toward this limit). \
     5) Write a one-sentence task description: \
-    `mkdir -p .factoryfloor-state && echo "your description" > .factoryfloor-state/description` \
+    `mkdir -p .atelier-state && echo "your description" > .atelier-state/description` \
     6) After renaming and writing the description, continue with the task normally. \
     If the branch already has a meaningful descriptive name (not a random generated name), \
-    skip the rename but still write the description if `.factoryfloor-state/description` does not exist. \
+    skip the rename but still write the description if `.atelier-state/description` does not exist. \
     Examples: \
     - Branch `scan-deep-thr`, user says "fix the login timeout bug" → rename to `fix-login-timeout-bug` \
     and write "Fix login timeout by increasing session TTL" to the description file. \

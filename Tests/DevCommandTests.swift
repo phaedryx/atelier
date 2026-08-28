@@ -1,7 +1,7 @@
 // ABOUTME: Tests for dev server command resolution (browser tab auto-start).
 // ABOUTME: Covers package.json detection, lockfile manager inference, and override precedence.
 
-@testable import FactoryFloor
+@testable import Atelier
 import XCTest
 
 final class DevCommandTests: XCTestCase {
@@ -90,7 +90,7 @@ final class DevCommandTests: XCTestCase {
     func testConfigRunScriptWinsOverEverything() throws {
         try writePackageJSON(["dev": "vite"])
         DevCommandResolver.saveOverride("npm --prefix frontend run dev", for: workstreamID)
-        let config = ScriptConfig(setup: nil, run: "make serve", teardown: nil, source: ".factoryfloor.json", loadError: nil)
+        let config = ScriptConfig(setup: nil, run: "make serve", teardown: nil, source: ".atelier.json", loadError: nil)
 
         let resolved = DevCommandResolver.resolve(
             scriptConfig: config,

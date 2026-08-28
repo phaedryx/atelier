@@ -4,7 +4,7 @@
 import Foundation
 import os
 
-private let logger = Logger(subsystem: "factoryfloor", category: "agent-state")
+private let logger = Logger(subsystem: "atelier", category: "agent-state")
 
 /// Tracks the live agent runs in each workstream.
 ///

@@ -1,7 +1,7 @@
 // ABOUTME: Tests for the pure flat-paths -> nested file tree builder used by the Changes sidebar.
 // ABOUTME: Validates nesting, sort order (dirs before files, case-insensitive), and leaf metadata.
 
-@testable import FactoryFloor
+@testable import Atelier
 import XCTest
 
 final class FileTreeTests: XCTestCase {

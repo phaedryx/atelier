@@ -2,21 +2,22 @@
 
 ## Channels
 
-Factory Floor ships via two channels:
+Atelier ships via two channels:
 
-1. **Homebrew cask** (primary): `brew install --cask alltuner/tap/factoryfloor`
+1. **Homebrew cask** (primary): `brew install --cask phaedryx/tap/atelier`
    - Installs the app and the `ff` CLI automatically
-   - Upgrade: `brew upgrade --cask factoryfloor`
+   - Upgrade: `brew upgrade --cask atelier`
 2. **Direct DMG** via GitHub Releases
    - CLI available from Settings > Environment
 
 ## Update notification
 
-DMG users get automatic updates via Sparkle, which reads the appcast
-feed at `https://factory-floor.com/appcast.xml`.
+Atelier has no in-app updater. `UpdateChecker` polls the GitHub Releases
+API for `phaedryx/atelier` on launch and shows a sidebar badge when a newer
+release is published; drafts and pre-releases are ignored.
 
-Homebrew users see a sidebar badge when a newer version is available.
-The app parses the version from the same appcast feed.
+Clicking the badge shows the `brew upgrade --cask atelier` command. DMG
+users download the new release manually.
 
 ## Release flow
 
@@ -30,10 +31,8 @@ The app parses the version from the same appcast feed.
    - Notarize via stored keychain profile
    - Create and sign DMG
    - Upload DMG to GitHub release
-   - Update Homebrew cask in `alltuner/homebrew-tap`
-   - Trigger website deploy (deploys appcast.xml from the release)
-5. Website deploys automatically (GitHub Pages)
-6. Users see update badge on next app launch
+   - Update Homebrew cask in `phaedryx/homebrew-tap`
+5. Users see the update badge on next app launch
 
 ## Required secrets
 
@@ -45,6 +44,8 @@ The app parses the version from the same appcast feed.
 | `APPLE_TEAM_ID` | Team identifier |
 | `APPLE_APP_PASSWORD` | App-specific password for notarization |
 | `HOMEBREW_TAP_TOKEN` | PAT with `public_repo` scope for tap updates |
+| `SIGNING_IDENTITY` | e.g. `Developer ID Application: Your Name (TEAMID)` |
+| `DEVELOPMENT_TEAM` | Apple Developer Team ID |
 
 ## Local release (manual)
 
@@ -55,11 +56,15 @@ The app parses the version from the same appcast feed.
 Builds, signs, notarizes, and creates a DMG locally. Version defaults
 to the value in `.release-please-manifest.json` if not provided.
 
-## Auto-update (future)
+## Auto-update (not shipped)
 
-Sparkle integration is planned after the release pipeline is stable.
-The `bleedingEdge` setting in the app is reserved for future beta
-channel selection.
+The upstream project used Sparkle. This fork dropped it: the signing key
+and appcast feed belonged to the original authors, and shipping an update
+channel pointed at someone else's builds is worse than having none.
+
+Restoring it means generating a new Ed25519 key pair with Sparkle's
+`generate_keys`, hosting an appcast, and reinstating the Sparkle package
+in `project.yml`.
 
 ## Release verification checklist
 
@@ -67,6 +72,4 @@ After a release, verify:
 
 1. GitHub release exists with notarized DMG attached
 2. Homebrew cask points to the new DMG
-3. `factory-floor.com/appcast.xml` reports the new version
-4. `/get` page shows correct install/upgrade commands
-5. App shows update badge when running an older version
+3. App shows the update badge when running an older version

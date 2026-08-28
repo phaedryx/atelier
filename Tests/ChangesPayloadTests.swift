@@ -1,7 +1,7 @@
 // ABOUTME: Tests for ChangesView's pure diff-payload classification.
 // ABOUTME: Validates binary/deferred/normal decisions and the large-file thresholds.
 
-@testable import FactoryFloor
+@testable import Atelier
 import XCTest
 
 final class ChangesPayloadTests: XCTestCase {

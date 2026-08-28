@@ -64,7 +64,7 @@ struct FileTypeIcon {
             return FileTypeIcon(symbolName: "photo")
 
         // Fonts
-        case "ttf", "otf", "woff", "woff2":
+        case "ttf", "otf", "woff", "woatelier":
             return FileTypeIcon(symbolName: "textformat")
 
         // SQL

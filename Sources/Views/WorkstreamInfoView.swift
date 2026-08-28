@@ -26,7 +26,7 @@ struct WorkstreamInfoView: View {
     var onRestart: () -> Void = {}
 
     @EnvironmentObject var appEnv: AppEnvironment
-    @AppStorage("factoryfloor.defaultTerminal") private var defaultTerminal: String = ""
+    @AppStorage("atelier.defaultTerminal") private var defaultTerminal: String = ""
     @State private var branchName: String?
     @State private var copiedBranch = false
     @State private var copiedPath = false

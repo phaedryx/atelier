@@ -30,11 +30,11 @@ jobs:
       contents: write
       actions: write
     env:
-      SIGNING_IDENTITY: "Developer ID Application: ALL TUNER LABS S.L. (J5TAY75Q3F)"
-      APP_NAME: "Factory Floor"
-      SCHEME: "FactoryFloor"
-      PROJECT: "FactoryFloor.xcodeproj"
-      SPARKLE_VERSION: "2.9.0"
+      SIGNING_IDENTITY: ${{ secrets.SIGNING_IDENTITY }}
+      DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
+      APP_NAME: "Atelier"
+      SCHEME: "Atelier"
+      PROJECT: "Atelier.xcodeproj"
     steps:
       - uses: actions/checkout@v6
         with:
@@ -78,10 +78,6 @@ jobs:
           cd ghostty
           zig build -Demit-xcframework=true -Demit-macos-app=false -Dxcframework-target=universal -Doptimize=ReleaseFast
 
-      - name: Setup Sparkle
-        uses: jozefizso/setup-sparkle@v2
-        with:
-          version: ${{ env.SPARKLE_VERSION }}
 
       - name: Build Monaco editor
         run: ./scripts/build-editor.sh
@@ -113,7 +109,7 @@ jobs:
             -destination 'generic/platform=macOS' \
             -derivedDataPath build/derived \
             -clonedSourcePackagesDirPath build/derived/SourcePackages \
-            DEVELOPMENT_TEAM=J5TAY75Q3F \
+            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" \
             CODE_SIGN_STYLE=Manual \
             ENABLE_HARDENED_RUNTIME=YES \
@@ -125,15 +121,21 @@ jobs:
         continue-on-error: true
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
         run: |
           if [ -z "$SENTRY_AUTH_TOKEN" ]; then
             echo "::warning::SENTRY_AUTH_TOKEN not set, skipping dSYM upload"
             exit 0
           fi
+          if [ -z "$SENTRY_ORG" ] || [ -z "$SENTRY_PROJECT" ]; then
+            echo "::warning::SENTRY_ORG/SENTRY_PROJECT not set, skipping dSYM upload"
+            exit 0
+          fi
           brew install getsentry/tools/sentry-cli
           sentry-cli debug-files upload \
-            --org all-tuner-labs \
-            --project factory-floor \
+            --org "$SENTRY_ORG" \
+            --project "$SENTRY_PROJECT" \
             build/derived/Build/Products/Release/*.dSYM
 
       - name: Package and sign
@@ -150,17 +152,6 @@ jobs:
           cp -R "$APP_BUILT" "build/release/${APP_NAME}.app"
           APP="build/release/${APP_NAME}.app"
 
-          # Codesign Sparkle framework components (XPC services, helpers, then framework)
-          codesign --force --sign "$SIGNING_IDENTITY" --timestamp --options=runtime \
-            "$APP/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Downloader.xpc"
-          codesign --force --sign "$SIGNING_IDENTITY" --timestamp --options=runtime \
-            "$APP/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Installer.xpc"
-          codesign --force --sign "$SIGNING_IDENTITY" --timestamp --options=runtime \
-            "$APP/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate"
-          codesign --force --sign "$SIGNING_IDENTITY" --timestamp --options=runtime \
-            "$APP/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app"
-          codesign --force --sign "$SIGNING_IDENTITY" --timestamp --options=runtime \
-            "$APP/Contents/Frameworks/Sparkle.framework"
 
           # Re-sign embedded frameworks with secure timestamp and hardened runtime
           find "$APP/Contents/Frameworks" -type f -perm +111 -o -name "*.dylib" | while read -r bin; do
@@ -174,7 +165,7 @@ jobs:
 
           # Sign the main app binary (not --deep, nested code is already signed above)
           codesign --force --sign "$SIGNING_IDENTITY" --timestamp --options=runtime \
-            --entitlements Resources/ff2.entitlements "$APP"
+            --entitlements Resources/atelier.entitlements "$APP"
 
           codesign --verify --verbose=2 --deep --strict "$APP"
 
@@ -238,51 +229,6 @@ jobs:
 
           xcrun stapler staple "build/release/$DMG_NAME"
 
-      - name: Generate appcast
-        env:
-          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.release-please.outputs.version }}
-          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
-        run: |
-          echo "$SPARKLE_PRIVATE_KEY" > /tmp/sparkle_key
-          SIGN_OUTPUT=$(sign_update -f /tmp/sparkle_key "build/release/$DMG_NAME")
-          rm -f /tmp/sparkle_key
-
-          # sign_update outputs: sparkle:edSignature="<sig>" length="<len>"
-          SIGNATURE=$(echo "$SIGN_OUTPUT" | sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p')
-          if [ -z "$SIGNATURE" ]; then
-            echo "::error::Failed to extract Ed25519 signature from sign_update output"
-            echo "sign_update output: $SIGN_OUTPUT"
-            exit 1
-          fi
-
-          # Download an existing appcast to merge with (preserves items for the Homebrew
-          # update popover). Cannot use --latest because release-please already created
-          # the current (empty) release. Walk back through previous releases until one
-          # actually yields an appcast: a release whose build failed carries no assets,
-          # and stopping at it would silently drop every historical item.
-          for CANDIDATE in $(gh release list --repo "$GITHUB_REPOSITORY" --limit 10 --json tagName --jq "[.[] | select(.tagName != \"$TAG_NAME\")][].tagName"); do
-            rm -f existing-appcast.xml
-            if gh release download "$CANDIDATE" --repo "$GITHUB_REPOSITORY" --pattern "appcast.xml" --output existing-appcast.xml 2>/dev/null; then
-              echo "Carrying forward appcast items from $CANDIDATE"
-              break
-            fi
-          done
-          if [ ! -f existing-appcast.xml ]; then
-            echo "::warning::No previous appcast found; this release's appcast will contain only its own item"
-          fi
-
-          DMG_URL="https://github.com/alltuner/factoryfloor/releases/download/v${VERSION}/${DMG_NAME}"
-          python3 scripts/generate_appcast.py \
-            --version "$VERSION" \
-            --signature "$SIGNATURE" \
-            --dmg-path "build/release/$DMG_NAME" \
-            --dmg-url "$DMG_URL" \
-            --changelog CHANGELOG.md \
-            --existing existing-appcast.xml \
-            --output appcast.xml
-
       - name: Upload to release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -290,7 +236,7 @@ jobs:
           TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
         run: |
           for attempt in 1 2 3 4 5; do
-            if gh release upload --clobber "$TAG_NAME" "build/release/$DMG_NAME" appcast.xml; then
+            if gh release upload --clobber "$TAG_NAME" "build/release/$DMG_NAME"; then
               exit 0
             fi
 
@@ -307,39 +253,39 @@ jobs:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           VERSION: ${{ needs.release-please.outputs.version }}
         run: |
-          DMG_URL="https://github.com/alltuner/factoryfloor/releases/download/v${VERSION}/${DMG_NAME}"
+          DMG_URL="https://github.com/phaedryx/atelier/releases/download/v${VERSION}/${DMG_NAME}"
           SHA256=$(shasum -a 256 "build/release/$DMG_NAME" | awk '{print $1}')
 
-          CASK_SHA=$(gh api repos/alltuner/homebrew-tap/contents/Casks/factoryfloor.rb \
+          CASK_SHA=$(gh api repos/phaedryx/homebrew-tap/contents/Casks/atelier.rb \
             --method GET -q '.sha')
 
           CASK_CONTENT=$(cat <<RUBY
-          cask "factoryfloor" do
+          cask "atelier" do
             version "${VERSION}"
             sha256 "${SHA256}"
 
             url "${DMG_URL}"
-            name "Factory Floor"
+            name "Atelier"
             desc "AI-powered development workspace for macOS"
-            homepage "https://factory-floor.com"
+            homepage "https://github.com/phaedryx/atelier"
 
             depends_on macos: ">= :sonoma"
 
-            app "Factory Floor.app"
-            binary "#{appdir}/Factory Floor.app/Contents/Resources/ff", target: "ff"
+            app "Atelier.app"
+            binary "#{appdir}/Atelier.app/Contents/Resources/atelier", target: "atelier"
 
             zap trash: [
-              "~/.config/factoryfloor",
-              "~/.factoryfloor",
-              "~/Library/Preferences/com.alltuner.factoryfloor.plist",
+              "~/.config/atelier",
+              "~/.atelier",
+              "~/Library/Preferences/com.github.phaedryx.atelier.plist",
             ]
           end
           RUBY
           )
 
-          gh api repos/alltuner/homebrew-tap/contents/Casks/factoryfloor.rb \
+          gh api repos/phaedryx/homebrew-tap/contents/Casks/atelier.rb \
             --method PUT \
-            -f message="chore: update factoryfloor to v${VERSION}" \
+            -f message="chore: update atelier to v${VERSION}" \
             -f content="$(echo "$CASK_CONTENT" | base64)" \
             -f sha="$CASK_SHA"
 

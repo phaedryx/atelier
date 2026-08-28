@@ -1,7 +1,7 @@
 // ABOUTME: Tests for environment tab session restoration decisions.
 // ABOUTME: Verifies run panes reappear when tmux already has a persisted run session.
 
-@testable import FactoryFloor
+@testable import Atelier
 import XCTest
 
 final class EnvironmentTabViewTests: XCTestCase {
@@ -21,9 +21,9 @@ final class EnvironmentTabViewTests: XCTestCase {
     }
 
     func testSetupScriptAppendsCompletionMessage() {
-        let command = scriptCommand(script: "./.hooks/factoryfloor-setup.sh", role: "setup", shell: "/bin/zsh")
+        let command = scriptCommand(script: "./.hooks/atelier-setup.sh", role: "setup", shell: "/bin/zsh")
 
-        XCTAssertTrue(command.contains("./.hooks/factoryfloor-setup.sh"))
+        XCTAssertTrue(command.contains("./.hooks/atelier-setup.sh"))
         XCTAssertTrue(command.contains("Setup completed in this terminal."))
     }
 
@@ -47,7 +47,7 @@ final class EnvironmentTabViewTests: XCTestCase {
     }
 
     func testRunScriptCommandUsesLoginShell() {
-        let command = runScriptCommand(script: "bun dev", workstreamID: UUID(), launcherPath: "/path/to/ff-run", shell: "/bin/zsh")
+        let command = runScriptCommand(script: "bun dev", workstreamID: UUID(), launcherPath: "/path/to/atelier-run", shell: "/bin/zsh")
 
         XCTAssertTrue(command.contains("/bin/zsh -lic"))
         XCTAssertFalse(command.contains("/bin/sh"))

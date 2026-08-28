@@ -4,15 +4,15 @@
 
 set -euo pipefail
 
-PROJECT_DIR="${1:-/Users/andresgonzalez/.factoryfloor/worktrees/crm-backend/queue-short-fifo}"
-PORT_FILE="$HOME/Library/Caches/factoryfloor/hook-port"
+PROJECT_DIR="${1:-/Users/andresgonzalez/.atelier/worktrees/crm-backend/queue-short-fifo}"
+PORT_FILE="$HOME/Library/Caches/atelier/hook-port"
 SESSION_ID="test-session-$(date +%s)"
 PASS=0
 FAIL=0
 
 if [ ! -f "$PORT_FILE" ]; then
   echo "ERROR: No port file found at $PORT_FILE"
-  echo "Is VibeFloor running?"
+  echo "Is Atelier running?"
   exit 1
 fi
 

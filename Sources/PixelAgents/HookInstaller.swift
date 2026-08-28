@@ -1,14 +1,14 @@
-// ABOUTME: Installs and uninstalls ff-hook entries in ~/.claude/settings.json.
-// ABOUTME: Idempotent — detects existing entries by command containing "ff-hook".
+// ABOUTME: Installs and uninstalls atelier-hook entries in ~/.claude/settings.json.
+// ABOUTME: Idempotent — detects existing entries by command containing "atelier-hook".
 
 import Foundation
 import os
 
-private let logger = Logger(subsystem: "factoryfloor", category: "hook-installer")
+private let logger = Logger(subsystem: "atelier", category: "hook-installer")
 
 enum HookInstaller {
 
-    /// Hook event types that ff-hook should be registered for.
+    /// Hook event types that atelier-hook should be registered for.
     private static let hookEvents = [
         "PreToolUse",
         "PostToolUse",
@@ -27,8 +27,8 @@ enum HookInstaller {
 
     // MARK: - Install
 
-    /// Reads `~/.claude/settings.json`, merges ff-hook entries for all event types, and writes back atomically.
-    /// - Parameter hookScriptPath: Absolute path to the `ff-hook` script bundled in the app.
+    /// Reads `~/.claude/settings.json`, merges atelier-hook entries for all event types, and writes back atomically.
+    /// - Parameter hookScriptPath: Absolute path to the `atelier-hook` script bundled in the app.
     static func install(hookScriptPath: String) {
         let fm = FileManager.default
         let path = settingsPath
@@ -61,11 +61,11 @@ enum HookInstaller {
         for eventName in hookEvents {
             var eventEntries = hooks[eventName] as? [[String: Any]] ?? []
 
-            // Check if ff-hook is already registered for this event
+            // Check if atelier-hook is already registered for this event
             let alreadyInstalled = eventEntries.contains { entry in
                 if let entryHooks = entry["hooks"] as? [[String: Any]] {
                     return entryHooks.contains { hook in
-                        (hook["command"] as? String)?.contains("ff-hook") == true
+                        (hook["command"] as? String)?.contains("atelier-hook") == true
                     }
                 }
                 return false
@@ -94,7 +94,7 @@ enum HookInstaller {
 
         do {
             try jsonData.write(to: URL(fileURLWithPath: path), options: .atomic)
-            logger.info("Installed ff-hook in settings.json for \(hookEvents.count) event types")
+            logger.info("Installed atelier-hook in settings.json for \(hookEvents.count) event types")
         } catch {
             logger.error("Failed to write settings.json: \(error.localizedDescription)")
         }
@@ -102,7 +102,7 @@ enum HookInstaller {
 
     // MARK: - Uninstall
 
-    /// Removes all ff-hook entries from `~/.claude/settings.json`, preserving everything else.
+    /// Removes all atelier-hook entries from `~/.claude/settings.json`, preserving everything else.
     static func uninstall() {
         let fm = FileManager.default
         let path = settingsPath
@@ -121,7 +121,7 @@ enum HookInstaller {
             let filtered = eventEntries.filter { entry in
                 guard let entryHooks = entry["hooks"] as? [[String: Any]] else { return true }
                 return !entryHooks.contains { hook in
-                    (hook["command"] as? String)?.contains("ff-hook") == true
+                    (hook["command"] as? String)?.contains("atelier-hook") == true
                 }
             }
 
@@ -145,6 +145,6 @@ enum HookInstaller {
         ) else { return }
 
         try? jsonData.write(to: URL(fileURLWithPath: path), options: .atomic)
-        logger.info("Uninstalled ff-hook from settings.json")
+        logger.info("Uninstalled atelier-hook from settings.json")
     }
 }

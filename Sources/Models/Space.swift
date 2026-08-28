@@ -24,7 +24,7 @@ struct Space: Identifiable, Hashable, Codable, Sendable {
 }
 
 enum SpaceStore {
-    private static let userDefaultsKey = "factoryfloor.spaces"
+    private static let userDefaultsKey = "atelier.spaces"
 
     static func load(defaults: UserDefaults = .standard) -> [Space] {
         guard let data = defaults.data(forKey: userDefaultsKey),
@@ -43,7 +43,7 @@ enum SpaceStore {
 /// first paint already sees migrated data. Operates directly on UserDefaults
 /// via the static stores. Idempotent and safe to call on every launch.
 enum SpacesBootstrap {
-    static let currentSpaceKey = "factoryfloor.currentSpace"
+    static let currentSpaceKey = "atelier.currentSpace"
 
     static func migrateIfNeeded(defaults: UserDefaults = .standard) {
         var spaces = SpaceStore.load(defaults: defaults)

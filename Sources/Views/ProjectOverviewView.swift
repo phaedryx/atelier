@@ -11,7 +11,7 @@ struct ProjectOverviewView: View {
     let onProjectChanged: () -> Void
 
     @EnvironmentObject var appEnv: AppEnvironment
-    @AppStorage("factoryfloor.workstreamSortOrder") private var workstreamSortOrder: ProjectSortOrder = .recent
+    @AppStorage("atelier.workstreamSortOrder") private var workstreamSortOrder: ProjectSortOrder = .recent
     @State private var worktrees: [WorktreeInfo] = []
     @State private var showingPruneConfirm = false
     @State private var isPruning = false
@@ -19,7 +19,7 @@ struct ProjectOverviewView: View {
     @State private var worktreeToPurge: WorktreeInfo?
     @State private var worktreePurgeWarning: String?
 
-    @AppStorage("factoryfloor.defaultTerminal") private var defaultTerminal: String = ""
+    @AppStorage("atelier.defaultTerminal") private var defaultTerminal: String = ""
     @State private var docFiles: [DocFile] = []
     @State private var selectedDoc: String?
     @State private var selectedWorktreeForDetail: WorktreeInfo?

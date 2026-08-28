@@ -1,5 +1,5 @@
 // ABOUTME: Builds environment variables injected into workstream terminals.
-// ABOUTME: Centralizes FF_* vars, default branch, and compatibility aliases for external tools.
+// ABOUTME: Centralizes ATELIER_* vars, legacy FF_* aliases, and compatibility aliases for external tools.
 
 import Foundation
 
@@ -23,15 +23,24 @@ enum WorkstreamEnvironment {
         let portString = "\(port)"
 
         var vars = [
-            "FF_WORKSTREAM_ID": id,
-            "FF_PROJECT": projectName,
-            "FF_WORKSTREAM": workstreamName,
-            "FF_PROJECT_DIR": projectDirectory,
-            "FF_WORKTREE_DIR": workingDirectory,
-            "FF_PORT": portString,
-            "FF_DEFAULT_BRANCH": defaultBranch,
-            "FF_HARNESS": harness.rawValue,
+            "ATELIER_WORKSTREAM_ID": id,
+            "ATELIER_PROJECT": projectName,
+            "ATELIER_WORKSTREAM": workstreamName,
+            "ATELIER_PROJECT_DIR": projectDirectory,
+            "ATELIER_WORKTREE_DIR": workingDirectory,
+            "ATELIER_PORT": portString,
+            "ATELIER_DEFAULT_BRANCH": defaultBranch,
+            "ATELIER_HARNESS": harness.rawValue,
         ]
+
+        // Run scripts that read FF_* live in the user's own repositories, where a
+        // rename here cannot reach them. Export both spellings, the same way the
+        // CONDUCTOR_/EMDASH_/SUPERSET_ aliases below cover other tools' scripts.
+        for (key, value) in Array(vars) {
+            guard let suffix = key.stripping(prefix: "ATELIER_") else { continue }
+            vars["FF_" + suffix] = value
+        }
+
         // Agent Teams is a Claude Code experimental feature.
         if agentTeams, harness == .claudeCode {
             vars["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
@@ -60,5 +69,12 @@ enum WorkstreamEnvironment {
         }
 
         return vars
+    }
+}
+
+private extension String {
+    /// Returns the remainder after `prefix`, or nil when the string doesn't start with it.
+    func stripping(prefix: String) -> String? {
+        hasPrefix(prefix) ? String(dropFirst(prefix.count)) : nil
     }
 }

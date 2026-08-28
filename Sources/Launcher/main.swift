@@ -15,7 +15,7 @@ do {
     FileHandle.standardError.write(Data((error.message + "\n").utf8))
     exit(error.exitCode)
 } catch {
-    FileHandle.standardError.write(Data("ff-run failed: \(error.localizedDescription)\n".utf8))
+    FileHandle.standardError.write(Data("atelier-run failed: \(error.localizedDescription)\n".utf8))
     exit(1)
 }
 
@@ -31,7 +31,7 @@ private func launchCommand(configuration: Configuration) throws {
     var pathBuf = [CChar](repeating: 0, count: Int(MAXPATHLEN))
     var pathLen = UInt32(pathBuf.count)
     guard _NSGetExecutablePath(&pathBuf, &pathLen) == 0 else {
-        throw LauncherError(exitCode: 1, message: "cannot determine ff-run path")
+        throw LauncherError(exitCode: 1, message: "cannot determine atelier-run path")
     }
     let selfPath = String(decoding: pathBuf.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }, as: UTF8.self)
 
@@ -60,7 +60,7 @@ private func launchCommand(configuration: Configuration) throws {
 
     // exec only returns on failure
     let err = String(cString: strerror(errno))
-    FileHandle.standardError.write(Data("ff-run: exec failed: \(err)\n".utf8))
+    FileHandle.standardError.write(Data("atelier-run: exec failed: \(err)\n".utf8))
     kill(monitorPID, SIGTERM)
     exit(1)
 }
@@ -123,7 +123,7 @@ private func writeState(configuration: Configuration, pid: Int32, status: RunSta
 
 private final class PortScanner: @unchecked Sendable {
     private let pid: Int32
-    private let queue = DispatchQueue(label: "factoryfloor.ff-run.scanner")
+    private let queue = DispatchQueue(label: "atelier.atelier-run.scanner")
     private var timer: DispatchSourceTimer?
     private var tracker: PortSelectionTracker
     private(set) var detectedPorts: [Int] = []
@@ -285,7 +285,7 @@ private struct Configuration {
                 guard valueIndex < arguments.count,
                       let pid = Int32(arguments[valueIndex])
                 else {
-                    throw LauncherError(exitCode: 2, message: "ff-run --pid requires a valid PID")
+                    throw LauncherError(exitCode: 2, message: "atelier-run --pid requires a valid PID")
                 }
                 monitorPID = pid
                 index += 2
@@ -296,7 +296,7 @@ private struct Configuration {
                 guard valueIndex < arguments.count,
                       let parsedID = UUID(uuidString: arguments[valueIndex])
                 else {
-                    throw LauncherError(exitCode: 2, message: "ff-run requires a valid --workstream-id")
+                    throw LauncherError(exitCode: 2, message: "atelier-run requires a valid --workstream-id")
                 }
                 workstreamID = parsedID
                 index += 2
@@ -306,20 +306,20 @@ private struct Configuration {
         }
 
         guard let workstreamID else {
-            throw LauncherError(exitCode: 2, message: "ff-run requires --workstream-id <uuid>")
+            throw LauncherError(exitCode: 2, message: "atelier-run requires --workstream-id <uuid>")
         }
 
         self.monitorMode = monitorMode
         self.monitorPID = monitorPID
         self.workstreamID = workstreamID
-        expectedPort = ProcessInfo.processInfo.environment["FF_PORT"].flatMap(Int.init)
+        expectedPort = ProcessInfo.processInfo.environment["ATELIER_PORT"].flatMap(Int.init)
         startedAt = Date()
 
         if monitorMode {
             command = []
         } else {
             guard let commandStartIndex, commandStartIndex < arguments.count else {
-                throw LauncherError(exitCode: 2, message: "ff-run requires a command after --")
+                throw LauncherError(exitCode: 2, message: "atelier-run requires a command after --")
             }
             command = Array(arguments[commandStartIndex...])
         }

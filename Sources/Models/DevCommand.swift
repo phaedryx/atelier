@@ -1,12 +1,12 @@
 // ABOUTME: Resolves the command that starts a workstream's local dev server.
-// ABOUTME: Precedence: .factoryfloor.json run script, user override, package.json dev script.
+// ABOUTME: Precedence: .atelier.json run script, user override, package.json dev script.
 
 import Foundation
 
 /// The command that starts a workstream's dev server, and where it came from.
 struct DevCommand: Equatable {
     enum Source: String, Equatable {
-        /// run script from .factoryfloor.json (or fallback config). Still approval-gated.
+        /// run script from .atelier.json (or fallback config). Still approval-gated.
         case configScript
         /// Per-workstream command saved by the user in the Environment pane.
         case override
@@ -20,7 +20,7 @@ struct DevCommand: Equatable {
 }
 
 enum DevCommandResolver {
-    private static let overrideKeyPrefix = "factoryfloor.devCommand."
+    private static let overrideKeyPrefix = "atelier.devCommand."
 
     // MARK: - Per-workstream override
 

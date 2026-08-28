@@ -5,7 +5,7 @@ import CryptoKit
 import Foundation
 
 enum ScriptTrust {
-    private static let userDefaultsKey = "factoryfloor.approvedScripts"
+    private static let userDefaultsKey = "atelier.approvedScripts"
 
     /// Identifies the executable content of a config. Any change to a command,
     /// to the role a command sits in, or to the file it was read from produces a

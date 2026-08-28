@@ -1,10 +1,10 @@
 // ABOUTME: Loads setup/run/teardown script configuration from project config files.
-// ABOUTME: Resolves from .factoryfloor.json, .emdash.json, conductor.json, or .superset/config.json.
+// ABOUTME: Resolves from .atelier.json, legacy .factoryfloor.json, .emdash.json, conductor.json, or .superset/config.json.
 
 import Foundation
 import os
 
-private let logger = Logger(subsystem: "factoryfloor", category: "script-config")
+private let logger = Logger(subsystem: "atelier", category: "script-config")
 
 struct ScriptConfig {
     let setup: String?
@@ -16,12 +16,16 @@ struct ScriptConfig {
     static let empty = ScriptConfig(setup: nil, run: nil, teardown: nil, source: nil, loadError: nil)
 
     /// Load script config for a project directory.
-    /// Checks .factoryfloor.json first, then .emdash.json, conductor.json, then .superset/config.json.
+    /// Checks .atelier.json first, then the legacy .factoryfloor.json, then
+    /// .emdash.json, conductor.json, and .superset/config.json.
     static func load(from directory: String) -> ScriptConfig {
         let dir = URL(fileURLWithPath: directory)
 
         let candidates: [(path: String, source: String, loader: (String) throws -> ScriptConfig)] = [
-            (dir.appendingPathComponent(".factoryfloor.json").path, ".factoryfloor.json", loadFF2),
+            (dir.appendingPathComponent(".atelier.json").path, ".atelier.json", loadAtelier),
+            // Same schema under the pre-fork name, so repositories configured for
+            // Factory Floor keep working without being edited.
+            (dir.appendingPathComponent(".factoryfloor.json").path, ".factoryfloor.json", loadAtelier),
             (dir.appendingPathComponent(".emdash.json").path, ".emdash.json", loadEmdash),
             (dir.appendingPathComponent("conductor.json").path, "conductor.json", loadConductor),
             (dir.appendingPathComponent(".superset/config.json").path, ".superset/config.json", loadSuperset),
@@ -80,7 +84,7 @@ struct ScriptConfig {
     }
 
     /// { "setup": "cmd", "run": "cmd", "teardown": "cmd" }
-    private static func loadFF2(_ path: String) throws -> ScriptConfig {
+    private static func loadAtelier(_ path: String) throws -> ScriptConfig {
         let dict = try loadJSON(path)
         let setup = dict["setup"] as? String
         let run = dict["run"] as? String

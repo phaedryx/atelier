@@ -1,7 +1,7 @@
 // ABOUTME: Tests for the CodingHarness enum.
 // ABOUTME: Validates raw values, display metadata, and Codable stability.
 
-@testable import FactoryFloor
+@testable import Atelier
 import XCTest
 
 final class CodingHarnessTests: XCTestCase {

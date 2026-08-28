@@ -1,7 +1,7 @@
 // ABOUTME: Tests for agent sprite resolution: type-keyed sets, variant
 // ABOUTME: cycling, name normalization, and bundle-backed fallbacks.
 
-@testable import FactoryFloor
+@testable import Atelier
 import XCTest
 
 @MainActor

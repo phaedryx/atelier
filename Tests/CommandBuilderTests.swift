@@ -1,7 +1,7 @@
 // ABOUTME: Tests for CommandBuilder shell command composition and quoting.
 // ABOUTME: Validates escaping of special characters, spaces, quotes, and nested commands.
 
-@testable import FactoryFloor
+@testable import Atelier
 import XCTest
 
 final class CommandBuilderTests: XCTestCase {

@@ -83,7 +83,7 @@ struct EditorView: View {
             openFileFinder()
         }
         .onChange(of: finderQuery) { _, newQuery in
-            print("[FF] query -> \(newQuery)")
+            print("[Atelier] query -> \(newQuery)")
             refreshFinderResults()
         }
         .alert(
@@ -437,7 +437,7 @@ struct EditorView: View {
             DispatchQueue.main.async {
                 self.fileIndex = visible
                 self.isScanningFiles = false
-                print("[FF] scan done: \(visible.count) files")
+                print("[Atelier] scan done: \(visible.count) files")
                 self.refreshFinderResults()
             }
         }
@@ -450,7 +450,7 @@ struct EditorView: View {
         let results = FileFinder.results(matching: finderQuery, in: fileIndex)
         finderResults = results
         finderSelection = results.isEmpty ? nil : 0
-        print("[FF] refresh(\(finderQuery)) -> \(results.prefix(3).map { ($0 as NSString).lastPathComponent }.joined(separator: ", "))")
+        print("[Atelier] refresh(\(finderQuery)) -> \(results.prefix(3).map { ($0 as NSString).lastPathComponent }.joined(separator: ", "))")
     }
 
     private func moveFinderSelection(_ delta: Int) {

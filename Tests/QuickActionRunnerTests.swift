@@ -1,7 +1,7 @@
 // ABOUTME: Tests for parsing `opencode run --format json` streams into
 // ABOUTME: human-readable quick-action summaries and PR artifact links.
 
-@testable import FactoryFloor
+@testable import Atelier
 import XCTest
 
 final class QuickActionRunnerTests: XCTestCase {

@@ -16,10 +16,10 @@ roster in `WorkstreamAgentStateTracker`.
 
 ```
 Claude Code hooks (settings.json)
-  → ff-hook (shell script, reads stdin JSON + CLAUDE_PROJECT_DIR env var)
+  → atelier-hook (shell script, reads stdin JSON + CLAUDE_PROJECT_DIR env var)
   → curl POST http://127.0.0.1:{port}/hook
   → HookEventReceiver (NWListener, Swift)
-  → FF2App.onEvent → HookEventRouter (fan-out) + WorkstreamAgentStateTracker.handle
+  → AtelierApp.onEvent → HookEventRouter (fan-out) + WorkstreamAgentStateTracker.handle
   → Sidebar: MainAgentPortrait state ring on the row + WorkstreamAgentRosterView cards
 ```
 
@@ -38,7 +38,7 @@ for these events:
 | `SubagentStop` | Subagent finished | `agentRemoved` | That roster card removed |
 | `Notification` | Permission prompt / idle nudge | `agentStatus` | Orange permission ring + badge |
 
-Each hook entry uses `type: "command"` pointing to the bundled `ff-hook` script.
+Each hook entry uses `type: "command"` pointing to the bundled `atelier-hook` script.
 
 Every payload also carries the session's `transcript_path`; the tracker reads
 context-window usage from its tail (see [Context window usage](#context-window-usage)).
@@ -46,14 +46,14 @@ context-window usage from its tail (see [Context window usage](#context-window-u
 ## Port discovery
 
 The HTTP listener binds to `127.0.0.1` on a dynamic port (OS-assigned via port
-0). The actual port is written to `~/Library/Caches/factoryfloor/hook-port`.
-The `ff-hook` script reads this file to know where to POST. If the file doesn't
+0). The actual port is written to `~/Library/Caches/atelier/hook-port`.
+The `atelier-hook` script reads this file to know where to POST. If the file doesn't
 exist (app not running), the script exits silently.
 
 ## Multi-workstream routing
 
 There is a **single** HTTP listener shared across all workstreams.
-`FF2App` feeds every event through two consumers:
+`AtelierApp` feeds every event through two consumers:
 
 1. `WorkstreamAgentStateTracker.handle(projectDir:event:)` — resolves the
    payload's `project_dir` to a workstream UUID via `workstreamLookup`
@@ -72,7 +72,7 @@ worktree paths match.
 
 | File | Role |
 |---|---|
-| `Resources/Scripts/ff-hook` | Shell script invoked by Claude Code hooks. Reads stdin JSON, wraps with `CLAUDE_PROJECT_DIR`, POSTs to localhost. |
+| `Resources/Scripts/atelier-hook` | Shell script invoked by Claude Code hooks. Reads stdin JSON, wraps with `CLAUDE_PROJECT_DIR`, POSTs to localhost. |
 | `Sources/PixelAgents/HookEventReceiver.swift` | NWListener singleton. Parses HTTP POST, maps hook events to `AgentEvent`, derives activity strings from tool name + input, attaches `transcript_path` and OpenCode context figures. |
 | `Sources/PixelAgents/HookEventRouter.swift` | Singleton registry routing events by normalized path. |
 | `Sources/PixelAgents/HookInstaller.swift` | Idempotent install/uninstall of hook entries in `~/.claude/settings.json`. |
@@ -146,7 +146,7 @@ Reads are throttled to one per 5 seconds per workstream — except at turn end
 (`Stop`), where the read is forced so the final totals always land. A failed
 read keeps the previously known value.
 
-**OpenCode** — the bundled plugin (`factoryfloor-opencode.js`) sums each
+**OpenCode** — the bundled plugin (`atelier-opencode.js`) sums each
 assistant message's cumulative tokens (`input` + `cache.read` +
 `cache.write`) and forwards the total as `context_used` on `agent_info`
 events. The dedup fingerprint includes the total, so refreshed figures flow
@@ -225,15 +225,15 @@ Unit tests for roster transitions live alongside other XCTest suites.
 
 **No roster appears:** Check that hooks are installed:
 ```bash
-cat ~/.claude/settings.json | python3 -m json.tool | grep ff-hook
+cat ~/.claude/settings.json | python3 -m json.tool | grep atelier-hook
 ```
 
-**Port file missing:** The app writes `~/Library/Caches/factoryfloor/hook-port`
+**Port file missing:** The app writes `~/Library/Caches/atelier/hook-port`
 on startup. If it's missing, the receiver failed to bind — check Console.app
-for `factoryfloor:hook-receiver` logs.
+for `atelier:hook-receiver` logs.
 
 **Wrong workstream:** The hook's `CLAUDE_PROJECT_DIR` must match the stored
-worktree path (e.g. `~/.factoryfloor/worktrees/project/workstream-name`). Watch routing logs:
+worktree path (e.g. `~/.atelier/worktrees/project/workstream-name`). Watch routing logs:
 ```bash
-log stream --predicate 'subsystem == "factoryfloor"' --info | grep -i hook
+log stream --predicate 'subsystem == "atelier"' --info | grep -i hook
 ```

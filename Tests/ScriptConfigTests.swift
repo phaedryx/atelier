@@ -1,7 +1,7 @@
 // ABOUTME: Tests for ScriptConfig loading from multiple config file formats.
-// ABOUTME: Validates priority order and parsing of factoryfloor, emdash, conductor, and superset configs.
+// ABOUTME: Validates priority order and parsing of atelier, emdash, conductor, and superset configs.
 
-@testable import FactoryFloor
+@testable import Atelier
 import XCTest
 
 final class ScriptConfigTests: XCTestCase {
@@ -29,36 +29,62 @@ final class ScriptConfigTests: XCTestCase {
         XCTAssertFalse(config.hasAnyScript)
     }
 
-    // MARK: - .factoryfloor.json (primary)
+    // MARK: - .atelier.json (primary)
 
-    func testFactoryFloorJSON() {
-        writeJSON(".factoryfloor.json", ["setup": "npm install", "run": "npm start"])
+    func testAtelierJSON() {
+        writeJSON(".atelier.json", ["setup": "npm install", "run": "npm start"])
         let config = ScriptConfig.load(from: tmpDir.path)
         XCTAssertEqual(config.setup, "npm install")
         XCTAssertEqual(config.run, "npm start")
         XCTAssertNil(config.teardown)
-        XCTAssertEqual(config.source, ".factoryfloor.json")
+        XCTAssertEqual(config.source, ".atelier.json")
     }
 
-    func testFactoryFloorTakesPriorityOverConductor() {
-        writeJSON(".factoryfloor.json", ["run": "ff-run"])
+    func testAtelierTakesPriorityOverConductor() {
+        writeJSON(".atelier.json", ["run": "atelier-run"])
         writeJSON("conductor.json", ["scripts": ["run": "conductor-run"]])
         let config = ScriptConfig.load(from: tmpDir.path)
-        XCTAssertEqual(config.run, "ff-run")
-        XCTAssertEqual(config.source, ".factoryfloor.json")
+        XCTAssertEqual(config.run, "atelier-run")
+        XCTAssertEqual(config.source, ".atelier.json")
     }
 
-    func testFactoryFloorTakesPriorityOverSuperset() throws {
-        writeJSON(".factoryfloor.json", ["run": "ff-run"])
+    func testAtelierTakesPriorityOverSuperset() throws {
+        writeJSON(".atelier.json", ["run": "atelier-run"])
         let supersetDir = tmpDir.appendingPathComponent(".superset")
         try FileManager.default.createDirectory(at: supersetDir, withIntermediateDirectories: true)
         writeJSON(".superset/config.json", ["run": ["superset-run"]])
         let config = ScriptConfig.load(from: tmpDir.path)
-        XCTAssertEqual(config.run, "ff-run")
-        XCTAssertEqual(config.source, ".factoryfloor.json")
+        XCTAssertEqual(config.run, "atelier-run")
+        XCTAssertEqual(config.source, ".atelier.json")
     }
 
     // MARK: - conductor.json (fallback)
+
+    // MARK: - .factoryfloor.json (legacy)
+
+    func testLegacyFactoryFloorJSON() {
+        writeJSON(".factoryfloor.json", ["setup": "npm install", "run": "npm start"])
+        let config = ScriptConfig.load(from: tmpDir.path)
+        XCTAssertEqual(config.setup, "npm install")
+        XCTAssertEqual(config.run, "npm start")
+        XCTAssertEqual(config.source, ".factoryfloor.json")
+    }
+
+    func testAtelierTakesPriorityOverLegacyFactoryFloor() {
+        writeJSON(".atelier.json", ["run": "new"])
+        writeJSON(".factoryfloor.json", ["run": "old"])
+        let config = ScriptConfig.load(from: tmpDir.path)
+        XCTAssertEqual(config.run, "new")
+        XCTAssertEqual(config.source, ".atelier.json")
+    }
+
+    func testLegacyFactoryFloorTakesPriorityOverConductor() {
+        writeJSON(".factoryfloor.json", ["run": "atelier-run"])
+        writeJSON("conductor.json", ["scripts": ["run": "conductor-run"]])
+        let config = ScriptConfig.load(from: tmpDir.path)
+        XCTAssertEqual(config.run, "atelier-run")
+        XCTAssertEqual(config.source, ".factoryfloor.json")
+    }
 
     func testConductorJSON() {
         writeJSON("conductor.json", ["scripts": ["setup": "make build", "run": "make serve", "archive": "make clean"]])
@@ -139,12 +165,12 @@ final class ScriptConfigTests: XCTestCase {
         XCTAssertFalse(config.hasAnyScript)
     }
 
-    func testFactoryFloorTakesPriorityOverEmdash() {
-        writeJSON(".factoryfloor.json", ["run": "ff-run"])
+    func testAtelierTakesPriorityOverEmdash() {
+        writeJSON(".atelier.json", ["run": "atelier-run"])
         writeJSON(".emdash.json", ["scripts": ["run": "emdash-run"]])
         let config = ScriptConfig.load(from: tmpDir.path)
-        XCTAssertEqual(config.run, "ff-run")
-        XCTAssertEqual(config.source, ".factoryfloor.json")
+        XCTAssertEqual(config.run, "atelier-run")
+        XCTAssertEqual(config.source, ".atelier.json")
     }
 
     func testEmdashTakesPriorityOverConductor() {
@@ -166,11 +192,11 @@ final class ScriptConfigTests: XCTestCase {
     // MARK: - Error handling
 
     func testInvalidJSONReportsError() {
-        let path = tmpDir.appendingPathComponent(".factoryfloor.json").path
+        let path = tmpDir.appendingPathComponent(".atelier.json").path
         FileManager.default.createFile(atPath: path, contents: "not json".data(using: .utf8))
         let config = ScriptConfig.load(from: tmpDir.path)
         XCTAssertNotNil(config.loadError)
-        XCTAssertEqual(config.source, ".factoryfloor.json")
+        XCTAssertEqual(config.source, ".atelier.json")
     }
 
     func testInvalidConductorJSONReportsError() {

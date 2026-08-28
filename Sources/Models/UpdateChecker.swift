@@ -1,10 +1,10 @@
-// ABOUTME: Checks factory-floor.com/appcast.xml for available updates.
-// ABOUTME: Sidebar badge for Homebrew users; Sparkle handles DMG auto-updates.
+// ABOUTME: Polls the GitHub Releases API for versions newer than the running build.
+// ABOUTME: Drives the sidebar update badge; the fork ships no in-app updater.
 
 import Foundation
 import os
 
-struct AppcastRelease {
+struct ReleaseInfo {
     let version: String
     let releaseNotesURL: URL?
     let releaseNotes: String?
@@ -12,7 +12,7 @@ struct AppcastRelease {
 
 @MainActor
 class UpdateChecker: ObservableObject {
-    @Published var pendingReleases: [AppcastRelease] = []
+    @Published var pendingReleases: [ReleaseInfo] = []
 
     var availableVersion: String? {
         pendingReleases.first?.version
@@ -24,7 +24,9 @@ class UpdateChecker: ObservableObject {
 
     private let currentVersion: String
     private let logger = Logger(subsystem: AppConstants.appID, category: "UpdateChecker")
-    private static let appcastURL = URL(string: "https://factory-floor.com/appcast.xml")!
+    private static let releasesURL = URL(
+        string: "https://api.github.com/repos/\(AppConstants.repositorySlug)/releases?per_page=20"
+    )!
 
     init() {
         currentVersion = AppConstants.version
@@ -36,8 +38,10 @@ class UpdateChecker: ObservableObject {
         #else
             Task.detached { [currentVersion, logger] in
                 do {
-                    let (data, _) = try await URLSession.shared.data(from: Self.appcastURL)
-                    let releases = Self.parseAppcast(from: data)
+                    var request = URLRequest(url: Self.releasesURL)
+                    request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+                    let (data, _) = try await URLSession.shared.data(for: request)
+                    let releases = Self.parseReleases(from: data)
                     let pending = Self.releasesNewer(than: currentVersion, in: releases)
                     guard !pending.isEmpty else { return }
                     await MainActor.run { [weak self] in
@@ -50,22 +54,42 @@ class UpdateChecker: ObservableObject {
         #endif
     }
 
-    /// Parses all release items from an appcast feed, ordered newest first.
-    nonisolated static func parseAppcast(from data: Data) -> [AppcastRelease] {
-        let parser = AppcastParser()
-        let xmlParser = XMLParser(data: data)
-        xmlParser.delegate = parser
-        guard xmlParser.parse() else { return [] }
-        return parser.releases
+    /// Decodes a GitHub Releases API payload, newest first.
+    ///
+    /// Drafts and pre-releases are skipped: neither is something a user on a
+    /// stable build should be prompted to upgrade to.
+    nonisolated static func parseReleases(from data: Data) -> [ReleaseInfo] {
+        guard let payload = try? JSONDecoder().decode([GitHubRelease].self, from: data) else { return [] }
+        return payload.compactMap { release in
+            guard !release.draft, !release.prerelease else { return nil }
+            guard let version = normalizedVersion(release.tagName) else { return nil }
+            let notes = release.body?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return ReleaseInfo(
+                version: version,
+                releaseNotesURL: release.htmlURL.flatMap(URL.init(string:)),
+                releaseNotes: (notes?.isEmpty ?? true) ? nil : notes
+            )
+        }
     }
 
-    /// Extracts the sparkle:shortVersionString from the first enclosure in an appcast feed.
+    /// Returns the version of the newest eligible release, if any.
     nonisolated static func parseVersion(from data: Data) -> String? {
-        parseAppcast(from: data).first?.version
+        parseReleases(from: data).first?.version
+    }
+
+    /// Strips the conventional leading "v" from a tag and rejects anything that
+    /// isn't a dotted numeric version, so stray tags never masquerade as releases.
+    nonisolated static func normalizedVersion(_ tag: String) -> String? {
+        var trimmed = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("v") { trimmed.removeFirst() }
+        guard !trimmed.isEmpty else { return nil }
+        let components = trimmed.split(separator: ".", omittingEmptySubsequences: false)
+        guard components.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }) else { return nil }
+        return trimmed
     }
 
     /// Filters releases to those newer than the given version.
-    nonisolated static func releasesNewer(than version: String, in releases: [AppcastRelease]) -> [AppcastRelease] {
+    nonisolated static func releasesNewer(than version: String, in releases: [ReleaseInfo]) -> [ReleaseInfo] {
         releases.filter { isNewer($0.version, than: version) }
     }
 
@@ -83,65 +107,18 @@ class UpdateChecker: ObservableObject {
     }
 }
 
-private class AppcastParser: NSObject, XMLParserDelegate {
-    var releases: [AppcastRelease] = []
+private struct GitHubRelease: Decodable {
+    let tagName: String
+    let htmlURL: String?
+    let body: String?
+    let draft: Bool
+    let prerelease: Bool
 
-    private var insideItem = false
-    private var currentElement: String?
-    private var currentText = ""
-
-    private var itemVersion: String?
-    private var itemLink: URL?
-    private var itemDescription: String?
-
-    func parser(
-        _: XMLParser,
-        didStartElement elementName: String,
-        namespaceURI _: String?,
-        qualifiedName _: String?,
-        attributes attributeDict: [String: String] = [:]
-    ) {
-        if elementName == "item" {
-            insideItem = true
-            itemVersion = nil
-            itemLink = nil
-            itemDescription = nil
-        } else if elementName == "enclosure", insideItem, itemVersion == nil {
-            itemVersion = attributeDict["sparkle:shortVersionString"]
-        }
-        currentElement = elementName
-        currentText = ""
-    }
-
-    func parser(_: XMLParser, foundCharacters string: String) {
-        currentText += string
-    }
-
-    func parser(
-        _: XMLParser,
-        didEndElement elementName: String,
-        namespaceURI _: String?,
-        qualifiedName _: String?
-    ) {
-        if insideItem {
-            let trimmed = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
-            if elementName == "link" {
-                itemLink = URL(string: trimmed)
-            } else if elementName == "description" {
-                if !trimmed.isEmpty {
-                    itemDescription = trimmed
-                }
-            } else if elementName == "item" {
-                if let version = itemVersion {
-                    releases.append(AppcastRelease(
-                        version: version,
-                        releaseNotesURL: itemLink,
-                        releaseNotes: itemDescription
-                    ))
-                }
-                insideItem = false
-            }
-        }
-        currentElement = nil
+    enum CodingKeys: String, CodingKey {
+        case tagName = "tag_name"
+        case htmlURL = "html_url"
+        case body
+        case draft
+        case prerelease
     }
 }

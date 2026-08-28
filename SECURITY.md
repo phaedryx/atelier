@@ -2,8 +2,8 @@
 
 ## Reporting a vulnerability
 
-Report security issues privately to **security@alltuner.com**, or open a
-[private vulnerability report](https://github.com/alltuner/factoryfloor/security/advisories/new)
+Report security issues privately by opening a
+[private vulnerability report](https://github.com/phaedryx/atelier/security/advisories/new)
 on GitHub.
 
 Please do not open a public issue for a security problem.
@@ -34,7 +34,7 @@ Fixes go into the latest release. There are no long-term support branches.
 
 ## Scope notes
 
-Factory Floor runs coding agents, terminals, and dev servers on your machine, so
+Atelier runs coding agents, terminals, and dev servers on your machine, so
 some behaviour that looks alarming is intended:
 
 - **A terminal runs the commands you type.** That is the product.
@@ -42,7 +42,7 @@ some behaviour that looks alarming is intended:
   prompts are the boundary, and turning on "Bypass permission prompts" removes
   that boundary deliberately.
 - **Repository-provided `setup`, `run`, and `teardown` commands require your
-  approval before they run.** Factory Floor reads them from `.factoryfloor.json`
+  approval before they run.** Atelier reads them from `.atelier.json`
   and from the `.emdash.json`, `conductor.json`, and `.superset/config.json`
   fallbacks. It shows you the commands and the file they came from, runs nothing
   until you approve, and asks again when the commands change. A path that

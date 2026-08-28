@@ -1,7 +1,7 @@
 // ABOUTME: Tests for GitOperations worktree resolution.
 // ABOUTME: Validates detection of worktree directories and resolution to main repository.
 
-@testable import FactoryFloor
+@testable import Atelier
 import XCTest
 
 final class GitOperationsTests: XCTestCase {

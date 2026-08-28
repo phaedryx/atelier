@@ -1,7 +1,7 @@
 // ABOUTME: Tests for ContextMeter's token formatting and the combined
 // ABOUTME: capacity/quality severity coloring.
 
-@testable import FactoryFloor
+@testable import Atelier
 import XCTest
 
 final class ContextMeterTests: XCTestCase {

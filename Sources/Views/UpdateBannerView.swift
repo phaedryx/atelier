@@ -1,11 +1,11 @@
 // ABOUTME: Update notification banner shown in the sidebar when a new version is available.
-// ABOUTME: DMG users get Sparkle's native flow; Homebrew users see a popover with the brew command.
+// ABOUTME: Opens the release on GitHub, or a popover with the brew upgrade command.
 
 import SwiftUI
 
 struct UpdateBanner: View {
     let version: String
-    let pendingReleases: [AppcastRelease]
+    let pendingReleases: [ReleaseInfo]
     @ObservedObject var updater: Updater
 
     @State private var isHovering = false
@@ -40,11 +40,11 @@ struct UpdateBanner: View {
 }
 
 private struct BrewUpdatePopover: View {
-    let pendingReleases: [AppcastRelease]
+    let pendingReleases: [ReleaseInfo]
 
     @State private var copied = false
 
-    private static let brewCommand = "brew upgrade factory-floor"
+    private static let brewCommand = "brew upgrade --cask atelier"
 
     private var latestVersion: String {
         pendingReleases.first?.version ?? ""
@@ -111,7 +111,7 @@ private struct BrewUpdatePopover: View {
 }
 
 private struct ReleaseEntryView: View {
-    let release: AppcastRelease
+    let release: ReleaseInfo
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {

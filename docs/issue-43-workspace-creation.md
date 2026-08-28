@@ -47,7 +47,7 @@ The mutation executes (confirmed by logs), but `activeProject` can't find the wo
 - GitHub Actions runner: `macos-15` (macOS 15.7.4)
 - Xcode: 16.4 (as of March 2026)
 - Configuration: Release with whole-module optimization
-- Code signing: Developer ID Application (ALL TUNER LABS S.L.)
+- Code signing: Developer ID Application (from repository secrets)
 - Hardened runtime: YES
 - `CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO`
 - `OTHER_CODE_SIGN_FLAGS="--timestamp --options=runtime"`

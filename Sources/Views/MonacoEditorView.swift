@@ -66,7 +66,7 @@ final class MonacoResourceSchemeHandler: NSObject, WKURLSchemeHandler {
         case "wasm": return "application/wasm"
         case "ttf": return "font/ttf"
         case "woff": return "font/woff"
-        case "woff2": return "font/woff2"
+        case "woatelier": return "font/woatelier"
         case "svg": return "image/svg+xml"
         case "png": return "image/png"
         default: return "application/octet-stream"
@@ -149,7 +149,7 @@ final class MonacoEditorBridge {
         if let resourceURL = Bundle.main.resourceURL {
             let bundleURL = resourceURL.appendingPathComponent("MonacoEditor")
             let handler = MonacoResourceSchemeHandler(baseURL: bundleURL)
-            config.setURLSchemeHandler(handler, forURLScheme: "ff-resource")
+            config.setURLSchemeHandler(handler, forURLScheme: "atelier-resource")
         }
 
         let wv = EditorWebView(frame: .zero, configuration: config)
@@ -158,7 +158,7 @@ final class MonacoEditorBridge {
             wv.isInspectable = true
         #endif
 
-        if let url = URL(string: "ff-resource://monaco/index.html") {
+        if let url = URL(string: "atelier-resource://monaco/index.html") {
             wv.load(URLRequest(url: url))
         }
 

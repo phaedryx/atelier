@@ -1,7 +1,7 @@
 // ABOUTME: Reproduction for ranking bug — a query like "papoover" must rank the
 // exact-named file first, and clearly-matching files above barely-matching ones.
 
-@testable import FactoryFloor
+@testable import Atelier
 import XCTest
 
 final class FileFinderRankingReproTests: XCTestCase {

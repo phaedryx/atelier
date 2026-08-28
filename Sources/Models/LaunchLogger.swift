@@ -1,5 +1,5 @@
 // ABOUTME: Per-workstream debug log files for agent, run, and setup launches.
-// ABOUTME: Writes JSON Lines entries to ~/Library/Caches/factoryfloor/logs/<workstream-id>.log when detailedLogging is enabled.
+// ABOUTME: Writes JSON Lines entries to ~/Library/Caches/atelier/logs/<workstream-id>.log when detailedLogging is enabled.
 
 import Foundation
 
@@ -67,7 +67,7 @@ enum LaunchLogger {
 
     /// Append a log entry to the workstream's log file. No-op when detailedLogging is disabled.
     static func log(_ entry: LaunchLogEntry) {
-        guard UserDefaults.standard.bool(forKey: "factoryfloor.detailedLogging") else { return }
+        guard UserDefaults.standard.bool(forKey: "atelier.detailedLogging") else { return }
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]

@@ -4,7 +4,7 @@
 import Foundation
 import os
 
-private let logger = Logger(subsystem: "factoryfloor", category: "hook-router")
+private let logger = Logger(subsystem: "atelier", category: "hook-router")
 
 /// Routes `AgentEvent`s from the `HookEventReceiver` to registered handlers.
 ///

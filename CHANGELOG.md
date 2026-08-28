@@ -1,5 +1,9 @@
 # Changelog
 
+Atelier was forked from [Factory Floor](https://github.com/alltuner/factoryfloor)
+at v0.1.79. Everything below that release is Factory Floor's history; those links
+point at the upstream repository.
+
 ## [0.1.79](https://github.com/alltuner/factoryfloor/compare/v0.1.78...v0.1.79) (2026-07-30)
 
 
