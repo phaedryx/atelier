@@ -114,38 +114,32 @@ final class ProjectTests: XCTestCase {
         XCTAssertEqual(decoded.workstreams[1].name, "bugfix")
     }
 
-    func testCodableRoundTripWithSpaceID() throws {
-        let spaceID = UUID()
-        let original = Project(name: "alpha", directory: "/Users/test/alpha", spaceID: spaceID)
-        let data = try JSONEncoder().encode(original)
-        let decoded = try JSONDecoder().decode(Project.self, from: data)
-        XCTAssertEqual(decoded.spaceID, spaceID)
-        XCTAssertEqual(original, decoded)
-    }
-
-    func testLegacyJSONWithoutSpaceIDDecodesToNil() throws {
-        // A throwaway struct mirroring the OLD Project shape (no spaceID).
-        // Matching the field set lets the default JSONEncoder/Decoder date
-        // handling stay consistent, avoiding hardcoded date formats.
-        struct LegacyProject: Codable {
+    func testJSONWithStaleSpaceIDStillDecodes() throws {
+        // Spaces were removed, but projects saved while the feature existed
+        // still carry a `spaceID` key. A stale key must not break decoding of
+        // the user's stored projects. The throwaway struct mirrors the OLD
+        // Project shape so the default JSONEncoder/Decoder date handling stays
+        // consistent, avoiding hardcoded date formats.
+        struct ProjectWithSpaceID: Codable {
             let id: UUID
             var name: String
             var directory: String
             var workstreams: [Workstream]
             var lastAccessedAt: Date
+            var spaceID: UUID?
         }
 
-        let legacy = LegacyProject(
+        let stored = ProjectWithSpaceID(
             id: UUID(),
             name: "legacy",
             directory: "/legacy",
             workstreams: [Workstream(name: "main")],
-            lastAccessedAt: Date()
+            lastAccessedAt: Date(),
+            spaceID: UUID()
         )
-        let data = try JSONEncoder().encode(legacy)
+        let data = try JSONEncoder().encode(stored)
         let decoded = try JSONDecoder().decode(Project.self, from: data)
-        XCTAssertNil(decoded.spaceID)
-        XCTAssertEqual(decoded.id, legacy.id)
+        XCTAssertEqual(decoded.id, stored.id)
         XCTAssertEqual(decoded.name, "legacy")
         XCTAssertEqual(decoded.directory, "/legacy")
         XCTAssertEqual(decoded.workstreams.count, 1)

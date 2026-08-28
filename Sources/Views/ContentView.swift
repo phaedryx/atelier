@@ -23,14 +23,6 @@ final class ProjectList: ObservableObject {
     }
 }
 
-final class SpaceList: ObservableObject {
-    @Published var items: [Space]
-
-    init() {
-        items = SpaceStore.load()
-    }
-}
-
 func workstreamHasUsablePath(_ workstream: Workstream, pathExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> Bool {
     guard let worktreePath = workstream.worktreePath else { return false }
     return pathExists(worktreePath)
@@ -84,7 +76,6 @@ func commandKeyNotification(charactersIgnoringModifiers: String?, modifierFlags:
 
 struct ContentView: View {
     @StateObject private var projectList = ProjectList()
-    @StateObject private var spaceList = SpaceList()
     @State private var selection: SidebarSelection? = SidebarSelection.loadSaved() ?? ContentView.initialSelection()
     @State private var selectionBeforeSettings: SidebarSelection?
 
@@ -103,7 +94,6 @@ struct ContentView: View {
     @State private var workstreamToPurge: UUID?
     @State private var purgeWarningMessage: String?
     @State private var removedProjectNames: [String] = []
-    @AppStorage("atelier.currentSpace") private var currentSpaceID: String = ""
     @State private var keyMonitorInstalled = false
 
     private static func initialSelection() -> SidebarSelection? {
@@ -245,11 +235,6 @@ struct ContentView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
                 refreshAgentStateLookup(projects: newValue)
             }
-            .onChange(of: spaceList.items) { _, newValue in
-                // Space edits are infrequent; persist immediately to avoid a
-                // race where a just-added space is lost if the app is killed.
-                SpaceStore.save(newValue)
-            }
             .alert(
                 "Remove Workstream",
                 isPresented: Binding(
@@ -375,11 +360,8 @@ struct ContentView: View {
         NavigationSplitView {
             ProjectSidebar(
                 projects: $projectList.items,
-                spaces: $spaceList.items,
-                currentSpaceID: $currentSpaceID,
                 selection: $selection,
-                onProjectsChanged: { ProjectStore.save(projects) },
-                onSpacesChanged: { SpaceStore.save(spaceList.items) }
+                onProjectsChanged: { ProjectStore.save(projects) }
             )
             .navigationSplitViewColumnWidth(min: 160, ideal: 200, max: 350)
         } detail: {
@@ -391,8 +373,6 @@ struct ContentView: View {
         .environmentObject(updater)
         .environmentObject(agentStateTracker)
         .onAppear {
-            // Spaces migration runs in AtelierApp.init() before any view renders.
-            alignCurrentSpaceWithSelection()
             appEnvironment.refresh()
             appEnvironment.refreshAllRepoInfo(projects: projects)
             appEnvironment.refreshPathValidity(projects: projects)
@@ -483,13 +463,7 @@ struct ContentView: View {
             logger.warning("[Atelier] workstreamCreationFailed: removed \(workstreamID, privacy: .public)")
         }
         .onReceive(NotificationCenter.default.publisher(for: .projectCreated)) { notification in
-            guard var project = notification.userInfo?["project"] as? Project else { return }
-            // Assign the new project to the currently active space.
-            if let spaceID = UUID(uuidString: currentSpaceID) {
-                project.spaceID = spaceID
-            } else if let first = spaceList.items.first {
-                project.spaceID = first.id
-            }
+            guard let project = notification.userInfo?["project"] as? Project else { return }
             projects.append(project)
             selection = .project(project.id)
             ProjectStore.save(projects)
@@ -518,28 +492,6 @@ struct ContentView: View {
     /// state tracker. Paths are normalized via `WorkstreamAgentStateTracker.normalize`
     /// (resolves symlinks) so hook payloads match regardless of how Claude
     /// reports the path on macOS.
-    /// Launch consistency for Spaces: if the restored selection points at a
-    /// project in a different space than `currentSpaceID`, switch the active
-    /// space to match so the sidebar and detail pane agree. Only applies to
-    /// project/workstream selections; settings/help are ignored. One-directional:
-    /// this is the single place selection is allowed to drive currentSpaceID, and
-    /// only at launch.
-    private func alignCurrentSpaceWithSelection() {
-        let owningProject: Project?
-        switch selection {
-        case let .project(id):
-            owningProject = projects.first(where: { $0.id == id })
-        case let .workstream(wsID):
-            owningProject = projects.first(where: { $0.workstreams.contains(where: { $0.id == wsID }) })
-        case .settings, .help, .none:
-            owningProject = nil
-        }
-        guard let spaceID = owningProject?.spaceID else { return }
-        if currentSpaceID != spaceID.uuidString {
-            currentSpaceID = spaceID.uuidString
-        }
-    }
-
     private func refreshAgentStateLookup(projects: [Project]) {
         var index: [String: UUID] = [:]
         for project in projects {
@@ -620,15 +572,9 @@ struct ContentView: View {
         }
     }
 
-    /// Cycle through projects in sidebar display order.
-    /// The sidebar shows only the current space's projects, always sorted A–Z.
+    /// Cycle through projects in sidebar display order, which is always A–Z.
     private func cycleProject(direction: Int) {
-        let space = UUID(uuidString: currentSpaceID)
-        let visible = projects.filter { project in
-            guard let space else { return true }
-            return project.spaceID == space
-        }
-        let sorted = visible.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        let sorted = projects.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         guard !sorted.isEmpty else { return }
 
         guard let current = activeProject,

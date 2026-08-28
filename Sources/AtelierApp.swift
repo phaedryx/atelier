@@ -167,11 +167,6 @@ struct AtelierApp: App {
 
         UserDefaults.standard.set(200, forKey: "NSInitialToolTipDelay") // 200ms vs system ~700-1000ms
 
-        // Migrate Spaces before any view renders so the sidebar's first paint
-        // already sees a valid current space and migrated project spaceIDs.
-        // Must run before ContentView's @StateObject/@AppStorage load.
-        SpacesBootstrap.migrateIfNeeded()
-
         // Start the hook event receiver and wire it to the router and the
         // sidebar agent-state tracker. `onEvent` is invoked on the main queue.
         HookEventReceiver.shared.onEvent = { projectDir, event in
