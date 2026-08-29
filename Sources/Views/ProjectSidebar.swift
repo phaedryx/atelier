@@ -216,31 +216,6 @@ struct ProjectSidebar: View {
                 )
             }
 
-            // Credit
-            VStack(spacing: 2) {
-                HStack(spacing: 0) {
-                    Text("by ")
-                        .foregroundStyle(.tertiary)
-                    Link("David Poblador i Garcia.", destination: URL(string: "https://davidpoblador.com/")!)
-                        .foregroundStyle(.secondary)
-                }
-                HStack(spacing: 0) {
-                    Text("Enhanced by ")
-                        .foregroundStyle(.tertiary)
-                    Link("Andrés González.", destination: URL(string: "https://github.com/AndresGonzalez5")!)
-                        .foregroundStyle(.secondary)
-                }
-                HStack(spacing: 0) {
-                    Text("Help ")
-                        .foregroundStyle(.tertiary)
-                    Link("supporting", destination: sponsorURL)
-                        .foregroundStyle(.secondary)
-                    Text(" the development.")
-                        .foregroundStyle(.tertiary)
-                }
-            }
-            .font(.system(size: 10))
-
             HStack {
                 SidebarBottomButton(icon: "plus") {
                     showingAddProjectChoice = true
@@ -702,8 +677,6 @@ struct ProjectSidebar: View {
         }
         return true
     }
-
-    private var sponsorURL: URL { AppConstants.sponsorURL }
 
     @AppStorage("atelier.baseDirectory") private var baseDirectory: String = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first ?? ""
 
