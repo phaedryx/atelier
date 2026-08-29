@@ -49,6 +49,11 @@ enum AppConstants {
     static let documentationURL = URL(string: "https://github.com/\(repositorySlug)#readme")!
     static let sponsorURL = URL(string: "https://github.com/sponsors/phaedryx")!
 
+    /// Upstream projects this fork descends from, credited in Help and the About panel.
+    static let upstreamURL = URL(string: "https://github.com/alltuner/factoryfloor")!
+    static let upstreamAuthorURL = URL(string: "https://davidpoblador.com/")!
+    static let upstreamEnhancerURL = URL(string: "https://github.com/AndresGonzalez5")!
+
     /// Sentry DSN, injected at build time via the `ATELIER_SENTRY_DSN` build setting.
     ///
     /// Empty by default so a plain checkout never ships crash reports to someone

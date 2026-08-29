@@ -289,6 +289,13 @@ struct AtelierApp: App {
             // Remove the default Help menu so Cmd+Shift+/ doesn't open it
             CommandGroup(replacing: .help) {}
 
+            // Feed the stock About panel our own credits.
+            CommandGroup(replacing: .appInfo) {
+                Button("About \(AppConstants.appName)") {
+                    AboutPanel.show()
+                }
+            }
+
             CommandGroup(replacing: .newItem) {
                 // Cmd+N: context-sensitive (add project if none selected, else add workstream)
                 Button("New") {
