@@ -222,6 +222,26 @@ final class WorkspaceModelCacheTests: XCTestCase {
         XCTAssertTrue(again.tabs.contains(.terminal(terminal)))
     }
 
+    /// Navigating away destroys `TerminalContainerView`, and coming back re-runs
+    /// its `init` against a fresh seed. Per-tab titles and file paths must ride
+    /// on the cached model, not on anything the seed can overwrite.
+    func testPerTabTitlesAndPathsSurviveARepeatLookup() {
+        let cache = TerminalSurfaceCache()
+        let workstreamID = UUID()
+        let model = cache.workspaceModel(for: workstreamID, seed: seed())
+        let browser = model.addBrowser()
+        let terminal = model.addTerminal()
+        let editor = model.addEditor(filePath: "src/main.swift")
+        model.browserTitles[browser] = "Example Domain"
+        model.terminalTitles[terminal] = "zsh"
+
+        let again = cache.workspaceModel(for: workstreamID, seed: seed())
+
+        XCTAssertEqual(again.browserTitles[browser], "Example Domain")
+        XCTAssertEqual(again.terminalTitles[terminal], "zsh")
+        XCTAssertEqual(again.editorFilePaths[editor], "src/main.swift")
+    }
+
     func testRemovingWorkstreamSurfacesDropsTheModel() {
         let cache = TerminalSurfaceCache()
         let workstreamID = UUID()
