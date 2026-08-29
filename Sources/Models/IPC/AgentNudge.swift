@@ -15,13 +15,11 @@ private let logger = Logger(subsystem: "atelier", category: "ipc-nudge")
 /// doesn't fire, the message still sits in the inbox, which is why the tool
 /// descriptions tell agents to check at natural boundaries.
 ///
-/// **Known limit.** Hook events carry `project_dir`, so the turn-ended signal is
-/// per *workstream*, not per surface. With one agent per workstream that is
-/// exact. With two agents sharing a worktree it is not: one finishing its turn
-/// marks the workstream idle while the other may be mid-thought, so a notice
-/// aimed at the second can land mid-turn. Aiming is per-surface; timing is not.
-/// Attributing hook events to a surface would take a marker the hook script
-/// forwards, which does not exist yet.
+/// **Attribution.** `atelier-hook` forwards the `ATELIER_SURFACE_ID` it
+/// inherited, so the tracker can answer "has *this pane's* agent finished its
+/// turn?" for any agent whose hooks reach Atelier. When a surface has never
+/// reported, `resolveState` falls back to the workstream signal for the Coding
+/// Agent tab alone — see its doc comment for why that one case is not a guess.
 @MainActor
 final class AgentNudge {
     static let shared = AgentNudge()
@@ -65,6 +63,25 @@ final class AgentNudge {
         return true
     }
 
+    /// The evidence that a given surface may be interrupted, or nil when there
+    /// is none.
+    ///
+    /// Per-surface evidence wins whenever it exists. Falling back to the
+    /// workstream signal is allowed for exactly one surface: the Coding Agent
+    /// tab, whose id *is* the workstream id (`claudeID == workstreamID`), so
+    /// the workstream signal is by construction a statement about that pane.
+    /// For any other surface the workstream signal is contaminated by whatever
+    /// else is running in the worktree, so no evidence means no nudge.
+    static func resolveState(
+        surfaceState: WorkstreamAgentStateTracker.AgentRunState?,
+        workstreamState: @autoclosure () -> WorkstreamAgentStateTracker.AgentRunState,
+        surfaceID: UUID,
+        workstreamID: UUID
+    ) -> WorkstreamAgentStateTracker.AgentRunState? {
+        if let surfaceState { return surfaceState }
+        return surfaceID == workstreamID ? workstreamState() : nil
+    }
+
     /// Types a one-line notice into the surface the recipient occupies, if the
     /// workstream reports that a turn has ended.
     ///
@@ -72,7 +89,14 @@ final class AgentNudge {
     /// this runs — the socket closing retires it — so this cannot type into a
     /// tab whose agent has quit and left a shell at the prompt.
     func nudge(surfaceID: UUID, workstreamID: UUID, senderName: String, waiting: Int, now: Date = Date()) {
-        let state = WorkstreamAgentStateTracker.shared.state(for: workstreamID)
+        let tracker = WorkstreamAgentStateTracker.shared
+        guard let state = Self.resolveState(
+            surfaceState: tracker.state(forSurface: surfaceID),
+            workstreamState: tracker.state(for: workstreamID),
+            surfaceID: surfaceID,
+            workstreamID: workstreamID
+        ) else { return }
+
         guard Self.shouldNudge(
             state: state,
             hasSurface: true,

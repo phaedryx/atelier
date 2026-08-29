@@ -47,6 +47,35 @@ final class AgentNudgeTests: XCTestCase {
         XCTAssertTrue(shouldNudge(state: .idle, lastNudge: now.addingTimeInterval(-AgentNudge.cooldown - 1)))
     }
 
+    // MARK: - Attribution
+
+    private let workstreamID = UUID()
+
+    func test_perSurfaceEvidence_alwaysWins() {
+        let other = UUID()
+        XCTAssertEqual(
+            AgentNudge.resolveState(surfaceState: .working, workstreamState: .idle, surfaceID: other, workstreamID: workstreamID),
+            .working,
+            "a busy pane must not be interrupted because the workstream looks idle"
+        )
+    }
+
+    func test_theAgentTab_fallsBackToTheWorkstreamSignal() {
+        // claudeID == workstreamID, so the workstream signal is a statement
+        // about that pane rather than a guess about it.
+        XCTAssertEqual(
+            AgentNudge.resolveState(surfaceState: nil, workstreamState: .idle, surfaceID: workstreamID, workstreamID: workstreamID),
+            .idle
+        )
+    }
+
+    func test_anyOtherSurface_withoutEvidence_isNotNudged() {
+        XCTAssertNil(
+            AgentNudge.resolveState(surfaceState: nil, workstreamState: .idle, surfaceID: UUID(), workstreamID: workstreamID),
+            "the workstream signal says nothing about a pane that has never reported"
+        )
+    }
+
     func test_nudge_withoutASurfaceCache_isANoOp() {
         AgentNudge.shared._testReset()
         AgentNudge.shared.nudge(surfaceID: UUID(), workstreamID: UUID(), senderName: "planner", waiting: 1)

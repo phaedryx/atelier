@@ -23,6 +23,11 @@ final class HookEventReceiver: @unchecked Sendable {
 
     private let queue = DispatchQueue(label: "atelier.hook-receiver", qos: .utility)
     private var listener: NWListener?
+    /// The port the listener bound to, once ready. Read this rather than the
+    /// port file when you need *this* process's port: the file on disk may
+    /// still hold a previous run's number.
+    var boundPort: UInt16? { queue.sync { currentPort } }
+    private var currentPort: UInt16?
     private var connections: [NWConnection] = []
 
     /// Per-project state for tracking subagent palettes.
@@ -48,6 +53,7 @@ final class HookEventReceiver: @unchecked Sendable {
             guard let self else { return }
             self.listener?.cancel()
             self.listener = nil
+            self.currentPort = nil
             for conn in self.connections {
                 conn.cancel()
             }
@@ -59,6 +65,9 @@ final class HookEventReceiver: @unchecked Sendable {
     // MARK: - Listener Setup
 
     private func setupListener() {
+        // Idempotent: a second start() must not leave an orphaned listener
+        // racing the first to rewrite the port file.
+        guard listener == nil else { return }
         do {
             let params = NWParameters.tcp
             params.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.loopback), port: .any)
@@ -69,6 +78,7 @@ final class HookEventReceiver: @unchecked Sendable {
                 case .ready:
                     if let port = newListener.port {
                         logger.info("Hook receiver listening on port \(port.rawValue)")
+                        self?.currentPort = port.rawValue
                         self?.writePortFile(port: port.rawValue)
                     }
                 case let .failed(error):
@@ -201,17 +211,30 @@ final class HookEventReceiver: @unchecked Sendable {
             return
         }
 
+        // Present only for an agent Atelier launched: the hook process inherits
+        // ATELIER_SURFACE_ID from the terminal it runs in. Empty for a Claude
+        // session started anywhere else, which the hook installs globally for.
+        let surfaceID = (json["surface_id"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+
         let source = json["source"] as? String
-        let events: [AgentEvent]
+        var events: [AgentEvent]
         if source == "opencode" {
             let kind = eventInput["kind"] as? String ?? ""
             logger.info("OpenCode event received: \(kind, privacy: .public) for project: \(projectDir, privacy: .public)")
             events = mapOpencodeEvent(eventInput: eventInput, projectDir: projectDir)
         } else {
             let hookEventName = eventInput["hook_event_name"] as? String ?? ""
-            logger.info("Hook event received: \(hookEventName, privacy: .public) for project: \(projectDir, privacy: .public)")
+            logger.info("Hook event received: \(hookEventName, privacy: .public) for project: \(projectDir, privacy: .public) surface: \(surfaceID ?? "none", privacy: .public)")
             events = mapHookEvent(hookEventName: hookEventName, eventInput: eventInput, projectDir: projectDir)
         }
+        if let surfaceID {
+            events = events.map { event in
+                var stamped = event
+                stamped.surfaceID = surfaceID
+                return stamped
+            }
+        }
+
         if !events.isEmpty {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }

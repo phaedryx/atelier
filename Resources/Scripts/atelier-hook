@@ -1,12 +1,13 @@
 #!/bin/sh
 # ABOUTME: Claude Code hook script that forwards events to the Atelier app.
-# ABOUTME: Reads JSON from stdin, wraps it with CLAUDE_PROJECT_DIR, and POSTs to localhost.
+# ABOUTME: Reads JSON from stdin, wraps it with CLAUDE_PROJECT_DIR and the
+# ABOUTME: inherited ATELIER_SURFACE_ID, and POSTs to localhost.
 INPUT=$(cat)
 PORT_FILE="$HOME/Library/Caches/atelier/hook-port"
 [ -f "$PORT_FILE" ] || exit 0
 PORT=$(cat "$PORT_FILE")
 curl -s -X POST "http://127.0.0.1:${PORT}/hook" \
   -H "Content-Type: application/json" \
-  -d "{\"event_input\": ${INPUT}, \"project_dir\": \"${CLAUDE_PROJECT_DIR}\"}" \
+  -d "{\"event_input\": ${INPUT}, \"project_dir\": \"${CLAUDE_PROJECT_DIR}\", \"surface_id\": \"${ATELIER_SURFACE_ID}\"}" \
   --max-time 1 -o /dev/null 2>/dev/null
 exit 0

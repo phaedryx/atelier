@@ -32,13 +32,16 @@ records it, and the nudge types into that surface. So two agents sharing one
 worktree are each nudged in their own pane, and anything Atelier did not launch
 has no surface id and is **pull-only** — there is nowhere to type.
 
-**What is still not solved:** hook events carry `project_dir`, so the turn-ended
-signal is keyed per *workstream*, not per *surface*. With one agent per
-workstream that is exact. With two, one finishing its turn marks the whole
-workstream idle while the other may be mid-thought, so a notice aimed at the
-second can land mid-turn. **Aiming is per-surface; timing is not.** Closing that
-would take a per-surface marker forwarded by `atelier-hook` and carried through
-`AgentEvent` into the tracker's keying — real work, and not done.
+**Attribution.** `atelier-hook` forwards the `ATELIER_SURFACE_ID` it inherited
+alongside `CLAUDE_PROJECT_DIR`, `HookEventReceiver` stamps it onto every event it
+maps, and the tracker keeps a per-surface turn state beside the per-workstream
+one that drives the sidebar. So "has *this pane's* agent finished its turn?" is
+answerable, and two agents in one worktree no longer share one signal.
+
+Where a surface has never reported, `AgentNudge.resolveState` falls back to the
+workstream signal for exactly one surface — the Coding Agent tab, whose id *is*
+the workstream id, so that signal is by construction a statement about that pane.
+Every other surface needs positive evidence or gets no nudge.
 
 ### 2. The "no HTTP surface" argument is already spent (spec §"Why not an in-app HTTP MCP server")
 

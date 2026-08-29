@@ -90,6 +90,15 @@ final class WorkstreamAgentStateTracker: ObservableObject {
     /// Latest known context-window usage for each workstream's MAIN session.
     @Published private(set) var contextUsage: [UUID: ContextUsage] = [:]
 
+    /// Turn state per *terminal surface*, for the agents whose hook events
+    /// carried an `ATELIER_SURFACE_ID`. The workstream-level `states` above
+    /// drives the sidebar and is unaffected; this exists because two agents
+    /// sharing one worktree produce one workstream signal between them, which
+    /// is too coarse to decide whether a particular pane may be interrupted.
+    @Published private(set) var surfaceStates: [UUID: AgentRunState] = [:]
+    /// Which workstream each known surface belongs to, so `clear` can drop it.
+    private var surfaceWorkstream: [UUID: UUID] = [:]
+
     private var lastContextReadAt: [UUID: Date] = [:]
 
     /// Resolves a Claude `project_dir` payload to the matching workstream UUID.
@@ -108,6 +117,13 @@ final class WorkstreamAgentStateTracker: ObservableObject {
 
     func state(for id: UUID) -> AgentRunState {
         states[id] ?? .idle
+    }
+
+    /// Turn state of one terminal surface, or nil if no agent has ever reported
+    /// from it. Nil is meaningful: it means there is no evidence about this
+    /// pane, not that the pane is idle.
+    func state(forSurface id: UUID) -> AgentRunState? {
+        surfaceStates[id]
     }
 
     /// Live agent runs for a workstream, main agent first.
@@ -153,6 +169,10 @@ final class WorkstreamAgentStateTracker: ObservableObject {
         liveSessionIDs.remove(workstreamID)
         contextUsage.removeValue(forKey: workstreamID)
         lastContextReadAt.removeValue(forKey: workstreamID)
+        for (surface, owner) in surfaceWorkstream where owner == workstreamID {
+            surfaceStates.removeValue(forKey: surface)
+            surfaceWorkstream.removeValue(forKey: surface)
+        }
     }
 
     /// Clears every tracked state. Used by tests to isolate cases.
@@ -162,6 +182,8 @@ final class WorkstreamAgentStateTracker: ObservableObject {
         liveSessionIDs.removeAll()
         contextUsage.removeAll()
         lastContextReadAt.removeAll()
+        surfaceStates.removeAll()
+        surfaceWorkstream.removeAll()
         workstreamLookup = nil
         currentSelection = nil
     }
@@ -196,6 +218,9 @@ final class WorkstreamAgentStateTracker: ObservableObject {
         updateRoster(wsID: wsID, event: event)
         if event.agentId == "main" {
             updateMainState(wsID: wsID, event: event)
+            if let surfaceID = event.surfaceID.flatMap(UUID.init(uuidString:)) {
+                updateSurfaceState(surfaceID: surfaceID, wsID: wsID, event: event)
+            }
             if let transcriptPath = event.transcriptPath {
                 refreshContextUsage(wsID: wsID, transcriptPath: transcriptPath, force: event.type == .agentIdle)
             }
@@ -381,6 +406,38 @@ final class WorkstreamAgentStateTracker: ObservableObject {
             // Otherwise no state change — prevents flicker between tools.
             if case .needsAttention(.permission) = states[wsID] {
                 states[wsID] = .working
+            }
+
+        case .agentCreated, .agentRemoved, .agentInfo:
+            break
+        }
+    }
+
+    /// Mirrors `updateMainState` for a single surface.
+    ///
+    /// Two deliberate differences. There is no selected/unselected split —
+    /// `.needsAttention(.justFinished)` exists to colour a sidebar row, and a
+    /// surface that finished its turn is simply `.idle`. And there is no stall
+    /// sweep: a surface whose agent dies mid-turn stays `.working` and is never
+    /// interrupted, which is the safe direction to fail.
+    private func updateSurfaceState(surfaceID: UUID, wsID: UUID, event: AgentEvent) {
+        surfaceWorkstream[surfaceID] = wsID
+
+        switch event.type {
+        case .agentWaiting:
+            surfaceStates[surfaceID] = .working
+
+        case .agentIdle:
+            surfaceStates[surfaceID] = .idle
+
+        case .agentStatus:
+            if event.status == "permissionRequired" {
+                surfaceStates[surfaceID] = .needsAttention(.permission)
+            }
+
+        case .agentToolStart, .agentToolDone:
+            if case .needsAttention(.permission) = surfaceStates[surfaceID] {
+                surfaceStates[surfaceID] = .working
             }
 
         case .agentCreated, .agentRemoved, .agentInfo:

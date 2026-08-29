@@ -671,4 +671,64 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         let usage = tracker.mainContextUsage(for: wsID)
         XCTAssertEqual(usage?.usedTokens, 42_000)
     }
+
+    // MARK: - Per-surface attribution
+
+    /// Builds an event stamped with the surface it came from, the way
+    /// `HookEventReceiver` does when the hook inherited ATELIER_SURFACE_ID.
+    private func fromSurface(_ surfaceID: UUID, _ event: AgentEvent) -> AgentEvent {
+        var stamped = event
+        stamped.surfaceID = surfaceID.uuidString
+        return stamped
+    }
+
+    func test_surfaceState_tracksTurnEndPerPane() {
+        let paneA = UUID()
+        let paneB = UUID()
+
+        handle(fromSurface(paneA, .waiting(agentId: "main")))
+        handle(fromSurface(paneB, .waiting(agentId: "main")))
+        XCTAssertEqual(tracker.state(forSurface: paneA), .working)
+        XCTAssertEqual(tracker.state(forSurface: paneB), .working)
+
+        handle(fromSurface(paneA, .idle(agentId: "main")))
+        XCTAssertEqual(tracker.state(forSurface: paneA), .idle)
+        XCTAssertEqual(tracker.state(forSurface: paneB), .working, "one pane finishing says nothing about the other")
+    }
+
+    func test_surfaceState_isNilUntilThatSurfaceReports() {
+        handle(.idle(agentId: "main"))
+        XCTAssertNil(tracker.state(forSurface: UUID()), "no evidence must read as nil, not as idle")
+    }
+
+    func test_surfaceState_ignoresSubagents() {
+        let pane = UUID()
+        handle(fromSurface(pane, .waiting(agentId: "main")))
+        handle(fromSurface(pane, .idle(agentId: "sub-1")))
+        XCTAssertEqual(tracker.state(forSurface: pane), .working, "a subagent stopping is not the main turn ending")
+    }
+
+    func test_surfaceState_reportsAPermissionPrompt() {
+        let pane = UUID()
+        handle(fromSurface(pane, .status(agentId: "main", status: "permissionRequired")))
+        XCTAssertEqual(tracker.state(forSurface: pane), .needsAttention(.permission))
+
+        handle(fromSurface(pane, .toolStart(agentId: "main", tool: "Bash")))
+        XCTAssertEqual(tracker.state(forSurface: pane), .working, "tool activity means the prompt was answered")
+    }
+
+    func test_clear_dropsTheWorkstreamsSurfaces() {
+        let pane = UUID()
+        handle(fromSurface(pane, .idle(agentId: "main")))
+        XCTAssertNotNil(tracker.state(forSurface: pane))
+
+        tracker.clear(workstreamID: wsID)
+        XCTAssertNil(tracker.state(forSurface: pane))
+    }
+
+    func test_workstreamState_isUnaffectedBySurfaceStamping() {
+        let pane = UUID()
+        handle(fromSurface(pane, .idle(agentId: "main")))
+        XCTAssertEqual(tracker.state(for: wsID), .needsAttention(.justFinished), "the sidebar's signal must not change")
+    }
 }
