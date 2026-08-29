@@ -219,8 +219,15 @@ final class QuickActionRunner: ObservableObject {
             do {
                 try process.run()
                 await MainActor.run { self.runningProcess = process }
+                // Drain the pipe while the child is still running. stdout and
+                // stderr share one pipe, so waiting on exit first deadlocks as
+                // soon as the child outgrows the ~64KB buffer — reachable for
+                // `claude -p --output-format json` on a large diff, since the
+                // JSON embeds the whole assistant reply.
+                let handle = pipe.fileHandleForReading
+                let reader = Task.detached { handle.readDataToEndOfFile() }
                 process.waitUntilExit()
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let data = await reader.value
                 output = String(data: data, encoding: .utf8) ?? ""
                 success = Self.parseSuccess(output: output, exitCode: process.terminationStatus)
             } catch {

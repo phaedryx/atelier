@@ -188,6 +188,10 @@ struct AtelierApp: App {
             HookInstaller.install(hookScriptPath: hookURL.path)
         }
 
+        // Earlier builds installed an OpenCode plugin into the user's global
+        // plugin directory; it outlives Atelier unless we take it back out.
+        OpencodePluginRemover.uninstall()
+
         let crashReportingEnabled = UserDefaults.standard.object(forKey: "atelier.crashReportingEnabled") as? Bool ?? true
         if crashReportingEnabled, let sentryDSN = AppConstants.sentryDSN {
             SentrySDK.start { options in
