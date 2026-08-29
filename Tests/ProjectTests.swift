@@ -197,6 +197,42 @@ final class ProjectTests: XCTestCase {
         XCTAssertEqual(decoded.name, "legacy")
     }
 
+    /// `ProjectStore.load` decodes the whole `[Project]` array with `try?`, so
+    /// one workstream that fails to decode takes every project with it. A blob
+    /// naming the retired OpenCode harness must not be that failure.
+    func testProjectStoreLoadsWorkstreamsWithRetiredHarness() {
+        let json = """
+        [{
+          "id": "\(UUID().uuidString)",
+          "name": "one",
+          "directory": "/one",
+          "lastAccessedAt": 0,
+          "workstreams": [
+            {
+              "id": "\(UUID().uuidString)",
+              "name": "dev",
+              "bypassPermissions": false,
+              "lastAccessedAt": 0,
+              "harness": "opencode"
+            },
+            {
+              "id": "\(UUID().uuidString)",
+              "name": "main",
+              "bypassPermissions": false,
+              "lastAccessedAt": 0,
+              "harness": "claudeCode"
+            }
+          ]
+        }]
+        """
+        testDefaults.set(Data(json.utf8), forKey: "atelier.projects")
+
+        let loaded = ProjectStore.load(defaults: testDefaults)
+        XCTAssertEqual(loaded.count, 1, "a retired harness must not wipe the project list")
+        XCTAssertEqual(loaded.first?.workstreams.map(\.name), ["dev", "main"])
+        XCTAssertEqual(loaded.first?.workstreams.map(\.harness), [.claudeCode, .claudeCode])
+    }
+
     /// Workstreams stored while OpenCode was supported must still load; a
     /// retired harness degrades to Claude Code instead of failing the decode.
     func testWorkstreamJSONWithRetiredHarnessDecodesToClaudeCode() throws {
