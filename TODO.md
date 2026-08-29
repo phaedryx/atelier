@@ -19,7 +19,6 @@
 
 ## Future
 
-- [ ] Agent roster avatars for more agent types: drop 64x64 `avatar_<type>_<k>.png` files in `Resources/AgentSprites/` (claude/plan have 1 sprite each; explore/generalpurpose have 4 each — sets cycle automatically; see docs/agent-roster.md)
 - [ ] External Chrome integration: launch with --remote-debugging-port for WebMCP/CDP
 - [ ] PR management: create and manage PRs from workstreams (currently view-only)
 - [ ] Horizontal terminal splits within a tab (ghostty C API supports splits)
@@ -88,29 +87,23 @@
 - [x] Fix: terminal mouse selection coordinates, env script lifecycle, proc_listchildpids count
 - [x] Restore full app state on launch, right-click sidebar menus, drag-and-drop tab reorder
 
-## Multi-harness support (Claude Code + OpenCode)
+## Coding agent
 
-- [x] CodingHarness enum with per-workstream harness selection and backward-compatible decoding
-- [x] OpenCode plugin auto-installer (status events, session tracking, instructions injection)
-- [x] Per-harness agent command building (resume/--session, --auto bypass, tmux wrapping)
-- [x] Harness picker in new-workstream sheet, global default setting, sidebar badges
-- [x] Switch-harness context menu with surface teardown + tmux kill
-- [x] OpenCode GitHub quick actions (opencode run -c --fork)
-- [x] OpenCode subagent roster: child-session name map + `agent_info` events (agent type, model attribute on roster lines), `session.status`, subtask spawn signal, sprite aliases for build/general/ask
-- [x] OpenCode quick-action output parsed from `--format json` stream into a summary + PR link; raw JSONL collapsed behind disclosure
-- [x] Fixed: quick-action forks hijacked `.atelier-state/opencode-session` (sentinel file makes the plugin ignore quick-action subprocesses)
-- [ ] Future harnesses (e.g., Codex): add enum case + command builder branch + event mapper
+- [x] Claude Code command building (resume, bypass, tmux wrapping)
+- [x] Removed OpenCode support and the `CodingHarness` abstraction with it.
+      Claude Code is assumed everywhere; a workstream no longer stores which
+      agent it runs, and blobs that still carry the retired `harness` key load
+      fine because the key is simply ignored.
+- [ ] A second coding agent (e.g., Codex) means reintroducing the type, not
+      adding a case: a per-workstream selection, its own command builder, its
+      own event mapper in `HookEventReceiver`, and the selection UI (picker in
+      the new-workstream sheet, a default setting, a switch menu).
 
 ## Agent IPC follow-ups
 
-- **opencode support.** v1 wires Claude Code only, via `--mcp-config` in
-  `buildClaudeCommand()`. opencode reads MCP config from a file; the precedent
-  for writing one is `OpencodePluginInstaller` and `Resources/Scripts/atelier-opencode.js`.
-- **The opencode plugin does not report a surface.** `surface_id` sits at the
-  hook envelope level, so `atelier-opencode.js` could forward
-  `process.env.ATELIER_SURFACE_ID` and get per-surface attribution for free. Not
-  done because opencode agents cannot register peers yet — the MCP config is
-  Claude Code only — so the code would be unexercisable.
+- **Other harnesses.** v1 wires Claude Code only, via `--mcp-config` in
+  `buildClaudeCommand()`. A second harness needs its own way of receiving the
+  MCP config, plus a `source` branch in `HookEventReceiver`.
 - **`IPCStore.isAlive` is O(peers x messages) for expired peers.** The TTL check
   returns first, so the inbox scan only runs for peers already past their TTL —
   unreachable at this scale. If IPC is ever reused for something busier, keep a

@@ -1,5 +1,5 @@
-// ABOUTME: Tests for transcript context-usage parsing, OpenCode token sums,
-// ABOUTME: and model-based context limit lookup.
+// ABOUTME: Tests for transcript context-usage parsing and model-based
+// ABOUTME: context limit lookup.
 
 @testable import Atelier
 import XCTest
@@ -54,32 +54,6 @@ final class TranscriptContextReaderTests: XCTestCase {
     func testLimitComesFromEntryModel() {
         let usage = TranscriptContextReader.usage(contents: opusOneMLine)
         XCTAssertEqual(usage?.limitTokens, 1_000_000)
-    }
-
-    // MARK: - OpenCode tokens dict
-
-    func testOpencodeTokenSumIncludesCacheReadAndWrite() {
-        let tokens: [String: Any] = [
-            "input": 100,
-            "output": 500,
-            "cache": ["read": 50, "write": 25],
-        ]
-        XCTAssertEqual(TranscriptContextReader.usedTokens(fromOpencodeTokens: tokens), 175)
-    }
-
-    func testOpencodeTokenSumHandlesMissingAndNonNumericFields() {
-        XCTAssertEqual(
-            TranscriptContextReader.usedTokens(fromOpencodeTokens: ["input": 7]),
-            7
-        )
-        XCTAssertEqual(
-            TranscriptContextReader.usedTokens(fromOpencodeTokens: [:]),
-            0
-        )
-        XCTAssertEqual(
-            TranscriptContextReader.usedTokens(fromOpencodeTokens: ["input": "nope", "cache": ["read": true]]),
-            0
-        )
     }
 
     // MARK: - File tail reading

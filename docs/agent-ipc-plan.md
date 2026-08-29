@@ -79,12 +79,12 @@ is kept; only the mechanism changes.
 
 ### 4. Harness scope: Claude Code only for v1
 
-`CodingHarness` is `claudeCode | opencode`; there is no `cursor-agent`, so the
-spec's "Minimum path" does not apply as written. v1 wires Claude Code via
-`--mcp-config` in `buildClaudeCommand()` (`Sources/Views/TerminalContainerView.swift:542`,
-already assembling flags through `CommandBuilder`). opencode is a follow-up;
-precedent for its config lives in `OpencodePluginInstaller` and
-`Resources/Scripts/atelier-opencode.js`.
+When this was written `CodingHarness` was `claudeCode | opencode`; OpenCode
+support has since been removed, so the enum is Claude Code only and there is
+no `cursor-agent` — the spec's "Minimum path" does not apply as written. v1
+wires Claude Code via `--mcp-config` in `buildClaudeCommand()`
+(`Sources/Views/TerminalContainerView.swift`, already assembling flags through
+`CommandBuilder`). A second harness is a follow-up.
 
 ### 5. Build wiring trap
 

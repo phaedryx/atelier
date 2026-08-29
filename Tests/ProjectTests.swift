@@ -157,56 +157,56 @@ final class ProjectTests: XCTestCase {
         XCTAssertEqual(loaded.first?.workstreams.first?.name, "dev")
     }
 
-    // MARK: - Harness selection
+    // MARK: - Persisted blobs from earlier shapes
 
-    func testWorkstreamDefaultsToClaudeCode() {
-        XCTAssertEqual(Workstream(name: "main").harness, .claudeCode)
-    }
+    /// `ProjectStore.load` decodes the whole `[Project]` array behind one
+    /// `try?`, so a workstream that fails to decode takes every project with
+    /// it. Blobs written while workstreams carried a `harness` are still on
+    /// disk; the retired key must be ignored, not fatal.
+    func testProjectStoreLoadsWorkstreamsWithRetiredHarnessKey() {
+        let json = """
+        [{
+          "id": "\(UUID().uuidString)",
+          "name": "one",
+          "directory": "/one",
+          "lastAccessedAt": 0,
+          "workstreams": [
+            {
+              "id": "\(UUID().uuidString)",
+              "name": "dev",
+              "bypassPermissions": false,
+              "lastAccessedAt": 0,
+              "harness": "opencode"
+            },
+            {
+              "id": "\(UUID().uuidString)",
+              "name": "main",
+              "bypassPermissions": false,
+              "lastAccessedAt": 0,
+              "harness": "claudeCode"
+            }
+          ]
+        }]
+        """
+        testDefaults.set(Data(json.utf8), forKey: "atelier.projects")
 
-    func testWorkstreamHarnessRoundTrip() throws {
-        var ws = Workstream(name: "main", harness: .opencode)
-        ws.worktreePath = "/tmp/ws"
-        let data = try JSONEncoder().encode(ws)
-        let decoded = try JSONDecoder().decode(Workstream.self, from: data)
-        XCTAssertEqual(decoded.harness, .opencode)
-        XCTAssertEqual(decoded.worktreePath, "/tmp/ws")
-    }
-
-    func testLegacyWorkstreamJSONWithoutHarnessDecodesToClaudeCode() throws {
-        // Mirrors the pre-multi-harness Workstream shape stored in UserDefaults.
-        struct LegacyWorkstream: Codable {
-            let id: UUID
-            var name: String
-            var displayName: String?
-            var worktreePath: String?
-            var bypassPermissions: Bool
-            var lastAccessedAt: Date
-        }
-        let legacy = LegacyWorkstream(
-            id: UUID(),
-            name: "legacy",
-            displayName: nil,
-            worktreePath: nil,
-            bypassPermissions: true,
-            lastAccessedAt: Date()
-        )
-        let data = try JSONEncoder().encode(legacy)
-        let decoded = try JSONDecoder().decode(Workstream.self, from: data)
-        XCTAssertEqual(decoded.harness, .claudeCode)
-        XCTAssertTrue(decoded.bypassPermissions)
-        XCTAssertEqual(decoded.name, "legacy")
-    }
-
-    func testProjectStorePreservesOpencodeHarness() {
-        let projects = [
-            Project(name: "one", directory: "/one", workstreams: [
-                Workstream(name: "dev", harness: .opencode),
-                Workstream(name: "main", harness: .claudeCode),
-            ]),
-        ]
-        ProjectStore.save(projects, defaults: testDefaults)
         let loaded = ProjectStore.load(defaults: testDefaults)
-        XCTAssertEqual(loaded.first?.workstreams[0].harness, .opencode)
-        XCTAssertEqual(loaded.first?.workstreams[1].harness, .claudeCode)
+        XCTAssertEqual(loaded.count, 1, "a retired harness key must not wipe the project list")
+        XCTAssertEqual(loaded.first?.workstreams.map(\.name), ["dev", "main"])
+    }
+
+    /// The pre-harness Workstream shape must also still decode.
+    func testLegacyWorkstreamJSONDecodes() throws {
+        let json = """
+        {
+          "id": "\(UUID().uuidString)",
+          "name": "legacy",
+          "bypassPermissions": true,
+          "lastAccessedAt": 0
+        }
+        """
+        let decoded = try JSONDecoder().decode(Workstream.self, from: Data(json.utf8))
+        XCTAssertEqual(decoded.name, "legacy")
+        XCTAssertTrue(decoded.bypassPermissions)
     }
 }
