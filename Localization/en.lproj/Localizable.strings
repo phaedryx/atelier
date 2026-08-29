@@ -400,11 +400,6 @@
 /* Coding agent */
 "Claude Code" = "Claude Code";
 "Enables experimental multi-agent coordination. Agents can spawn teammates, delegate tasks, and collaborate across workstreams. Only applies to Claude Code." = "Enables experimental multi-agent coordination. Agents can spawn teammates, delegate tasks, and collaborate across workstreams. Only applies to Claude Code.";
-"Claude Code not found" = "Claude Code not found";
-"Install Claude Code to use the Coding Agent." = "Install Claude Code to use the Coding Agent.";
-"Install Claude Code" = "Install Claude Code";
-"Claude Code is not installed." = "Claude Code is not installed.";
-
 /* Quick action results */
 "Raw output" = "Raw output";
 
