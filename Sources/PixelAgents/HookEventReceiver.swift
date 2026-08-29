@@ -30,13 +30,6 @@ final class HookEventReceiver: @unchecked Sendable {
     private var currentPort: UInt16?
     private var connections: [NWConnection] = []
 
-    /// Per-project state for tracking subagent palettes.
-    private struct ProjectState {
-        var nextPalette: Int = 1 // 0 is reserved for main
-        var knownAgents: Set<String> = []
-    }
-
-    private var projectState: [String: ProjectState] = [:] // keyed by projectDir
 
     private init() {}
 
@@ -250,19 +243,6 @@ final class HookEventReceiver: @unchecked Sendable {
         !agentId.isEmpty && agentId != "main"
     }
 
-    /// Assigns a roster palette slot for an agent within a project.
-    /// Must be called on `self.queue`.
-    private func assignPalette(projectDir: String, agentId: String) -> Int {
-        var state = projectState[projectDir] ?? ProjectState()
-        let palette = state.nextPalette % 6
-        if !state.knownAgents.contains(agentId) {
-            state.nextPalette += 1
-            state.knownAgents.insert(agentId)
-        }
-        projectState[projectDir] = state
-        return palette
-    }
-
     /// Maps a tool name (and, when available, its input) to a short human-readable
     /// activity description for the sidebar roster, e.g. "Editing Foo.swift".
     static func activityDescription(toolName: String, toolInput: [String: Any]?) -> String? {
@@ -345,10 +325,8 @@ final class HookEventReceiver: @unchecked Sendable {
             guard isSubagent(aid) else { return [] }
             let agentType = eventInput["agent_type"] as? String ?? "Sub-agent"
             let name = String(agentType.prefix(20))
-            let palette = assignPalette(projectDir: projectDir, agentId: aid)
-
-            logger.info("Hook SubagentStart: \(aid, privacy: .public) name=\(name, privacy: .public) palette=\(palette)")
-            return [AgentEvent.created(agentId: aid, name: name, palette: palette, parentAgentId: "main")]
+            logger.info("Hook SubagentStart: \(aid, privacy: .public) name=\(name, privacy: .public)")
+            return [AgentEvent.created(agentId: aid, name: name, parentAgentId: "main")]
 
         case "SubagentStop":
             let aid = agentId(from: eventInput)

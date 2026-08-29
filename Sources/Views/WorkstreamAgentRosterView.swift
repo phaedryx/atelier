@@ -4,9 +4,9 @@
 import SwiftUI
 
 /// One card per live SUBAGENT run, mirroring the workstream row's design in
-/// miniature: ringed pixel portrait, type name, and a status meta line (dot +
-/// word · activity · elapsed). The main agent is not listed — its portrait,
-/// status line, and context bar live on the workstream row itself. Cards
+/// miniature: status dot, type name, and a status meta line (dot + word ·
+/// activity · elapsed). The main agent is not listed — its dot, status line,
+/// and context bar live on the workstream row itself. Cards
 /// exist exactly while their run is live — Claude Code's stop hooks remove
 /// them the moment an agent finishes.
 struct WorkstreamAgentRosterView: View {
@@ -36,8 +36,9 @@ struct WorkstreamAgentRosterView: View {
                 Text(String(format: NSLocalizedString("+%d more", comment: "Additional agents beyond the visible roster lines"), hiddenCount))
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
-                    // Clears the 30pt art column so the label aligns with names.
-                    .padding(.leading, 36)
+                    // Clears the 12pt dot column plus the 6pt stack spacing so
+                    // the label aligns with the card names.
+                    .padding(.leading, 18)
                     .onTapGesture(perform: onSelect)
             }
         }
@@ -76,7 +77,7 @@ private struct RosterCard: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 6) {
-            RosterAvatar(name: run.name, palette: run.palette, variant: run.variantIndex, state: run.state)
+            RosterStatusDot(state: run.state)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(displayName)
@@ -140,18 +141,16 @@ private extension String {
     }
 }
 
-// MARK: - Avatar
+// MARK: - Status dot
 
-private struct RosterAvatar: View {
-    let name: String?
-    let palette: Int
-    let variant: Int
+/// Leading status dot for a roster card, matching the workstream row's
+/// indicator: blue while working, yellow when stalled, pulsing while working.
+private struct RosterStatusDot: View {
     let state: WorkstreamAgentStateTracker.AgentRun.RunState
 
     @State private var isPulsing = false
 
-    /// Mirrors MainAgentPortrait's state palette (blue working, yellow stalled).
-    private var ringColor: Color {
+    private var color: Color {
         switch state {
         case .working: return .blue
         case .stalled: return .yellow
@@ -159,40 +158,19 @@ private struct RosterAvatar: View {
     }
 
     var body: some View {
-        ZStack {
-            Circle()
-                .strokeBorder(
-                    ringColor.opacity(isPulsing && state == .working ? 0.35 : 0.9),
-                    lineWidth: 1.5
-                )
-
-            portrait
-                .padding(1)
-        }
-        .frame(width: 30, height: 30)
-        .onChange(of: state) { _, newValue in
-            isPulsing = (newValue == .working)
-        }
-        .onAppear {
-            isPulsing = (state == .working)
-        }
-        .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: isPulsing)
-    }
-
-    private var portrait: some View {
-        Group {
-            if let image = AgentSpriteStore.shared.avatar(name: name, palette: palette, variant: variant) {
-                Image(nsImage: image)
-                    .resizable()
-                    .interpolation(.none)
-                    .scaledToFill()
-            } else {
-                Image(systemName: "person.crop.circle.fill")
-                    .resizable()
-                    .scaledToFill()
-            }
-        }
-        .clipShape(Circle())
+        Circle()
+            .fill(color)
+            .frame(width: 6, height: 6)
+            .opacity(isPulsing ? 0.4 : 1.0)
+            .animation(
+                state == .working
+                    ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true)
+                    : .default,
+                value: isPulsing
+            )
+            .onAppear { isPulsing = (state == .working) }
+            .onChange(of: state) { _, newValue in isPulsing = (newValue == .working) }
+            .frame(width: 12)
     }
 }
 

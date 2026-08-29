@@ -860,7 +860,6 @@ private struct WorkstreamRow: View {
     let isPathValid: Bool
     var agentState: WorkstreamAgentStateTracker.AgentRunState = .idle
     var hasLiveSession: Bool = false
-    var portraitName: String = "Claude"
     var mainActivity: String?
     var mainContextUsage: WorkstreamAgentStateTracker.ContextUsage?
     /// When this workstream's main run was first seen this launch; drives
@@ -913,9 +912,9 @@ private struct WorkstreamRow: View {
         }
     }
 
-    /// Dot/word color mirroring the portrait ring; nil when dormant.
+    /// Dot/word color for the status meta line; nil when dormant.
     private var statusColor: Color? {
-        MainAgentPortrait.ringColor(for: agentState, hasLiveSession: hasLiveSession)
+        AgentActivityIndicator.color(for: agentState, hasLiveSession: hasLiveSession)
     }
 
     private var statusText: LocalizedStringKey? {
@@ -967,11 +966,10 @@ private struct WorkstreamRow: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 6) {
-            MainAgentPortrait(
+            AgentActivityIndicator(
                 state: agentState,
                 isPathValid: isPathValid,
-                hasLiveSession: hasLiveSession,
-                portraitName: portraitName
+                hasLiveSession: hasLiveSession
             )
 
             VStack(alignment: .leading, spacing: 3) {
@@ -1298,5 +1296,71 @@ private struct NewProjectSheet: View {
         }
         .padding(20)
         .frame(width: 380)
+    }
+}
+
+/// Leading status dot for a workstream row: a warning triangle when the
+/// worktree path is gone, a pulsing dot while the agent is spending context,
+/// and a static dot otherwise. Colour encodes the agent's run state and is
+/// shared with the row's status word.
+private struct AgentActivityIndicator: View {
+    let state: WorkstreamAgentStateTracker.AgentRunState
+    let isPathValid: Bool
+    let hasLiveSession: Bool
+
+    @State private var isPulsing = false
+
+    /// State palette, also used by the row's status word:
+    /// blue = working, yellow = stalled, orange = awaiting permission,
+    /// green = finished, secondary = idle with a live session.
+    /// Nil when the workstream is dormant (no agent activity this launch).
+    static func color(
+        for state: WorkstreamAgentStateTracker.AgentRunState,
+        hasLiveSession: Bool
+    ) -> Color? {
+        switch state {
+        case .working: .blue
+        case .stalled: .yellow
+        case .needsAttention(.permission): .orange
+        case .needsAttention(.justFinished): .green
+        case .idle where hasLiveSession: .secondary
+        case .idle: nil
+        }
+    }
+
+    /// True while the agent is mid-turn, which is what pulses.
+    private var isActive: Bool {
+        switch state {
+        case .working, .stalled: true
+        case .idle, .needsAttention: false
+        }
+    }
+
+    var body: some View {
+        Group {
+            if !isPathValid {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                    .font(.system(size: 10))
+            } else if let color = Self.color(for: state, hasLiveSession: hasLiveSession) {
+                Circle()
+                    .fill(color)
+                    .frame(width: 6, height: 6)
+                    .opacity(isActive && isPulsing ? 0.4 : 1.0)
+                    .animation(
+                        isActive
+                            ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true)
+                            : .default,
+                        value: isPulsing
+                    )
+                    .onAppear { isPulsing = isActive }
+                    .onChange(of: isActive) { _, active in isPulsing = active }
+            } else {
+                Circle()
+                    .fill(.tertiary)
+                    .frame(width: 6, height: 6)
+            }
+        }
+        .frame(width: 12)
     }
 }

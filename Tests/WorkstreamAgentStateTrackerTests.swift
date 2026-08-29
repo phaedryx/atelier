@@ -59,12 +59,11 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
     }
 
     func testSubagentStartStopLifecycle() {
-        handle(.created(agentId: "sub-1", name: "Explore", palette: 2))
+        handle(.created(agentId: "sub-1", name: "Explore"))
         var runs = tracker.runs(for: wsID)
         XCTAssertEqual(runs.count, 1)
         XCTAssertFalse(runs[0].isMain)
         XCTAssertEqual(runs[0].name, "Explore")
-        XCTAssertEqual(runs[0].palette, 2)
 
         handle(.removed(agentId: "sub-1"))
         runs = tracker.runs(for: wsID)
@@ -72,15 +71,15 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
     }
 
     func testDuplicateSubagentStartDoesNotDuplicateRun() {
-        handle(.created(agentId: "sub-1", name: "Explore", palette: 1))
-        handle(.created(agentId: "sub-1", name: "Explore", palette: 1))
+        handle(.created(agentId: "sub-1", name: "Explore"))
+        handle(.created(agentId: "sub-1", name: "Explore"))
         XCTAssertEqual(tracker.activeRunCount(for: wsID), 1)
     }
 
     func testMainRunSortsFirstAmongSubagents() {
         handle(.waiting(agentId: "main"))
-        handle(.created(agentId: "sub-a", name: "Explore", palette: 1))
-        handle(.created(agentId: "sub-b", name: "Plan", palette: 2))
+        handle(.created(agentId: "sub-a", name: "Explore"))
+        handle(.created(agentId: "sub-b", name: "Plan"))
         let runs = tracker.runs(for: wsID)
         XCTAssertEqual(runs.map(\.id), ["main", "sub-a", "sub-b"])
     }
@@ -88,7 +87,7 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
     func testEventsOutsideTrackedWorkstreamsAreIgnored() {
         tracker.workstreamLookup = { _ in nil }
         handle(.waiting(agentId: "main"))
-        handle(.created(agentId: "sub-1", name: "Explore", palette: 1))
+        handle(.created(agentId: "sub-1", name: "Explore"))
         XCTAssertEqual(tracker.activeRunCount(for: wsID), 0)
     }
 
@@ -104,7 +103,7 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
     }
 
     func testSubagentActivityIsTrackedSeparately() {
-        handle(.created(agentId: "sub-1", name: "Explore", palette: 1))
+        handle(.created(agentId: "sub-1", name: "Explore"))
         handle(.toolStart(agentId: "sub-1", tool: "Grep", activity: "Searching"))
         let sub = tracker.runs(for: wsID).first(where: { $0.id == "sub-1" })
         XCTAssertEqual(sub?.activity, "Searching")
@@ -197,7 +196,7 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
     /// goes quiet.
     func testFreshSubagentKeepsRowWorkingWhenMainGoesQuiet() {
         handle(.waiting(agentId: "main"))
-        handle(.created(agentId: "ses_build", name: "build", palette: 1))
+        handle(.created(agentId: "ses_build", name: "build"))
         backdateMainRun(secondsAgo: WorkstreamAgentStateTracker.stallThreshold + 10)
 
         tracker.sweepForStalls(now: Date())
@@ -232,77 +231,11 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         XCTAssertEqual(usage?.limitTokens, 200_000)
     }
 
-    // MARK: - Variant assignment
-
-    func testVariantIndicesAssignedPerType() {
-        handle(.created(agentId: "e1", name: "Explore", palette: 1))
-        handle(.created(agentId: "e2", name: "Explore", palette: 2))
-        handle(.created(agentId: "g1", name: "general-purpose", palette: 3))
-        let runs = tracker.runs(for: wsID)
-        XCTAssertEqual(runs.first(where: { $0.id == "e1" })?.variantIndex, 0)
-        XCTAssertEqual(runs.first(where: { $0.id == "e2" })?.variantIndex, 1)
-        // Independent sequence per type.
-        XCTAssertEqual(runs.first(where: { $0.id == "g1" })?.variantIndex, 0)
-    }
-
-    func testFreedVariantIndexIsReused() {
-        handle(.created(agentId: "e1", name: "Explore", palette: 1))
-        handle(.created(agentId: "e2", name: "Explore", palette: 1))
-        handle(.created(agentId: "e3", name: "Explore", palette: 1))
-        handle(.removed(agentId: "e2"))
-        handle(.created(agentId: "e4", name: "Explore", palette: 1))
-        XCTAssertEqual(tracker.runs(for: wsID).first(where: { $0.id == "e4" })?.variantIndex, 1)
-    }
-
-    func testVariantIndicesKeepCountingWhenOverCapacity() {
-        for i in 1...5 {
-            handle(.created(agentId: "e\(i)", name: "Explore", palette: 1))
-        }
-        let variants = tracker.runs(for: wsID).map(\.variantIndex).sorted()
-        // Raw indices keep counting; cycling to sprite 1 happens at render time.
-        XCTAssertEqual(variants, [0, 1, 2, 3, 4])
-    }
-
-    func testVariantIndexIsStableForRunLifetime() {
-        handle(.created(agentId: "e1", name: "Explore", palette: 1))
-        handle(.toolStart(agentId: "e1", tool: "Grep", activity: "Searching"))
-        XCTAssertEqual(tracker.runs(for: wsID).first?.variantIndex, 0)
-    }
-
-    func testMainAgentVariantIsZero() {
-        handle(.waiting(agentId: "main"))
-        XCTAssertEqual(tracker.runs(for: wsID).first?.variantIndex, 0)
-    }
-
-    func testNextVariantIndexMatchesNormalizedTypeNames() {
-        var runs = tracker.runs(for: wsID)
-        runs = [
-            run(name: "Explore", variant: 0),
-            run(name: "explore", variant: 2),
-        ]
-        XCTAssertEqual(WorkstreamAgentStateTracker.nextVariantIndex(for: "Explore", in: runs), 1)
-        XCTAssertEqual(WorkstreamAgentStateTracker.nextVariantIndex(for: "general-purpose", in: runs), 0)
-    }
-
-    private func run(name: String, variant: Int) -> WorkstreamAgentStateTracker.AgentRun {
-        WorkstreamAgentStateTracker.AgentRun(
-            id: name + String(variant),
-            name: name,
-            palette: 1,
-            isMain: false,
-            variantIndex: variant,
-            state: .working,
-            activity: nil,
-            startedAt: Date(),
-            lastEventAt: Date()
-        )
-    }
-
     // MARK: - Cleanup
 
     func testClearRemovesAllStateForWorkstream() {
         handle(.waiting(agentId: "main"))
-        handle(.created(agentId: "sub-1", name: "Explore", palette: 1))
+        handle(.created(agentId: "sub-1", name: "Explore"))
         tracker.clear(workstreamID: wsID)
         XCTAssertEqual(tracker.activeRunCount(for: wsID), 0)
         XCTAssertEqual(tracker.state(for: wsID), .idle)
@@ -344,29 +277,28 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
     /// A duplicate create refines the existing run instead of recreating or
     /// resetting it.
     func testDuplicateCreatedRefinesName() {
-        handle(.created(agentId: "sub-1", name: "Sub-agent", palette: 3))
-        let originalVariant = tracker.runs(for: wsID).first?.variantIndex
+        handle(.created(agentId: "sub-1", name: "Sub-agent"))
+        let originalStart = tracker.runs(for: wsID).first?.startedAt
 
-        handle(.created(agentId: "sub-1", name: "explore", palette: 1, parentAgentId: "main"))
+        handle(.created(agentId: "sub-1", name: "explore", parentAgentId: "main"))
 
         let runs = tracker.runs(for: wsID)
         XCTAssertEqual(runs.count, 1)
         let sub = runs[0]
         XCTAssertEqual(sub.name, "explore")
-        XCTAssertEqual(sub.palette, 3)
-        XCTAssertEqual(sub.variantIndex, originalVariant)
+        XCTAssertEqual(sub.startedAt, originalStart, "the run is refined, not recreated")
     }
 
     func testChildIdleRemovesOnlyThatChild() {
         handle(.waiting(agentId: "main"))
-        handle(.created(agentId: "ses_child", name: "Explore", palette: 1))
+        handle(.created(agentId: "ses_child", name: "Explore"))
         handle(.idle(agentId: "ses_child"))
         XCTAssertEqual(tracker.runs(for: wsID).map(\.id), ["main"])
     }
 
     func testMainIdleClearsRemainingChildren() {
         handle(.waiting(agentId: "main"))
-        handle(.created(agentId: "ses_a", name: "Explore", palette: 1))
+        handle(.created(agentId: "ses_a", name: "Explore"))
         handle(.idle(agentId: "main"))
         XCTAssertEqual(tracker.activeRunCount(for: wsID), 0)
     }

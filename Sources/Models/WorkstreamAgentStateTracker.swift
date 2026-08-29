@@ -46,12 +46,7 @@ final class WorkstreamAgentStateTracker: ObservableObject {
         /// Display name ("Claude" or the subagent type). Mutable: later events
         /// may refine it once the harness reports the agent type.
         var name: String
-        let palette: Int
         let isMain: Bool
-        /// Per-type occurrence slot: the lowest index not held by a live
-        /// same-type run at creation. Drives sprite-set cycling in the roster
-        /// (sprite shown is `variantIndex % setCount`).
-        let variantIndex: Int
         var state: RunState
         /// What the agent is doing right now, e.g. "Editing Foo.swift".
         var activity: String?
@@ -232,7 +227,7 @@ final class WorkstreamAgentStateTracker: ObservableObject {
         let now = Date()
         var list = rosters[wsID] ?? []
 
-        func upsert(_ agentId: String, name: String? = nil, palette: Int = 0, isMain: Bool = true, variantIndex: Int = 0, mutate: (inout AgentRun) -> Void = { _ in }) {
+        func upsert(_ agentId: String, name: String? = nil, isMain: Bool = true, mutate: (inout AgentRun) -> Void = { _ in }) {
             if let idx = list.firstIndex(where: { $0.id == agentId }) {
                 mutate(&list[idx])
                 // A later event may refine the display name once the harness
@@ -245,9 +240,7 @@ final class WorkstreamAgentStateTracker: ObservableObject {
                 var run = AgentRun(
                     id: agentId,
                     name: name ?? "Claude",
-                    palette: palette,
                     isMain: isMain,
-                    variantIndex: variantIndex,
                     state: .working,
                     activity: nil,
                     startedAt: now,
@@ -270,13 +263,7 @@ final class WorkstreamAgentStateTracker: ObservableObject {
                 }
                 list[idx].lastEventAt = now
             } else {
-                upsert(
-                    event.agentId,
-                    name: name,
-                    palette: event.palette ?? 1,
-                    isMain: false,
-                    variantIndex: Self.nextVariantIndex(for: name, in: list)
-                )
+                upsert(event.agentId, name: name, isMain: false)
             }
 
         case .agentRemoved:
@@ -403,19 +390,6 @@ final class WorkstreamAgentStateTracker: ObservableObject {
         case .agentCreated, .agentRemoved:
             break
         }
-    }
-
-    // MARK: - Variant Assignment
-
-    /// Lowest variant index not held by a live run of the same type. Cycling
-    /// happens at render time (`variantIndex % setCount`), so indices beyond
-    /// the sprite count wrap back to the first sprite.
-    static func nextVariantIndex(for name: String, in runs: [AgentRun]) -> Int {
-        let key = AgentSpriteStore.normalizeTypeName(name)
-        let used = Set(runs.filter { AgentSpriteStore.normalizeTypeName($0.name) == key }.map(\.variantIndex))
-        var index = 0
-        while used.contains(index) { index += 1 }
-        return index
     }
 
     // MARK: - Stall Detection

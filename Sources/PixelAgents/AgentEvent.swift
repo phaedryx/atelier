@@ -1,5 +1,5 @@
-// ABOUTME: Event types for the Swift-to-JS pixel agents bridge protocol.
-// ABOUTME: Encoded as JSON and sent to the WKWebView via evaluateJavaScript.
+// ABOUTME: Event types the hook receiver produces from Claude Code hook payloads.
+// ABOUTME: Consumed by WorkstreamAgentStateTracker to drive the sidebar roster.
 
 import Foundation
 
@@ -7,7 +7,6 @@ struct AgentEvent: Codable, Sendable {
     let type: EventType
     let agentId: String
     var name: String?
-    var palette: Int?
     var tool: String?
     /// Human-readable description of what the agent is doing right now
     /// (e.g. "Editing Foo.swift"), derived from the tool and its input.
@@ -37,7 +36,6 @@ struct AgentEvent: Codable, Sendable {
         case type
         case agentId
         case name
-        case palette
         case tool
         case activity
         case status
@@ -50,10 +48,9 @@ struct AgentEvent: Codable, Sendable {
     static func created(
         agentId: String,
         name: String,
-        palette: Int,
         parentAgentId: String? = nil
     ) -> AgentEvent {
-        AgentEvent(type: .agentCreated, agentId: agentId, name: name, palette: palette, parentAgentId: parentAgentId)
+        AgentEvent(type: .agentCreated, agentId: agentId, name: name, parentAgentId: parentAgentId)
     }
 
     static func removed(agentId: String) -> AgentEvent {

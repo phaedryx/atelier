@@ -1,11 +1,11 @@
 # Agent Roster — Architecture
 
-The sidebar shows live agent status per workstream: each row leads with the
-main agent's pixel portrait inside a circular state ring — the portrait
-carries the main agent's state, current activity, and context meter — and
-while subagents are running, a compact roster of two-line mini cards under
-the row shows who is doing what right now. The main agent is not listed in
-the roster; everything it does is visible on the row itself.
+The sidebar shows live agent status per workstream: each row leads with a
+small status dot carrying the main agent's state, alongside its current
+activity and context meter — and while subagents are running, a compact
+roster of two-line mini cards under the row shows who is doing what right
+now. The main agent is not listed in the roster; everything it does is
+visible on the row itself.
 
 ## How it works
 
@@ -20,7 +20,7 @@ Claude Code hooks (settings.json)
   → curl POST http://127.0.0.1:{port}/hook
   → HookEventReceiver (NWListener, Swift)
   → AtelierApp.onEvent → HookEventRouter (fan-out) + WorkstreamAgentStateTracker.handle
-  → Sidebar: MainAgentPortrait state ring on the row + WorkstreamAgentRosterView cards
+  → Sidebar: AgentActivityIndicator dot on the row + WorkstreamAgentRosterView cards
 ```
 
 ## Hook registration
@@ -79,51 +79,45 @@ worktree paths match.
 | `Sources/PixelAgents/AgentEvent.swift` | Event model: `agentCreated`, `agentRemoved`, `agentStatus`, `agentToolStart`, `agentToolDone`, `agentIdle`, `agentWaiting`. |
 | `Sources/PixelAgents/TranscriptContextReader.swift` | Extracts context-window usage from Claude Code transcript tails. |
 | `Sources/PixelAgents/ContextLimits.swift` | Maps model IDs to context-window limits (200k default, 1M extended). |
-| `Sources/PixelAgents/AgentSpriteStore.swift` | Loads agent portraits for the roster (`avatar_<type>_<k>.png` sets with palette-slot fallback). |
 | `Sources/Models/WorkstreamAgentStateTracker.swift` | Per-workstream roster + row-level state machine + stall sweep + live-session tracking + context usage. |
-| `Sources/Views/MainAgentPortrait.swift` | Circular pixel portrait leading each workstream row; ring color/pulse encodes state. |
 | `Sources/Views/WorkstreamAgentRosterView.swift` | Subagent mini cards under each workstream row. |
 | `Sources/Views/ContextMeter.swift` | Context-window meter (bar + percentage) shared by the row and roster cards. |
-| `Resources/AgentSprites/` | Avatar art (6 palettes). |
-| `scripts/generate-avatars.swift` | Regenerates the 64×64 avatar PNGs from high-resolution source art. |
 
 ## Row-level states (`AgentRunState`)
 
-Each workstream row leads with the main agent's portrait (~28pt, circular).
-The ring around the character — and how much of the character shows through —
-encodes the state:
+Each workstream row leads with a 6pt status dot in a 12pt column
+(`AgentActivityIndicator`). Its color encodes the state, and it pulses while
+the agent is mid-turn. The same color drives the row's status word:
 
-| State | Portrait treatment | Trigger |
+| State | Dot | Trigger |
 |---|---|---|
-| `.idle` (live session) | Desaturated, slightly dimmed character with a thin gray ring | No active turn, but ≥1 hook event seen since app launch |
-| `.idle` (dormant) | Character at ~20% opacity, no ring | No active turn and no harness activity this launch |
-| `.working` | Full color, pulsing green ring + subtle green glow | `UserPromptSubmit`, tool activity after a permission grant |
-| `.stalled` | Pulsing orange ring | No hook events for 45s mid-turn (swept every 15s) |
-| `.needsAttention(.permission)` | Static orange ring + orange exclamation badge | Notification hook reports a permission prompt |
-| `.needsAttention(.justFinished)` | Static blue ring | `Stop` on an unselected workstream; cleared by `markSeen` when selected |
+| `.idle` (live session) | Secondary gray, static | No active turn, but ≥1 hook event seen since app launch |
+| `.idle` (dormant) | Tertiary gray, static | No active turn and no agent activity this launch |
+| `.working` | Blue, pulsing | `UserPromptSubmit`, tool activity after a permission grant |
+| `.stalled` | Yellow, pulsing | No hook events for 45s mid-turn (swept every 15s) |
+| `.needsAttention(.permission)` | Orange, static | Notification hook reports a permission prompt |
+| `.needsAttention(.justFinished)` | Green, static | `Stop` on an unselected workstream; cleared by `markSeen` when selected |
 
 Whether an idle workstream counts as "live" comes from
 `WorkstreamAgentStateTracker.liveSessionIDs` — an in-memory set of
-workstreams that saw any harness event this app launch. It is deliberately
+workstreams that saw any agent event this app launch. It is deliberately
 not persisted: a workstream nobody touched today renders dormant regardless
 of past sessions.
 
-An invalid worktree path overrides all of the above: the row shows a dimmed
-character with an orange warning-triangle badge instead of any state ring
-(`MainAgentPortrait.isPathValid`).
+An invalid worktree path overrides all of the above: the row shows an orange
+warning triangle instead of the dot (`AgentActivityIndicator.isPathValid`).
 
 ## Roster lifecycle
 
 - A run exists exactly from its create event (`UserPromptSubmit` /
   `SubagentStart`) to its stop event (`Stop` / `SubagentStop`) — no artificial
   collapse timers.
-- The roster lists **subagents only**. The main agent's state ring, current
+- The roster lists **subagents only**. The main agent's status dot, current
   activity line, and context meter render on the workstream row itself
   (`WorkstreamRow`), so no information is duplicated.
-- Each live subagent renders as a two-line mini card: a 20pt circular portrait
-  with its own state ring (green pulsing while working, orange when stalled),
-  the agent name plus model chip on the first line, and the current activity
-  on the second.
+- Each live subagent renders as a two-line mini card: its own status dot
+  (blue pulsing while working, yellow when stalled), the agent name on the
+  first line, and the current activity on the second.
 - The trailing side of a card shows, in order of precedence: **"Stalled"**
   (orange label) → **context-window meter** (when the harness reports per-run
   usage) → **elapsed time** since the run started.
@@ -155,43 +149,6 @@ the main agent is working or stalled), reading the transcript-derived figure
 carry no meter — Claude Code hooks report no per-run token figures. The meter
 itself is a 40×3pt bar plus a percentage: green below 60%, orange below 85%,
 red at 85% or more (`ContextMeter`).
-
-## Avatars
-
-`AgentSpriteStore` serves one portrait per agent run, resolved in order:
-
-1. **Numbered per-type sets** — `Resources/AgentSprites/avatar_<type>_1.png`,
-   `avatar_<type>_2.png`, … where `<type>` is the agent type normalized to
-   lowercase alphanumerics (`avatar_explore_1.png`, `avatar_claude_1.png`,
-   `avatar_generalpurpose_2.png`). Concurrent same-type agents pick distinct
-   sprites: the tracker assigns each run the lowest variant index not held by
-   a live same-type run, and the sprite shown is
-   `set[variantIndex % count]` — so the 5th of 4 Explore sprites cycles back
-   to sprite 1. A run keeps its sprite for its whole lifetime.
-2. **Single type portrait** — `avatar_<type>.png` for types without variants.
-3. **Palette slots** — `avatar_<0-5>.png` fallback.
-
-Types with no art at all resolve to nil; views substitute a neutral SF Symbol
-placeholder (`person.crop.circle.fill`).
-
-Assets are 64×64 PNGs normalized to 32pt (`AgentSpriteStore.pointSize`);
-views render them with `.interpolation(.none)` for crisp pixels on Retina.
-
-To regenerate the numbered avatars from source art (1024×1024 PNGs):
-
-```bash
-swift scripts/generate-avatars.swift <source-dir> <output-dir>
-```
-
-The script crops each mapped source to its alpha bounding box, adds ~4%
-padding per axis, squares the frame around the character's center, downscales
-to exactly 64×64 with high-quality interpolation, and preserves transparency.
-Its source map lives at the top of the script; add an entry there when
-introducing new art (e.g. a new agent type).
-
-To add sprites for a new agent type (or extend a set): drop 64×64
-`avatar_<type>_<k>.png` files into `Resources/AgentSprites/` — they are
-enumerated automatically, no code changes.
 
 ## Testing
 
