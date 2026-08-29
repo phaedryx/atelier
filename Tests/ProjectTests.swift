@@ -157,50 +157,13 @@ final class ProjectTests: XCTestCase {
         XCTAssertEqual(loaded.first?.workstreams.first?.name, "dev")
     }
 
-    // MARK: - Harness selection
+    // MARK: - Persisted blobs from earlier shapes
 
-    func testWorkstreamDefaultsToClaudeCode() {
-        XCTAssertEqual(Workstream(name: "main").harness, .claudeCode)
-    }
-
-    func testWorkstreamHarnessRoundTrip() throws {
-        var ws = Workstream(name: "main", harness: .claudeCode)
-        ws.worktreePath = "/tmp/ws"
-        let data = try JSONEncoder().encode(ws)
-        let decoded = try JSONDecoder().decode(Workstream.self, from: data)
-        XCTAssertEqual(decoded.harness, .claudeCode)
-        XCTAssertEqual(decoded.worktreePath, "/tmp/ws")
-    }
-
-    func testLegacyWorkstreamJSONWithoutHarnessDecodesToClaudeCode() throws {
-        // Mirrors the pre-multi-harness Workstream shape stored in UserDefaults.
-        struct LegacyWorkstream: Codable {
-            let id: UUID
-            var name: String
-            var displayName: String?
-            var worktreePath: String?
-            var bypassPermissions: Bool
-            var lastAccessedAt: Date
-        }
-        let legacy = LegacyWorkstream(
-            id: UUID(),
-            name: "legacy",
-            displayName: nil,
-            worktreePath: nil,
-            bypassPermissions: true,
-            lastAccessedAt: Date()
-        )
-        let data = try JSONEncoder().encode(legacy)
-        let decoded = try JSONDecoder().decode(Workstream.self, from: data)
-        XCTAssertEqual(decoded.harness, .claudeCode)
-        XCTAssertTrue(decoded.bypassPermissions)
-        XCTAssertEqual(decoded.name, "legacy")
-    }
-
-    /// `ProjectStore.load` decodes the whole `[Project]` array with `try?`, so
-    /// one workstream that fails to decode takes every project with it. A blob
-    /// naming the retired OpenCode harness must not be that failure.
-    func testProjectStoreLoadsWorkstreamsWithRetiredHarness() {
+    /// `ProjectStore.load` decodes the whole `[Project]` array behind one
+    /// `try?`, so a workstream that fails to decode takes every project with
+    /// it. Blobs written while workstreams carried a `harness` are still on
+    /// disk; the retired key must be ignored, not fatal.
+    func testProjectStoreLoadsWorkstreamsWithRetiredHarnessKey() {
         let json = """
         [{
           "id": "\(UUID().uuidString)",
@@ -228,25 +191,22 @@ final class ProjectTests: XCTestCase {
         testDefaults.set(Data(json.utf8), forKey: "atelier.projects")
 
         let loaded = ProjectStore.load(defaults: testDefaults)
-        XCTAssertEqual(loaded.count, 1, "a retired harness must not wipe the project list")
+        XCTAssertEqual(loaded.count, 1, "a retired harness key must not wipe the project list")
         XCTAssertEqual(loaded.first?.workstreams.map(\.name), ["dev", "main"])
-        XCTAssertEqual(loaded.first?.workstreams.map(\.harness), [.claudeCode, .claudeCode])
     }
 
-    /// Workstreams stored while OpenCode was supported must still load; a
-    /// retired harness degrades to Claude Code instead of failing the decode.
-    func testWorkstreamJSONWithRetiredHarnessDecodesToClaudeCode() throws {
+    /// The pre-harness Workstream shape must also still decode.
+    func testLegacyWorkstreamJSONDecodes() throws {
         let json = """
         {
           "id": "\(UUID().uuidString)",
-          "name": "dev",
-          "bypassPermissions": false,
-          "lastAccessedAt": 0,
-          "harness": "opencode"
+          "name": "legacy",
+          "bypassPermissions": true,
+          "lastAccessedAt": 0
         }
         """
         let decoded = try JSONDecoder().decode(Workstream.self, from: Data(json.utf8))
-        XCTAssertEqual(decoded.harness, .claudeCode)
-        XCTAssertEqual(decoded.name, "dev")
+        XCTAssertEqual(decoded.name, "legacy")
+        XCTAssertTrue(decoded.bypassPermissions)
     }
 }

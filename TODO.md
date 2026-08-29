@@ -88,16 +88,17 @@
 - [x] Fix: terminal mouse selection coordinates, env script lifecycle, proc_listchildpids count
 - [x] Restore full app state on launch, right-click sidebar menus, drag-and-drop tab reorder
 
-## Harness support
+## Coding agent
 
-- [x] CodingHarness enum with per-workstream harness selection and backward-compatible decoding
-- [x] Claude Code agent command building (resume, bypass, tmux wrapping)
-- [x] Removed OpenCode support; `CodingHarness` is Claude Code only, and a
-      persisted `"opencode"` workstream decodes back to Claude Code
-- [ ] Future harnesses (e.g., Codex): add enum case + command builder branch + event mapper.
-      Re-adding a second harness also means restoring the selection UI (picker in
-      the new-workstream sheet, default-harness setting, switch-harness menu),
-      which was removed along with OpenCode.
+- [x] Claude Code command building (resume, bypass, tmux wrapping)
+- [x] Removed OpenCode support and the `CodingHarness` abstraction with it.
+      Claude Code is assumed everywhere; a workstream no longer stores which
+      agent it runs, and blobs that still carry the retired `harness` key load
+      fine because the key is simply ignored.
+- [ ] A second coding agent (e.g., Codex) means reintroducing the type, not
+      adding a case: a per-workstream selection, its own command builder, its
+      own event mapper in `HookEventReceiver`, and the selection UI (picker in
+      the new-workstream sheet, a default setting, a switch menu).
 
 ## Agent IPC follow-ups
 

@@ -134,10 +134,9 @@ character with an orange warning-triangle badge instead of any state ring
 
 ## Context window usage
 
-How full the agent's context window is, shown as a small meter. Two sources
-depending on harness:
+How full the agent's context window is, shown as a small meter.
 
-**Claude Code** — every hook payload carries `transcript_path`. On main-agent
+Every Claude Code hook payload carries `transcript_path`. On main-agent
 events the tracker re-reads the transcript through `TranscriptContextReader`.
 Transcripts are append-only JSONL, so only the last 256KB is parsed; the
 reader takes the *last* assistant entry carrying `message.usage` and sums

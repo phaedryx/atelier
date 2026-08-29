@@ -75,7 +75,7 @@ struct QuickActionLogEntry: Identifiable {
     let command: String
     var output: String
     var exitCode: Int32?
-    /// Human-readable result extracted from the harness output (assistant
+    /// Human-readable result extracted from the agent output (assistant
     /// text), shown instead of the raw stream.
     var summary: String?
     /// Link extracted from the result (e.g. the created PR URL).
@@ -92,8 +92,7 @@ final class QuickActionRunner: ObservableObject {
 
     func run(
         action: QuickAction,
-        harness: CodingHarness = .claudeCode,
-        agentPath: String?,
+        claudePath: String?,
         ghPath: String?,
         workingDirectory: String,
         branchName: String? = nil
@@ -105,11 +104,8 @@ final class QuickActionRunner: ObservableObject {
 
         switch action {
         case .commit, .createPR:
-            guard let agentPath else { return }
-            switch harness {
-            case .claudeCode:
-                runClaudeAction(action: action, claudePath: agentPath, workingDirectory: workingDirectory)
-            }
+            guard let claudePath else { return }
+            runClaudeAction(action: action, claudePath: claudePath, workingDirectory: workingDirectory)
         case .push:
             runPush(workingDirectory: workingDirectory)
         case .closePR:

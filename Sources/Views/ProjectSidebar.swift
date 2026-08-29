@@ -169,7 +169,6 @@ struct ProjectSidebar: View {
                                 isPathValid: appEnv.isPathValid(workstream.worktreePath),
                                 agentState: agentStateTracker.state(for: workstream.id),
                                 hasLiveSession: agentStateTracker.hasLiveSession(for: workstream.id),
-                                portraitName: workstream.harness.portraitName,
                                 mainActivity: mainRun?.activity,
                                 // Passed regardless of whether the main run
                                 // is still rostered: the tracker keeps the

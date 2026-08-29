@@ -246,8 +246,7 @@ func workspaceEnvironmentVariables(
     port: Int,
     agentTeams: Bool,
     defaultBranch: String,
-    scriptSource: String?,
-    harness: CodingHarness = .claudeCode
+    scriptSource: String?
 ) -> [String: String] {
     WorkstreamEnvironment.variables(
         workstreamID: workstreamID,
@@ -258,8 +257,7 @@ func workspaceEnvironmentVariables(
         port: port,
         agentTeams: agentTeams,
         defaultBranch: defaultBranch,
-        scriptSource: scriptSource,
-        harness: harness
+        scriptSource: scriptSource
     )
 }
 
@@ -304,7 +302,6 @@ struct TerminalContainerView: View {
     let workstreamName: String
     let workstreamLabel: String
     let bypassPermissions: Bool
-    var harness: CodingHarness = .claudeCode
     let isActive: Bool
 
     @EnvironmentObject var surfaceCache: TerminalSurfaceCache
@@ -336,11 +333,7 @@ struct TerminalContainerView: View {
     @State private var refreshGeneration = 0
     @State private var refreshDebounceTask: Task<Void, Never>?
     @State private var fileFinderRequest = 0
-    @State private var cachedAgentCommand: String?
-    /// Harness the cached command was built for. Guards against rendering a
-    /// stale command right after a harness switch, which would recreate the
-    /// agent surface under the previous CLI before the rebuild lands.
-    @State private var cachedCommandHarness: CodingHarness?
+    @State private var cachedClaudeCommand: String?
     @State private var draggedCustomTab: WorkspaceTab?
     @StateObject private var portDetector: PortDetector
     @State private var browserStartPending = false
@@ -362,7 +355,6 @@ struct TerminalContainerView: View {
         workstreamName: String,
         workstreamLabel: String? = nil,
         bypassPermissions: Bool,
-        harness: CodingHarness = .claudeCode,
         isActive: Bool,
         scriptConfig: ScriptConfig = .empty,
         initialTabState: WorkspaceTabSnapshot = startupWorkspaceTabState(snapshot: nil, savedTab: nil)
@@ -374,7 +366,6 @@ struct TerminalContainerView: View {
         self.workstreamName = workstreamName
         self.workstreamLabel = workstreamLabel ?? workstreamName
         self.bypassPermissions = bypassPermissions
-        self.harness = harness
         self.isActive = isActive
         _activeTab = State(initialValue: initialTabState.activeTab)
         _tabs = State(initialValue: initialTabState.tabs)
@@ -602,24 +593,10 @@ struct TerminalContainerView: View {
         return finalCommand
     }
 
-    private func buildAgentCommand() -> String? {
-        switch harness {
-        case .claudeCode: return buildClaudeCommand()
-        }
-    }
-
-    /// The binary path backing this workstream's harness, when installed.
-    private var harnessBinaryPath: String? {
-        switch harness {
-        case .claudeCode: return appEnv.toolStatus.claude.path
-        }
-    }
-
-    private func rebuildAgentCommand() {
-        cachedAgentCommand = buildAgentCommand()
-        cachedCommandHarness = harness
-        if let cmd = cachedAgentCommand {
-            logger.info("[Atelier] agent cmd rebuilt for \(self.harness.rawValue, privacy: .public): \(cmd.prefix(80), privacy: .public)")
+    private func rebuildClaudeCommand() {
+        cachedClaudeCommand = buildClaudeCommand()
+        if let cmd = cachedClaudeCommand {
+            logger.info("[Atelier] claude cmd rebuilt: \(cmd.prefix(80), privacy: .public)")
         }
     }
 
@@ -763,25 +740,25 @@ struct TerminalContainerView: View {
                 setupGateFailedView
             } else if sessionMode == .waitingForTools || appEnv.isDetecting {
                 terminalLoadingView(message: "Checking terminal tools...")
-            } else if harnessBinaryPath == nil {
+            } else if appEnv.toolStatus.claude.path == nil {
                 VStack(spacing: 16) {
-                    Image(systemName: harness.systemImageName)
+                    Image(systemName: "sparkle")
                         .font(.system(size: 40))
                         .foregroundStyle(.tertiary)
-                    Text("\(harness.displayName) not found")
+                    Text("Claude Code not found")
                         .font(.title3)
                         .foregroundStyle(.secondary)
-                    Text("Install \(harness.displayName) to use the Coding Agent.")
+                    Text("Install Claude Code to use the Coding Agent.")
                         .foregroundStyle(.tertiary)
-                    Link("Install \(harness.displayName)", destination: harness.installURL)
+                    Link("Install Claude Code", destination: URL(string: "https://docs.anthropic.com/en/docs/claude-code/overview")!)
                         .buttonStyle(.bordered)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let agentCommand = cachedAgentCommand, cachedCommandHarness == harness {
+            } else if let claudeCommand = cachedClaudeCommand {
                 SingleTerminalView(
                     surfaceID: claudeID,
                     workingDirectory: workingDirectory,
-                    command: agentCommand,
+                    command: claudeCommand,
                     isFocused: true,
                     environmentVars: envVars
                 )
@@ -834,24 +811,13 @@ struct TerminalContainerView: View {
 
     private var mainContent: some View {
         mainLayout
-            .onChange(of: tmuxMode) { rebuildAgentCommand() }
-            .onChange(of: bypassPermissions) { rebuildAgentCommand() }
-            .onChange(of: autoRenameBranch) { rebuildAgentCommand() }
-            .onChange(of: allowOutsideWorktree) { rebuildAgentCommand() }
-            .onChange(of: workstreamName) { rebuildAgentCommand() }
-            .onChange(of: harness) {
-                // The sidebar switch already tore the old agent surface down.
-                // Rebuild for the new harness and start it immediately —
-                // otherwise the next render would lazily recreate the surface.
-                rebuildAgentCommand()
-                guard setupGateState != .awaitingApproval else { return }
-                if setupGateState == .notNeeded {
-                    surfaceCache.respawnableIDs.insert(claudeID)
-                }
-                preloadSurfaces()
-            }
+            .onChange(of: tmuxMode) { rebuildClaudeCommand() }
+            .onChange(of: bypassPermissions) { rebuildClaudeCommand() }
+            .onChange(of: autoRenameBranch) { rebuildClaudeCommand() }
+            .onChange(of: allowOutsideWorktree) { rebuildClaudeCommand() }
+            .onChange(of: workstreamName) { rebuildClaudeCommand() }
             .onChange(of: appEnv.isDetecting) {
-                rebuildAgentCommand()
+                rebuildClaudeCommand()
                 if isActive { preloadSurfaces() }
             }
             .onReceive(NotificationCenter.default.publisher(for: .toggleInfo)) { _ in
@@ -1053,8 +1019,7 @@ struct TerminalContainerView: View {
 
                         GitHubActionMenu(
                             runner: quickActionRunner,
-                            harness: harness,
-                            agentPath: harnessBinaryPath,
+                            claudePath: appEnv.toolStatus.claude.path,
                             ghPath: appEnv.toolStatus.gh.path,
                             workingDirectory: workingDirectory,
                             branchName: appEnv.branchName(for: workingDirectory),
@@ -1534,7 +1499,7 @@ struct TerminalContainerView: View {
             }
         }
         appEnv.refreshWorktreeState(for: workingDirectory, projectDirectory: projectDirectory)
-        rebuildAgentCommand()
+        rebuildClaudeCommand()
         scriptsApproved = ScriptTrust.isApproved(scriptConfig, for: projectDirectory)
         setupGateState = SetupGateState.resolve(
             hasSetupScript: scriptConfig.setup != nil,
@@ -1574,7 +1539,7 @@ struct TerminalContainerView: View {
             }
         } else {
             // Agent surface
-            if let cmd = cachedAgentCommand {
+            if let cmd = cachedClaudeCommand {
                 _ = surfaceCache.ensureSurface(
                     for: claudeID,
                     app: app,
@@ -1627,8 +1592,7 @@ struct TerminalContainerView: View {
             port: workstreamPort,
             agentTeams: agentTeams,
             defaultBranch: defaultBranch,
-            scriptSource: scriptConfig.source,
-            harness: harness
+            scriptSource: scriptConfig.source
         )
         // claudeID is the workstream id, so the Agent surface addresses itself
         // the same way every other surface does.
@@ -1841,8 +1805,7 @@ private struct WorkspaceTabDropDelegate: DropDelegate {
 
 private struct GitHubActionMenu: View {
     @ObservedObject var runner: QuickActionRunner
-    let harness: CodingHarness
-    let agentPath: String?
+    let claudePath: String?
     let ghPath: String?
     let workingDirectory: String
     let branchName: String?
@@ -1933,8 +1896,8 @@ private struct GitHubActionMenu: View {
 
     private func disabledReason(for action: QuickAction) -> String? {
         if action.usesLLM {
-            if agentPath == nil {
-                return String(format: NSLocalizedString("%@ is not installed.", comment: "Quick actions unavailable because the coding agent CLI is missing"), harness.displayName)
+            if claudePath == nil {
+                return NSLocalizedString("Claude Code is not installed.", comment: "Quick actions unavailable because the Claude Code CLI is missing")
             }
             if !bypassPermissions {
                 return NSLocalizedString("Enable \"Bypass permission prompts\" in Settings.", comment: "")
@@ -1950,8 +1913,7 @@ private struct GitHubActionMenu: View {
         guard disabledReason(for: action) == nil else { return }
         runner.run(
             action: action,
-            harness: harness,
-            agentPath: agentPath,
+            claudePath: claudePath,
             ghPath: ghPath,
             workingDirectory: workingDirectory,
             branchName: branchName
@@ -2509,8 +2471,7 @@ final class TerminalSurfaceCache: ObservableObject {
     }
 
     /// Creates the surface for `id`, replacing any existing surface whose
-    /// stored command differs (e.g., after a harness switch). A matching
-    /// surface is returned untouched.
+    /// stored command differs. A matching surface is returned untouched.
     func ensureSurface(for id: UUID, app: ghostty_app_t, workingDirectory: String, command: String?, initialInput: String? = nil, environmentVars: [String: String] = [:], waitAfterCommand: Bool = true) -> TerminalView {
         if let existing = surfaces[id],
            let params = surfaceParams[id],

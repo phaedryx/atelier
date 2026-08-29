@@ -166,7 +166,7 @@ struct SettingsView: View {
                 SettingToggle(
                     "Agent Teams",
                     isOn: $agentTeams,
-                    description: String(format: NSLocalizedString("Enables experimental multi-agent coordination. Agents can spawn teammates, delegate tasks, and collaborate across workstreams. Only applies to %@.", comment: "Agent Teams setting description; %@ is a coding-agent name"), CodingHarness.claudeCode.displayName)
+                    description: NSLocalizedString("Enables experimental multi-agent coordination. Agents can spawn teammates, delegate tasks, and collaborate across workstreams. Only applies to Claude Code.", comment: "Agent Teams setting description")
                 )
 
                 SettingToggle(
@@ -178,7 +178,7 @@ struct SettingsView: View {
                 SettingToggle(
                     "Agent messaging",
                     isOn: $agentIPC,
-                    description: String(format: NSLocalizedString("Lets coding agents in this project see and message each other. Messages are delivered when the recipient checks its inbox. Takes effect the next time a Coding Agent starts. Only applies to %@.", comment: "Agent IPC setting description; %@ is a coding-agent name"), CodingHarness.claudeCode.displayName)
+                    description: NSLocalizedString("Lets coding agents in this project see and message each other. Messages are delivered when the recipient checks its inbox. Takes effect the next time a Coding Agent starts. Only applies to Claude Code.", comment: "Agent IPC setting description")
                 )
                 .onChange(of: agentIPC) { _, _ in
                     AgentIPCSettings.apply()
@@ -438,13 +438,6 @@ struct ToolStatus {
     var ghAuthDetail: String?
     var git: BinaryStatus = .notFound
     var gitVersion: String?
-
-    /// Binary status for a given harness's CLI.
-    func binary(for harness: CodingHarness) -> BinaryStatus {
-        switch harness {
-        case .claudeCode: return claude
-        }
-    }
 
     static func detect() -> ToolStatus {
         var status = ToolStatus()
