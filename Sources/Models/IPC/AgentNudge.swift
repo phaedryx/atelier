@@ -102,7 +102,10 @@ final class AgentNudge {
             workstreamState: tracker.reportedState(for: workstreamID),
             surfaceID: surfaceID,
             workstreamID: workstreamID
-        ) else { return }
+        ) else {
+            record("skipped — nothing has reported a turn state for this pane", surfaceID: surfaceID)
+            return
+        }
 
         guard Self.shouldNudge(
             state: state,
@@ -110,13 +113,17 @@ final class AgentNudge {
             nudgeEnabled: AgentIPCSettings.nudgeEnabled,
             lastNudge: lastNudge[surfaceID],
             now: now
-        ) else { return }
-
-        guard let surfaceCache else {
-            logger.warning("No surface cache; dropping the nudge for \(surfaceID)")
+        ) else {
+            record("skipped — state is \(state), or the 5s cooldown is still running", surfaceID: surfaceID)
             return
         }
 
+        guard let surfaceCache else {
+            record("skipped — no surface cache is wired up", surfaceID: surfaceID)
+            return
+        }
+
+        record("typing a notice from \(senderName)", surfaceID: surfaceID)
         lastNudge[surfaceID] = now
         let plural = waiting == 1 ? "message" : "messages"
         // The sender chose this name. It is about to be typed into someone
@@ -142,6 +149,30 @@ final class AgentNudge {
                 guard let self, self.stillIdle(surfaceID: surfaceID, workstreamID: workstreamID) else { return }
                 self.surfaceCache?.sendReturn(to: surfaceID)
             }
+        }
+    }
+
+    /// Records why a nudge did or didn't happen.
+    ///
+    /// A refused nudge is otherwise completely silent — the right behaviour, but
+    /// it leaves nobody able to say *which* gate closed. Same file-and-flag
+    /// convention as `LaunchLogger`: nothing is written unless the user has
+    /// turned on detailed logging.
+    private func record(_ reason: String, surfaceID: UUID) {
+        logger.detailed("Nudge for \(surfaceID): \(reason)")
+        guard UserDefaults.standard.bool(forKey: "atelier.detailedLogging") else { return }
+
+        let directory = AppConstants.cacheDirectory.appendingPathComponent("logs", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("nudge.log")
+
+        let line = "\(ISO8601DateFormatter().string(from: Date())) surface=\(surfaceID) \(reason)\n"
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile()
+            handle.write(Data(line.utf8))
+            handle.closeFile()
+        } else {
+            try? Data(line.utf8).write(to: url, options: .atomic)
         }
     }
 

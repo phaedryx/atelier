@@ -29,9 +29,13 @@ final class IPCServerTests: XCTestCase {
     /// The listener binds asynchronously, so every test waits for the endpoint
     /// file the way a helper process would.
     private func waitForEndpoint(timeout: TimeInterval = 5) throws -> IPCEndpoint {
+        // Must match *this* server's port: ipc.json is a shared path, and a
+        // previous test's server can still be tearing down and removing it.
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if let endpoint = IPCEndpoint.read() { return endpoint }
+            if let endpoint = IPCEndpoint.read(), endpoint.port == server.boundPort {
+                return endpoint
+            }
             usleep(20_000)
         }
         throw XCTSkip("IPC listener did not come up within \(timeout)s")
@@ -354,10 +358,11 @@ final class IPCServerTests: XCTestCase {
         var second: IPCEndpoint?
         while Date() < deadline, second == nil {
             let current = IPCEndpoint.read()
-            second = current?.port == first.port ? nil : current
+            second = current?.port == restarted.boundPort ? current : nil
             if second == nil { usleep(20_000) }
         }
         XCTAssertNotNil(second, "the restarted listener did not publish a new endpoint")
+        XCTAssertNotEqual(second?.port, first.port)
 
         // The first call after the restart hits a dead socket, reconnects, and
         // replays the registration before retrying.

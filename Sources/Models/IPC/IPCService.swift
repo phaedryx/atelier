@@ -69,11 +69,16 @@ actor IPCService {
            let renamed = await store.updatePeer(id: existingID, name: name, role: role.isEmpty ? nil : role)
         {
             contexts[renamed.id] = context(from: request.client)
+            await store.pin(renamed.id)
             return .success(id: request.id, .peer(await info(for: renamed)))
         }
 
         let peer = await store.registerPeer(name: name, role: role)
         contexts[peer.id] = context(from: request.client)
+        // Registration only ever arrives over a live connection, and `release`
+        // runs when that connection closes — so the pin's lifetime is the
+        // helper's lifetime.
+        await store.pin(peer.id)
         return .success(id: request.id, .peer(await info(for: peer)))
     }
 
@@ -210,6 +215,13 @@ actor IPCService {
         }
     }
 
+    /// Drops every peer. Called when the listener stops — nothing can reach the
+    /// app afterwards, and pinned peers would otherwise outlive their sockets.
+    func releaseAll() async {
+        await store.cleanup()
+        contexts.removeAll()
+    }
+
     // MARK: - Nudging
 
     /// Asks the terminal nudge to tell each recipient a message arrived.
@@ -229,7 +241,13 @@ actor IPCService {
             else { continue }
 
             let waiting = await store.inboxCount(for: recipient)
-            await MainActor.run {
+
+            // Detached, not awaited. The message is already in the inbox; the
+            // nudge is a courtesy, and waiting for the main actor here would
+            // make delivery to one agent depend on the UI being free — a busy
+            // main thread would stall send_message rather than just delaying a
+            // notice.
+            Task { @MainActor in
                 AgentNudge.shared.nudge(
                     surfaceID: surfaceID,
                     workstreamID: workstreamID,

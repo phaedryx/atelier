@@ -1346,4 +1346,41 @@ final class IPCStoreTests: XCTestCase {
         XCTAssertEqual(contents.first, "requeued-10",
                        "The oldest surviving requeued message must still be returned first")
     }
+
+    // MARK: - Connection pinning
+
+    func test_pinnedPeer_survivesItsTTL() async {
+        let store = makeStore()
+        let peer = await store.registerPeer(name: "waiting", role: "for work")
+        await store.pin(peer.id)
+        await store._testSetPeerLastSeen(peerId: peer.id, date: Date().addingTimeInterval(-3600))
+
+        let listed = await store.listPeers()
+        XCTAssertEqual(listed.count, 1, "an agent whose helper is connected is alive however long it has been quiet")
+        let status = await store.peerStatus(id: peer.id)
+        XCTAssertNotNil(status)
+    }
+
+    func test_unpinnedPeer_expiresAgain() async {
+        let store = makeStore()
+        let peer = await store.registerPeer(name: "departing", role: "")
+        await store.pin(peer.id)
+        await store.unpin(peer.id)
+        await store._testSetPeerLastSeen(peerId: peer.id, date: Date().addingTimeInterval(-3600))
+
+        let listed = await store.listPeers()
+        XCTAssertTrue(listed.isEmpty)
+    }
+
+    func test_removingAPeer_dropsItsPin() async {
+        let store = makeStore()
+        let peer = await store.registerPeer(name: "gone", role: "")
+        await store.pin(peer.id)
+        await store.removePeer(id: peer.id)
+
+        // Re-registering with the same id is impossible, but a stale pin would
+        // resurrect any peer that later happened to reuse it.
+        let listed = await store.listPeers()
+        XCTAssertTrue(listed.isEmpty)
+    }
 }

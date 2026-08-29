@@ -265,6 +265,22 @@ final class IPCServiceTests: XCTestCase {
         XCTAssertLessThan(peer.lastSeenSecondsAgo, 5, "the poll should have refreshed lastSeen")
     }
 
+    func test_anIdleAgentStaysReachable() async throws {
+        let waiting = try await register(name: "waiting", project: projectA)
+        let sender = try await register(name: "sender", project: projectA)
+
+        // Twenty minutes of silence: twice the TTL. An agent sitting at a
+        // prompt is exactly what this feature exists to message, so it must
+        // still be listed and still take delivery.
+        await service._testBackdate(peerID: try XCTUnwrap(UUID(uuidString: waiting)), to: Date().addingTimeInterval(-1200))
+
+        let listed = try peers(of: await call(.listPeers, as: client(project: projectA, peerID: sender)))
+        XCTAssertEqual(listed.map(\.name), ["waiting"])
+
+        let response = await call(.sendMessage, ["to": waiting, "content": "still there?"], as: client(project: projectA, peerID: sender))
+        XCTAssertNil(response.error, "a quiet agent must take delivery, not be told it does not exist")
+    }
+
     // MARK: - Status
 
     func test_getPeerStatus_acrossProjects_isRefused() async throws {

@@ -33,6 +33,11 @@ final class IPCServer: @unchecked Sendable {
     /// the app grow without bound by never sending a newline.
     private static let maxFrameBytes = 1_048_576
     private var token: String = ""
+    /// The port this listener bound to, once ready. Read this rather than
+    /// `ipc.json` when you need *this* server's port: the file is shared, and a
+    /// server shutting down removes it.
+    var boundPort: UInt16? { queue.sync { currentPort } }
+    private var currentPort: UInt16?
 
     init(service: IPCService = .shared) {
         self.service = service
@@ -51,12 +56,16 @@ final class IPCServer: @unchecked Sendable {
             guard let self else { return }
             self.listener?.cancel()
             self.listener = nil
+            self.currentPort = nil
             for connection in self.connections.values {
                 connection.cancel()
             }
             self.connections.removeAll()
             self.connectionPeers.removeAll()
             self.peerOwners.removeAll()
+
+            let service = self.service
+            Task { await service.releaseAll() }
             try? FileManager.default.removeItem(at: IPCEndpoint.fileURL)
         }
     }
@@ -73,6 +82,7 @@ final class IPCServer: @unchecked Sendable {
                 switch state {
                 case .ready:
                     guard let port = newListener.port else { return }
+                    self?.currentPort = port.rawValue
                     self?.writeEndpointFile(port: port.rawValue)
                 case let .failed(error):
                     logger.error("IPC listener failed: \(error.localizedDescription)")

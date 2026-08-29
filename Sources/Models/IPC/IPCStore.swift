@@ -51,6 +51,8 @@ enum IPCError: Error, LocalizedError {
 actor IPCStore {
     private var peers: [UUID: Peer] = [:]
     private var inbox: [UUID: [Message]] = [:]
+    /// Peers whose helper is known to be connected. See `pin`.
+    private var pinned: Set<UUID> = []
 
     /// How long a peer stays alive without activity.
     private let peerTTL: TimeInterval = 600
@@ -60,10 +62,12 @@ actor IPCStore {
 
     // MARK: - Liveness
 
-    /// A peer is alive while its `lastSeen` is within `peerTTL`, or while it is
-    /// pinned by being the sender or recipient of an in-flight message — so an
-    /// undelivered message can never be orphaned by its peer expiring.
+    /// A peer is alive while its helper is connected, while its `lastSeen` is
+    /// within `peerTTL`, or while it is pinned by an in-flight message it sent
+    /// or is due to receive — so an undelivered message can never be orphaned by
+    /// its peer expiring.
     private func isAlive(_ peer: Peer) -> Bool {
+        if pinned.contains(peer.id) { return true }
         if Date().timeIntervalSince(peer.lastSeen) <= peerTTL { return true }
         for (_, msgs) in inbox {
             if msgs.contains(where: { $0.from == peer.id || $0.to == peer.id }) {
@@ -104,6 +108,25 @@ actor IPCStore {
     func removePeer(id: UUID) {
         peers.removeValue(forKey: id)
         inbox.removeValue(forKey: id)
+        pinned.remove(id)
+    }
+
+    /// Marks a peer as backed by a live helper connection, exempting it from the
+    /// TTL until the connection closes.
+    ///
+    /// The TTL alone evicts exactly the agents this feature exists to reach: one
+    /// waiting for work is idle by definition, and after ten quiet minutes it
+    /// would drop out of `list_peers` while its helper sat there connected, with
+    /// messages to it refused rather than queued. An open socket is the real
+    /// liveness signal — the same reasoning that makes a closing socket retire
+    /// a peer — so the TTL is left as a backstop for a close that never arrives.
+    func pin(_ id: UUID) {
+        guard peers[id] != nil else { return }
+        pinned.insert(id)
+    }
+
+    func unpin(_ id: UUID) {
+        pinned.remove(id)
     }
 
     /// Every alive peer, lazily purging the rest.
@@ -252,6 +275,7 @@ actor IPCStore {
     func cleanup() {
         peers.removeAll()
         inbox.removeAll()
+        pinned.removeAll()
     }
 
     // MARK: - Test Helpers
