@@ -144,11 +144,14 @@ final class WorkspaceModelTests: XCTestCase {
         let dead = model.addTerminal()
         let browser = model.addBrowser()
         model.activeTab = .terminal(dead)
+        model.terminalTitles[dead] = "zsh"
 
         model.reconcile(liveSurfaceIDs: [live])
 
         XCTAssertEqual(model.tabs, [.info, .agent, .changes, .terminal(live), .browser(browser)])
         XCTAssertEqual(model.activeTab, .agent)
+        // Reconcile goes through removeTab, so it clears per-tab state too.
+        XCTAssertNil(model.terminalTitles[dead])
     }
 
     func testSnapshotRoundTrip() {
@@ -240,6 +243,39 @@ final class WorkspaceModelCacheTests: XCTestCase {
         XCTAssertEqual(again.browserTitles[browser], "Example Domain")
         XCTAssertEqual(again.terminalTitles[terminal], "zsh")
         XCTAssertEqual(again.editorFilePaths[editor], "src/main.swift")
+    }
+
+    /// A shell that exits is pruned at exit, not at the next mount — a
+    /// mount-time prune races `TerminalSurfaceView.updateNSView`, which
+    /// recreates any missing surface as soon as its tab renders.
+    func testExitedTerminalSurfaceDropsItsTabFromTheOwningModel() {
+        let cache = TerminalSurfaceCache()
+        let owner = cache.workspaceModel(for: UUID(), seed: seed())
+        let bystander = cache.workspaceModel(for: UUID(), seed: seed())
+        let terminal = owner.addTerminal()
+        let survivor = owner.addTerminal()
+        let otherTerminal = bystander.addTerminal()
+        owner.terminalTitles[terminal] = "zsh"
+
+        cache.removeTerminalTab(surfaceID: terminal)
+
+        XCTAssertFalse(owner.tabs.contains(.terminal(terminal)))
+        XCTAssertTrue(owner.tabs.contains(.terminal(survivor)))
+        XCTAssertNil(owner.terminalTitles[terminal])
+        XCTAssertTrue(bystander.tabs.contains(.terminal(otherTerminal)))
+    }
+
+    /// The agent, dev-server, and setup-gate surfaces close through the same
+    /// path but belong to no tab.
+    func testRemovingATerminalTabIgnoresSurfaceIDsNoTabOwns() {
+        let cache = TerminalSurfaceCache()
+        let workstreamID = UUID()
+        let model = cache.workspaceModel(for: workstreamID, seed: seed())
+        let before = model.tabs
+
+        cache.removeTerminalTab(surfaceID: workstreamID)
+
+        XCTAssertEqual(model.tabs, before)
     }
 
     func testRemovingWorkstreamSurfacesDropsTheModel() {

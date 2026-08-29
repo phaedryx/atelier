@@ -1463,13 +1463,20 @@ struct TerminalContainerView: View {
                 {
                     let fullPath = (workingDirectory as NSString)
                         .appendingPathComponent(relativePath)
-                    guard let content = await bridge.getContent(modelId: id.uuidString) else { return }
-                    do {
-                        try content.write(toFile: fullPath, atomically: true, encoding: .utf8)
-                    } catch {
-                        let errorAlert = NSAlert(error: error)
-                        errorAlert.runModal()
-                        return
+                    // A nil result means this bridge never opened the model.
+                    // The bridge is rebuilt on every mount while the dirty flag
+                    // now lives on the model and survives navigation, so the
+                    // two can disagree. There is nothing to write, but the
+                    // close must still happen — a Save the user asked for can
+                    // never silently do nothing.
+                    if let content = await bridge.getContent(modelId: id.uuidString) {
+                        do {
+                            try content.write(toFile: fullPath, atomically: true, encoding: .utf8)
+                        } catch {
+                            let errorAlert = NSAlert(error: error)
+                            errorAlert.runModal()
+                            return
+                        }
                     }
                 }
                 forceCloseTab(tab)
@@ -2585,6 +2592,23 @@ final class TerminalSurfaceCache: ObservableObject {
         return model
     }
 
+    /// Drops the tab that owned a terminal surface which has just exited.
+    ///
+    /// This has to happen here, at exit, rather than as a prune when a
+    /// workstream is mounted: `TerminalSurfaceView.updateNSView` recreates any
+    /// missing surface the moment its tab renders, so a mount-time prune either
+    /// runs after the resurrection and sees a live id, or runs before it and
+    /// leaves the same render pass to spawn a shell for a tab that is already
+    /// gone. At exit the tab is dead and nothing is about to re-render it.
+    ///
+    /// A no-op for the agent, dev-server, and setup-gate surfaces, which no
+    /// workspace tab owns.
+    func removeTerminalTab(surfaceID: UUID) {
+        let tab = WorkspaceTab.terminal(surfaceID)
+        guard let owner = workspaceModels.values.first(where: { $0.tabs.contains(tab) }) else { return }
+        owner.removeTab(tab)
+    }
+
     func removeWebView(for id: UUID) {
         webViews.removeValue(forKey: id)
     }
@@ -2671,6 +2695,7 @@ final class TerminalSurfaceCache: ObservableObject {
             objectWillChange.send()
         } else {
             removeSurface(for: id)
+            removeTerminalTab(surfaceID: id)
             NotificationCenter.default.post(name: .terminalTabExited, object: id)
         }
     }
@@ -2721,8 +2746,7 @@ final class TerminalSurfaceCache: ObservableObject {
 
     func restoreTabSnapshot(for workstreamID: UUID) -> WorkspaceTabSnapshot? {
         guard let snapshot = tabSnapshots[workstreamID] else { return nil }
-        let liveSurfaceIDs = Set(surfaces.keys)
-        return snapshot.reconciled(liveSurfaceIDs: liveSurfaceIDs)
+        return snapshot.reconciled(liveSurfaceIDs: liveSurfaceIDs())
     }
 
     func removeTabSnapshot(for workstreamID: UUID) {

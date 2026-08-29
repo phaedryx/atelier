@@ -143,12 +143,23 @@ final class WorkspaceModel: ObservableObject {
 
     /// Drops terminal tabs whose surface no longer exists. Browser and editor
     /// tabs are kept regardless — they do not use terminal surfaces.
+    ///
+    /// Goes through `removeTab` so there is a single clearing rule: a filter
+    /// over `tabs` alone would strand the dead terminal's title behind it.
     func reconcile(liveSurfaceIDs: Set<UUID>) {
-        tabs = tabs.filter { tab in
-            if case let .terminal(id) = tab { return liveSurfaceIDs.contains(id) }
-            return true
+        let deadTabs = tabs.filter { tab in
+            if case let .terminal(id) = tab { return !liveSurfaceIDs.contains(id) }
+            return false
         }
-        if !tabs.contains(activeTab) {
+        guard !deadTabs.isEmpty else { return }
+        // `removeTab` would hand the selection to whichever tab happened to sit
+        // next to the dead one. Arriving into a workstream whose active tab did
+        // not survive should land on Agent instead.
+        let activeDied = deadTabs.contains(activeTab)
+        for tab in deadTabs {
+            removeTab(tab)
+        }
+        if activeDied {
             activeTab = .agent
         }
     }
