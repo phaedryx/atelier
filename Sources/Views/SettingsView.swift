@@ -16,6 +16,8 @@ struct SettingsView: View {
     @AppStorage("atelier.allowOutsideWorktree") private var allowOutsideWorktree: Bool = false
     @AppStorage("atelier.agentTeams") private var agentTeams: Bool = false
     @AppStorage("atelier.autoRenameBranch") private var autoRenameBranch: Bool = false
+    @AppStorage(AgentIPCSettings.enabledKey) private var agentIPC: Bool = false
+    @AppStorage(AgentIPCSettings.nudgeKey) private var agentIPCNudge: Bool = false
     @AppStorage("atelier.defaultTerminal") private var defaultTerminal: String = ""
     @AppStorage("atelier.defaultBrowser") private var defaultBrowser: String = ""
     @AppStorage("atelier.appearance") private var appearance: String = "system"
@@ -195,6 +197,23 @@ struct SettingsView: View {
                     isOn: $autoRenameBranch,
                     description: "On the first request, the agent renames the branch to match the task and writes a short description visible in the sidebar."
                 )
+
+                SettingToggle(
+                    "Agent messaging",
+                    isOn: $agentIPC,
+                    description: String(format: NSLocalizedString("Lets coding agents in this project see and message each other. Messages are delivered when the recipient checks its inbox. Takes effect the next time a Coding Agent starts. Only applies to %@.", comment: "Agent IPC setting description; %@ is a coding-agent name"), CodingHarness.claudeCode.displayName)
+                )
+                .onChange(of: agentIPC) { _, _ in
+                    AgentIPCSettings.apply()
+                }
+
+                SettingToggle(
+                    "Nudge idle agents",
+                    isOn: $agentIPCNudge,
+                    description: "When a message arrives for an agent that has finished its turn, Atelier types a notice into its terminal. That is typed input: an agent running without permission prompts will act on it.",
+                    descriptionStyle: agentIPCNudge ? .warning : .secondary
+                )
+                .disabled(!agentIPC)
 
                 SettingToggle(
                     "Tmux Mode",

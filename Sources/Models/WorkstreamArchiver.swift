@@ -32,6 +32,7 @@ enum WorkstreamArchiver {
             }
         }
         surfaceCache.removeWorkstreamSurfaces(for: workstreamID)
+        IPCConfig.remove(for: workstreamID)
         LaunchLogger.removeLog(for: workstreamID)
         SetupStateStore.remove(for: workstreamID)
         project.workstreams.removeAll { $0.id == workstreamID }

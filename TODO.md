@@ -100,3 +100,29 @@
 - [x] OpenCode quick-action output parsed from `--format json` stream into a summary + PR link; raw JSONL collapsed behind disclosure
 - [x] Fixed: quick-action forks hijacked `.atelier-state/opencode-session` (sentinel file makes the plugin ignore quick-action subprocesses)
 - [ ] Future harnesses (e.g., Codex): add enum case + command builder branch + event mapper
+
+## Agent IPC follow-ups
+
+- **opencode support.** v1 wires Claude Code only, via `--mcp-config` in
+  `buildClaudeCommand()`. opencode reads MCP config from a file; the precedent
+  for writing one is `OpencodePluginInstaller` and `Resources/Scripts/atelier-opencode.js`.
+- **The opencode plugin does not report a surface.** `surface_id` sits at the
+  hook envelope level, so `atelier-opencode.js` could forward
+  `process.env.ATELIER_SURFACE_ID` and get per-surface attribution for free. Not
+  done because opencode agents cannot register peers yet — the MCP config is
+  Claude Code only — so the code would be unexercisable.
+- **`IPCStore.isAlive` is O(peers x messages) for expired peers.** The TTL check
+  returns first, so the inbox scan only runs for peers already past their TTL —
+  unreachable at this scale. If IPC is ever reused for something busier, keep a
+  set of peers pinned by in-flight messages instead of scanning inboxes.
+- **The helper's socket timeout is not covered by a test.** `SO_RCVTIMEO` needs a
+  listener that accepts and never answers, and asserting it costs the full
+  timeout in suite time. Verified by reasoning and by the unparseable-frame path
+  that shares the recovery code.
+- **Cross-project messaging.** Peers are scoped to the caller's project with no
+  way to opt out. If that ever becomes a real need, it wants its own louder
+  switch, not a widening of `atelier.agentIPC`.
+- **Peer contexts are pruned only by `list_peers`.** A peer that expires while
+  nobody lists gets its `IPCService` context held until the next call. Harmless
+  today — the store's own liveness check still rejects the peer — but it is a
+  slow leak in a long session.

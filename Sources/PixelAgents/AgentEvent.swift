@@ -27,6 +27,11 @@ struct AgentEvent: Codable, Sendable {
     /// Short task description OpenCode attaches to delegated subagents
     /// (e.g. "Map people/task completion code"), shown as a roster subtitle.
     var taskDescription: String?
+    /// The Atelier terminal surface the reporting agent runs in, when the hook
+    /// inherited `ATELIER_SURFACE_ID`. Deliberately absent from `CodingKeys`:
+    /// this is app-internal routing, not part of the bridge protocol the
+    /// webview sees.
+    var surfaceID: String?
 
     enum EventType: String, Codable, Sendable {
         case agentCreated

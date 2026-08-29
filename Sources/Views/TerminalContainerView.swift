@@ -314,6 +314,7 @@ struct TerminalContainerView: View {
     @AppStorage("atelier.agentTeams") private var agentTeams: Bool = false
     @AppStorage("atelier.autoRenameBranch") private var autoRenameBranch: Bool = false
     @AppStorage("atelier.allowOutsideWorktree") private var allowOutsideWorktree: Bool = false
+    @AppStorage(AgentIPCSettings.enabledKey) private var agentIPC: Bool = false
     @AppStorage("atelier.quickActionDebug") private var quickActionDebug: Bool = false
     @AppStorage("atelier.editorTabActive") private var editorTabActive: Bool = false
     @AppStorage("atelier.editorFileDirty") private var editorFileDirty: Bool = false
@@ -550,6 +551,16 @@ struct TerminalContainerView: View {
         if autoRenameBranch {
             systemPromptParts.append(SystemPrompts.autoRenameBranchPrompt)
         }
+        // A file path rather than inline JSON, even though --mcp-config accepts
+        // both: LaunchLogger records finalCommand verbatim. --strict-mcp-config
+        // stays off, since turning it on would silently drop the user's own
+        // global MCP servers.
+        let mcpConfigPath = agentIPC ? IPCConfig.write(for: workstreamID) : nil
+        if mcpConfigPath != nil {
+            // Tied to the config actually being written: an agent told it has
+            // peers but given no server would call tools that do not exist.
+            systemPromptParts.append(SystemPrompts.agentIPCPrompt(workstreamName: workstreamName))
+        }
         let combinedSystemPrompt = systemPromptParts.isEmpty ? nil : systemPromptParts.joined(separator: "\n\n")
 
         var resume = CommandBuilder(basePath)
@@ -562,6 +573,9 @@ struct TerminalContainerView: View {
         if let combinedSystemPrompt {
             resume.option("--append-system-prompt", combinedSystemPrompt)
         }
+        if let mcpConfigPath {
+            resume.option("--mcp-config", mcpConfigPath)
+        }
 
         var fresh = CommandBuilder(basePath)
         fresh.option("--session-id", sessionID)
@@ -572,6 +586,9 @@ struct TerminalContainerView: View {
         if bypassPermissions { fresh.flag("--dangerously-skip-permissions") }
         if let combinedSystemPrompt {
             fresh.option("--append-system-prompt", combinedSystemPrompt)
+        }
+        if let mcpConfigPath {
+            fresh.option("--mcp-config", mcpConfigPath)
         }
 
         let cmd = CommandBuilder.withFallback(
@@ -838,7 +855,7 @@ struct TerminalContainerView: View {
                 surfaceID: id,
                 workingDirectory: workingDirectory,
                 isFocused: true,
-                environmentVars: terminalEnvVars
+                environmentVars: terminalEnvVars(for: id)
             )
         case let .browser(id):
             BrowserView(defaultURL: browserDefaultURL, isWaitingForServer: isWaitingForServer, tabID: id, webView: surfaceCache.webView(for: id))
@@ -1636,16 +1653,34 @@ struct TerminalContainerView: View {
         return scriptCommand(script: setup, role: "setup")
     }
 
-    /// Env vars for plain terminal tabs. Clears tmux vars to prevent inheritance.
+    /// Env vars for surfaces that are not the Coding Agent: setup gate, run
+    /// script, and the base for terminal tabs. Clears tmux vars to prevent
+    /// inheritance, and the Agent surface's id — a tab that kept it would claim
+    /// the Agent's pane as its nudge target, which is the exact misdelivery the
+    /// per-surface marker exists to prevent.
     private var terminalEnvVars: [String: String] {
         var vars = envVars
         vars["TMUX"] = ""
         vars["TMUX_PANE"] = ""
+        vars.removeValue(forKey: "ATELIER_SURFACE_ID")
         return vars
     }
 
+    /// Env vars for one terminal tab, carrying that tab's own surface id.
+    ///
+    /// An agent the user starts by hand in a tab can then be messaged *and*
+    /// nudged in its own pane, instead of being pull-only for want of an
+    /// address. Script surfaces deliberately stay on the plain `terminalEnvVars`
+    /// above: nothing there reads an inbox, so nothing should be typed into it.
+    private func terminalEnvVars(for surfaceID: UUID) -> [String: String] {
+        var vars = terminalEnvVars
+        vars["ATELIER_SURFACE_ID"] = surfaceID.uuidString
+        return vars
+    }
+
+    /// Env vars for the Coding Agent surface.
     private var envVars: [String: String] {
-        workspaceEnvironmentVariables(
+        var vars = workspaceEnvironmentVariables(
             workstreamID: workstreamID,
             projectName: projectName,
             workstreamName: workstreamName,
@@ -1657,6 +1692,10 @@ struct TerminalContainerView: View {
             scriptSource: scriptConfig.source,
             harness: harness
         )
+        // claudeID is the workstream id, so the Agent surface addresses itself
+        // the same way every other surface does.
+        vars["ATELIER_SURFACE_ID"] = claudeID.uuidString
+        return vars
     }
 
     private var setupApprovalView: some View {
@@ -2693,6 +2732,29 @@ final class TerminalSurfaceCache: ObservableObject {
         text.withCString { ptr in
             ghostty_surface_text(surface, ptr, UInt(text.utf8.count))
         }
+    }
+
+    /// Send a synthetic Return keypress to a terminal surface.
+    ///
+    /// A trailing newline inside `sendText` is not enough: a program reading
+    /// with bracketed paste enabled treats it as literal text in the buffer,
+    /// not as submit. Only a real key event ends the line.
+    func sendReturn(to surfaceID: UUID) {
+        guard let view = surfaces[surfaceID],
+              let surface = view.surface else { return }
+
+        var keyEvent = ghostty_input_key_s()
+        keyEvent.keycode = 0x24 // Return
+        keyEvent.mods = GHOSTTY_MODS_NONE
+        keyEvent.consumed_mods = GHOSTTY_MODS_NONE
+        keyEvent.text = nil
+        keyEvent.unshifted_codepoint = 0
+        keyEvent.composing = false
+
+        keyEvent.action = GHOSTTY_ACTION_PRESS
+        _ = ghostty_surface_key(surface, keyEvent)
+        keyEvent.action = GHOSTTY_ACTION_RELEASE
+        _ = ghostty_surface_key(surface, keyEvent)
     }
 
     // MARK: - Workspace tab snapshots

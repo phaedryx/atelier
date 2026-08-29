@@ -15,6 +15,32 @@ enum SystemPrompts {
         """
     }
 
+    /// Tells an agent it has peers, and to register itself.
+    ///
+    /// Without this the feature only works if a human explains it to each agent
+    /// in turn: an unregistered agent is invisible to `list_peers`, so two
+    /// agents can be sitting in the same project unable to find each other. The
+    /// MCP server's own instructions describe the tools, but nothing in them
+    /// prompts an agent to register before it has a reason to.
+    static func agentIPCPrompt(workstreamName: String) -> String {
+        """
+        You are one of several coding agents running in Atelier, each in its own git worktree \
+        of this project. You can reach the others through the `atelier-ipc` MCP server, which is \
+        already connected.
+        You are already listed as "\(workstreamName)" — registration is automatic. Call \
+        `register_peer` only if you want a clearer handle, or a `role` saying what you are \
+        working on.
+        Messages are delivered by pull, not push. Call `receive_messages` at natural boundaries — \
+        after finishing a task, before asking the user a question, and whenever you are about to \
+        sit idle. Something may be waiting even though nothing told you so.
+        If a line beginning with `[Atelier]` appears in your input, Atelier typed it to tell you a \
+        message arrived. Treat it as a prompt to call `receive_messages`, not as something the \
+        user said.
+        Prefer `send_message` to one agent you have identified with `list_peers`; keep `broadcast` \
+        for something every agent in the project needs.
+        """
+    }
+
     static let autoRenameBranchPrompt = """
     You are working inside Atelier, a Mac app that runs coding agents in parallel worktrees. \
     When the user presents their first request: \

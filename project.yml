@@ -77,6 +77,7 @@ targets:
       - path: Sources
         excludes:
           - Launcher
+          - MCPHelper
       - path: Resources/Assets.xcassets
         buildPhase: resources
       - path: Localization/en.lproj/Localizable.strings
@@ -140,6 +141,7 @@ targets:
           DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
     dependencies:
       - target: AtelierRun
+      - target: AtelierMCP
       - package: swift-cmark
         product: cmark-gfm
       - package: swift-cmark
@@ -167,12 +169,19 @@ targets:
       - script: |
           set -e
           mkdir -p "${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Helpers"
-          cp -f "${BUILT_PRODUCTS_DIR}/atelier-run" "${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Helpers/atelier-run"
-          chmod +x "${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Helpers/atelier-run"
-          codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY}" --timestamp --options=runtime --generate-entitlement-der "${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Helpers/atelier-run"
-        name: Bundle atelier-run
+          for helper in atelier-run atelier-mcp; do
+            dest="${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Helpers/${helper}"
+            cp -f "${BUILT_PRODUCTS_DIR}/${helper}" "$dest"
+            chmod +x "$dest"
+            codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY}" --timestamp --options=runtime --generate-entitlement-der "$dest"
+          done
+        name: Bundle helpers
+        inputFiles:
+          - $(BUILT_PRODUCTS_DIR)/atelier-run
+          - $(BUILT_PRODUCTS_DIR)/atelier-mcp
         outputFiles:
           - $(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Helpers/atelier-run
+          - $(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Helpers/atelier-mcp
 
   AtelierRun:
     type: tool
@@ -189,6 +198,23 @@ targets:
         PRODUCT_NAME: atelier-run
         OTHER_LDFLAGS:
           - -lproc
+      configs:
+        Debug:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+
+  AtelierMCP:
+    type: tool
+    platform: macOS
+    sources:
+      - path: Sources
+        includes:
+          - MCPHelper/**
+          - Models/AppConstants.swift
+          - Models/FilePersistence.swift
+          - Models/IPC/IPCProtocol.swift
+    settings:
+      base:
+        PRODUCT_NAME: atelier-mcp
       configs:
         Debug:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
