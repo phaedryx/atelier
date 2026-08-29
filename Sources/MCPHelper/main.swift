@@ -15,6 +15,14 @@ final class IPCTransport {
     private var fd: Int32 = -1
     private var buffer = Data()
 
+    /// Drops the socket and any half-read frame with it. A leftover partial
+    /// line would corrupt framing on the next connection.
+    func disconnect() {
+        if fd >= 0 { close(fd) }
+        fd = -1
+        buffer.removeAll()
+    }
+
     func connect(to endpoint: IPCEndpoint) -> Bool {
         let socketFD = socket(AF_INET, SOCK_STREAM, 0)
         guard socketFD >= 0 else { return false }
@@ -214,36 +222,89 @@ final class IPCBridge {
         case failed(String)
     }
 
+    /// One attempt at a request, distinguishing "the app said no" from "the app
+    /// isn't there any more" — only the second is worth reconnecting for.
+    private enum Attempt {
+        case ok(IPCPayload?)
+        case refused(String)
+        case disconnected
+    }
+
     private let transport = IPCTransport()
+    /// Resolved lazily, and again after a reconnect: a restarted Atelier
+    /// listens on a new port with a new token.
+    private var endpoint: IPCEndpoint?
     /// The identity `register_peer` handed this session. Sent with every later
     /// request, so a reconnect renames the same peer instead of stranding its
     /// inbox behind a dead id.
     private var peerID: String?
-    /// Resolved lazily and once: the app may not be listening when the agent
-    /// starts, and exiting here would look like a broken MCP server rather than
-    /// a recoverable tool error.
-    private var endpoint: IPCEndpoint?
+    /// What this session registered as, replayed after a reconnect so the agent
+    /// does not have to notice that Atelier restarted.
+    private var registration: [String: String]?
 
     func call(tool: IPCTool, arguments: [String: String]) -> Outcome {
-        if endpoint == nil {
-            guard let resolved = IPCEndpoint.read() else {
-                return .failed("Atelier is not running, or agent IPC is disabled in its settings.")
-            }
-            guard transport.connect(to: resolved) else {
-                return .failed("Could not reach Atelier's IPC listener on port \(resolved.port).")
-            }
-            endpoint = resolved
+        if let failure = connect() { return .failed(failure) }
+
+        switch attempt(tool: tool, arguments: arguments) {
+        case let .ok(payload):
+            return .ok(payload)
+        case let .refused(message):
+            return .failed(message)
+        case .disconnected:
+            break
         }
-        guard let endpoint else { return .failed("Not connected.") }
+
+        // Atelier went away mid-session — almost always a restart during
+        // development. Reconnect once and replay, rather than making every
+        // later tool call fail until the agent itself is restarted.
+        transport.disconnect()
+        endpoint = nil
+        if let failure = connect() {
+            return .failed("Atelier closed the IPC connection. \(failure)")
+        }
+
+        // A restarted app has an empty store, so the peer id from before is
+        // meaningless. Re-register under the same name before retrying.
+        if tool != .registerPeer, let registration {
+            peerID = nil
+            _ = attempt(tool: .registerPeer, arguments: registration)
+        }
+
+        switch attempt(tool: tool, arguments: arguments) {
+        case let .ok(payload):
+            return .ok(payload)
+        case let .refused(message):
+            return .failed(message)
+        case .disconnected:
+            return .failed("Atelier closed the IPC connection.")
+        }
+    }
+
+    /// Opens the connection if it isn't already up. Returns a message on
+    /// failure, nil on success.
+    private func connect() -> String? {
+        if endpoint != nil { return nil }
+        guard let resolved = IPCEndpoint.read() else {
+            return "Atelier is not running, or agent IPC is disabled in its settings."
+        }
+        guard transport.connect(to: resolved) else {
+            return "Could not reach Atelier's IPC listener on port \(resolved.port)."
+        }
+        endpoint = resolved
+        return nil
+    }
+
+    private func attempt(tool: IPCTool, arguments: [String: String]) -> Attempt {
+        guard let endpoint else { return .disconnected }
 
         let identity = IPCClientIdentity.fromEnvironment(peerID: peerID)
         let request = IPCRequest(token: endpoint.token, tool: tool, arguments: arguments, client: identity)
-        guard let response = transport.roundTrip(request) else {
-            return .failed("Atelier closed the IPC connection.")
-        }
-        if let error = response.error { return .failed(error) }
+        guard let response = transport.roundTrip(request) else { return .disconnected }
+        if let error = response.error { return .refused(error) }
+
         if tool == .registerPeer, case let .peer(peer) = response.payload {
             peerID = peer.id
+            registration = arguments
         }
         return .ok(response.payload)
     }

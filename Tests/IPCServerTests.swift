@@ -208,6 +208,51 @@ final class IPCServerTests: XCTestCase {
         XCTAssertEqual(builder.callTool("receive_messages"), "No new messages.")
     }
 
+    /// Atelier quitting and coming back is the common case in development: new
+    /// port, new token, empty store. The helper should recover on its own rather
+    /// than failing every call until the agent is restarted.
+    func test_helper_reconnectsAndReregistersAfterARestart() throws {
+        let helper = try XCTUnwrap(MCPHelperLauncher.executableURL(), "atelier-mcp was not found in the host app bundle")
+        let first = try waitForEndpoint()
+
+        func environment(workstream: String) -> [String: String] {
+            var environment = ProcessInfo.processInfo.environment
+            environment["ATELIER_PROJECT_DIR"] = "/repos/atelier"
+            environment["ATELIER_WORKSTREAM"] = workstream
+            environment["ATELIER_WORKSTREAM_ID"] = UUID().uuidString
+            environment["ATELIER_SURFACE_ID"] = UUID().uuidString
+            return environment
+        }
+
+        let survivor = try MCPProcess(helper: helper, environment: environment(workstream: "wry-amber-lexer"))
+        XCTAssertNotNil(survivor.callTool("register_peer", ["name": "survivor", "role": "keeps going"]))
+
+        server.stop()
+        let restarted = IPCServer(service: IPCService())
+        defer { restarted.stop() }
+        restarted.start()
+
+        let deadline = Date().addingTimeInterval(5)
+        var second: IPCEndpoint?
+        while Date() < deadline, second == nil {
+            let current = IPCEndpoint.read()
+            second = current?.port == first.port ? nil : current
+            if second == nil { usleep(20_000) }
+        }
+        XCTAssertNotNil(second, "the restarted listener did not publish a new endpoint")
+
+        // The first call after the restart hits a dead socket, reconnects, and
+        // replays the registration before retrying.
+        XCTAssertEqual(survivor.callTool("list_peers"), "No other agents are registered in this project.")
+
+        // A fresh helper proves the re-registration actually landed in the new
+        // store, rather than the call merely not failing.
+        let observer = try MCPProcess(helper: helper, environment: environment(workstream: "bold-crimson-parser"))
+        XCTAssertNotNil(observer.callTool("register_peer", ["name": "observer"]))
+        let listed = try XCTUnwrap(observer.callTool("list_peers"))
+        XCTAssertTrue(listed.contains("survivor"), "expected the re-registered peer, got: \(listed)")
+    }
+
     /// Drives the built `atelier-mcp` over stdio exactly as Claude Code would.
     ///
     /// The helper resolves `ipc.json` through `AppConstants.cacheDirectory`,

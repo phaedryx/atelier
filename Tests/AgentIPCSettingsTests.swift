@@ -5,14 +5,26 @@
 import XCTest
 
 final class AgentIPCSettingsTests: XCTestCase {
+    /// These keys live in the app's own defaults domain, and the test host *is*
+    /// the app — so a test that simply cleared them would silently turn the
+    /// feature off for whoever ran the suite. Save and put back.
+    private var saved: [String: Any?] = [:]
+
     override func setUp() {
         super.setUp()
+        for key in [AgentIPCSettings.enabledKey, AgentIPCSettings.nudgeKey] {
+            saved[key] = UserDefaults.standard.object(forKey: key)
+        }
         clearSettings()
         try? FileManager.default.removeItem(at: IPCEndpoint.fileURL)
     }
 
     override func tearDown() {
         clearSettings()
+        for (key, value) in saved {
+            if let value { UserDefaults.standard.set(value, forKey: key) }
+        }
+        saved.removeAll()
         super.tearDown()
     }
 

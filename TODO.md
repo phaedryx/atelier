@@ -117,10 +117,6 @@
 - **Cross-project messaging.** Peers are scoped to the caller's project with no
   way to opt out. If that ever becomes a real need, it wants its own louder
   switch, not a widening of `atelier.agentIPC`.
-- **The helper does not reconnect.** If Atelier restarts while an agent is
-  running, its `atelier-mcp` keeps the dead socket and every tool call returns
-  "Atelier closed the IPC connection" until the agent restarts. The error is
-  honest, but a single reconnect attempt in `IPCBridge.call` would fix it.
 - **Peer contexts are pruned only by `list_peers`.** A peer that expires while
   nobody lists gets its `IPCService` context held until the next call. Harmless
   today — the store's own liveness check still rejects the peer — but it is a
