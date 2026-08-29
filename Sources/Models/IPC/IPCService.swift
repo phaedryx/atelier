@@ -235,10 +235,7 @@ actor IPCService {
         let senderName = await store.peerStatus(id: senderID)?.name ?? "another agent"
 
         for recipient in recipients {
-            guard let context = contexts[recipient],
-                  let surfaceID = context.surfaceID,
-                  let workstreamID = context.workstreamID.flatMap(UUID.init(uuidString:))
-            else { continue }
+            guard let context = contexts[recipient], let surfaceID = context.surfaceID else { continue }
 
             let waiting = await store.inboxCount(for: recipient)
 
@@ -248,12 +245,7 @@ actor IPCService {
             // main thread would stall send_message rather than just delaying a
             // notice.
             Task { @MainActor in
-                AgentNudge.shared.nudge(
-                    surfaceID: surfaceID,
-                    workstreamID: workstreamID,
-                    senderName: senderName,
-                    waiting: waiting
-                )
+                AgentNudge.shared.nudge(surfaceID: surfaceID, senderName: senderName, waiting: waiting)
             }
         }
     }

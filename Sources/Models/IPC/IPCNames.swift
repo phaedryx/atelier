@@ -22,7 +22,11 @@ enum IPCNames {
     static func sanitized(_ raw: String, limit: Int, fallback: String) -> String {
         var scalars = String.UnicodeScalarView()
         for scalar in raw.unicodeScalars where !forbidden.contains(scalar) {
-            scalars.append(scalar)
+            // Any other flavour of space becomes a plain one. A no-break space
+            // is harmless in a terminal but invisible in a roster, so without
+            // this two peers can be given names that render identically and an
+            // agent picking one out of `list_peers` has nothing to go on.
+            scalars.append(CharacterSet.whitespaces.contains(scalar) ? " " : scalar)
             if scalars.count >= limit { break }
         }
         let cleaned = String(scalars).trimmingCharacters(in: .whitespaces)

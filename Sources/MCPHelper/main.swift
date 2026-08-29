@@ -329,7 +329,22 @@ final class IPCBridge {
         let identity = IPCClientIdentity.fromEnvironment(peerID: peerID)
         let request = IPCRequest(token: endpoint.token, tool: tool, arguments: arguments, client: identity)
         guard let response = transport.roundTrip(request) else { return .disconnected }
-        if let error = response.error { return .refused(error) }
+        if let error = response.error {
+            // The app refuses a peer id whose previous connection it still
+            // considers live — reachable when a reconnect overtakes the old
+            // socket's close. Treated as final, that wedges the session for
+            // good: `ensureRegistered` no-ops while `peerID` is set, so nothing
+            // would ever ask again. Drop the identity and re-register instead.
+            if error.contains("belongs to another session") {
+                peerID = nil
+                if case let .ok(payload) = attempt(tool: .registerPeer, arguments: registration ?? [:]),
+                   case .peer = payload
+                {
+                    return attempt(tool: tool, arguments: arguments)
+                }
+            }
+            return .refused(error)
+        }
 
         if tool == .registerPeer, case let .peer(peer) = response.payload {
             peerID = peer.id

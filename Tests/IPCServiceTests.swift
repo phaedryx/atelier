@@ -173,6 +173,18 @@ final class IPCServiceTests: XCTestCase {
         XCTAssertFalse(peer.role.contains("\n"))
     }
 
+    func test_registerPeer_leavesNoInvisibleCharactersInAName() async throws {
+        // A right-to-left override, a zero-width space, a zero-width joiner, a
+        // byte-order mark, and a no-break space. The last becomes a plain space
+        // rather than vanishing: two peers whose names render identically are a
+        // way to get an agent to address the wrong one.
+        let hostile = "pla\u{202E}n\u{200B}n\u{200D}e\u{FEFF}r\u{00A0}two"
+        let response = await call(.registerPeer, ["name": hostile], as: client(project: projectA))
+        guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
+
+        XCTAssertEqual(peer.name, "planner two")
+    }
+
     func test_registerPeer_capsTheName() async throws {
         let response = await call(.registerPeer, ["name": String(repeating: "a", count: 200)], as: client(project: projectA))
         guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }

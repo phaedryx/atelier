@@ -49,47 +49,19 @@ final class AgentNudgeTests: XCTestCase {
 
     // MARK: - Attribution
 
-    private let workstreamID = UUID()
-
-    func test_perSurfaceEvidence_alwaysWins() {
-        let other = UUID()
-        XCTAssertEqual(
-            AgentNudge.resolveState(surfaceState: .working, workstreamState: .idle, surfaceID: other, workstreamID: workstreamID),
-            .working,
-            "a busy pane must not be interrupted because the workstream looks idle"
-        )
-    }
-
-    func test_noEvidenceAnywhere_isNotIdle() {
-        // state(for:) defaults to .idle so a sidebar row can draw something.
-        // Acting on that default would treat "hooks never arrived" as "the turn
-        // ended", which is why resolveState takes the reported state instead.
-        XCTAssertNil(
-            AgentNudge.resolveState(surfaceState: nil, workstreamState: nil, surfaceID: workstreamID, workstreamID: workstreamID),
-            "an Agent tab that has never reported must not be nudged"
-        )
-    }
-
-    func test_theAgentTab_fallsBackToTheWorkstreamSignal() {
-        // claudeID == workstreamID, so the workstream signal is a statement
-        // about that pane rather than a guess about it.
-        XCTAssertEqual(
-            AgentNudge.resolveState(surfaceState: nil, workstreamState: .idle, surfaceID: workstreamID, workstreamID: workstreamID),
-            .idle
-        )
-    }
-
-    func test_anyOtherSurface_withoutEvidence_isNotNudged() {
-        XCTAssertNil(
-            AgentNudge.resolveState(surfaceState: nil, workstreamState: .idle, surfaceID: UUID(), workstreamID: workstreamID),
-            "the workstream signal says nothing about a pane that has never reported"
-        )
+    func test_onlyPerSurfaceEvidenceCounts() {
+        // The workstream signal used to stand in for the Coding Agent tab. It is
+        // contaminated by any other session in the same worktree, so a pane with
+        // nothing reported about it is now simply not interrupted.
+        XCTAssertNil(AgentNudge.resolveState(surfaceState: nil))
+        XCTAssertEqual(AgentNudge.resolveState(surfaceState: .idle), .idle)
+        XCTAssertEqual(AgentNudge.resolveState(surfaceState: .working), .working)
     }
 
     func test_nudge_withoutASurfaceCache_recordsNothing() {
         AgentNudge.shared._testReset()
         let surface = UUID()
-        AgentNudge.shared.nudge(surfaceID: surface, workstreamID: surface, senderName: "planner", waiting: 1)
+        AgentNudge.shared.nudge(surfaceID: surface, senderName: "planner", waiting: 1)
         XCTAssertNil(AgentNudge.shared._testLastNudge(for: surface), "a nudge with nowhere to go must not consume the cooldown")
     }
 

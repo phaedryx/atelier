@@ -294,6 +294,45 @@ final class IPCServerTests: XCTestCase {
         XCTAssertTrue(accepted, "a returning helper must be able to reclaim its own peer")
     }
 
+    /// The race two reviewers found independently: a peer is created by
+    /// `register_peer`, but the connection dies before the reply-side claim can
+    /// bind it. `forget` finds nothing bound and returns; the claim then finds
+    /// no connection. Nothing released the peer — and a pinned peer no longer
+    /// expires, so it would sit in `list_peers` collecting messages until the
+    /// app restarted.
+    func test_aRegistrationWhoseConnectionDiesImmediately_leavesNoGhost() throws {
+        let endpoint = try waitForEndpoint()
+
+        let doomed = try connect(to: endpoint)
+        let request = IPCRequest(
+            token: endpoint.token,
+            tool: .registerPeer,
+            arguments: ["name": "ghost"],
+            client: identity(project: "/repos/atelier")
+        )
+        let data = try IPCFraming.encode(request)
+        _ = data.withUnsafeBytes { Darwin.send(doomed, $0.baseAddress!, data.count, 0) }
+        // Hang up without waiting for the reply.
+        close(doomed)
+
+        let observer = try connect(to: endpoint)
+        defer { close(observer) }
+        let deadline = Date().addingTimeInterval(5)
+        var listed: [IPCPeerInfo] = []
+        repeat {
+            let response = try roundTrip(
+                IPCRequest(token: endpoint.token, tool: .listPeers, client: identity(project: "/repos/atelier")),
+                on: observer
+            )
+            guard case let .peers(peers) = response.payload else { return XCTFail("expected peers") }
+            listed = peers
+            if listed.isEmpty { break }
+            usleep(50_000)
+        } while Date() < deadline
+
+        XCTAssertTrue(listed.isEmpty, "a peer nobody owns must not outlive the connection that made it")
+    }
+
     // MARK: - Hostile input
 
     func test_anUnparseableFrame_closesTheConnection() throws {

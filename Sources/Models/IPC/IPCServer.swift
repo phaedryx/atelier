@@ -213,15 +213,35 @@ final class IPCServer: @unchecked Sendable {
         guard let peerID = peerID.flatMap(UUID.init(uuidString:)) else { return true }
         let key = ObjectIdentifier(connection)
 
-        // A reply can land after its connection died; nothing to bind it to.
-        guard connections[key] != nil else { return false }
+        // A reply can land after its connection died. Nothing to bind it to —
+        // and since registration already created the peer, dropping the claim
+        // here would strand it: `forget` has already run and found nothing bound,
+        // and a pinned peer no longer expires. Retire it instead.
+        guard connections[key] != nil else {
+            retire(peerID)
+            return false
+        }
         if let owner = peerOwners[peerID], owner != key, connections[owner] != nil {
             return false
+        }
+
+        // One connection speaks for one peer. Registering a second time on the
+        // same socket abandons the first, which would otherwise stay pinned with
+        // nobody left to close it.
+        if let previous = connectionPeers[key], previous != peerID {
+            peerOwners.removeValue(forKey: previous)
+            retire(previous)
         }
 
         peerOwners[peerID] = key
         connectionPeers[key] = peerID
         return true
+    }
+
+    /// Drops a peer from the store without going through a connection close.
+    private func retire(_ peerID: UUID) {
+        let service = service
+        Task { await service.release(peerID: peerID) }
     }
 
     /// Retires the connection and the peer it spoke for: an agent whose helper
@@ -238,9 +258,7 @@ final class IPCServer: @unchecked Sendable {
         // take the live session down with it.
         guard peerOwners[peerID] == key else { return }
         peerOwners.removeValue(forKey: peerID)
-
-        let service = service
-        Task { await service.release(peerID: peerID) }
+        retire(peerID)
     }
 
     private func send(_ response: IPCResponse, on connection: NWConnection) {
