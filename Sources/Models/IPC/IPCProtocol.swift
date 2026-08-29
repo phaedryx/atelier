@@ -77,11 +77,13 @@ struct IPCClientIdentity: Codable, Sendable {
     let workstreamName: String?
     /// `ATELIER_PROJECT_DIR`, used for same-project scoping.
     let projectDirectory: String?
-    /// True only when `ATELIER_AGENT_SURFACE` is set, which the app exports for
-    /// the Coding Agent surface alone. A `claude` the user typed into a Cmd+T
-    /// tab inherits the same workstream vars but not this one, which is what
-    /// keeps a terminal nudge from being delivered to the wrong surface.
-    let isAgentSurface: Bool
+    /// `ATELIER_SURFACE_ID`: the terminal surface this agent is running in.
+    ///
+    /// Every Atelier-launched terminal exports its own — the Coding Agent tab
+    /// and each Cmd+T tab alike — so a nudge can be typed into the pane the
+    /// recipient actually occupies rather than assumed to be the Agent tab.
+    /// Absent for anything Atelier didn't launch, which is then pull-only.
+    let surfaceID: String?
     /// The peer this session registered, once it has one.
     let peerID: String?
 
@@ -90,7 +92,7 @@ struct IPCClientIdentity: Codable, Sendable {
             workstreamID: env["ATELIER_WORKSTREAM_ID"],
             workstreamName: env["ATELIER_WORKSTREAM"],
             projectDirectory: env["ATELIER_PROJECT_DIR"],
-            isAgentSurface: env["ATELIER_AGENT_SURFACE"] != nil,
+            surfaceID: env["ATELIER_SURFACE_ID"],
             peerID: peerID
         )
     }

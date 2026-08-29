@@ -15,8 +15,9 @@ actor IPCService {
         let workstreamID: String?
         let workstreamName: String?
         let projectDirectory: String?
-        /// Set only for the Coding Agent surface; see `IPCClientIdentity`.
-        let isAgentSurface: Bool
+        /// The terminal surface this peer runs in, when Atelier launched it.
+        /// Nil means pull-only: there is nowhere to type a notice.
+        let surfaceID: UUID?
     }
 
     private let store: IPCStore
@@ -203,13 +204,18 @@ actor IPCService {
 
         for recipient in recipients {
             guard let context = contexts[recipient],
-                  context.isAgentSurface,
+                  let surfaceID = context.surfaceID,
                   let workstreamID = context.workstreamID.flatMap(UUID.init(uuidString:))
             else { continue }
 
             let waiting = await store.inboxCount(for: recipient)
             await MainActor.run {
-                AgentNudge.shared.nudge(workstreamID: workstreamID, senderName: senderName, waiting: waiting)
+                AgentNudge.shared.nudge(
+                    surfaceID: surfaceID,
+                    workstreamID: workstreamID,
+                    senderName: senderName,
+                    waiting: waiting
+                )
             }
         }
     }
@@ -235,7 +241,7 @@ actor IPCService {
             workstreamID: client.workstreamID,
             workstreamName: client.workstreamName,
             projectDirectory: client.projectDirectory,
-            isAgentSurface: client.isAgentSurface
+            surfaceID: client.surfaceID.flatMap(UUID.init(uuidString:))
         )
     }
 
@@ -267,6 +273,10 @@ actor IPCService {
         let peer = await store.registerPeer(name: name, role: role)
         contexts[peer.id] = context
         return peer
+    }
+
+    func _testContext(for peerID: UUID) -> PeerContext? {
+        contexts[peerID]
     }
 
     func _testBackdate(peerID: UUID, to date: Date) async {

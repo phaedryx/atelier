@@ -70,12 +70,12 @@ final class IPCServerTests: XCTestCase {
         throw XCTSkip("no IPC response within 5s")
     }
 
-    private func identity(project: String?) -> IPCClientIdentity {
+    private func identity(project: String?, surfaceID: UUID = UUID()) -> IPCClientIdentity {
         IPCClientIdentity(
             workstreamID: UUID().uuidString,
             workstreamName: "bold-crimson-parser",
             projectDirectory: project,
-            isAgentSurface: true,
+            surfaceID: surfaceID.uuidString,
             peerID: nil
         )
     }
@@ -96,7 +96,7 @@ final class IPCServerTests: XCTestCase {
             workstreamID: UUID().uuidString,
             workstreamName: "bold-crimson-parser",
             projectDirectory: "/repos/atelier",
-            isAgentSurface: true
+            surfaceID: UUID()
         )
         _ = await service._testRegister(name: "reviewer", role: "reviews diffs", context: context)
 
@@ -184,7 +184,7 @@ final class IPCServerTests: XCTestCase {
             environment["ATELIER_PROJECT_DIR"] = "/repos/atelier"
             environment["ATELIER_WORKSTREAM"] = workstream
             environment["ATELIER_WORKSTREAM_ID"] = UUID().uuidString
-            environment["ATELIER_AGENT_SURFACE"] = "1"
+            environment["ATELIER_SURFACE_ID"] = UUID().uuidString
             return environment
         }
 
@@ -221,7 +221,7 @@ final class IPCServerTests: XCTestCase {
             workstreamID: UUID().uuidString,
             workstreamName: "wry-amber-lexer",
             projectDirectory: "/repos/atelier",
-            isAgentSurface: true
+            surfaceID: UUID()
         )
         _ = await service._testRegister(name: "planner", role: "writes plans", context: context)
         _ = try waitForEndpoint()

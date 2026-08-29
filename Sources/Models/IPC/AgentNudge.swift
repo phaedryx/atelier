@@ -10,10 +10,18 @@ private let logger = Logger(subsystem: "atelier", category: "ipc-nudge")
 ///
 /// The mailbox is the contract; this is a courtesy. It fires only when the
 /// recipient's turn has actually ended — Claude Code's own `Stop` hook says so,
-/// via `WorkstreamAgentStateTracker` — and only into the Coding Agent surface,
-/// never a terminal tab where the user happens to be running an agent by hand.
-/// When it doesn't fire, the message still sits in the inbox, which is why the
-/// tool descriptions tell agents to check at natural boundaries.
+/// via `WorkstreamAgentStateTracker` — and only into a surface Atelier itself
+/// launched, which is the only way it has an address to type into. When it
+/// doesn't fire, the message still sits in the inbox, which is why the tool
+/// descriptions tell agents to check at natural boundaries.
+///
+/// **Known limit.** Hook events carry `project_dir`, so the turn-ended signal is
+/// per *workstream*, not per surface. With one agent per workstream that is
+/// exact. With two agents sharing a worktree it is not: one finishing its turn
+/// marks the workstream idle while the other may be mid-thought, so a notice
+/// aimed at the second can land mid-turn. Aiming is per-surface; timing is not.
+/// Attributing hook events to a surface would take a marker the hook script
+/// forwards, which does not exist yet.
 @MainActor
 final class AgentNudge {
     static let shared = AgentNudge()
@@ -22,11 +30,12 @@ final class AgentNudge {
     /// singleton, and nudging needs the live surfaces it owns.
     weak var surfaceCache: TerminalSurfaceCache?
 
-    /// Last nudge per workstream, so a burst of messages produces one notice
-    /// rather than one per message.
+    /// Last nudge per surface, so a burst of messages produces one notice
+    /// rather than one per message. Keyed per surface, not per workstream: two
+    /// agents sharing a worktree each get their own notice.
     private var lastNudge: [UUID: Date] = [:]
 
-    /// Minimum gap between two nudges to the same workstream.
+    /// Minimum gap between two nudges to the same surface.
     static let cooldown: TimeInterval = 5
 
     /// Whether a nudge is allowed right now. Pure, so the policy is testable
@@ -40,12 +49,12 @@ final class AgentNudge {
     /// someone's work.
     static func shouldNudge(
         state: WorkstreamAgentStateTracker.AgentRunState,
-        isAgentSurface: Bool,
+        hasSurface: Bool,
         nudgeEnabled: Bool,
         lastNudge: Date?,
         now: Date = Date()
     ) -> Bool {
-        guard nudgeEnabled, isAgentSurface else { return false }
+        guard nudgeEnabled, hasSurface else { return false }
         switch state {
         case .idle, .needsAttention(.justFinished):
             break
@@ -56,27 +65,31 @@ final class AgentNudge {
         return true
     }
 
-    /// Types a one-line notice into the recipient's agent surface, if it is at a
-    /// prompt. The surface id is the workstream id — see `claudeID`.
-    func nudge(workstreamID: UUID, senderName: String, waiting: Int, now: Date = Date()) {
+    /// Types a one-line notice into the surface the recipient occupies, if the
+    /// workstream reports that a turn has ended.
+    ///
+    /// A peer whose helper has exited is already gone from the store by the time
+    /// this runs — the socket closing retires it — so this cannot type into a
+    /// tab whose agent has quit and left a shell at the prompt.
+    func nudge(surfaceID: UUID, workstreamID: UUID, senderName: String, waiting: Int, now: Date = Date()) {
         let state = WorkstreamAgentStateTracker.shared.state(for: workstreamID)
         guard Self.shouldNudge(
             state: state,
-            isAgentSurface: true,
+            hasSurface: true,
             nudgeEnabled: AgentIPCSettings.nudgeEnabled,
-            lastNudge: lastNudge[workstreamID],
+            lastNudge: lastNudge[surfaceID],
             now: now
         ) else { return }
 
         guard let surfaceCache else {
-            logger.warning("No surface cache; dropping the nudge for \(workstreamID)")
+            logger.warning("No surface cache; dropping the nudge for \(surfaceID)")
             return
         }
 
-        lastNudge[workstreamID] = now
+        lastNudge[surfaceID] = now
         let plural = waiting == 1 ? "message" : "messages"
         surfaceCache.sendText(
-            to: workstreamID,
+            to: surfaceID,
             text: "[Atelier] \(senderName) sent you a message. Call receive_messages to read your inbox (\(waiting) \(plural) waiting)."
         )
 
@@ -84,9 +97,9 @@ final class AgentNudge {
         // agent's input widget just took, the second submits it. Sending one
         // immediately looks fine by hand and drops input intermittently in use.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak surfaceCache] in
-            surfaceCache?.sendReturn(to: workstreamID)
+            surfaceCache?.sendReturn(to: surfaceID)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak surfaceCache] in
-                surfaceCache?.sendReturn(to: workstreamID)
+                surfaceCache?.sendReturn(to: surfaceID)
             }
         }
     }

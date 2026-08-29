@@ -17,12 +17,17 @@ final class IPCServiceTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func client(project: String?, peerID: String? = nil, workstream: String = "bold-crimson-parser", agentSurface: Bool = true) -> IPCClientIdentity {
+    private func client(
+        project: String?,
+        peerID: String? = nil,
+        workstream: String = "bold-crimson-parser",
+        surfaceID: UUID? = UUID()
+    ) -> IPCClientIdentity {
         IPCClientIdentity(
             workstreamID: UUID().uuidString,
             workstreamName: workstream,
             projectDirectory: project,
-            isAgentSurface: agentSurface,
+            surfaceID: surfaceID?.uuidString,
             peerID: peerID
         )
     }
@@ -153,6 +158,61 @@ final class IPCServiceTests: XCTestCase {
         let strangerInbox = await call(.receiveMessages, as: client(project: projectB, peerID: stranger))
         guard case let .messages(none) = strangerInbox.payload else { return XCTFail("expected messages") }
         XCTAssertTrue(none.isEmpty)
+    }
+
+    // MARK: - Surface identity
+
+    func test_registerPeer_recordsTheSurfaceTheAgentRunsIn() async throws {
+        // What the Coding Agent surface exports: its surface id is the
+        // workstream id, since claudeID == workstreamID.
+        let workstreamID = UUID()
+        let agent = IPCClientIdentity(
+            workstreamID: workstreamID.uuidString,
+            workstreamName: "bold-crimson-parser",
+            projectDirectory: projectA,
+            surfaceID: workstreamID.uuidString,
+            peerID: nil
+        )
+        let response = await call(.registerPeer, ["name": "agent-tab"], as: agent)
+        guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
+
+        let context = await service._testContext(for: try XCTUnwrap(UUID(uuidString: peer.id)))
+        XCTAssertEqual(context?.surfaceID, workstreamID, "the Agent tab must still address its own pane")
+    }
+
+    func test_twoAgentsInOneWorkstream_keepSeparateSurfaces() async throws {
+        let workstreamID = UUID()
+        let tabSurface = UUID()
+
+        func identity(surface: UUID) -> IPCClientIdentity {
+            IPCClientIdentity(
+                workstreamID: workstreamID.uuidString,
+                workstreamName: "bold-crimson-parser",
+                projectDirectory: projectA,
+                surfaceID: surface.uuidString,
+                peerID: nil
+            )
+        }
+
+        let agentTab = await call(.registerPeer, ["name": "agent-tab"], as: identity(surface: workstreamID))
+        let handStarted = await call(.registerPeer, ["name": "hand-started"], as: identity(surface: tabSurface))
+        guard case let .peer(first) = agentTab.payload, case let .peer(second) = handStarted.payload else {
+            return XCTFail("expected two peers")
+        }
+
+        let firstContext = await service._testContext(for: try XCTUnwrap(UUID(uuidString: first.id)))
+        let secondContext = await service._testContext(for: try XCTUnwrap(UUID(uuidString: second.id)))
+        XCTAssertEqual(firstContext?.surfaceID, workstreamID)
+        XCTAssertEqual(secondContext?.surfaceID, tabSurface, "a tab must be nudged in its own pane, not the Agent's")
+        XCTAssertEqual(firstContext?.workstreamID, secondContext?.workstreamID, "both are in the same workstream")
+    }
+
+    func test_peerWithoutASurface_isPullOnly() async throws {
+        let response = await call(.registerPeer, ["name": "elsewhere"], as: client(project: projectA, surfaceID: nil))
+        guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
+
+        let context = await service._testContext(for: try XCTUnwrap(UUID(uuidString: peer.id)))
+        XCTAssertNil(context?.surfaceID, "an agent Atelier did not launch has nowhere to be nudged")
     }
 
     // MARK: - Liveness

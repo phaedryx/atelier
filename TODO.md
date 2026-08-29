@@ -106,6 +106,12 @@
 - **opencode support.** v1 wires Claude Code only, via `--mcp-config` in
   `buildClaudeCommand()`. opencode reads MCP config from a file; the precedent
   for writing one is `OpencodePluginInstaller` and `Resources/Scripts/atelier-opencode.js`.
+- **Per-surface idle detection.** `ATELIER_SURFACE_ID` makes nudge *aiming*
+  per-surface, but `WorkstreamAgentStateTracker` is still keyed per workstream
+  because hook events carry only `project_dir`. Two agents in one worktree share
+  one turn-ended signal, so a notice aimed at the second can land mid-turn. The
+  fix is a surface marker forwarded by `atelier-hook` and carried through
+  `AgentEvent` into the tracker.
 - **The nudge is unexercised.** `AgentNudge.shouldNudge` is tested; the injection
   path (`sendText` + two-stage synthetic Return) needs a live surface and has
   only been reasoned about. Watch the first real delivery.

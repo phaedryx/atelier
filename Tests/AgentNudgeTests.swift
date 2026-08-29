@@ -10,13 +10,13 @@ final class AgentNudgeTests: XCTestCase {
 
     private func shouldNudge(
         state: WorkstreamAgentStateTracker.AgentRunState,
-        isAgentSurface: Bool = true,
+        hasSurface: Bool = true,
         nudgeEnabled: Bool = true,
         lastNudge: Date? = nil
     ) -> Bool {
         AgentNudge.shouldNudge(
             state: state,
-            isAgentSurface: isAgentSurface,
+            hasSurface: hasSurface,
             nudgeEnabled: nudgeEnabled,
             lastNudge: lastNudge,
             now: now
@@ -39,7 +39,7 @@ final class AgentNudgeTests: XCTestCase {
     }
 
     func test_staysQuiet_forASessionAtelierDidNotLaunch() {
-        XCTAssertFalse(shouldNudge(state: .idle, isAgentSurface: false), "a hand-started claude in a terminal tab is not the agent surface")
+        XCTAssertFalse(shouldNudge(state: .idle, hasSurface: false), "with no surface id there is nowhere to type")
     }
 
     func test_coalesces_aBurstOfMessages() {
@@ -49,6 +49,6 @@ final class AgentNudgeTests: XCTestCase {
 
     func test_nudge_withoutASurfaceCache_isANoOp() {
         AgentNudge.shared._testReset()
-        AgentNudge.shared.nudge(workstreamID: UUID(), senderName: "planner", waiting: 1)
+        AgentNudge.shared.nudge(surfaceID: UUID(), workstreamID: UUID(), senderName: "planner", waiting: 1)
     }
 }

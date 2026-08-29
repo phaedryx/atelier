@@ -25,13 +25,20 @@ real Claude Code lifecycle hooks (`UserPromptSubmit`/`Stop`, `PreToolUse`/
 So "the agent's turn ended" is a real signal, not a guess. The nudge fires on
 `.idle`, not on a quiet-window heuristic.
 
-**What is still not solved:** hook events carry `project_dir`, so the tracker is
-keyed per *workstream*, not per *surface*. A `claude` started by hand in a Cmd+T
-tab is indistinguishable from the Agent tab at the tracker level, and nudging it
-would inject into the wrong surface. Resolution: the Agent surface's environment
-carries an extra `ATELIER_AGENT_SURFACE` var that plain terminal tabs do not get;
-`register_peer` records it. Peers without it are **pull-only** — no nudge, ever.
-That keeps the spec's honesty requirement without keeping its pessimism.
+**Addressing.** Every Atelier-launched terminal exports its own
+`ATELIER_SURFACE_ID` — the Coding Agent tab (whose surface id *is* the workstream
+id, since `claudeID == workstreamID`) and each Cmd+T tab alike. `register_peer`
+records it, and the nudge types into that surface. So two agents sharing one
+worktree are each nudged in their own pane, and anything Atelier did not launch
+has no surface id and is **pull-only** — there is nowhere to type.
+
+**What is still not solved:** hook events carry `project_dir`, so the turn-ended
+signal is keyed per *workstream*, not per *surface*. With one agent per
+workstream that is exact. With two, one finishing its turn marks the whole
+workstream idle while the other may be mid-thought, so a notice aimed at the
+second can land mid-turn. **Aiming is per-surface; timing is not.** Closing that
+would take a per-surface marker forwarded by `atelier-hook` and carried through
+`AgentEvent` into the tracker's keying — real work, and not done.
 
 ### 2. The "no HTTP surface" argument is already spent (spec §"Why not an in-app HTTP MCP server")
 

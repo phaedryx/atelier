@@ -851,7 +851,7 @@ struct TerminalContainerView: View {
                 surfaceID: id,
                 workingDirectory: workingDirectory,
                 isFocused: true,
-                environmentVars: terminalEnvVars
+                environmentVars: terminalEnvVars(for: id)
             )
         case let .browser(id):
             BrowserView(defaultURL: browserDefaultURL, isWaitingForServer: isWaitingForServer, tabID: id, webView: surfaceCache.webView(for: id))
@@ -1649,15 +1649,28 @@ struct TerminalContainerView: View {
         return scriptCommand(script: setup, role: "setup")
     }
 
-    /// Env vars for plain terminal tabs. Clears tmux vars to prevent inheritance,
-    /// and the agent marker so a `claude` the user starts by hand here is not
-    /// mistaken for the Coding Agent surface when IPC decides where to deliver a
-    /// nudge.
+    /// Env vars for surfaces that are not the Coding Agent: setup gate, run
+    /// script, and the base for terminal tabs. Clears tmux vars to prevent
+    /// inheritance, and the Agent surface's id — a tab that kept it would claim
+    /// the Agent's pane as its nudge target, which is the exact misdelivery the
+    /// per-surface marker exists to prevent.
     private var terminalEnvVars: [String: String] {
         var vars = envVars
         vars["TMUX"] = ""
         vars["TMUX_PANE"] = ""
-        vars.removeValue(forKey: "ATELIER_AGENT_SURFACE")
+        vars.removeValue(forKey: "ATELIER_SURFACE_ID")
+        return vars
+    }
+
+    /// Env vars for one terminal tab, carrying that tab's own surface id.
+    ///
+    /// An agent the user starts by hand in a tab can then be messaged *and*
+    /// nudged in its own pane, instead of being pull-only for want of an
+    /// address. Script surfaces deliberately stay on the plain `terminalEnvVars`
+    /// above: nothing there reads an inbox, so nothing should be typed into it.
+    private func terminalEnvVars(for surfaceID: UUID) -> [String: String] {
+        var vars = terminalEnvVars
+        vars["ATELIER_SURFACE_ID"] = surfaceID.uuidString
         return vars
     }
 
@@ -1675,7 +1688,9 @@ struct TerminalContainerView: View {
             scriptSource: scriptConfig.source,
             harness: harness
         )
-        vars["ATELIER_AGENT_SURFACE"] = "1"
+        // claudeID is the workstream id, so the Agent surface addresses itself
+        // the same way every other surface does.
+        vars["ATELIER_SURFACE_ID"] = claudeID.uuidString
         return vars
     }
 
