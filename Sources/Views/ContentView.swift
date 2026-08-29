@@ -140,9 +140,12 @@ struct ContentView: View {
         } else if let workstream = activeWorkstream, let project = activeProject {
             if let workstreamID = renderableWorkstreamID(in: project, selectedWorkstreamID: workstream.id) {
                 let scriptConfig = ScriptConfig.load(from: project.directory)
-                let initialTabState = startupWorkspaceTabState(
-                    snapshot: surfaceCache.restoreTabSnapshot(for: workstreamID),
-                    savedTab: WorkspaceStateStore.load(for: workstreamID)
+                let workspaceModel = surfaceCache.workspaceModel(
+                    for: workstreamID,
+                    seed: startupWorkspaceTabState(
+                        snapshot: surfaceCache.restoreTabSnapshot(for: workstreamID),
+                        savedTab: WorkspaceStateStore.load(for: workstreamID)
+                    )
                 )
                 TerminalContainerView(
                     workstreamID: workstreamID,
@@ -155,7 +158,7 @@ struct ContentView: View {
                     harness: workstream.harness,
                     isActive: true,
                     scriptConfig: scriptConfig,
-                    initialTabState: initialTabState
+                    model: workspaceModel
                 )
                 // Harness is part of the identity so switching coding agents
                 // rebuilds the workspace from scratch — no stale cached

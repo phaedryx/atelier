@@ -309,6 +309,12 @@ struct TerminalContainerView: View {
 
     @EnvironmentObject var surfaceCache: TerminalSurfaceCache
     @EnvironmentObject var appEnv: AppEnvironment
+    /// Per-workstream tab state. Resolved by `ContentView` from the surface
+    /// cache and passed in, because `surfaceCache` is an `@EnvironmentObject`
+    /// and so is not available here in `init`. It must stay a stored
+    /// `@ObservedObject`: a computed property re-resolving it on each access
+    /// would never subscribe, and the view would silently render stale tabs.
+    @ObservedObject var model: WorkspaceModel
     @AppStorage("atelier.defaultBrowser") private var defaultBrowser: String = ""
     @AppStorage("atelier.tmuxMode") private var tmuxMode: Bool = false
     @AppStorage("atelier.agentTeams") private var agentTeams: Bool = false
@@ -318,11 +324,6 @@ struct TerminalContainerView: View {
     @AppStorage("atelier.quickActionDebug") private var quickActionDebug: Bool = false
     @AppStorage("atelier.editorTabActive") private var editorTabActive: Bool = false
     @AppStorage("atelier.editorFileDirty") private var editorFileDirty: Bool = false
-    @State private var activeTab: WorkspaceTab = .info
-    @State private var tabs: [WorkspaceTab] = [.info, .agent]
-    @State private var terminalCount = 0
-    @State private var browserCount = 0
-    @State private var editorCount = 0
     @State private var scriptConfig: ScriptConfig = .empty
     @State private var browserTitles: [UUID: String] = [:]
     @State private var terminalTitles: [UUID: String] = [:]
@@ -344,8 +345,6 @@ struct TerminalContainerView: View {
     @State private var draggedCustomTab: WorkspaceTab?
     @StateObject private var portDetector: PortDetector
     @State private var browserStartPending = false
-    @State private var runStoppedManually = false
-    @State private var runStarted = false
     @State private var runGeneration = 0
     @State private var runCommandString: String?
     @State private var devCommandOverride: String?
@@ -365,7 +364,7 @@ struct TerminalContainerView: View {
         harness: CodingHarness = .claudeCode,
         isActive: Bool,
         scriptConfig: ScriptConfig = .empty,
-        initialTabState: WorkspaceTabSnapshot = startupWorkspaceTabState(snapshot: nil, savedTab: nil)
+        model: WorkspaceModel
     ) {
         self.workstreamID = workstreamID
         self.workingDirectory = workingDirectory
@@ -376,17 +375,11 @@ struct TerminalContainerView: View {
         self.bypassPermissions = bypassPermissions
         self.harness = harness
         self.isActive = isActive
-        _activeTab = State(initialValue: initialTabState.activeTab)
-        _tabs = State(initialValue: initialTabState.tabs)
-        _terminalCount = State(initialValue: initialTabState.terminalCount)
-        _browserCount = State(initialValue: initialTabState.browserCount)
+        self.model = model
         _scriptConfig = State(initialValue: scriptConfig)
-        _editorCount = State(initialValue: initialTabState.editorCount)
-        _browserTitles = State(initialValue: initialTabState.browserTitles)
-        _terminalTitles = State(initialValue: initialTabState.terminalTitles)
-        _editorFilePaths = State(initialValue: initialTabState.editorFilePaths)
-        _runStoppedManually = State(initialValue: initialTabState.runStoppedManually)
-        _runStarted = State(initialValue: initialTabState.runStarted)
+        _browserTitles = State(initialValue: model.browserTitles)
+        _terminalTitles = State(initialValue: model.terminalTitles)
+        _editorFilePaths = State(initialValue: model.editorFilePaths)
         _portDetector = StateObject(wrappedValue: PortDetector(workstreamID: workstreamID))
 
         let savedOverride = DevCommandResolver.savedOverride(for: workstreamID)
@@ -412,18 +405,18 @@ struct TerminalContainerView: View {
     }
 
     private var isEditorTabActive: Bool {
-        if case .editor = activeTab { return true }
+        if case .editor = model.activeTab { return true }
         return false
     }
 
     private var isActiveEditorDirty: Bool {
-        if case let .editor(id) = activeTab { return editorDirtyState[id] == true }
+        if case let .editor(id) = model.activeTab { return editorDirtyState[id] == true }
         return false
     }
 
     /// Surface IDs that should be rendering for the active tab.
     private var visibleSurfaceIDs: Set<UUID>? {
-        switch activeTab {
+        switch model.activeTab {
         case .agent:
             if setupGateState == .awaitingApproval {
                 return []
@@ -686,11 +679,11 @@ struct TerminalContainerView: View {
     }
 
     private var fixedTabs: [WorkspaceTab] {
-        tabs.filter { !$0.isCloseable }
+        model.tabs.filter { !$0.isCloseable }
     }
 
     private var closeableTabs: [WorkspaceTab] {
-        tabs.filter(\.isCloseable)
+        model.tabs.filter(\.isCloseable)
     }
 
     private var tabBar: some View {
@@ -704,7 +697,7 @@ struct TerminalContainerView: View {
             if !closeableTabs.isEmpty {
                 ScrollableTabStrip(
                     tabs: closeableTabs,
-                    activeTab: activeTab,
+                    activeTab: model.activeTab,
                     tabButton: { tab in tabButton(for: tab) }
                 )
                 .layoutPriority(-1)
@@ -759,9 +752,9 @@ struct TerminalContainerView: View {
             label: tabLabel(tab),
             icon: tabIcon(tab),
             shortcut: shortcut,
-            isActive: activeTab == tab,
+            isActive: model.activeTab == tab,
             isDirty: isEditorDirty(tab),
-            onSelect: { activeTab = tab },
+            onSelect: { model.activeTab = tab },
             onClose: tab.isCloseable ? { closeTab(tab) } : nil
         )
 
@@ -781,7 +774,7 @@ struct TerminalContainerView: View {
 
     @ViewBuilder
     private var tabContent: some View {
-        switch activeTab {
+        switch model.activeTab {
         case .info:
             WorkstreamInfoView(
                 workstreamID: workstreamID,
@@ -796,8 +789,8 @@ struct TerminalContainerView: View {
                 runCommandIsGated: runCommandIsGated,
                 devCommand: resolvedDevCommand,
                 devCommandOverride: $devCommandOverride,
-                runStoppedManually: $runStoppedManually,
-                runStarted: $runStarted,
+                runStoppedManually: $model.runStoppedManually,
+                runStarted: $model.runStarted,
                 scriptsApproved: $scriptsApproved,
                 runGeneration: $runGeneration,
                 sessionMode: sessionMode,
@@ -918,22 +911,22 @@ struct TerminalContainerView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .toggleInfo)) { _ in
                 guard isActive else { return }
-                activeTab = .info
+                model.activeTab = .info
             }
             .onReceive(NotificationCenter.default.publisher(for: .focusAgent)) { _ in
                 guard isActive else { return }
-                activeTab = .agent
+                model.activeTab = .agent
             }
             .onReceive(NotificationCenter.default.publisher(for: .rerunScript)) { _ in
                 guard isActive else { return }
                 guard resolvedRunCommand != nil else { return }
                 guard !runCommandIsGated || scriptsApproved else { return }
-                if runStarted {
+                if model.runStarted {
                     restartRun()
                 } else {
                     startRunIfNeeded()
                 }
-                activeTab = .info
+                model.activeTab = .info
             }
             .onReceive(NotificationCenter.default.publisher(for: .toggleTerminal)) { _ in
                 guard isActive else { return }
@@ -949,7 +942,7 @@ struct TerminalContainerView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .toggleFileFinder)) { _ in
                 guard isActive else { return }
-                if case .editor = activeTab {
+                if case .editor = model.activeTab {
                     fileFinderRequest += 1
                 }
             }
@@ -959,7 +952,7 @@ struct TerminalContainerView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .closeTerminal)) { _ in
                 guard isActive else { return }
-                if activeTab.isCloseable { closeTab(activeTab) }
+                if model.activeTab.isCloseable { closeTab(model.activeTab) }
             }
     }
 
@@ -985,7 +978,7 @@ struct TerminalContainerView: View {
                 editorTabActive = isEditorTabActive
                 editorFileDirty = isActiveEditorDirty
             }
-            if tabs.contains(where: { if case .editor = $0 { return true } else { return false } }) {
+            if model.tabs.contains(where: { if case .editor = $0 { return true } else { return false } }) {
                 startFileTreeWatcherIfNeeded()
             }
         }
@@ -997,12 +990,12 @@ struct TerminalContainerView: View {
             guard workspaceStarted else { return }
             surfaceCache.saveTabSnapshot(for: workstreamID, snapshot: currentTabSnapshot())
         }
-        .onChange(of: activeTab) {
+        .onChange(of: model.activeTab) {
             guard isActive else { return }
             editorTabActive = isEditorTabActive
             editorFileDirty = isActiveEditorDirty
             surfaceCache.updateOcclusion(visibleSurfaceIDs: visibleSurfaceIDs)
-            WorkspaceStateStore.save(RestorableWorkspaceTab(activeTab: activeTab), for: workstreamID)
+            WorkspaceStateStore.save(RestorableWorkspaceTab(activeTab: model.activeTab), for: workstreamID)
             appEnv.refreshWorktreeState(for: workingDirectory, projectDirectory: projectDirectory)
         }
         .onReceive(NotificationCenter.default.publisher(for: .terminalActivity)) { notification in
@@ -1027,7 +1020,7 @@ struct TerminalContainerView: View {
                     override: newValue
                 )
             }
-            .onChange(of: runStarted) { _, started in
+            .onChange(of: model.runStarted) { _, started in
                 // A session restored from tmux (or started before TerminalApp
                 // was ready) needs its command assembled on the container side
                 // so the restored surface reattaches to the existing session.
@@ -1045,18 +1038,18 @@ struct TerminalContainerView: View {
                 guard isActive else { return }
                 guard let n = notification.object as? Int, n >= 1 else { return }
                 // Cmd+1-9 maps to all tabs in display order
-                guard n <= tabs.count else { return }
-                activeTab = tabs[n - 1]
+                guard n <= model.tabs.count else { return }
+                model.activeTab = model.tabs[n - 1]
             }
             .onReceive(NotificationCenter.default.publisher(for: .nextTab)) { _ in
                 guard isActive else { return }
-                guard let currentIndex = tabs.firstIndex(of: activeTab) else { return }
-                activeTab = tabs[(currentIndex + 1) % tabs.count]
+                guard let currentIndex = model.tabs.firstIndex(of: model.activeTab) else { return }
+                model.activeTab = model.tabs[(currentIndex + 1) % model.tabs.count]
             }
             .onReceive(NotificationCenter.default.publisher(for: .prevTab)) { _ in
                 guard isActive else { return }
-                guard let currentIndex = tabs.firstIndex(of: activeTab) else { return }
-                activeTab = tabs[(currentIndex - 1 + tabs.count) % tabs.count]
+                guard let currentIndex = model.tabs.firstIndex(of: model.activeTab) else { return }
+                model.activeTab = model.tabs[(currentIndex - 1 + model.tabs.count) % model.tabs.count]
             }
             .onReceive(NotificationCenter.default.publisher(for: .terminalChildExited)) { notification in
                 guard let surfaceID = notification.object as? UUID, surfaceID == setupGateID,
@@ -1074,7 +1067,7 @@ struct TerminalContainerView: View {
                     // The dev-server session died; no port is coming.
                     browserStartPending = false
                 }
-                if let tab = tabs.first(where: {
+                if let tab = model.tabs.first(where: {
                     if case let .terminal(id) = $0 { return id == surfaceID }
                     return false
                 }) {
@@ -1145,7 +1138,7 @@ struct TerminalContainerView: View {
     private static let compactTabThreshold = 3
 
     private var useCompactTabs: Bool {
-        tabs.filter(\.isCloseable).count > Self.compactTabThreshold
+        model.tabs.filter(\.isCloseable).count > Self.compactTabThreshold
     }
 
     private func tabLabel(_ tab: WorkspaceTab) -> String? {
@@ -1179,7 +1172,7 @@ struct TerminalContainerView: View {
 
     private func closeableTabShortcut(_ tab: WorkspaceTab) -> String? {
         guard tab.isCloseable,
-              let idx = tabs.firstIndex(of: tab),
+              let idx = model.tabs.firstIndex(of: tab),
               idx < 9 else { return nil }
         return "\(idx + 1)"
     }
@@ -1207,22 +1200,14 @@ struct TerminalContainerView: View {
     }
 
     private func addTerminal() {
-        terminalCount += 1
-        let id = derivedUUID(from: workstreamID, salt: "terminal-\(terminalCount)")
-        let tab = WorkspaceTab.terminal(id)
-        tabs.append(tab)
-        activeTab = tab
+        _ = model.addTerminal()
         saveTabSnapshot()
         Telemetry.shared.track("tab_opened", url: "/tab/terminal", title: "Terminal Tab", data: ["kind": "terminal"])
     }
 
     private func addBrowser() {
         startRunIfNeeded()
-        browserCount += 1
-        let id = derivedUUID(from: workstreamID, salt: "browser-\(browserCount)")
-        let tab = WorkspaceTab.browser(id)
-        tabs.append(tab)
-        activeTab = tab
+        _ = model.addBrowser()
         saveTabSnapshot()
         Telemetry.shared.track("tab_opened", url: "/tab/browser", title: "Browser Tab", data: ["kind": "browser"])
     }
@@ -1236,7 +1221,7 @@ struct TerminalContainerView: View {
         guard setupGateState != .awaitingApproval else { return }
         guard portDetector.status == .none else { return }
         if runCommandIsGated, !scriptsApproved { return }
-        if runStarted { stopRun() }
+        if model.runStarted { stopRun() }
         doStartRun()
     }
 
@@ -1247,10 +1232,10 @@ struct TerminalContainerView: View {
         guard let command = resolvedRunCommand else { return }
         killRunTmuxSession()
         surfaceCache.removeSurface(for: runID)
-        runStoppedManually = false
+        model.runStoppedManually = false
         runGeneration += 1
         runCommandString = buildRunCommand(script: command)
-        runStarted = true
+        model.runStarted = true
         markBrowserStartPending()
         preloadRunSurface()
         saveTabSnapshot()
@@ -1265,8 +1250,8 @@ struct TerminalContainerView: View {
     private func stopRun() {
         killRunTmuxSession()
         surfaceCache.removeSurface(for: runID)
-        runStoppedManually = true
-        runStarted = false
+        model.runStoppedManually = true
+        model.runStarted = false
         browserStartPending = false
         runCommandString = nil
         runGeneration += 1
@@ -1277,13 +1262,13 @@ struct TerminalContainerView: View {
         guard resolvedRunCommand != nil else { return }
         killRunTmuxSession()
         surfaceCache.removeSurface(for: runID)
-        runStoppedManually = false
+        model.runStoppedManually = false
         markBrowserStartPending()
         runGeneration += 1
         if let command = resolvedRunCommand {
             runCommandString = buildRunCommand(script: command)
         }
-        runStarted = true
+        model.runStarted = true
         preloadRunSurface()
         saveTabSnapshot()
     }
@@ -1373,20 +1358,13 @@ struct TerminalContainerView: View {
 
     /// Activate the always-present Changes tab.
     private func addChanges() {
-        activeTab = .changes
+        model.activateChanges()
     }
 
     private func addEditor(filePath: String? = nil) {
         // Create bridge before adding the tab — never during body evaluation
         createEditorBridgeIfNeeded()
-        editorCount += 1
-        let id = derivedUUID(from: workstreamID, salt: "editor-\(editorCount)")
-        if let filePath {
-            editorFilePaths[id] = filePath
-        }
-        let tab = WorkspaceTab.editor(id)
-        tabs.append(tab)
-        activeTab = tab
+        _ = model.addEditor(filePath: filePath)
         startFileTreeWatcherIfNeeded()
         saveTabSnapshot()
         Telemetry.shared.track("tab_opened", url: "/tab/editor", title: "Editor Tab", data: ["kind": "editor"])
@@ -1443,8 +1421,7 @@ struct TerminalContainerView: View {
     }
 
     private func stopFileTreeWatcherIfUnneeded() {
-        let hasEditorTabs = tabs.contains { if case .editor = $0 { return true } else { return false } }
-        if !hasEditorTabs {
+        if !model.hasEditorTabs {
             refreshGeneration += 1
             directoryWatcher?.stop()
             directoryWatcher = nil
@@ -1460,7 +1437,7 @@ struct TerminalContainerView: View {
         bridge.onContentChanged = { [self] modelId, dirty in
             if let uuid = UUID(uuidString: modelId) {
                 editorDirtyState[uuid] = dirty
-                if case .editor(uuid) = activeTab {
+                if case .editor(uuid) = model.activeTab {
                     editorFileDirty = dirty
                 }
             }
@@ -1525,21 +1502,21 @@ struct TerminalContainerView: View {
     }
 
     private func forceCloseTab(_ tab: WorkspaceTab) {
-        guard let index = tabs.firstIndex(of: tab) else { return }
-        tabs.remove(at: index)
-        // Clean up cached views
+        // The model drops the tab and moves the selection to a neighbour; the
+        // view is left to tear down the resources the tab was holding.
+        guard model.removeTab(tab) else { return }
+
         switch tab {
         case let .terminal(id):
             surfaceCache.removeSurface(for: id)
         case let .browser(id):
             surfaceCache.removeWebView(for: id)
             // The browser tab owns the dev server: closing the last one stops it.
-            let hasBrowserTabs = tabs.contains { tab in
-                if case .browser = tab { return true }
-                return false
-            }
-            if !hasBrowserTabs { stopRun() }
+            if !model.hasBrowserTabs { stopRun() }
         case let .editor(id):
+            // The view still keeps its own copies of these two until Task 4
+            // folds them into the model; `model.removeTab` already cleared the
+            // model's.
             editorFilePaths.removeValue(forKey: id)
             editorDirtyState.removeValue(forKey: id)
             editorBridge?.closeModel(modelId: id.uuidString)
@@ -1547,27 +1524,11 @@ struct TerminalContainerView: View {
             break
         }
         stopFileTreeWatcherIfUnneeded()
-        // Switch to previous tab or agent
-        if activeTab == tab {
-            let newIndex = min(index, tabs.count - 1)
-            activeTab = tabs[newIndex]
-        }
         saveTabSnapshot()
     }
 
     private func currentTabSnapshot() -> WorkspaceTabSnapshot {
-        WorkspaceTabSnapshot(
-            tabs: tabs,
-            terminalCount: terminalCount,
-            browserCount: browserCount,
-            editorCount: editorCount,
-            activeTab: activeTab,
-            browserTitles: browserTitles,
-            terminalTitles: terminalTitles,
-            editorFilePaths: editorFilePaths,
-            runStarted: runStarted,
-            runStoppedManually: runStoppedManually
-        )
+        model.snapshot()
     }
 
     private func saveTabSnapshot() {
@@ -1576,7 +1537,7 @@ struct TerminalContainerView: View {
 
     private func moveCustomTab(to targetTab: WorkspaceTab) {
         guard let currentDraggedTab = draggedCustomTab else { return }
-        tabs = reorderedCustomTabs(tabs, dragging: currentDraggedTab, to: targetTab)
+        model.moveTab(dragging: currentDraggedTab, to: targetTab)
         draggedCustomTab = nil
     }
 
