@@ -111,9 +111,6 @@
   `process.env.ATELIER_SURFACE_ID` and get per-surface attribution for free. Not
   done because opencode agents cannot register peers yet — the MCP config is
   Claude Code only — so the code would be unexercisable.
-- **The nudge is unexercised.** `AgentNudge.shouldNudge` is tested; the injection
-  path (`sendText` + two-stage synthetic Return) needs a live surface and has
-  only been reasoned about. Watch the first real delivery.
 - **`IPCStore.isAlive` is O(peers x messages) for expired peers.** The TTL check
   returns first, so the inbox scan only runs for peers already past their TTL —
   unreachable at this scale. If IPC is ever reused for something busier, keep a
