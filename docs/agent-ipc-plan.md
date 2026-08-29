@@ -263,3 +263,12 @@ reviewers endorsed the design and the rejection of a timed settle window.
 One reported residual was checked and is not real: U+2028/U+2029 do not survive
 `IPCNames.sanitized` — they are in `CharacterSet.newlines`, confirmed by running
 the shipped function against them.
+
+**Scoping is advisory, not enforced.** Worth stating plainly, since a reviewer
+raised it: `ipc.json` is mode 0600 but readable by anything running as the user,
+and every agent has shell access. Project scoping and surface attribution rest
+on environment variables the caller asserts, so they hold only against an agent
+that stays on the MCP tool surface. The connection-level peer ownership in
+`IPCServer` is the one guard that does not depend on the caller being honest.
+That is as far as this architecture goes, and the token's doc comment already
+says the token is not a boundary against the agent either.

@@ -19,17 +19,30 @@ enum IPCNames {
         return set
     }()
 
+    /// Cleans a name and caps it at `limit` *characters*, not scalars.
+    ///
+    /// Counting graphemes matters at the boundary: cutting mid-cluster can
+    /// strand a combining mark or a joiner that then attaches to whatever the
+    /// template puts next, so a name can smear into the surrounding text.
     static func sanitized(_ raw: String, limit: Int, fallback: String) -> String {
-        var scalars = String.UnicodeScalarView()
-        for scalar in raw.unicodeScalars where !forbidden.contains(scalar) {
-            // Any other flavour of space becomes a plain one. A no-break space
-            // is harmless in a terminal but invisible in a roster, so without
-            // this two peers can be given names that render identically and an
-            // agent picking one out of `list_peers` has nothing to go on.
-            scalars.append(CharacterSet.whitespaces.contains(scalar) ? " " : scalar)
-            if scalars.count >= limit { break }
+        var result = ""
+        for character in raw {
+            var scalars = String.UnicodeScalarView()
+            for scalar in character.unicodeScalars where !forbidden.contains(scalar) {
+                // Any other flavour of space becomes a plain one. A no-break
+                // space is harmless in a terminal but invisible in a roster, so
+                // without this two peers can be given names that render
+                // identically and an agent picking one out of `list_peers` has
+                // nothing to go on.
+                scalars.append(CharacterSet.whitespaces.contains(scalar) ? " " : scalar)
+            }
+            guard !scalars.isEmpty else { continue }
+
+            result += String(scalars)
+            if result.count >= limit { break }
         }
-        let cleaned = String(scalars).trimmingCharacters(in: .whitespaces)
+
+        let cleaned = result.trimmingCharacters(in: .whitespaces)
         return cleaned.isEmpty ? fallback : cleaned
     }
 }

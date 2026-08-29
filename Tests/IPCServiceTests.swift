@@ -185,6 +185,18 @@ final class IPCServiceTests: XCTestCase {
         XCTAssertEqual(peer.name, "planner two")
     }
 
+    func test_registerPeer_capsTheNameOnACharacterBoundary() async throws {
+        // 39 plain characters then a combining acute. Cutting by scalar could
+        // keep the "e" and drop its accent, or strand the accent so it attaches
+        // to whatever follows the name; cutting by character cannot.
+        let name = String(repeating: "a", count: 39) + "e\u{0301}"
+        let response = await call(.registerPeer, ["name": name], as: client(project: projectA))
+        guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
+
+        XCTAssertEqual(peer.name.count, 40)
+        XCTAssertTrue(peer.name.hasSuffix("é"), "the accent must travel with its letter, got: \(peer.name)")
+    }
+
     func test_registerPeer_capsTheName() async throws {
         let response = await call(.registerPeer, ["name": String(repeating: "a", count: 200)], as: client(project: projectA))
         guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }

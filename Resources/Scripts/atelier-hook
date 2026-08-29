@@ -12,6 +12,10 @@ PORT=$(cat "$PORT_FILE")
 # silently break every hook event from that project — and a lost event is the
 # unsafe direction: it can leave an agent's state reading "finished" while it
 # works.
+# Control bytes are deleted rather than escaped as \uXXXX: no filesystem path
+# legitimately contains one, and the sed gymnastics to emit unicode escapes are
+# not worth carrying. INPUT is interpolated raw on purpose — it is the harness's
+# own JSON, not a string being embedded in one.
 escape_json() {
   printf '%s' "$1" | tr -d '\000-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
 }

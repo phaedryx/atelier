@@ -148,17 +148,25 @@ final class IPCServer: @unchecked Sendable {
             var accumulated = buffer
             if let data { accumulated.append(data) }
 
-            let (lines, remainder) = IPCFraming.lines(from: accumulated)
-            for line in lines {
-                self.handle(line: line, on: connection)
-            }
-
-            if isComplete || error != nil {
+            // Checked before splitting, on everything held rather than on the
+            // unterminated tail: a newline arriving in the same chunk as a huge
+            // frame would otherwise let one read overshoot the cap.
+            guard accumulated.count <= Self.maxFrameBytes else {
+                logger.warning("IPC frame exceeded \(Self.maxFrameBytes) bytes; closing the connection")
                 connection.cancel()
                 return
             }
-            guard remainder.count <= Self.maxFrameBytes else {
-                logger.warning("IPC frame exceeded \(Self.maxFrameBytes) bytes; closing the connection")
+
+            let (lines, remainder) = IPCFraming.lines(from: accumulated)
+            for line in lines {
+                // A line that hangs up the connection ends the batch. The rest
+                // of this read belongs to a socket that is already closing, and
+                // acting on it would bind peers to a connection whose `forget`
+                // has not run yet.
+                guard self.handle(line: line, on: connection) else { return }
+            }
+
+            if isComplete || error != nil {
                 connection.cancel()
                 return
             }
@@ -166,7 +174,10 @@ final class IPCServer: @unchecked Sendable {
         }
     }
 
-    private func handle(line: Data, on connection: NWConnection) {
+    /// Returns false when this line closed the connection, so the caller stops
+    /// processing whatever else arrived in the same read.
+    @discardableResult
+    private func handle(line: Data, on connection: NWConnection) -> Bool {
         guard let request = try? JSONDecoder().decode(IPCRequest.self, from: line) else {
             // Never silently drop: the caller is blocked on a reply it will
             // never get. Hanging up gives the helper a clean reconnect instead
@@ -174,18 +185,18 @@ final class IPCServer: @unchecked Sendable {
             // and an upgraded app looks like.
             logger.warning("Unparseable IPC request; closing the connection")
             connection.cancel()
-            return
+            return false
         }
         guard constantTimeEquals(request.token, token) else {
             logger.warning("Rejected an IPC request with a bad token")
             send(.failure(id: request.id, "Unauthorized."), on: connection)
-            return
+            return true
         }
 
         guard claim(request.client.peerID, for: connection) else {
             logger.warning("Rejected a request claiming a peer owned by a live connection")
             send(.failure(id: request.id, "That peer id belongs to another session."), on: connection)
-            return
+            return true
         }
 
         let service = service
@@ -199,6 +210,7 @@ final class IPCServer: @unchecked Sendable {
             }
             self?.send(response, on: connection)
         }
+        return true
     }
 
     /// Binds a peer to this connection, or refuses if a live connection already
