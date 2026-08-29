@@ -114,6 +114,14 @@
 - **The nudge is unexercised.** `AgentNudge.shouldNudge` is tested; the injection
   path (`sendText` + two-stage synthetic Return) needs a live surface and has
   only been reasoned about. Watch the first real delivery.
+- **`IPCStore.isAlive` is O(peers x messages) for expired peers.** The TTL check
+  returns first, so the inbox scan only runs for peers already past their TTL —
+  unreachable at this scale. If IPC is ever reused for something busier, keep a
+  set of peers pinned by in-flight messages instead of scanning inboxes.
+- **The helper's socket timeout is not covered by a test.** `SO_RCVTIMEO` needs a
+  listener that accepts and never answers, and asserting it costs the full
+  timeout in suite time. Verified by reasoning and by the unparseable-frame path
+  that shares the recovery code.
 - **Cross-project messaging.** Peers are scoped to the caller's project with no
   way to opt out. If that ever becomes a real need, it wants its own louder
   switch, not a widening of `atelier.agentIPC`.

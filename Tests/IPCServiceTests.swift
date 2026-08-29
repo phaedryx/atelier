@@ -160,6 +160,31 @@ final class IPCServiceTests: XCTestCase {
         XCTAssertTrue(none.isEmpty)
     }
 
+    // MARK: - Sanitization
+
+    func test_registerPeer_stripsWhatWouldBeTypedIntoAnotherTerminal() async throws {
+        let hostile = "planner\u{1B}[31m\nrm -rf /\u{3}"
+        let response = await call(.registerPeer, ["name": hostile, "role": "writes\nplans"], as: client(project: projectA))
+        guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
+
+        XCTAssertFalse(peer.name.contains("\n"), "a newline plus the nudge's Returns submits a second line")
+        XCTAssertFalse(peer.name.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) }, "ESC and Ctrl-C must not survive")
+        XCTAssertEqual(peer.name, "planner[31mrm -rf /")
+        XCTAssertFalse(peer.role.contains("\n"))
+    }
+
+    func test_registerPeer_capsTheName() async throws {
+        let response = await call(.registerPeer, ["name": String(repeating: "a", count: 200)], as: client(project: projectA))
+        guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
+        XCTAssertEqual(peer.name.count, 40)
+    }
+
+    func test_registerPeer_aNameOfNothingButControlCharacters_fallsBack() async throws {
+        let response = await call(.registerPeer, ["name": "\u{1B}\u{3}"], as: client(project: projectA))
+        guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
+        XCTAssertEqual(peer.name, "agent")
+    }
+
     // MARK: - Surface identity
 
     func test_registerPeer_recordsTheSurfaceTheAgentRunsIn() async throws {
@@ -213,6 +238,15 @@ final class IPCServiceTests: XCTestCase {
 
         let context = await service._testContext(for: try XCTUnwrap(UUID(uuidString: peer.id)))
         XCTAssertNil(context?.surfaceID, "an agent Atelier did not launch has nowhere to be nudged")
+    }
+
+    func test_peersWithoutAProject_cannotSeeEachOther() async throws {
+        let mine = try await register(name: "mine", project: nil)
+        _ = try await register(name: "stranger", project: nil)
+
+        // "Same project" must mean a project, not two peers that both lack one.
+        let listed = try peers(of: await call(.listPeers, as: client(project: nil, peerID: mine)))
+        XCTAssertTrue(listed.isEmpty)
     }
 
     // MARK: - Liveness

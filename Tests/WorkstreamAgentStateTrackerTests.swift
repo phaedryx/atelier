@@ -731,4 +731,31 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         handle(fromSurface(pane, .idle(agentId: "main")))
         XCTAssertEqual(tracker.state(for: wsID), .needsAttention(.justFinished), "the sidebar's signal must not change")
     }
+
+    func test_surfaceState_toolActivityMeansWorking() {
+        let pane = UUID()
+        handle(fromSurface(pane, .idle(agentId: "main")))
+        XCTAssertEqual(tracker.state(forSurface: pane), .idle)
+
+        // A dropped turn-start would otherwise leave this reading .idle for the
+        // whole turn; a running tool is proof the agent is busy.
+        handle(fromSurface(pane, .toolStart(agentId: "main", tool: "Bash")))
+        XCTAssertEqual(tracker.state(forSurface: pane), .working)
+    }
+
+    func test_clearSurface_dropsOnlyThatSurface() {
+        let paneA = UUID()
+        let paneB = UUID()
+        handle(fromSurface(paneA, .idle(agentId: "main")))
+        handle(fromSurface(paneB, .idle(agentId: "main")))
+
+        tracker.clear(surfaceID: paneA)
+        XCTAssertNil(tracker.state(forSurface: paneA))
+        XCTAssertEqual(tracker.state(forSurface: paneB), .idle)
+    }
+
+    func test_reportedState_isNilBeforeAnyEvent() {
+        XCTAssertNil(tracker.reportedState(for: UUID()))
+        XCTAssertEqual(tracker.state(for: UUID()), .idle, "the sidebar default is unchanged")
+    }
 }

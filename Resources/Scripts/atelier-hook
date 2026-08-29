@@ -6,8 +6,20 @@ INPUT=$(cat)
 PORT_FILE="$HOME/Library/Caches/atelier/hook-port"
 [ -f "$PORT_FILE" ] || exit 0
 PORT=$(cat "$PORT_FILE")
+
+# Both values are interpolated into a JSON string, and a project path may
+# legitimately contain a quote or a backslash. Unescaped, one such path would
+# silently break every hook event from that project — and a lost event is the
+# unsafe direction: it can leave an agent's state reading "finished" while it
+# works.
+escape_json() {
+  printf '%s' "$1" | tr -d '\000-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+PROJECT_DIR=$(escape_json "$CLAUDE_PROJECT_DIR")
+SURFACE_ID=$(escape_json "$ATELIER_SURFACE_ID")
+
 curl -s -X POST "http://127.0.0.1:${PORT}/hook" \
   -H "Content-Type: application/json" \
-  -d "{\"event_input\": ${INPUT}, \"project_dir\": \"${CLAUDE_PROJECT_DIR}\", \"surface_id\": \"${ATELIER_SURFACE_ID}\"}" \
+  -d "{\"event_input\": ${INPUT}, \"project_dir\": \"${PROJECT_DIR}\", \"surface_id\": \"${SURFACE_ID}\"}" \
   --max-time 1 -o /dev/null 2>/dev/null
 exit 0

@@ -43,6 +43,11 @@ workstream signal for exactly one surface — the Coding Agent tab, whose id *is
 the workstream id, so that signal is by construction a statement about that pane.
 Every other surface needs positive evidence or gets no nudge.
 
+The fallback reads `reportedState(for:)`, not `state(for:)`. The latter defaults
+to `.idle` so a sidebar row has something to draw, and acting on that default
+would treat "no hook has ever arrived" — hooks not installed, or failing — as
+"the agent finished its turn".
+
 ### 2. The "no HTTP surface" argument is already spent (spec §"Why not an in-app HTTP MCP server")
 
 `HookEventReceiver` is already an `NWListener` on `127.0.0.1:<ephemeral>` speaking
@@ -131,3 +136,56 @@ its turn, and watch what lands.
 Steps 1–4 give a working IPC whose worst failure mode is an unread message.
 Step 6 is the only one that can inject text into another agent's session, and it
 is correctly last.
+
+---
+
+## Hardening after review
+
+An independent multi-agent review of the branch found five real defects, all in
+the newest code and all now fixed. Recorded here because three of them
+contradicted claims this document or the source comments made.
+
+**Agent-chosen names were typed into other agents' terminals unfiltered.**
+`register_peer` takes a name from the calling agent and the nudge types it into a
+*different* agent's pane, followed by synthetic Returns. A newline made that two
+submitted lines; `ESC` opened an escape sequence; `\u{3}` was Ctrl-C to whatever
+held the foreground. In a pane running `--dangerously-skip-permissions` that is
+cross-agent command injection. `IPCNames.sanitized` now strips control
+characters, newlines and illegal scalars and caps length, at registration and
+again at the typing boundary.
+
+**"No evidence" read as idle.** `state(for:)` defaults to `.idle`; the nudge's
+Agent-tab fallback therefore treated a workstream whose hooks never arrived as
+one that had finished its turn. It now takes `reportedState(for:)`, which is nil
+until something reports.
+
+**A retired peer left its surface reporting a finished turn.** Nothing cleared
+`surfaceStates` when a peer was released, so a nudge arriving afterwards would
+type into a pane whose agent had gone. `release(peerID:)` now clears it. The
+window is not zero — the service hops to the main actor to nudge, and a release
+can land during that hop — but what remains is the Coding Agent surface, which
+respawns its agent on exit, so the pane is an agent prompt rather than a shell.
+
+**A dropped turn-start left a surface idle for the whole turn.** Hook delivery is
+a one-second `curl` that fails silently. Tool activity now sets the surface to
+`.working` outright, so any tool call recovers the state. (A timed "settle
+window" was proposed and rejected: a stale `.idle` stays stale however long you
+wait, so it would suppress legitimate notices without addressing the failure.)
+
+**Peer identity was caller-asserted.** Any agent could claim another's peer id —
+speaking as it, retiring it by hanging up, or keeping it alive. The server now
+binds a peer to the connection that claims it and refuses a claim while the
+owning connection is live. Ownership transfers freely once that connection is
+gone, which is what keeps the helper's reconnect working.
+
+Also: a 1 MB frame cap and a hang-up on unparseable frames, so a client cannot
+grow the app without bound or leave a caller waiting for a reply that will never
+come; `SO_RCVTIMEO`/`SO_SNDTIMEO` on the helper socket, so a stuck app cannot
+hang an agent's tool call; JSON escaping in `atelier-hook`, since a project path
+containing a quote silently broke every hook event from that project; and
+`isVisible` now requires a project rather than treating two peers that both lack
+one as colleagues.
+
+Rejected from the review: rebuilding the agent command when the IPC setting is
+toggled. That would respawn a running agent mid-session; the setting already says
+it takes effect at the next Coding Agent start.

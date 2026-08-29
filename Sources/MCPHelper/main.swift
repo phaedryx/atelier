@@ -42,6 +42,14 @@ final class IPCTransport {
             return false
         }
 
+        // Without a receive timeout a stuck app hangs the agent's tool call
+        // forever: no reply, no close, and a blocking recv. Generous, since
+        // every handler here is sub-millisecond — this is a liveness backstop,
+        // not a latency budget.
+        var timeout = timeval(tv_sec: 15, tv_usec: 0)
+        setsockopt(socketFD, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        setsockopt(socketFD, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+
         fd = socketFD
         return true
     }
@@ -70,6 +78,9 @@ final class IPCTransport {
 
             var chunk = [UInt8](repeating: 0, count: 65_536)
             let read = recv(fd, &chunk, chunk.count, 0)
+            // 0 is a closed socket; -1 with EAGAIN is the timeout above. Both
+            // mean "no answer is coming", which the caller turns into a
+            // reconnect rather than a hang.
             guard read > 0 else { return nil }
             buffer.append(contentsOf: chunk[0 ..< read])
         }

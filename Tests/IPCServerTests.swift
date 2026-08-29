@@ -171,6 +171,124 @@ final class IPCServerTests: XCTestCase {
         XCTAssertTrue(listed.isEmpty, "a peer whose helper exited must not linger for the rest of its TTL")
     }
 
+    // MARK: - Peer ownership
+
+    /// Reads from `fd` until it closes or the deadline passes; true if the
+    /// server hung up.
+    private func waitForClose(_ fd: Int32, timeout: TimeInterval = 5) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        var chunk = [UInt8](repeating: 0, count: 4096)
+        while Date() < deadline {
+            let read = recv(fd, &chunk, chunk.count, MSG_DONTWAIT)
+            if read == 0 { return true }
+            if read < 0, errno != EAGAIN, errno != EWOULDBLOCK { return true }
+            usleep(20_000)
+        }
+        return false
+    }
+
+    private func sendRaw(_ data: Data, on fd: Int32) {
+        var sent = 0
+        while sent < data.count {
+            let written = data.withUnsafeBytes { bytes -> Int in
+                Darwin.send(fd, bytes.baseAddress!.advanced(by: sent), data.count - sent, 0)
+            }
+            guard written > 0 else { return }
+            sent += written
+        }
+    }
+
+    func test_aPeerCannotBeClaimedByAnotherLiveConnection() throws {
+        let endpoint = try waitForEndpoint()
+
+        let owner = try connect(to: endpoint)
+        defer { close(owner) }
+        let registration = try roundTrip(
+            IPCRequest(token: endpoint.token, tool: .registerPeer, arguments: ["name": "owner"], client: identity(project: "/repos/atelier")),
+            on: owner
+        )
+        guard case let .peer(peer) = registration.payload else { return XCTFail("expected a peer") }
+
+        // A second agent claims the first agent's identity. Allowing it would
+        // let anyone speak as anyone, retire a peer by hanging up, or keep a
+        // dead one alive.
+        let impostor = try connect(to: endpoint)
+        defer { close(impostor) }
+        var stolen = identity(project: "/repos/atelier")
+        stolen = IPCClientIdentity(
+            workstreamID: stolen.workstreamID,
+            workstreamName: stolen.workstreamName,
+            projectDirectory: stolen.projectDirectory,
+            surfaceID: stolen.surfaceID,
+            peerID: peer.id
+        )
+        let response = try roundTrip(
+            IPCRequest(token: endpoint.token, tool: .listPeers, client: stolen),
+            on: impostor
+        )
+        XCTAssertEqual(response.error, "That peer id belongs to another session.")
+    }
+
+    func test_aPeerCanBeReclaimedOnceItsConnectionIsGone() throws {
+        let endpoint = try waitForEndpoint()
+
+        let first = try connect(to: endpoint)
+        let registration = try roundTrip(
+            IPCRequest(token: endpoint.token, tool: .registerPeer, arguments: ["name": "reconnector"], client: identity(project: "/repos/atelier")),
+            on: first
+        )
+        guard case let .peer(peer) = registration.payload else { return XCTFail("expected a peer") }
+        close(first)
+
+        // The helper's reconnect path: same peer id, new socket. Ownership has
+        // to transfer, or the fix for impersonation would lock out the fix for
+        // restarts.
+        let deadline = Date().addingTimeInterval(5)
+        var accepted = false
+        while Date() < deadline, !accepted {
+            let second = try connect(to: endpoint)
+            defer { close(second) }
+            var returning = identity(project: "/repos/atelier")
+            returning = IPCClientIdentity(
+                workstreamID: returning.workstreamID,
+                workstreamName: returning.workstreamName,
+                projectDirectory: returning.projectDirectory,
+                surfaceID: returning.surfaceID,
+                peerID: peer.id
+            )
+            let response = try roundTrip(
+                IPCRequest(token: endpoint.token, tool: .registerPeer, arguments: ["name": "reconnector"], client: returning),
+                on: second
+            )
+            accepted = response.error == nil
+            if !accepted { usleep(50_000) }
+        }
+        XCTAssertTrue(accepted, "a returning helper must be able to reclaim its own peer")
+    }
+
+    // MARK: - Hostile input
+
+    func test_anUnparseableFrame_closesTheConnection() throws {
+        let endpoint = try waitForEndpoint()
+        let fd = try connect(to: endpoint)
+        defer { close(fd) }
+
+        // Dropping it silently would leave the caller blocked on a reply that
+        // never comes — what version skew between helper and app looks like.
+        sendRaw(Data("not json at all\n".utf8), on: fd)
+        XCTAssertTrue(waitForClose(fd), "the server should hang up rather than leave the caller waiting")
+    }
+
+    func test_anEndlessFrame_closesTheConnection() throws {
+        let endpoint = try waitForEndpoint()
+        let fd = try connect(to: endpoint)
+        defer { close(fd) }
+
+        // No newline, ever: without a cap the app buffers until it dies.
+        sendRaw(Data(repeating: UInt8(ascii: "a"), count: 1_200_000), on: fd)
+        XCTAssertTrue(waitForClose(fd), "an oversized frame should be cut off")
+    }
+
     // MARK: - End to end
 
     /// Two helper processes, two registered peers, one message between them —
@@ -276,7 +394,7 @@ final class IPCServerTests: XCTestCase {
         var environment = ProcessInfo.processInfo.environment
         environment["ATELIER_PROJECT_DIR"] = "/repos/atelier"
         environment["ATELIER_WORKSTREAM"] = "sly-cobalt-parser"
-        environment["ATELIER_AGENT_SURFACE"] = "1"
+        environment["ATELIER_SURFACE_ID"] = UUID().uuidString
         process.environment = environment
 
         let input = Pipe()

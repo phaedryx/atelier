@@ -23,6 +23,15 @@ final class IPCServer: @unchecked Sendable {
     private var connections: [ObjectIdentifier: NWConnection] = [:]
     /// The peer each connection last spoke for, so closing the socket can retire it.
     private var connectionPeers: [ObjectIdentifier: UUID] = [:]
+    /// Which connection owns each peer. A request may only act as a peer whose
+    /// owning connection is gone — otherwise one agent could speak as another,
+    /// retire it by hanging up, or keep it alive indefinitely.
+    private var peerOwners: [UUID: ObjectIdentifier] = [:]
+
+    /// Largest frame the listener will buffer before hanging up. Generous next
+    /// to the store's 64KB message cap; the point is that a client cannot make
+    /// the app grow without bound by never sending a newline.
+    private static let maxFrameBytes = 1_048_576
     private var token: String = ""
 
     init(service: IPCService = .shared) {
@@ -47,6 +56,7 @@ final class IPCServer: @unchecked Sendable {
             }
             self.connections.removeAll()
             self.connectionPeers.removeAll()
+            self.peerOwners.removeAll()
             try? FileManager.default.removeItem(at: IPCEndpoint.fileURL)
         }
     }
@@ -137,13 +147,23 @@ final class IPCServer: @unchecked Sendable {
                 connection.cancel()
                 return
             }
+            guard remainder.count <= Self.maxFrameBytes else {
+                logger.warning("IPC frame exceeded \(Self.maxFrameBytes) bytes; closing the connection")
+                connection.cancel()
+                return
+            }
             self.receive(on: connection, buffer: remainder)
         }
     }
 
     private func handle(line: Data, on connection: NWConnection) {
         guard let request = try? JSONDecoder().decode(IPCRequest.self, from: line) else {
-            logger.warning("Discarded an unparseable IPC request")
+            // Never silently drop: the caller is blocked on a reply it will
+            // never get. Hanging up gives the helper a clean reconnect instead
+            // of a hang, which is what version skew between a running helper
+            // and an upgraded app looks like.
+            logger.warning("Unparseable IPC request; closing the connection")
+            connection.cancel()
             return
         }
         guard constantTimeEquals(request.token, token) else {
@@ -152,7 +172,11 @@ final class IPCServer: @unchecked Sendable {
             return
         }
 
-        remember(request.client.peerID, on: connection)
+        guard claim(request.client.peerID, for: connection) else {
+            logger.warning("Rejected a request claiming a peer owned by a live connection")
+            send(.failure(id: request.id, "That peer id belongs to another session."), on: connection)
+            return
+        }
 
         let service = service
         Task { [weak self] in
@@ -161,15 +185,33 @@ final class IPCServer: @unchecked Sendable {
             // rather than the request, and an agent that registers and then
             // exits is exactly the case that would otherwise leave a ghost.
             if case let .peer(peer) = response.payload {
-                self?.queue.async { self?.remember(peer.id, on: connection) }
+                self?.queue.async { _ = self?.claim(peer.id, for: connection) }
             }
             self?.send(response, on: connection)
         }
     }
 
-    private func remember(_ peerID: String?, on connection: NWConnection) {
-        guard let peerID = peerID.flatMap(UUID.init(uuidString:)) else { return }
-        connectionPeers[ObjectIdentifier(connection)] = peerID
+    /// Binds a peer to this connection, or refuses if a live connection already
+    /// owns it.
+    ///
+    /// Ownership transfers freely once the previous owner is gone, which is what
+    /// makes the helper's reconnect work: it comes back on a new socket carrying
+    /// the peer id from before, and the dead connection no longer holds a claim.
+    /// Gating on the owner still being live — rather than on a claim merely
+    /// existing — is the difference between this and a lockout.
+    private func claim(_ peerID: String?, for connection: NWConnection) -> Bool {
+        guard let peerID = peerID.flatMap(UUID.init(uuidString:)) else { return true }
+        let key = ObjectIdentifier(connection)
+
+        // A reply can land after its connection died; nothing to bind it to.
+        guard connections[key] != nil else { return false }
+        if let owner = peerOwners[peerID], owner != key, connections[owner] != nil {
+            return false
+        }
+
+        peerOwners[peerID] = key
+        connectionPeers[key] = peerID
+        return true
     }
 
     /// Retires the connection and the peer it spoke for: an agent whose helper
@@ -179,6 +221,14 @@ final class IPCServer: @unchecked Sendable {
         let key = ObjectIdentifier(connection)
         connections.removeValue(forKey: key)
         guard let peerID = connectionPeers.removeValue(forKey: key) else { return }
+
+        // Only retire a peer this connection still owns. A helper that dropped
+        // and reconnected has already claimed it on the new socket, and the old
+        // socket's close — which can arrive afterwards under load — must not
+        // take the live session down with it.
+        guard peerOwners[peerID] == key else { return }
+        peerOwners.removeValue(forKey: peerID)
+
         let service = service
         Task { await service.release(peerID: peerID) }
     }

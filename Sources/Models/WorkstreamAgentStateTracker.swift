@@ -119,6 +119,16 @@ final class WorkstreamAgentStateTracker: ObservableObject {
         states[id] ?? .idle
     }
 
+    /// The workstream's turn state only when something has actually reported it.
+    ///
+    /// `state(for:)` above defaults to `.idle` so a sidebar row has something to
+    /// draw. That default is wrong for anything that acts on the state: it makes
+    /// "no hook has ever arrived" — hooks not installed, or failing — read as
+    /// "the agent finished its turn".
+    func reportedState(for id: UUID) -> AgentRunState? {
+        states[id]
+    }
+
     /// Turn state of one terminal surface, or nil if no agent has ever reported
     /// from it. Nil is meaningful: it means there is no evidence about this
     /// pane, not that the pane is idle.
@@ -173,6 +183,14 @@ final class WorkstreamAgentStateTracker: ObservableObject {
             surfaceStates.removeValue(forKey: surface)
             surfaceWorkstream.removeValue(forKey: surface)
         }
+    }
+
+    /// Drops one surface's turn state, called when the agent occupying it goes
+    /// away. Without this a surface keeps whatever it last reported — typically
+    /// `.idle` — and anything consulting it later acts on a dead agent's state.
+    func clear(surfaceID: UUID) {
+        surfaceStates.removeValue(forKey: surfaceID)
+        surfaceWorkstream.removeValue(forKey: surfaceID)
     }
 
     /// Clears every tracked state. Used by tests to isolate cases.
@@ -436,9 +454,14 @@ final class WorkstreamAgentStateTracker: ObservableObject {
             }
 
         case .agentToolStart, .agentToolDone:
-            if case .needsAttention(.permission) = surfaceStates[surfaceID] {
-                surfaceStates[surfaceID] = .working
-            }
+            // A running tool is proof of an active turn, so this sets .working
+            // outright rather than only clearing a permission prompt the way
+            // `updateMainState` does. That difference is deliberate: hook
+            // delivery is a one-second curl that fails silently, and a dropped
+            // turn-start would otherwise leave the surface reading .idle for the
+            // rest of the turn. Any tool call recovers it. The sidebar keeps its
+            // no-flicker behaviour; only this per-surface state changes.
+            surfaceStates[surfaceID] = .working
 
         case .agentCreated, .agentRemoved, .agentInfo:
             break

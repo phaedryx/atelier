@@ -74,7 +74,7 @@ final class AgentNudge {
     /// else is running in the worktree, so no evidence means no nudge.
     static func resolveState(
         surfaceState: WorkstreamAgentStateTracker.AgentRunState?,
-        workstreamState: @autoclosure () -> WorkstreamAgentStateTracker.AgentRunState,
+        workstreamState: @autoclosure () -> WorkstreamAgentStateTracker.AgentRunState?,
         surfaceID: UUID,
         workstreamID: UUID
     ) -> WorkstreamAgentStateTracker.AgentRunState? {
@@ -82,17 +82,24 @@ final class AgentNudge {
         return surfaceID == workstreamID ? workstreamState() : nil
     }
 
-    /// Types a one-line notice into the surface the recipient occupies, if the
-    /// workstream reports that a turn has ended.
+    /// Types a one-line notice into the surface the recipient occupies, if that
+    /// surface reports a turn has ended.
     ///
-    /// A peer whose helper has exited is already gone from the store by the time
-    /// this runs — the socket closing retires it — so this cannot type into a
-    /// tab whose agent has quit and left a shell at the prompt.
+    /// **On typing into a pane whose agent has quit.** Retiring a peer clears
+    /// its surface state, so a nudge that arrives afterwards finds no evidence
+    /// and does nothing. The window is not zero: this hops from the service's
+    /// actor to the main actor, and a peer can be released during that hop.
+    /// What is left in that window is the Coding Agent surface, which respawns
+    /// its agent on exit (`surfaceCache.respawnableIDs`), so the pane is an
+    /// agent prompt rather than a shell. Closing the window entirely would take
+    /// a lock across two isolation domains, which this is not worth.
     func nudge(surfaceID: UUID, workstreamID: UUID, senderName: String, waiting: Int, now: Date = Date()) {
         let tracker = WorkstreamAgentStateTracker.shared
         guard let state = Self.resolveState(
             surfaceState: tracker.state(forSurface: surfaceID),
-            workstreamState: tracker.state(for: workstreamID),
+            // reportedState, not state(for:): the latter defaults to .idle, so
+            // a workstream whose hooks never arrived would read as "finished".
+            workstreamState: tracker.reportedState(for: workstreamID),
             surfaceID: surfaceID,
             workstreamID: workstreamID
         ) else { return }
@@ -112,24 +119,57 @@ final class AgentNudge {
 
         lastNudge[surfaceID] = now
         let plural = waiting == 1 ? "message" : "messages"
+        // The sender chose this name. It is about to be typed into someone
+        // else's terminal, so it is sanitized here as well as at registration.
+        let safeName = IPCNames.sanitized(senderName, limit: 40, fallback: "another agent")
         surfaceCache.sendText(
             to: surfaceID,
-            text: "[Atelier] \(senderName) sent you a message. Call receive_messages to read your inbox (\(waiting) \(plural) waiting)."
+            text: "[Atelier] \(safeName) sent you a message. Call receive_messages to read your inbox (\(waiting) \(plural) waiting)."
         )
 
         // Two stages, both deferred: the first Return confirms the paste the
         // agent's input widget just took, the second submits it. Sending one
         // immediately looks fine by hand and drops input intermittently in use.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak surfaceCache] in
-            surfaceCache?.sendReturn(to: surfaceID)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak surfaceCache] in
-                surfaceCache?.sendReturn(to: surfaceID)
+        //
+        // Each is re-checked, because a second is long enough for the agent to
+        // start a new turn or for the user to start typing in that pane — and an
+        // unconditional Return would submit whatever is on the line, theirs
+        // included.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self, self.stillIdle(surfaceID: surfaceID, workstreamID: workstreamID) else { return }
+            self.surfaceCache?.sendReturn(to: surfaceID)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self, self.stillIdle(surfaceID: surfaceID, workstreamID: workstreamID) else { return }
+                self.surfaceCache?.sendReturn(to: surfaceID)
             }
+        }
+    }
+
+    /// Whether the surface still reports a finished turn. The cooldown is
+    /// deliberately not consulted: this is the same nudge, mid-delivery.
+    private func stillIdle(surfaceID: UUID, workstreamID: UUID) -> Bool {
+        let tracker = WorkstreamAgentStateTracker.shared
+        guard let state = Self.resolveState(
+            surfaceState: tracker.state(forSurface: surfaceID),
+            workstreamState: tracker.reportedState(for: workstreamID),
+            surfaceID: surfaceID,
+            workstreamID: workstreamID
+        ) else { return false }
+
+        switch state {
+        case .idle, .needsAttention(.justFinished):
+            return true
+        case .working, .stalled, .needsAttention(.permission):
+            return false
         }
     }
 
     func _testReset() {
         lastNudge.removeAll()
         surfaceCache = nil
+    }
+
+    func _testLastNudge(for surfaceID: UUID) -> Date? {
+        lastNudge[surfaceID]
     }
 }

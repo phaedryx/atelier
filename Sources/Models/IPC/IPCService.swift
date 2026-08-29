@@ -56,8 +56,14 @@ actor IPCService {
     /// same identity back renamed — otherwise one agent would accumulate a new
     /// peer per registration and its inbox would strand behind the old id.
     private func registerPeer(for request: IPCRequest) async -> IPCResponse {
-        let name = request.arguments["name"] ?? request.client.workstreamName ?? "agent"
-        let role = request.arguments["role"] ?? ""
+        // Both are agent-chosen and both are shown to other agents; the name is
+        // additionally typed into their terminals by the nudge.
+        let name = IPCNames.sanitized(
+            request.arguments["name"] ?? request.client.workstreamName ?? "agent",
+            limit: 40,
+            fallback: "agent"
+        )
+        let role = IPCNames.sanitized(request.arguments["role"] ?? "", limit: 80, fallback: "")
 
         if let existingID = request.client.peerID.flatMap(UUID.init(uuidString:)),
            let renamed = await store.updatePeer(id: existingID, name: name, role: role.isEmpty ? nil : role)
@@ -178,6 +184,11 @@ actor IPCService {
         guard let id = client.peerID.flatMap(UUID.init(uuidString:)), contexts[id] != nil else { return }
         if await store.updatePeer(id: id, name: nil, role: nil) == nil {
             contexts.removeValue(forKey: id)
+        } else if contexts[id] == nil {
+            // A release landed during the await while the store kept the peer.
+            // Left alone this is a peer others can see but that cannot send,
+            // since its own requests would no longer resolve a context.
+            contexts[id] = context(from: client)
         }
     }
 
@@ -187,7 +198,16 @@ actor IPCService {
     /// that `list_peers` advertises and `send_message` reports delivering to.
     func release(peerID: UUID) async {
         await store.removePeer(id: peerID)
-        contexts.removeValue(forKey: peerID)
+        let context = contexts.removeValue(forKey: peerID)
+
+        // Its surface state goes with it. Otherwise the tracker keeps reporting
+        // whatever that agent last said — usually .idle — and a nudge arriving
+        // afterwards would type into a pane whose agent has gone.
+        if let surfaceID = context?.surfaceID {
+            await MainActor.run {
+                WorkstreamAgentStateTracker.shared.clear(surfaceID: surfaceID)
+            }
+        }
     }
 
     // MARK: - Nudging
@@ -227,7 +247,8 @@ actor IPCService {
     /// can, once nudging is on, drive a session in a repository the user wasn't
     /// thinking about.
     private func isVisible(_ peerID: UUID, to client: IPCClientIdentity) -> Bool {
-        contexts[peerID]?.projectDirectory == client.projectDirectory
+        guard let project = client.projectDirectory, !project.isEmpty else { return false }
+        return contexts[peerID]?.projectDirectory == project
     }
 
     /// The caller's own peer id, if it has registered one that is still alive.

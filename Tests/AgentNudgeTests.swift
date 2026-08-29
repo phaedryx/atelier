@@ -60,6 +60,16 @@ final class AgentNudgeTests: XCTestCase {
         )
     }
 
+    func test_noEvidenceAnywhere_isNotIdle() {
+        // state(for:) defaults to .idle so a sidebar row can draw something.
+        // Acting on that default would treat "hooks never arrived" as "the turn
+        // ended", which is why resolveState takes the reported state instead.
+        XCTAssertNil(
+            AgentNudge.resolveState(surfaceState: nil, workstreamState: nil, surfaceID: workstreamID, workstreamID: workstreamID),
+            "an Agent tab that has never reported must not be nudged"
+        )
+    }
+
     func test_theAgentTab_fallsBackToTheWorkstreamSignal() {
         // claudeID == workstreamID, so the workstream signal is a statement
         // about that pane rather than a guess about it.
@@ -76,8 +86,39 @@ final class AgentNudgeTests: XCTestCase {
         )
     }
 
-    func test_nudge_withoutASurfaceCache_isANoOp() {
+    func test_nudge_withoutASurfaceCache_recordsNothing() {
         AgentNudge.shared._testReset()
-        AgentNudge.shared.nudge(surfaceID: UUID(), workstreamID: UUID(), senderName: "planner", waiting: 1)
+        let surface = UUID()
+        AgentNudge.shared.nudge(surfaceID: surface, workstreamID: surface, senderName: "planner", waiting: 1)
+        XCTAssertNil(AgentNudge.shared._testLastNudge(for: surface), "a nudge with nowhere to go must not consume the cooldown")
+    }
+
+    func test_releasingAPeer_clearsTheSurfaceItOccupied() async {
+        let tracker = WorkstreamAgentStateTracker.shared
+        tracker.resetForTesting()
+        defer { tracker.resetForTesting() }
+
+        let surface = UUID()
+        let workstream = UUID()
+        tracker.workstreamLookup = { _ in workstream }
+        var finished = AgentEvent.idle(agentId: "main")
+        finished.surfaceID = surface.uuidString
+        tracker.handle(projectDir: "/tmp/atelier-nudge-test", event: finished)
+        XCTAssertEqual(tracker.state(forSurface: surface), .idle)
+
+        let service = IPCService()
+        let peer = await service._testRegister(
+            name: "departing",
+            role: "",
+            context: IPCService.PeerContext(
+                workstreamID: workstream.uuidString,
+                workstreamName: "bold-crimson-parser",
+                projectDirectory: "/repos/atelier",
+                surfaceID: surface
+            )
+        )
+        await service.release(peerID: peer.id)
+
+        XCTAssertNil(tracker.state(forSurface: surface), "a retired peer's surface must stop reporting a finished turn")
     }
 }
