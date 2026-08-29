@@ -4,9 +4,9 @@
 import SwiftUI
 
 /// One card per live SUBAGENT run, mirroring the workstream row's design in
-/// miniature: status dot, type name, and a status meta line (dot + word ·
-/// activity · elapsed). The main agent is not listed — its dot, status line,
-/// and context bar live on the workstream row itself. Cards
+/// miniature: type name over a status meta line (dot + word · activity ·
+/// elapsed). The main agent is not listed — its status line and context bar
+/// live on the workstream row itself. Cards
 /// exist exactly while their run is live — Claude Code's stop hooks remove
 /// them the moment an agent finishes.
 struct WorkstreamAgentRosterView: View {
@@ -36,9 +36,6 @@ struct WorkstreamAgentRosterView: View {
                 Text(String(format: NSLocalizedString("+%d more", comment: "Additional agents beyond the visible roster lines"), hiddenCount))
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
-                    // Clears the 12pt dot column plus the 6pt stack spacing so
-                    // the label aligns with the card names.
-                    .padding(.leading, 18)
                     .onTapGesture(perform: onSelect)
             }
         }
@@ -77,8 +74,6 @@ private struct RosterCard: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 6) {
-            RosterStatusDot(state: run.state)
-
             VStack(alignment: .leading, spacing: 3) {
                 Text(displayName)
                     .font(.system(size: 11, weight: .medium))
@@ -138,39 +133,6 @@ private extension String {
     var capitalizedFirst: String {
         guard let first else { return self }
         return String(first).uppercased() + dropFirst()
-    }
-}
-
-// MARK: - Status dot
-
-/// Leading status dot for a roster card, matching the workstream row's
-/// indicator: blue while working, yellow when stalled, pulsing while working.
-private struct RosterStatusDot: View {
-    let state: WorkstreamAgentStateTracker.AgentRun.RunState
-
-    @State private var isPulsing = false
-
-    private var color: Color {
-        switch state {
-        case .working: return .blue
-        case .stalled: return .yellow
-        }
-    }
-
-    var body: some View {
-        Circle()
-            .fill(color)
-            .frame(width: 6, height: 6)
-            .opacity(isPulsing ? 0.4 : 1.0)
-            .animation(
-                state == .working
-                    ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true)
-                    : .default,
-                value: isPulsing
-            )
-            .onAppear { isPulsing = (state == .working) }
-            .onChange(of: state) { _, newValue in isPulsing = (newValue == .working) }
-            .frame(width: 12)
     }
 }
 

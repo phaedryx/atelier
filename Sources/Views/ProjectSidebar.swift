@@ -912,9 +912,18 @@ private struct WorkstreamRow: View {
         }
     }
 
-    /// Dot/word color for the status meta line; nil when dormant.
+    /// Dot/word color for the status meta line: blue = working, yellow =
+    /// stalled, orange = awaiting permission, green = finished, secondary =
+    /// idle with a live session. Nil when dormant, which hides the line.
     private var statusColor: Color? {
-        AgentActivityIndicator.color(for: agentState, hasLiveSession: hasLiveSession)
+        switch agentState {
+        case .working: .blue
+        case .stalled: .yellow
+        case .needsAttention(.permission): .orange
+        case .needsAttention(.justFinished): .green
+        case .idle where hasLiveSession: .secondary
+        case .idle: nil
+        }
     }
 
     private var statusText: LocalizedStringKey? {
@@ -966,11 +975,15 @@ private struct WorkstreamRow: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 6) {
-            AgentActivityIndicator(
-                state: agentState,
-                isPathValid: isPathValid,
-                hasLiveSession: hasLiveSession
-            )
+            // No status dot here: the meta line below the name already
+            // carries one, with the state word beside it. A missing worktree
+            // has no such line, so it keeps a marker.
+            if !isPathValid {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.orange)
+                    .frame(width: 12)
+            }
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(headline)
@@ -1296,71 +1309,5 @@ private struct NewProjectSheet: View {
         }
         .padding(20)
         .frame(width: 380)
-    }
-}
-
-/// Leading status dot for a workstream row: a warning triangle when the
-/// worktree path is gone, a pulsing dot while the agent is spending context,
-/// and a static dot otherwise. Colour encodes the agent's run state and is
-/// shared with the row's status word.
-private struct AgentActivityIndicator: View {
-    let state: WorkstreamAgentStateTracker.AgentRunState
-    let isPathValid: Bool
-    let hasLiveSession: Bool
-
-    @State private var isPulsing = false
-
-    /// State palette, also used by the row's status word:
-    /// blue = working, yellow = stalled, orange = awaiting permission,
-    /// green = finished, secondary = idle with a live session.
-    /// Nil when the workstream is dormant (no agent activity this launch).
-    static func color(
-        for state: WorkstreamAgentStateTracker.AgentRunState,
-        hasLiveSession: Bool
-    ) -> Color? {
-        switch state {
-        case .working: .blue
-        case .stalled: .yellow
-        case .needsAttention(.permission): .orange
-        case .needsAttention(.justFinished): .green
-        case .idle where hasLiveSession: .secondary
-        case .idle: nil
-        }
-    }
-
-    /// True while the agent is mid-turn, which is what pulses.
-    private var isActive: Bool {
-        switch state {
-        case .working, .stalled: true
-        case .idle, .needsAttention: false
-        }
-    }
-
-    var body: some View {
-        Group {
-            if !isPathValid {
-                Image(systemName: "exclamationmark.triangle")
-                    .foregroundStyle(.orange)
-                    .font(.system(size: 10))
-            } else if let color = Self.color(for: state, hasLiveSession: hasLiveSession) {
-                Circle()
-                    .fill(color)
-                    .frame(width: 6, height: 6)
-                    .opacity(isActive && isPulsing ? 0.4 : 1.0)
-                    .animation(
-                        isActive
-                            ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true)
-                            : .default,
-                        value: isPulsing
-                    )
-                    .onAppear { isPulsing = isActive }
-                    .onChange(of: isActive) { _, active in isPulsing = active }
-            } else {
-                Circle()
-                    .fill(.tertiary)
-                    .frame(width: 6, height: 6)
-            }
-        }
-        .frame(width: 12)
     }
 }

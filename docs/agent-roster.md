@@ -1,11 +1,10 @@
 # Agent Roster — Architecture
 
-The sidebar shows live agent status per workstream: each row leads with a
-small status dot carrying the main agent's state, alongside its current
-activity and context meter — and while subagents are running, a compact
-roster of two-line mini cards under the row shows who is doing what right
-now. The main agent is not listed in the roster; everything it does is
-visible on the row itself.
+The sidebar shows live agent status per workstream: under each row's name a
+status line carries the main agent's state, current activity, and context
+meter — and while subagents are running, a compact roster of two-line mini
+cards under the row shows who is doing what right now. The main agent is not
+listed in the roster; everything it does is visible on the row itself.
 
 ## How it works
 
@@ -20,7 +19,7 @@ Claude Code hooks (settings.json)
   → curl POST http://127.0.0.1:{port}/hook
   → HookEventReceiver (NWListener, Swift)
   → AtelierApp.onEvent → HookEventRouter (fan-out) + WorkstreamAgentStateTracker.handle
-  → Sidebar: AgentActivityIndicator dot on the row + WorkstreamAgentRosterView cards
+  → Sidebar: status line on the workstream row + WorkstreamAgentRosterView cards
 ```
 
 ## Hook registration
@@ -85,18 +84,17 @@ worktree paths match.
 
 ## Row-level states (`AgentRunState`)
 
-Each workstream row leads with a 6pt status dot in a 12pt column
-(`AgentActivityIndicator`). Its color encodes the state, and it pulses while
-the agent is mid-turn. The same color drives the row's status word:
+Under the workstream name, a status line pairs a 5pt dot with the state
+word (`WorkstreamRow.statusMeta`). One color drives both:
 
-| State | Dot | Trigger |
+| State | Status line | Trigger |
 |---|---|---|
-| `.idle` (live session) | Secondary gray, static | No active turn, but ≥1 hook event seen since app launch |
-| `.idle` (dormant) | Tertiary gray, static | No active turn and no agent activity this launch |
-| `.working` | Blue, pulsing | `UserPromptSubmit`, tool activity after a permission grant |
-| `.stalled` | Yellow, pulsing | No hook events for 45s mid-turn (swept every 15s) |
-| `.needsAttention(.permission)` | Orange, static | Notification hook reports a permission prompt |
-| `.needsAttention(.justFinished)` | Green, static | `Stop` on an unselected workstream; cleared by `markSeen` when selected |
+| `.idle` (live session) | Secondary gray · "Idle" | No active turn, but ≥1 hook event seen since app launch |
+| `.idle` (dormant) | Not rendered | No active turn and no agent activity this launch |
+| `.working` | Blue · "Working" | `UserPromptSubmit`, tool activity after a permission grant |
+| `.stalled` | Yellow · "Stalled" | No hook events for 45s mid-turn (swept every 15s) |
+| `.needsAttention(.permission)` | Orange · "Waiting for approval" | Notification hook reports a permission prompt |
+| `.needsAttention(.justFinished)` | Green · "Done" | `Stop` on an unselected workstream; cleared by `markSeen` when selected |
 
 Whether an idle workstream counts as "live" comes from
 `WorkstreamAgentStateTracker.liveSessionIDs` — an in-memory set of
@@ -104,8 +102,10 @@ workstreams that saw any agent event this app launch. It is deliberately
 not persisted: a workstream nobody touched today renders dormant regardless
 of past sessions.
 
-An invalid worktree path overrides all of the above: the row shows an orange
-warning triangle instead of the dot (`AgentActivityIndicator.isPathValid`).
+An invalid worktree path overrides all of the above: the name is struck
+through and dimmed, and an orange warning triangle leads the row. That
+marker is the row's only leading element — a healthy workstream reserves no
+space for it.
 
 ## Roster lifecycle
 
@@ -115,9 +115,9 @@ warning triangle instead of the dot (`AgentActivityIndicator.isPathValid`).
 - The roster lists **subagents only**. The main agent's status dot, current
   activity line, and context meter render on the workstream row itself
   (`WorkstreamRow`), so no information is duplicated.
-- Each live subagent renders as a two-line mini card: its own status dot
-  (blue pulsing while working, yellow when stalled), the agent name on the
-  first line, and the current activity on the second.
+- Each live subagent renders as a two-line mini card: the agent name on the
+  first line and its own status line on the second (blue while working,
+  yellow when stalled, then the current activity and elapsed time).
 - The trailing side of a card shows, in order of precedence: **"Stalled"**
   (orange label) → **context-window meter** (when the harness reports per-run
   usage) → **elapsed time** since the run started.
