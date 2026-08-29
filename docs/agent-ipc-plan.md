@@ -189,3 +189,26 @@ one as colleagues.
 Rejected from the review: rebuilding the agent command when the IPC setting is
 toggled. That would respawn a running agent mid-session; the setting already says
 it takes effect at the next Coding Agent start.
+
+---
+
+## Registration is the helper's job, not the agent's
+
+First attempt was a system prompt telling the agent to call `register_peer`
+early. Measured against a real headless session — plain task, prompt attached,
+a watcher polling `list_peers` while it ran — and the agent did the task and
+ignored the instruction. Discovery cannot depend on a model remembering
+something it has no immediate use for.
+
+`atelier-mcp` now registers on its own the moment it can reach the app, using
+the environment it already has: the peer name defaults to the workstream. It
+retries on every incoming MCP message, so a session that starts before Atelier
+is listening lands as soon as it is, and Claude Code's own `initialize` and
+`tools/list` at startup mean this costs nothing extra. The same measurement now
+shows the agent in the roster without it calling anything.
+
+`register_peer` survives as a *rename* — the store already had those semantics —
+and the tool description and system prompt say so. What the prompt is still
+needed for is the half a model genuinely has to do: pulling its inbox at natural
+boundaries, and understanding that an `[Atelier]` line in its input came from the
+app rather than the user.

@@ -253,6 +253,24 @@ final class IPCBridge {
     /// does not have to notice that Atelier restarted.
     private var registration: [String: String]?
 
+    /// Registers this session the moment the helper can reach the app, without
+    /// waiting for the agent to ask.
+    ///
+    /// Registration used to be the agent's job, which made discovery depend on a
+    /// model remembering an instruction it had no immediate use for — measured,
+    /// and it does not happen. An agent's existence is what makes it reachable,
+    /// so the helper claims an identity as soon as it has a connection: name
+    /// defaults to the workstream, and `register_peer` from the agent becomes a
+    /// rename rather than a prerequisite.
+    ///
+    /// Called on every incoming MCP message, so a session that starts before
+    /// Atelier is listening still lands as soon as it is. Claude Code sends
+    /// `initialize` and `tools/list` at startup, so this costs nothing extra.
+    func ensureRegistered() {
+        guard peerID == nil, connect() == nil else { return }
+        _ = attempt(tool: .registerPeer, arguments: registration ?? [:])
+    }
+
     func call(tool: IPCTool, arguments: [String: String]) -> Outcome {
         if let failure = connect() { return .failed(failure) }
 
@@ -324,6 +342,8 @@ final class IPCBridge {
 let bridge = IPCBridge()
 
 while let line = readLine(strippingNewline: true) {
+    bridge.ensureRegistered()
+
     guard let data = line.data(using: .utf8),
           let message = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let method = message["method"] as? String

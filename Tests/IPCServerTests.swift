@@ -175,6 +175,30 @@ final class IPCServerTests: XCTestCase {
         XCTAssertTrue(listed.isEmpty, "a peer whose helper exited must not linger for the rest of its TTL")
     }
 
+    /// A session becomes reachable because it exists, not because the agent
+    /// remembered to announce itself.
+    func test_helper_registersItselfWithoutAnyToolCall() throws {
+        let helper = try XCTUnwrap(MCPHelperLauncher.executableURL(), "atelier-mcp was not found in the host app bundle")
+        _ = try waitForEndpoint()
+
+        func environment(workstream: String) -> [String: String] {
+            var environment = ProcessInfo.processInfo.environment
+            environment["ATELIER_PROJECT_DIR"] = "/repos/atelier"
+            environment["ATELIER_WORKSTREAM"] = workstream
+            environment["ATELIER_WORKSTREAM_ID"] = UUID().uuidString
+            environment["ATELIER_SURFACE_ID"] = UUID().uuidString
+            return environment
+        }
+
+        // Nothing but the MCP handshake — no tool is ever called on this one.
+        let quiet = try MCPProcess(helper: helper, environment: environment(workstream: "quiet-agent"))
+        XCTAssertNotNil(quiet.send(method: "initialize", params: ["protocolVersion": "2025-06-18"]))
+
+        let observer = try MCPProcess(helper: helper, environment: environment(workstream: "observer"))
+        let listed = try XCTUnwrap(observer.callTool("list_peers"))
+        XCTAssertTrue(listed.contains("quiet-agent"), "an agent that never called a tool should still be reachable, got: \(listed)")
+    }
+
     // MARK: - Peer ownership
 
     /// Reads from `fd` until it closes or the deadline passes; true if the

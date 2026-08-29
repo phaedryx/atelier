@@ -551,13 +551,17 @@ struct TerminalContainerView: View {
         if autoRenameBranch {
             systemPromptParts.append(SystemPrompts.autoRenameBranchPrompt)
         }
-        let combinedSystemPrompt = systemPromptParts.isEmpty ? nil : systemPromptParts.joined(separator: "\n\n")
-
         // A file path rather than inline JSON, even though --mcp-config accepts
         // both: LaunchLogger records finalCommand verbatim. --strict-mcp-config
         // stays off, since turning it on would silently drop the user's own
         // global MCP servers.
         let mcpConfigPath = agentIPC ? IPCConfig.write(for: workstreamID) : nil
+        if mcpConfigPath != nil {
+            // Tied to the config actually being written: an agent told it has
+            // peers but given no server would call tools that do not exist.
+            systemPromptParts.append(SystemPrompts.agentIPCPrompt(workstreamName: workstreamName))
+        }
+        let combinedSystemPrompt = systemPromptParts.isEmpty ? nil : systemPromptParts.joined(separator: "\n\n")
 
         var resume = CommandBuilder(basePath)
         resume.option("--resume", sessionID)
