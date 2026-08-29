@@ -397,11 +397,8 @@
 "Context: %1$lld tokens · %2$lld%%" = "Context: %1$lld tokens · %2$lld%%";
 "%lld agents active" = "%lld agents active";
 
-/* Multi-harness support */
+/* Coding agent */
 "Claude Code" = "Claude Code";
-"OpenCode" = "OpenCode";
-"Default coding agent" = "Default coding agent";
-"Used when creating new workstreams. Each workstream can override this choice." = "Used when creating new workstreams. Each workstream can override this choice.";
 "Enables experimental multi-agent coordination. Agents can spawn teammates, delegate tasks, and collaborate across workstreams. Only applies to %@." = "Enables experimental multi-agent coordination. Agents can spawn teammates, delegate tasks, and collaborate across workstreams. Only applies to %@.";
 "%@ not found" = "%@ not found";
 "Install %@ to use the Coding Agent." = "Install %@ to use the Coding Agent.";

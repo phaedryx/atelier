@@ -5,14 +5,19 @@ import Foundation
 
 enum CodingHarness: String, Codable, CaseIterable, Sendable {
     case claudeCode
-    case opencode
+
+    /// Maps a persisted raw value onto a known harness, falling back to Claude
+    /// Code. Blobs written before OpenCode support was removed still carry
+    /// `"opencode"`; they must load, not throw.
+    static func fromPersisted(_ rawValue: String?) -> CodingHarness {
+        guard let rawValue else { return .claudeCode }
+        return CodingHarness(rawValue: rawValue) ?? .claudeCode
+    }
 
     var displayName: String {
         switch self {
         case .claudeCode:
             return NSLocalizedString("Claude Code", comment: "Name of the Claude Code coding agent")
-        case .opencode:
-            return NSLocalizedString("OpenCode", comment: "Name of the OpenCode coding agent")
         }
     }
 
@@ -20,8 +25,6 @@ enum CodingHarness: String, Codable, CaseIterable, Sendable {
         switch self {
         case .claudeCode:
             return "claude"
-        case .opencode:
-            return "opencode"
         }
     }
 
@@ -29,8 +32,6 @@ enum CodingHarness: String, Codable, CaseIterable, Sendable {
         switch self {
         case .claudeCode:
             return "sparkle"
-        case .opencode:
-            return "chevron.left.forwardslash.chevron.right"
         }
     }
 
@@ -39,8 +40,6 @@ enum CodingHarness: String, Codable, CaseIterable, Sendable {
         switch self {
         case .claudeCode:
             return "Claude"
-        case .opencode:
-            return "OpenCode"
         }
     }
 
@@ -48,8 +47,6 @@ enum CodingHarness: String, Codable, CaseIterable, Sendable {
         switch self {
         case .claudeCode:
             return URL(string: "https://docs.anthropic.com/en/docs/claude-code/overview")!
-        case .opencode:
-            return URL(string: "https://opencode.ai")!
         }
     }
 }

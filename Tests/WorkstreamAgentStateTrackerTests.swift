@@ -214,18 +214,16 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.state(for: wsID), .stalled)
     }
 
-    /// The main run's final context figures must outlive the roster clear
-    /// at turn end so the row's context bar persists at Done/Idle.
-    func testContextUsageSurvivesMainIdle() {
-        handle(AgentEvent.info(
-            agentId: "main",
-            name: "OpenCode",
-            model: "claude-sonnet-4-5",
-            contextUsedTokens: 42_000
-        ))
+    /// The main session's context figures must outlive the roster clear at
+    /// turn end so the row's context bar persists at Done/Idle.
+    func testContextUsageSurvivesMainIdle() throws {
+        let url = tempTranscriptURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try writeTranscript(url: url, usedTokens: 42_000)
+        handle(.waiting(agentId: "main", transcriptPath: url.path))
         XCTAssertNotNil(tracker.mainContextUsage(for: wsID))
 
-        handle(.idle(agentId: "main"))
+        handle(.idle(agentId: "main", transcriptPath: url.path))
         XCTAssertTrue(tracker.runs(for: wsID).isEmpty)
 
         let usage = tracker.mainContextUsage(for: wsID)
@@ -324,9 +322,9 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "SomeCustomTool", toolInput: nil), "SomeCustomTool")
     }
 
-    // MARK: - OpenCode (lowercase tool names, per-harness run names)
+    // MARK: - Case-insensitive tool matching
 
-    func testActivityDescriptionMatchesLowercaseOpencodeTools() {
+    func testActivityDescriptionMatchesLowercaseToolNames() {
         let filePathInput: [String: Any] = ["file_path": "/repo/Sources/Foo.swift"]
         XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "edit", toolInput: filePathInput), String(format: NSLocalizedString("Editing %@", comment: ""), "Foo.swift"))
         XCTAssertEqual(HookEventReceiver.activityDescription(toolName: "read", toolInput: filePathInput), String(format: NSLocalizedString("Reading %@", comment: ""), "Foo.swift"))
@@ -343,104 +341,20 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         XCTAssertNil(HookEventReceiver.activityDescription(toolName: "", toolInput: nil))
     }
 
-    func testOpencodeRunUsesProvidedHarnessName() {
-        var event = AgentEvent.waiting(agentId: "main")
-        event.name = "OpenCode"
-        handle(event)
-        XCTAssertEqual(tracker.runs(for: wsID).first?.name, "OpenCode")
-    }
-
-    /// OpenCode session_created payloads may carry the subtask description;
-    /// it must land on the run as a separate field, not baked into the name
-    /// (sprite selection keys off the type name).
-    func testOpencodeSubagentCreatedCarriesTaskDescription() {
-        handle(.created(
-            agentId: "sub-1",
-            name: "explore",
-            palette: 1,
-            parentAgentId: "main",
-            taskDescription: "Map people/task completion code"
-        ))
-        let sub = tracker.runs(for: wsID).first(where: { $0.id == "sub-1" })
-        XCTAssertEqual(sub?.name, "explore")
-        XCTAssertEqual(sub?.taskDescription, "Map people/task completion code")
-    }
-
-    /// The plugin re-sends session_created when the subtask part arrives after
-    /// the child was registered without a description; the duplicate must
-    /// refine the existing run instead of recreating or resetting it.
-    func testDuplicateCreatedRefinesNameAndTaskDescription() {
+    /// A duplicate create refines the existing run instead of recreating or
+    /// resetting it.
+    func testDuplicateCreatedRefinesName() {
         handle(.created(agentId: "sub-1", name: "Sub-agent", palette: 3))
         let originalVariant = tracker.runs(for: wsID).first?.variantIndex
 
-        handle(.created(
-            agentId: "sub-1",
-            name: "explore",
-            palette: 1,
-            parentAgentId: "main",
-            taskDescription: "Map people/task completion code"
-        ))
+        handle(.created(agentId: "sub-1", name: "explore", palette: 1, parentAgentId: "main"))
 
         let runs = tracker.runs(for: wsID)
         XCTAssertEqual(runs.count, 1)
         let sub = runs[0]
         XCTAssertEqual(sub.name, "explore")
-        XCTAssertEqual(sub.taskDescription, "Map people/task completion code")
         XCTAssertEqual(sub.palette, 3)
         XCTAssertEqual(sub.variantIndex, originalVariant)
-
-        // A later create without a description must not wipe the stored one.
-        handle(.created(agentId: "sub-1", name: "explore", palette: 1))
-        XCTAssertEqual(tracker.runs(for: wsID)[0].taskDescription, "Map people/task completion code")
-    }
-
-    /// Claude Code-style creates carry no description; runs stay unaffected.
-    func testClaudeStyleCreateHasNoTaskDescription() {
-        handle(.created(agentId: "sub-1", name: "Explore", palette: 2))
-        XCTAssertNil(tracker.runs(for: wsID).first?.taskDescription)
-    }
-
-    // MARK: - Subtask description capping
-
-    func testCappedTaskDescriptionTrimsAndCaps() {
-        XCTAssertNil(HookEventReceiver.cappedTaskDescription(nil))
-        XCTAssertNil(HookEventReceiver.cappedTaskDescription("   \n  "))
-        XCTAssertEqual(HookEventReceiver.cappedTaskDescription("  Map people/task completion code  "), "Map people/task completion code")
-
-        let long = String(repeating: "a", count: 200)
-        XCTAssertEqual(HookEventReceiver.cappedTaskDescription(long), String(repeating: "a", count: 120))
-    }
-
-    /// OpenCode's message.updated can precede any tool/prompt event; the
-    /// info-only event must still create the main run so its context
-    /// figures land and the row's context bar can appear.
-    func testAgentInfoCreatesMissingMainRunWithContext() {
-        handle(AgentEvent.info(
-            agentId: "main",
-            name: "OpenCode",
-            model: "claude-sonnet-4-5",
-            contextUsedTokens: 42_000
-        ))
-        let runs = tracker.runs(for: wsID)
-        XCTAssertEqual(runs.count, 1)
-        XCTAssertTrue(runs[0].isMain)
-        XCTAssertEqual(runs[0].name, "OpenCode")
-        XCTAssertEqual(runs[0].model, "claude-sonnet-4-5")
-        XCTAssertEqual(runs[0].contextUsedTokens, 42_000)
-        XCTAssertEqual(runs[0].contextLimitTokens, 200_000)
-        XCTAssertNotNil(tracker.mainContextUsage(for: wsID))
-    }
-
-    /// Subagents are never created from attribute-only events — that path
-    /// must not produce ghost roster entries.
-    func testAgentInfoDoesNotCreateSubagentRuns() {
-        handle(AgentEvent.info(
-            agentId: "ses_child",
-            name: "Explore",
-            model: "claude-sonnet-4-5",
-            contextUsedTokens: 1_000
-        ))
-        XCTAssertTrue(tracker.runs(for: wsID).isEmpty)
     }
 
     func testChildIdleRemovesOnlyThatChild() {
@@ -460,59 +374,23 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
     // MARK: - Name and attribute refinement
 
     func testToolStartCreatesRunWithCarriedName() {
-        var event = AgentEvent.toolStart(agentId: "ses_child", tool: "edit")
-        event.name = "build"
+        var event = AgentEvent.toolStart(agentId: "ses_child", tool: "Edit")
+        event.name = "explore"
         handle(event)
-        XCTAssertEqual(tracker.runs(for: wsID).first?.name, "build")
+        XCTAssertEqual(tracker.runs(for: wsID).first?.name, "explore")
     }
 
     func testSubsequentEventRefinesExistingRunName() {
-        var first = AgentEvent.toolStart(agentId: "ses_child", tool: "bash")
-        first.name = "OpenCode"
+        var first = AgentEvent.toolStart(agentId: "ses_child", tool: "Bash")
+        first.name = "Sub-agent"
         handle(first)
-        XCTAssertEqual(tracker.runs(for: wsID).first?.name, "OpenCode")
+        XCTAssertEqual(tracker.runs(for: wsID).first?.name, "Sub-agent")
 
-        // The plugin reports the real agent type once known.
-        var second = AgentEvent.toolStart(agentId: "ses_child", tool: "read")
-        second.name = "general"
+        // The hook reports the real agent type once known.
+        var second = AgentEvent.toolStart(agentId: "ses_child", tool: "Read")
+        second.name = "general-purpose"
         handle(second)
-        XCTAssertEqual(tracker.runs(for: wsID).first?.name, "general")
-    }
-
-    func testAgentInfoStoresModelOnExistingRun() {
-        handle(.waiting(agentId: "main"))
-        handle(AgentEvent.info(agentId: "main", name: "OpenCode", model: "claude-sonnet-4-5"))
-        let run = tracker.runs(for: wsID).first
-        XCTAssertEqual(run?.name, "OpenCode")
-        XCTAssertEqual(run?.model, "claude-sonnet-4-5")
-        XCTAssertEqual(tracker.state(for: wsID), .working)
-    }
-
-    /// Attribute-only events may create the MAIN run (so OpenCode's early
-    /// message.updated context lands) but never subagent runs.
-    func testAgentInfoDoesNotCreateSubagentGhostRuns() {
-        handle(AgentEvent.info(agentId: "main", name: "OpenCode", model: "m"))
-        handle(AgentEvent.info(agentId: "ses_unknown", name: "build", model: "m"))
-        XCTAssertEqual(tracker.runs(for: wsID).map(\.id), ["main"])
-        XCTAssertTrue(tracker.runs(for: wsID)[0].isMain)
-        XCTAssertEqual(tracker.state(for: wsID), .idle)
-    }
-
-    func testAgentInfoDoesNotClearPermissionState() {
-        tracker.currentSelection = wsID
-        handle(.waiting(agentId: "main"))
-        handle(.status(agentId: "main", status: "permissionRequired"))
-        handle(AgentEvent.info(agentId: "main", name: "OpenCode", model: "m"))
-        XCTAssertEqual(tracker.state(for: wsID), .needsAttention(.permission))
-    }
-
-    func testAgentInfoRefreshesLastEventAt() {
-        handle(.waiting(agentId: "main"))
-        backdateMainRun(secondsAgo: 30)
-        handle(AgentEvent.info(agentId: "main", name: "OpenCode", model: "m"))
-        // If lastEventAt were not refreshed the next sweep would stall the run.
-        let cutoff = Date().addingTimeInterval(-WorkstreamAgentStateTracker.stallThreshold)
-        XCTAssertGreaterThan(tracker.runs(for: wsID)[0].lastEventAt, cutoff)
+        XCTAssertEqual(tracker.runs(for: wsID).first?.name, "general-purpose")
     }
 
     // MARK: - Live session presence
@@ -611,62 +489,17 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         XCTAssertNil(tracker.contextUsage[wsID])
     }
 
-    func testAgentInfoAppliesContextFieldsToRun() {
-        handle(.waiting(agentId: "main"))
-        handle(AgentEvent.info(
-            agentId: "main",
-            name: "OpenCode",
-            model: "claude-sonnet-4-5",
-            contextUsedTokens: 42_000
-        ))
-        let run = tracker.runs(for: wsID).first
-        XCTAssertEqual(run?.contextUsedTokens, 42_000)
-        XCTAssertEqual(run?.contextLimitTokens, 200_000)
-    }
-
-    func testMainContextUsageFallsBackToRunReportedTokens() {
-        handle(.waiting(agentId: "main"))
-        handle(AgentEvent.info(
-            agentId: "main",
-            name: "OpenCode",
-            model: "claude-sonnet-4-5",
-            contextUsedTokens: 42_000
-        ))
-
-        let usage = tracker.mainContextUsage(for: wsID)
-        XCTAssertEqual(usage?.usedTokens, 42_000)
-        XCTAssertEqual(usage?.limitTokens, 200_000)
-    }
-
-    func testMainContextUsagePrefersTranscriptOverRunTokens() throws {
-        let url = tempTranscriptURL()
-        defer { try? FileManager.default.removeItem(at: url) }
-        try writeTranscript(url: url, usedTokens: 100)
-        handle(.waiting(agentId: "main", transcriptPath: url.path))
-        handle(AgentEvent.info(
-            agentId: "main",
-            name: "OpenCode",
-            model: "claude-sonnet-4-5",
-            contextUsedTokens: 42_000
-        ))
-
-        XCTAssertEqual(tracker.mainContextUsage(for: wsID)?.usedTokens, 100)
-    }
-
-    /// Usage is nil until the harness has reported figures — but once it
-    /// has, the last reading persists past turn end (the row's bar dims
-    /// instead of vanishing at Done/Idle).
-    func testMainContextUsageNilUntilReportedThenPersists() {
+    /// Usage is nil until a transcript has been parsed — but once it has,
+    /// the last reading persists past turn end (the row's bar dims instead
+    /// of vanishing at Done/Idle).
+    func testMainContextUsageNilUntilReportedThenPersists() throws {
         XCTAssertNil(tracker.mainContextUsage(for: wsID))
 
-        handle(.waiting(agentId: "main"))
-        handle(AgentEvent.info(
-            agentId: "main",
-            name: "OpenCode",
-            model: "claude-sonnet-4-5",
-            contextUsedTokens: 42_000
-        ))
-        handle(.idle(agentId: "main"))
+        let url = tempTranscriptURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try writeTranscript(url: url, usedTokens: 42_000)
+        handle(.waiting(agentId: "main", transcriptPath: url.path))
+        handle(.idle(agentId: "main", transcriptPath: url.path))
 
         let usage = tracker.mainContextUsage(for: wsID)
         XCTAssertEqual(usage?.usedTokens, 42_000)

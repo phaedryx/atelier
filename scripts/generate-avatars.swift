@@ -21,7 +21,6 @@ let alphaThreshold = 3     // alpha byte >= this counts as visible (≈0.01)
 /// Source path relative to <source-dir> -> output file name.
 let spriteMap: [String: String] = [
     "claude_agent.png": "avatar_claude_1.png",
-    "opencode_agent.png": "avatar_opencode_1.png",
     "explore_agent.png": "avatar_explore_1.png",
     "additionals/explore_2.png": "avatar_explore_2.png",
     "additionals/explore_3.png": "avatar_explore_3.png",

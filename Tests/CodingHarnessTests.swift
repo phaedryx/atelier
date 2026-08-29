@@ -8,22 +8,27 @@ final class CodingHarnessTests: XCTestCase {
     func testRawValuesAreStable() {
         // Raw values persist in UserDefaults; changing them breaks stored workstreams.
         XCTAssertEqual(CodingHarness.claudeCode.rawValue, "claudeCode")
-        XCTAssertEqual(CodingHarness.opencode.rawValue, "opencode")
     }
 
     func testDecodeFromRawValue() {
         XCTAssertEqual(CodingHarness(rawValue: "claudeCode"), .claudeCode)
-        XCTAssertEqual(CodingHarness(rawValue: "opencode"), .opencode)
         XCTAssertNil(CodingHarness(rawValue: "unknown"))
     }
 
     func testCLINames() {
         XCTAssertEqual(CodingHarness.claudeCode.cliName, "claude")
-        XCTAssertEqual(CodingHarness.opencode.cliName, "opencode")
     }
 
     func testAllCases() {
-        XCTAssertEqual(CodingHarness.allCases, [.claudeCode, .opencode])
+        XCTAssertEqual(CodingHarness.allCases, [.claudeCode])
+    }
+
+    /// Blobs written while OpenCode was supported must still load.
+    func testRetiredHarnessFallsBackToClaudeCode() {
+        XCTAssertEqual(CodingHarness.fromPersisted("opencode"), .claudeCode)
+        XCTAssertEqual(CodingHarness.fromPersisted("unknown"), .claudeCode)
+        XCTAssertEqual(CodingHarness.fromPersisted(nil), .claudeCode)
+        XCTAssertEqual(CodingHarness.fromPersisted("claudeCode"), .claudeCode)
     }
 
     func testInstallURLsAreValid() {

@@ -30,8 +30,10 @@ struct Workstream: Identifiable, Hashable, Codable, Sendable {
         worktreePath = try container.decodeIfPresent(String.self, forKey: .worktreePath)
         bypassPermissions = try container.decode(Bool.self, forKey: .bypassPermissions)
         lastAccessedAt = try container.decode(Date.self, forKey: .lastAccessedAt)
-        // Older persisted blobs predate harness selection; they were all Claude Code.
-        harness = try container.decodeIfPresent(CodingHarness.self, forKey: .harness) ?? .claudeCode
+        // Older persisted blobs predate harness selection; blobs written while
+        // OpenCode was supported name a harness that no longer exists. Both
+        // resolve to Claude Code instead of failing the whole decode.
+        harness = CodingHarness.fromPersisted(try container.decodeIfPresent(String.self, forKey: .harness))
     }
 
     /// The user-facing label. Falls back to the branch-tracked `name` when no override is set.

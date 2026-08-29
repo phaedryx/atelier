@@ -188,13 +188,6 @@ struct AtelierApp: App {
             HookInstaller.install(hookScriptPath: hookURL.path)
         }
 
-        // Install the Atelier plugin so OpenCode forwards events
-        if let pluginURL = Bundle.main.url(forResource: "atelier-opencode", withExtension: "js", subdirectory: "Scripts")
-            ?? Bundle.main.url(forResource: "atelier-opencode", withExtension: "js")
-        {
-            OpencodePluginInstaller.install(bundledPath: pluginURL.path)
-        }
-
         let crashReportingEnabled = UserDefaults.standard.object(forKey: "atelier.crashReportingEnabled") as? Bool ?? true
         if crashReportingEnabled, let sentryDSN = AppConstants.sentryDSN {
             SentrySDK.start { options in

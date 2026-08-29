@@ -164,11 +164,11 @@ final class ProjectTests: XCTestCase {
     }
 
     func testWorkstreamHarnessRoundTrip() throws {
-        var ws = Workstream(name: "main", harness: .opencode)
+        var ws = Workstream(name: "main", harness: .claudeCode)
         ws.worktreePath = "/tmp/ws"
         let data = try JSONEncoder().encode(ws)
         let decoded = try JSONDecoder().decode(Workstream.self, from: data)
-        XCTAssertEqual(decoded.harness, .opencode)
+        XCTAssertEqual(decoded.harness, .claudeCode)
         XCTAssertEqual(decoded.worktreePath, "/tmp/ws")
     }
 
@@ -197,16 +197,20 @@ final class ProjectTests: XCTestCase {
         XCTAssertEqual(decoded.name, "legacy")
     }
 
-    func testProjectStorePreservesOpencodeHarness() {
-        let projects = [
-            Project(name: "one", directory: "/one", workstreams: [
-                Workstream(name: "dev", harness: .opencode),
-                Workstream(name: "main", harness: .claudeCode),
-            ]),
-        ]
-        ProjectStore.save(projects, defaults: testDefaults)
-        let loaded = ProjectStore.load(defaults: testDefaults)
-        XCTAssertEqual(loaded.first?.workstreams[0].harness, .opencode)
-        XCTAssertEqual(loaded.first?.workstreams[1].harness, .claudeCode)
+    /// Workstreams stored while OpenCode was supported must still load; a
+    /// retired harness degrades to Claude Code instead of failing the decode.
+    func testWorkstreamJSONWithRetiredHarnessDecodesToClaudeCode() throws {
+        let json = """
+        {
+          "id": "\(UUID().uuidString)",
+          "name": "dev",
+          "bypassPermissions": false,
+          "lastAccessedAt": 0,
+          "harness": "opencode"
+        }
+        """
+        let decoded = try JSONDecoder().decode(Workstream.self, from: Data(json.utf8))
+        XCTAssertEqual(decoded.harness, .claudeCode)
+        XCTAssertEqual(decoded.name, "dev")
     }
 }

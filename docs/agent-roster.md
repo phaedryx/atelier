@@ -73,11 +73,11 @@ worktree paths match.
 | File | Role |
 |---|---|
 | `Resources/Scripts/atelier-hook` | Shell script invoked by Claude Code hooks. Reads stdin JSON, wraps with `CLAUDE_PROJECT_DIR`, POSTs to localhost. |
-| `Sources/PixelAgents/HookEventReceiver.swift` | NWListener singleton. Parses HTTP POST, maps hook events to `AgentEvent`, derives activity strings from tool name + input, attaches `transcript_path` and OpenCode context figures. |
+| `Sources/PixelAgents/HookEventReceiver.swift` | NWListener singleton. Parses HTTP POST, maps hook events to `AgentEvent`, derives activity strings from tool name + input, attaches `transcript_path`. |
 | `Sources/PixelAgents/HookEventRouter.swift` | Singleton registry routing events by normalized path. |
 | `Sources/PixelAgents/HookInstaller.swift` | Idempotent install/uninstall of hook entries in `~/.claude/settings.json`. |
-| `Sources/PixelAgents/AgentEvent.swift` | Event model: `agentCreated`, `agentRemoved`, `agentStatus`, `agentToolStart`, `agentToolDone`, `agentIdle`, `agentWaiting`, `agentInfo`. |
-| `Sources/PixelAgents/TranscriptContextReader.swift` | Extracts context-window usage from Claude Code transcript tails and OpenCode token payloads. |
+| `Sources/PixelAgents/AgentEvent.swift` | Event model: `agentCreated`, `agentRemoved`, `agentStatus`, `agentToolStart`, `agentToolDone`, `agentIdle`, `agentWaiting`. |
+| `Sources/PixelAgents/TranscriptContextReader.swift` | Extracts context-window usage from Claude Code transcript tails. |
 | `Sources/PixelAgents/ContextLimits.swift` | Maps model IDs to context-window limits (200k default, 1M extended). |
 | `Sources/PixelAgents/AgentSpriteStore.swift` | Loads agent portraits for the roster (`avatar_<type>_<k>.png` sets with palette-slot fallback). |
 | `Sources/Models/WorkstreamAgentStateTracker.swift` | Per-workstream roster + row-level state machine + stall sweep + live-session tracking + context usage. |
@@ -146,25 +146,16 @@ Reads are throttled to one per 5 seconds per workstream — except at turn end
 (`Stop`), where the read is forced so the final totals always land. A failed
 read keeps the previously known value.
 
-**OpenCode** — the bundled plugin (`atelier-opencode.js`) sums each
-assistant message's cumulative tokens (`input` + `cache.read` +
-`cache.write`) and forwards the total as `context_used` on `agent_info`
-events. The dedup fingerprint includes the total, so refreshed figures flow
-through even when name and model are unchanged.
-
 Limits come from `ContextLimits`: 200k tokens by default, 1M when the model
 ID contains `[1m]` or `-1m` (case-insensitive, e.g.
 `claude-sonnet-4-5[1m]`).
 
-Display scope is the same for both harnesses: the main session's meter shows
-on the workstream row itself (visible while the main agent is working or
-stalled), preferring the transcript-derived figure and falling back to the
-per-run totals OpenCode reports (`WorkstreamAgentStateTracker.mainContextUsage(for:)`),
-while OpenCode child sessions carry their own figures
-(`AgentRun.contextUsedTokens` / `contextLimitTokens`) from `agent_info`
-events, shown on their roster cards. The meter itself is a 40×3pt bar plus a
-percentage: green below 60%, orange below 85%, red at 85% or more
-(`ContextMeter`).
+The main session's meter shows on the workstream row itself (visible while
+the main agent is working or stalled), reading the transcript-derived figure
+(`WorkstreamAgentStateTracker.mainContextUsage(for:)`). Subagent roster cards
+carry no meter — Claude Code hooks report no per-run token figures. The meter
+itself is a 40×3pt bar plus a percentage: green below 60%, orange below 85%,
+red at 85% or more (`ContextMeter`).
 
 ## Avatars
 
@@ -183,12 +174,6 @@ percentage: green below 60%, orange below 85%, red at 85% or more
 
 Types with no art at all resolve to nil; views substitute a neutral SF Symbol
 placeholder (`person.crop.circle.fill`).
-
-Types can also **alias** to another set (`typeAliases` in `AgentSpriteStore`),
-covering harnesses whose built-ins lack dedicated art: OpenCode's `build` →
-claude, `general` → generalpurpose, `ask`/`scout` → explore. A type's own art
-always wins — dropping `avatar_<type>_1.png` immediately overrides the alias,
-no code changes.
 
 Assets are 64×64 PNGs normalized to 32pt (`AgentSpriteStore.pointSize`);
 views render them with `.interpolation(.none)` for crisp pixels on Retina.

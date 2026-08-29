@@ -6,7 +6,6 @@ import Foundation
 struct LaunchLogEntry: Codable {
     struct ToolPaths: Codable {
         let claude: String?
-        var opencode: String? = nil
         let tmux: String?
         let ffRun: String?
     }

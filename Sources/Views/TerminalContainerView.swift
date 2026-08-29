@@ -506,40 +506,6 @@ struct TerminalContainerView: View {
         return appEnv.githubPR(for: projectDirectory, branch: branch)
     }
 
-    /// The Atelier state directory inside the worktree.
-    private var factoryFloorStateDirectory: URL {
-        URL(fileURLWithPath: workingDirectory).appendingPathComponent(".atelier-state", isDirectory: true)
-    }
-
-    /// Session id recorded by the Atelier opencode plugin, if any.
-    private var trackedOpencodeSessionID: String? {
-        let url = factoryFloorStateDirectory.appendingPathComponent("opencode-session")
-        guard let raw = try? String(contentsOf: url, encoding: .utf8) else { return nil }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    /// Writes (or clears) the system-prompt instructions the opencode plugin
-    /// appends on each user message. Claude receives these via
-    /// --append-system-prompt instead.
-    private func syncOpencodeInstructions() {
-        var parts: [String] = []
-        if !allowOutsideWorktree {
-            parts.append(SystemPrompts.restrictToWorktreePrompt(worktreePath: workingDirectory))
-        }
-        if autoRenameBranch {
-            parts.append(SystemPrompts.autoRenameBranchPrompt)
-        }
-
-        let instructionsURL = factoryFloorStateDirectory.appendingPathComponent("instructions.md")
-        do {
-            try FileManager.default.createDirectory(at: factoryFloorStateDirectory, withIntermediateDirectories: true)
-            try parts.joined(separator: "\n\n").write(to: instructionsURL, atomically: true, encoding: .utf8)
-        } catch {
-            logger.warning("Failed to write opencode instructions: \(error.localizedDescription)")
-        }
-    }
-
     private func buildClaudeCommand() -> String? {
         guard let basePath = appEnv.toolStatus.claude.path else { return nil }
         let sessionID = workstreamID.uuidString.lowercased()
@@ -596,36 +562,11 @@ struct TerminalContainerView: View {
             message: "Starting new session..."
         )
 
-        return wrapAgentCommand(cmd, intermediates: [resume.command, fresh.command, cmd], toolPathsClaude: basePath, toolPathsOpencode: nil)
-    }
-
-    private func buildOpencodeCommand() -> String? {
-        guard let basePath = appEnv.toolStatus.opencode.path else { return nil }
-        syncOpencodeInstructions()
-
-        // Resume-first: prefer the session id the plugin recorded for this
-        // worktree; fall back to launching fresh (the plugin then records the
-        // new id).
-        var resume = CommandBuilder(basePath)
-        if let tracked = trackedOpencodeSessionID {
-            resume.flag("--session")
-            resume.arg(tracked)
-        }
-        if bypassPermissions { resume.flag("--auto") }
-
-        var fresh = CommandBuilder(basePath)
-        if bypassPermissions { fresh.flag("--auto") }
-
-        let cmd = CommandBuilder.withFallback(
-            resume.command, fresh.command,
-            message: "Starting new session..."
-        )
-
-        return wrapAgentCommand(cmd, intermediates: [resume.command, fresh.command, cmd], toolPathsClaude: nil, toolPathsOpencode: basePath)
+        return wrapAgentCommand(cmd, intermediates: [resume.command, fresh.command, cmd], toolPathsClaude: basePath)
     }
 
     /// Shared tail of agent command building: optional tmux wrapping + launch log.
-    private func wrapAgentCommand(_ cmd: String, intermediates: [String], toolPathsClaude: String?, toolPathsOpencode: String?) -> String {
+    private func wrapAgentCommand(_ cmd: String, intermediates: [String], toolPathsClaude: String?) -> String {
         let finalCommand: String
         var intermediates = intermediates
         if useTmux, let tmuxPath = appEnv.toolStatus.tmux.path {
@@ -645,7 +586,6 @@ struct TerminalContainerView: View {
             workingDirectory: workingDirectory,
             toolPaths: LaunchLogEntry.ToolPaths(
                 claude: toolPathsClaude ?? appEnv.toolStatus.claude.path,
-                opencode: toolPathsOpencode,
                 tmux: appEnv.toolStatus.tmux.path,
                 ffRun: RunLauncher.executableURL()?.path
             ),
@@ -665,7 +605,6 @@ struct TerminalContainerView: View {
     private func buildAgentCommand() -> String? {
         switch harness {
         case .claudeCode: return buildClaudeCommand()
-        case .opencode: return buildOpencodeCommand()
         }
     }
 
@@ -673,7 +612,6 @@ struct TerminalContainerView: View {
     private var harnessBinaryPath: String? {
         switch harness {
         case .claudeCode: return appEnv.toolStatus.claude.path
-        case .opencode: return appEnv.toolStatus.opencode.path
         }
     }
 

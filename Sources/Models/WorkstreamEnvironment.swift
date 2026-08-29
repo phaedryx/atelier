@@ -42,7 +42,7 @@ enum WorkstreamEnvironment {
         }
 
         // Agent Teams is a Claude Code experimental feature.
-        if agentTeams, harness == .claudeCode {
+        if agentTeams {
             vars["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
         }
 

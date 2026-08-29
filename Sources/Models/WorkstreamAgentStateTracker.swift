@@ -43,8 +43,8 @@ final class WorkstreamAgentStateTracker: ObservableObject {
 
         /// Claude's agent id ("main" or a subagent id).
         let id: String
-        /// Display name ("Claude"/"OpenCode" or the subagent type). Mutable:
-        /// later events may refine it once the harness reports the agent type.
+        /// Display name ("Claude" or the subagent type). Mutable: later events
+        /// may refine it once the harness reports the agent type.
         var name: String
         let palette: Int
         let isMain: Bool
@@ -55,16 +55,6 @@ final class WorkstreamAgentStateTracker: ObservableObject {
         var state: RunState
         /// What the agent is doing right now, e.g. "Editing Foo.swift".
         var activity: String?
-        /// Model backing the run when the harness reports one.
-        var model: String?
-        /// Per-run context figures when the harness reports them directly
-        /// (e.g. OpenCode child sessions via agent_info).
-        var contextUsedTokens: Int?
-        var contextLimitTokens: Int?
-        /// Short task description the harness attaches to delegated subagents
-        /// (OpenCode subtask parts); rendered as a roster subtitle. Kept out of
-        /// `name` so sprite selection keeps keying off the agent type.
-        var taskDescription: String?
         let startedAt: Date
         var lastEventAt: Date
     }
@@ -159,17 +149,10 @@ final class WorkstreamAgentStateTracker: ObservableObject {
         liveSessionIDs.contains(id)
     }
 
-    /// Context usage of the workstream's main session, regardless of harness:
-    /// prefers the transcript-derived figure (Claude Code), falling back to
-    /// the per-run totals the harness reported (OpenCode `agent_info`).
-    /// Returns nil while no main run is live or nothing has been reported yet.
+    /// Context usage of the workstream's main session, read from the Claude
+    /// Code transcript tail. Returns nil until a transcript has been parsed.
     func mainContextUsage(for id: UUID) -> ContextUsage? {
-        if let rowLevel = contextUsage[id] { return rowLevel }
-        guard let main = rosters[id]?.first(where: { $0.isMain }),
-              let used = main.contextUsedTokens,
-              let limit = main.contextLimitTokens,
-              limit > 0 else { return nil }
-        return ContextUsage(usedTokens: used, limitTokens: limit)
+        contextUsage[id]
     }
 
     /// Drops all tracked state for a workstream (called when it is removed).
@@ -252,8 +235,8 @@ final class WorkstreamAgentStateTracker: ObservableObject {
         func upsert(_ agentId: String, name: String? = nil, palette: Int = 0, isMain: Bool = true, variantIndex: Int = 0, mutate: (inout AgentRun) -> Void = { _ in }) {
             if let idx = list.firstIndex(where: { $0.id == agentId }) {
                 mutate(&list[idx])
-                // Harnesses may report the display name after a run's first
-                // event (e.g. OpenCode child sessions); apply refinements.
+                // A later event may refine the display name once the harness
+                // reports the agent type; apply refinements.
                 if let name, !name.isEmpty, name != list[idx].name {
                     list[idx].name = name
                 }
@@ -267,7 +250,6 @@ final class WorkstreamAgentStateTracker: ObservableObject {
                     variantIndex: variantIndex,
                     state: .working,
                     activity: nil,
-                    model: nil,
                     startedAt: now,
                     lastEventAt: now
                 )
@@ -278,17 +260,13 @@ final class WorkstreamAgentStateTracker: ObservableObject {
 
         switch event.type {
         case .agentCreated:
-            // A duplicate create (OpenCode re-forwards the subtask part to
-            // enrich an already-registered child) refines the existing run's
-            // attributes instead of recreating it.
+            // A duplicate create refines the existing run's attributes
+            // instead of recreating it.
             let fallbackName = NSLocalizedString("Sub-agent", comment: "Fallback name for an unnamed subagent")
             let name = event.name ?? fallbackName
             if let idx = list.firstIndex(where: { $0.id == event.agentId }) {
                 if !name.isEmpty, name != list[idx].name {
                     list[idx].name = name
-                }
-                if let description = event.taskDescription, !description.isEmpty {
-                    list[idx].taskDescription = description
                 }
                 list[idx].lastEventAt = now
             } else {
@@ -298,11 +276,7 @@ final class WorkstreamAgentStateTracker: ObservableObject {
                     palette: event.palette ?? 1,
                     isMain: false,
                     variantIndex: Self.nextVariantIndex(for: name, in: list)
-                ) { run in
-                    if let description = event.taskDescription, !description.isEmpty {
-                        run.taskDescription = description
-                    }
-                }
+                )
             }
 
         case .agentRemoved:
@@ -326,47 +300,10 @@ final class WorkstreamAgentStateTracker: ObservableObject {
         case .agentWaiting:
             upsert(event.agentId, name: event.name)
 
-        case .agentInfo:
-            // Attribute-only refresh: update an existing run's name/model
-            // without touching state. Info can also arrive before any tool
-            // or prompt event (OpenCode streams message.updated early); in
-            // that case create the MAIN run so its context figures land —
-            // subagents are still never created from info alone.
-            if event.agentId == "main", !list.contains(where: { $0.id == "main" }) {
-                upsert("main", name: event.name) { run in
-                    run.model = event.model ?? run.model
-                    run.contextUsedTokens = event.contextUsedTokens ?? run.contextUsedTokens
-                    run.contextLimitTokens = event.contextLimitTokens ?? run.contextLimitTokens
-                }
-            } else if let idx = list.firstIndex(where: { $0.id == event.agentId }) {
-                if let name = event.name, !name.isEmpty, name != list[idx].name {
-                    list[idx].name = name
-                }
-                if let model = event.model {
-                    list[idx].model = model
-                }
-                if let used = event.contextUsedTokens {
-                    list[idx].contextUsedTokens = used
-                }
-                if let limit = event.contextLimitTokens {
-                    list[idx].contextLimitTokens = limit
-                }
-                list[idx].lastEventAt = now
-            }
-
         case .agentIdle:
             // Main going idle ends the whole turn; a child idling removes
-            // only that child. Snapshot the main run's last known context
-            // figures first — OpenCode reports them per-run only, and the
-            // roster is about to clear, but the row keeps showing usage
-            // until the next turn.
+            // only that child.
             if event.agentId == "main" {
-                if let main = list.first(where: \.isMain),
-                   let used = main.contextUsedTokens,
-                   let limit = main.contextLimitTokens,
-                   limit > 0 {
-                    contextUsage[wsID] = ContextUsage(usedTokens: used, limitTokens: limit)
-                }
                 list.removeAll()
             } else {
                 list.removeAll { $0.id == event.agentId }
@@ -426,7 +363,7 @@ final class WorkstreamAgentStateTracker: ObservableObject {
                 states[wsID] = .working
             }
 
-        case .agentCreated, .agentRemoved, .agentInfo:
+        case .agentCreated, .agentRemoved:
             break
         }
     }
@@ -463,7 +400,7 @@ final class WorkstreamAgentStateTracker: ObservableObject {
             // no-flicker behaviour; only this per-surface state changes.
             surfaceStates[surfaceID] = .working
 
-        case .agentCreated, .agentRemoved, .agentInfo:
+        case .agentCreated, .agentRemoved:
             break
         }
     }

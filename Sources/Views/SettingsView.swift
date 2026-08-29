@@ -4,13 +4,6 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @AppStorage("atelier.defaultHarness") private var defaultHarnessRaw: String = CodingHarness.claudeCode.rawValue
-    private var defaultHarness: Binding<CodingHarness> {
-        Binding(
-            get: { CodingHarness(rawValue: defaultHarnessRaw) ?? .claudeCode },
-            set: { defaultHarnessRaw = $0.rawValue }
-        )
-    }
     @AppStorage("atelier.tmuxMode") private var tmuxMode: Bool = false
     @AppStorage("atelier.bypassPermissions") private var bypassPermissions: Bool = false
     @AppStorage("atelier.allowOutsideWorktree") private var allowOutsideWorktree: Bool = false
@@ -50,11 +43,6 @@ struct SettingsView: View {
                     name: "claude",
                     status: appEnv.toolStatus.claude,
                     version: appEnv.toolStatus.claudeVersion
-                )
-                ToolRow(
-                    name: "opencode",
-                    status: appEnv.toolStatus.opencode,
-                    version: appEnv.toolStatus.opencodeVersion
                 )
                 ToolRow(
                     name: "gh",
@@ -161,17 +149,6 @@ struct SettingsView: View {
             // MARK: - Coding Agent
 
             Section("Coding Agent") {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Default coding agent")
-                        .font(.caption)
-                        .fontWeight(.medium)
-                        .foregroundStyle(.secondary)
-                    HarnessPicker(selection: defaultHarness)
-                    Text("Used when creating new workstreams. Each workstream can override this choice.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
                 SettingToggle(
                     "Bypass permission prompts",
                     isOn: $bypassPermissions,
@@ -456,8 +433,6 @@ struct ToolStatus {
     var claude: BinaryStatus = .notFound
     var claudeVersion: String?
     var claudeSupportsSessionName: Bool = false
-    var opencode: BinaryStatus = .notFound
-    var opencodeVersion: String?
     var gh: BinaryStatus = .notFound
     var ghVersion: String?
     var ghAuthDetail: String?
@@ -468,7 +443,6 @@ struct ToolStatus {
     func binary(for harness: CodingHarness) -> BinaryStatus {
         switch harness {
         case .claudeCode: return claude
-        case .opencode: return opencode
         }
     }
 
@@ -484,11 +458,6 @@ struct ToolStatus {
         if let path = status.claude.path {
             status.claudeVersion = runForVersion(path, args: ["--version"])
             status.claudeSupportsSessionName = helpContainsFlag(path, flag: "--name")
-        }
-
-        status.opencode = findBinary("opencode")
-        if let path = status.opencode.path {
-            status.opencodeVersion = runForVersion(path, args: ["--version"])
         }
 
         status.gh = findBinary("gh")

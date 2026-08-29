@@ -28,19 +28,6 @@ final class AgentSpriteStore {
     /// Number of distinct palettes (0 is the main agent).
     static let paletteCount = 6
 
-    /// Sprite-set aliases: agent type names without their own sprite files
-    /// reuse an existing set. OpenCode ships `build`/`plan` primaries and
-    /// `general`/`explore`/`scout` subagents; Claude Code uses
-    /// `explore`/`general-purpose`/`plan`. A type's own art always wins —
-    /// aliases only fill gaps (drop `avatar_<type>_1.png` to override).
-    private static let typeAliases: [String: String] = [
-        "build": "claude",
-        "code": "claude",
-        "general": "generalpurpose",
-        "ask": "explore",
-        "scout": "explore",
-    ]
-
     /// Point size the avatars are normalized to.
     static let pointSize = CGSize(width: 32, height: 32)
 
@@ -55,8 +42,8 @@ final class AgentSpriteStore {
         let slot = ((palette % Self.paletteCount) + Self.paletteCount) % Self.paletteCount
 
         if let name, !name.isEmpty {
-            let normalized = Self.normalizeTypeName(name)
-            for key in Self.resolutionKeys(for: normalized) {
+            let key = Self.normalizeTypeName(name)
+            if !key.isEmpty {
                 if let file = spriteFile(for: key, variant: variant),
                    let image = cachedLookup("file:\(file)", resource: file)
                 {
@@ -71,17 +58,6 @@ final class AgentSpriteStore {
             return image
         }
         return nil
-    }
-
-    /// Keys to try for a normalized type name, in order: the type itself
-    /// first (so dedicated art overrides aliases), then its alias, if any.
-    static func resolutionKeys(for normalizedType: String) -> [String] {
-        guard !normalizedType.isEmpty else { return [] }
-        var keys = [normalizedType]
-        if let alias = typeAliases[normalizedType], alias != normalizedType {
-            keys.append(alias)
-        }
-        return keys
     }
 
     // MARK: - Sprite Sets

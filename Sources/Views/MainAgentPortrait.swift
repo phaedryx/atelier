@@ -15,7 +15,7 @@ struct MainAgentPortrait: View {
     let isPathValid: Bool
     /// Whether any hook event was seen for this workstream this app launch.
     let hasLiveSession: Bool
-    /// Agent type resolving the sprite ("Claude", "OpenCode", …).
+    /// Agent type resolving the sprite ("Claude", "explore", …).
     let portraitName: String
     var size: CGFloat = 38
 

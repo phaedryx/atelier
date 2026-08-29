@@ -88,8 +88,6 @@ targets:
         buildPhase: resources
       - path: Resources/Scripts/atelier-hook
         buildPhase: resources
-      - path: Resources/Scripts/atelier-opencode.js
-        buildPhase: resources
       - path: Resources/AgentSprites
         buildPhase: resources
         type: folder

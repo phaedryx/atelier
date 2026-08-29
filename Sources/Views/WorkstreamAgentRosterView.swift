@@ -4,9 +4,8 @@
 import SwiftUI
 
 /// One card per live SUBAGENT run, mirroring the workstream row's design in
-/// miniature: ringed pixel portrait, type name, a status meta line (dot +
-/// word · activity · elapsed), and a context bar when the harness reports
-/// per-run token figures. The main agent is not listed — its portrait,
+/// miniature: ringed pixel portrait, type name, and a status meta line (dot +
+/// word · activity · elapsed). The main agent is not listed — its portrait,
 /// status line, and context bar live on the workstream row itself. Cards
 /// exist exactly while their run is live — Claude Code's stop hooks remove
 /// them the moment an agent finishes.
@@ -51,9 +50,6 @@ struct WorkstreamAgentRosterView: View {
         for run in runs {
             let cap = run.name.capitalizedFirst
             text = text + Text(", ") + Text(cap)
-            if let description = run.taskDescription, !description.isEmpty {
-                text = text + Text(" — ") + Text(description)
-            }
         }
         return text
     }
@@ -63,15 +59,6 @@ struct WorkstreamAgentRosterView: View {
 
 private struct RosterCard: View {
     let run: WorkstreamAgentStateTracker.AgentRun
-
-    /// Child sessions carry per-run context figures from the harness;
-    /// cards without them simply render shorter.
-    private var contextUsage: WorkstreamAgentStateTracker.ContextUsage? {
-        guard let used = run.contextUsedTokens,
-              let limit = run.contextLimitTokens,
-              limit > 0 else { return nil }
-        return WorkstreamAgentStateTracker.ContextUsage(usedTokens: used, limitTokens: limit)
-    }
 
     private var statusColor: Color {
         switch run.state {
@@ -92,23 +79,19 @@ private struct RosterCard: View {
             RosterAvatar(name: run.name, palette: run.palette, variant: run.variantIndex, state: run.state)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(inlineTitle)
+                Text(displayName)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.tail)
 
                 statusMeta
-
-                if let usage = contextUsage {
-                    ContextMeter(usage: usage, style: .bar)
-                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
             Spacer(minLength: 0)
         }
-        .help(tooltipText)
+        .help(displayName)
         .padding(.vertical, 2)
     }
 
@@ -147,20 +130,6 @@ private struct RosterCard: View {
 
     private var displayName: String {
         run.name.capitalizedFirst
-    }
-
-    private var inlineTitle: String {
-        if let desc = run.taskDescription, !desc.isEmpty {
-            return "\(displayName) — \(desc)"
-        }
-        return displayName
-    }
-
-    private var tooltipText: String {
-        var parts = [displayName]
-        if let model = run.model, !model.isEmpty { parts.append(model) }
-        if let description = run.taskDescription, !description.isEmpty { parts.append(description) }
-        return parts.joined(separator: " · ")
     }
 }
 
