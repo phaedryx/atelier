@@ -2510,6 +2510,7 @@ final class TerminalSurfaceCache: ObservableObject {
     private var tabSnapshots: [UUID: WorkspaceTabSnapshot] = [:]
     private var webViews: [UUID: WKWebView] = [:]
     private var quickActionRunners: [UUID: QuickActionRunner] = [:]
+    private var workspaceModels: [UUID: WorkspaceModel] = [:]
     /// Surface IDs that should respawn when closed (e.g., the agent).
     var respawnableIDs: Set<UUID> = []
     /// Guards against concurrent respawns for the same surface ID.
@@ -2634,6 +2635,18 @@ final class TerminalSurfaceCache: ObservableObject {
         return runner
     }
 
+    /// The workstream's tab state. Created on first access from `seed`, which is
+    /// ignored on every later call — the model, not the seed, is the source of
+    /// truth once it exists.
+    func workspaceModel(for workstreamID: UUID, seed: @autoclosure () -> WorkspaceTabSnapshot) -> WorkspaceModel {
+        if let existing = workspaceModels[workstreamID] {
+            return existing
+        }
+        let model = WorkspaceModel(workstreamID: workstreamID, snapshot: seed())
+        workspaceModels[workstreamID] = model
+        return model
+    }
+
     func removeWebView(for id: UUID) {
         webViews.removeValue(forKey: id)
     }
@@ -2649,6 +2662,7 @@ final class TerminalSurfaceCache: ObservableObject {
 
     func removeWorkstreamSurfaces(for workstreamID: UUID) {
         tabSnapshots.removeValue(forKey: workstreamID)
+        workspaceModels.removeValue(forKey: workstreamID)
         if let runner = quickActionRunners.removeValue(forKey: workstreamID) {
             runner.cancel()
         }

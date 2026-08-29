@@ -185,3 +185,51 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertFalse(model.isActiveEditorDirty)
     }
 }
+
+@MainActor
+final class WorkspaceModelCacheTests: XCTestCase {
+    private func seed() -> WorkspaceTabSnapshot {
+        startupWorkspaceTabState(snapshot: nil, savedTab: nil)
+    }
+
+    func testCacheReturnsTheSameModelForTheSameWorkstream() {
+        let cache = TerminalSurfaceCache()
+        let workstreamID = UUID()
+
+        let first = cache.workspaceModel(for: workstreamID, seed: seed())
+        let second = cache.workspaceModel(for: workstreamID, seed: seed())
+
+        XCTAssertTrue(first === second)
+    }
+
+    func testCacheKeepsModelsDistinctPerWorkstream() {
+        let cache = TerminalSurfaceCache()
+
+        let a = cache.workspaceModel(for: UUID(), seed: seed())
+        let b = cache.workspaceModel(for: UUID(), seed: seed())
+
+        XCTAssertFalse(a === b)
+    }
+
+    func testSeedIsIgnoredAfterTheModelExists() {
+        let cache = TerminalSurfaceCache()
+        let workstreamID = UUID()
+        let model = cache.workspaceModel(for: workstreamID, seed: seed())
+        let terminal = model.addTerminal()
+
+        let again = cache.workspaceModel(for: workstreamID, seed: seed())
+
+        XCTAssertTrue(again.tabs.contains(.terminal(terminal)))
+    }
+
+    func testRemovingWorkstreamSurfacesDropsTheModel() {
+        let cache = TerminalSurfaceCache()
+        let workstreamID = UUID()
+        let first = cache.workspaceModel(for: workstreamID, seed: seed())
+
+        cache.removeWorkstreamSurfaces(for: workstreamID)
+        let second = cache.workspaceModel(for: workstreamID, seed: seed())
+
+        XCTAssertFalse(first === second)
+    }
+}
