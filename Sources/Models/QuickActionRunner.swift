@@ -75,11 +75,6 @@ struct QuickActionLogEntry: Identifiable {
     let command: String
     var output: String
     var exitCode: Int32?
-    /// Human-readable result extracted from the agent output (assistant
-    /// text), shown instead of the raw stream.
-    var summary: String?
-    /// Link extracted from the result (e.g. the created PR URL).
-    var artifactURL: String?
 }
 
 @MainActor

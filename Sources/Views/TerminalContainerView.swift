@@ -2338,8 +2338,6 @@ private struct QuickActionLogRow: View {
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
 
-            summarySection
-
             if !entry.output.isEmpty {
                 DisclosureGroup(isExpanded: $showsRawOutput) {
                     Text(entry.output)
@@ -2355,45 +2353,6 @@ private struct QuickActionLogRow: View {
             }
         }
         .padding(.horizontal, 8)
-    }
-
-    /// Parsed assistant-text result, or a placeholder while streaming.
-    @ViewBuilder
-    private var summarySection: some View {
-        if let summary = entry.summary, !summary.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(summary)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.primary)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                if let artifactURL = entry.artifactURL, let url = URL(string: artifactURL) {
-                    Button {
-                        NSWorkspace.shared.open(url)
-                    } label: {
-                        Label(artifactLabel, systemImage: "arrow.up.forward")
-                            .font(.system(size: 10, weight: .medium))
-                    }
-                    .buttonStyle(.borderless)
-                    .help(url.absoluteString)
-                }
-            }
-            .padding(8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 5))
-        } else if entry.exitCode == nil {
-            Text("Working…")
-                .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
-        }
-    }
-
-    private var artifactLabel: String {
-        if entry.artifactURL?.contains("/pull/") == true {
-            return NSLocalizedString("Open Pull Request", comment: "Opens the PR created by a quick action")
-        }
-        return NSLocalizedString("Open Link", comment: "Opens an artifact link produced by a quick action")
     }
 }
 

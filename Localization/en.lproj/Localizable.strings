@@ -407,9 +407,6 @@
 
 /* Quick action results */
 "Raw output" = "Raw output";
-"Open Pull Request" = "Open Pull Request";
-"Open Link" = "Open Link";
-"Working…" = "Working…";
 
 /* Agent IPC */
 "Agent messaging" = "Agent messaging";
