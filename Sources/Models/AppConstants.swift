@@ -40,7 +40,7 @@ enum AppConstants {
         "Atelier"
     }()
 
-    /// GitHub `owner/repo` the update checker polls for new releases.
+    /// GitHub `owner/repo` backing the repository and documentation URLs below.
     static let repositorySlug: String = "phaedryx/atelier"
 
     /// Home of the project. The fork has no marketing site, so docs and

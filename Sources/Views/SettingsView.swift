@@ -19,7 +19,6 @@ struct SettingsView: View {
     @AppStorage("atelier.crashReportingEnabled") private var crashReportingEnabled: Bool = true
     @AppStorage("atelier.detailedLogging") private var detailedLogging: Bool = false
     @AppStorage("atelier.quickActionDebug") private var quickActionDebug: Bool = false
-    @AppStorage("atelier.bleedingEdge") private var bleedingEdge: Bool = false
     @AppStorage("atelier.baseDirectory") private var baseDirectory: String = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first ?? ""
 
     @State private var launchAtLogin = LaunchAtLogin.isEnabled
@@ -286,13 +285,6 @@ struct SettingsView: View {
                     "Quick action debug",
                     isOn: $quickActionDebug,
                     description: "Show a debug panel with command output from quick actions (Create PR, Commit & Push)."
-                )
-
-                SettingToggle(
-                    "Bleeding edge",
-                    isOn: $bleedingEdge,
-                    description: "Receive pre-release builds with the latest features. These may be less stable.",
-                    descriptionStyle: bleedingEdge ? .warning : .secondary
                 )
 
                 LabeledContent("Clear project list") {
