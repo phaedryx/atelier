@@ -278,6 +278,12 @@
 "Refresh changes" = "Refresh changes";
 "Binary file (not shown)" = "Binary file (not shown)";
 "Large file — %d changes, click to load" = "Large file — %d changes, click to load";
+"%d comment(s)" = "%d comment(s)";
+"Submit Review" = "Submit Review";
+"Discard" = "Discard";
+"Discard all review comments?" = "Discard all review comments?";
+"No Coding Agent terminal is running for this workstream." = "No Coding Agent terminal is running for this workstream.";
+"Submit Review Comments" = "Submit Review Comments";
 
 /* Changes diff - review comments */
 "Add review comment…" = "Add review comment…";

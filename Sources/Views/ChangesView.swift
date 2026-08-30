@@ -28,11 +28,14 @@ struct ChangesView: View {
     let projectDirectory: String
     let bridge: MonacoDiffBridge
     @ObservedObject var annotations: ChangeAnnotationStore
+    @EnvironmentObject private var surfaceCache: TerminalSurfaceCache
 
     @State private var isLoading = true
     @State private var isRefreshing = false
     @State private var fileCount = 0
     @State private var mode: ChangesMode = .branch
+    @State private var showNoAgentAlert = false
+    @State private var confirmDiscard = false
 
     /// The current changed-file set, surfaced for the sidebar tree. Captured
     /// from the same load that builds the diff payload (no extra git read).
@@ -125,6 +128,9 @@ struct ChangesView: View {
             configureCommentHandler()
             fullLoad()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .submitChangeReview)) { _ in
+            submitReview()
+        }
     }
 
     // MARK: - Toolbar
@@ -163,6 +169,24 @@ struct ChangesView: View {
                 .foregroundStyle(.secondary)
             }
 
+            if !annotations.comments(mode: mode).isEmpty {
+                let count = annotations.comments(mode: mode).count
+                Divider().frame(height: 14)
+                Text(String(
+                    format: NSLocalizedString("%d comment(s)", comment: "Changes tab: pending review comment count"),
+                    count
+                ))
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+
+                Button("Submit Review") { submitReview() }
+                    .controlSize(.small)
+                    .disabled(isLoading || isRefreshing)
+
+                Button("Discard") { confirmDiscard = true }
+                    .controlSize(.small)
+            }
+
             Spacer()
 
             Button {
@@ -179,6 +203,18 @@ struct ChangesView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(.bar)
+        .confirmationDialog(
+            Text("Discard all review comments?"),
+            isPresented: $confirmDiscard
+        ) {
+            Button("Discard", role: .destructive) {
+                annotations.clear(mode: mode)
+                pushComments()
+            }
+        }
+        .alert(Text("No Coding Agent terminal is running for this workstream."), isPresented: $showNoAgentAlert) {
+            Button("OK", role: .cancel) {}
+        }
     }
 
     // MARK: - Refresh
@@ -343,6 +379,47 @@ struct ChangesView: View {
             return entry
         }
         bridge.setComments(payload)
+    }
+
+    /// Format the active mode's comments and paste them into the workstream's
+    /// Coding Agent surface. Comments are cleared only after a successful send;
+    /// a missing surface keeps them and tells the user.
+    private func submitReview() {
+        let toSend = annotations.comments(mode: mode)
+        guard !toSend.isEmpty else { return }
+        guard surfaceCache.hasLiveSurface(workstreamID) else {
+            showNoAgentAlert = true
+            return
+        }
+
+        let workDir = workingDirectory
+        let projDir = projectDirectory
+        let currentMode = mode
+        let cache = surfaceCache
+        let target = workstreamID
+
+        // repoInfo shells out to git — resolve the labels off the main thread.
+        DispatchQueue.global(qos: .userInitiated).async {
+            let branch = GitOperations.repoInfo(at: workDir).branch
+            let base = GitOperations.repoInfo(at: projDir).branch
+            let payload = ChangeReviewFormatter.payload(
+                comments: toSend, mode: currentMode, branch: branch, baseBranch: base
+            )
+            DispatchQueue.main.async {
+                cache.sendText(to: target, text: payload)
+                // Same two-stage Return as AgentNudge (AgentNudge.swift:140-147):
+                // the first confirms the bracketed paste, the second submits.
+                // One immediate Return drops input intermittently.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    cache.sendReturn(to: target)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        cache.sendReturn(to: target)
+                    }
+                }
+                annotations.clear(mode: currentMode)
+                pushComments()
+            }
+        }
     }
 
     /// Pull (original, modified) texts out of the setFiles payload for

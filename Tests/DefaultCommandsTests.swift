@@ -52,4 +52,14 @@ final class DefaultCommandsTests: XCTestCase {
 
         wait(for: [posted], timeout: 1)
     }
+
+    @MainActor
+    func testSubmitReviewCommandIsWorkstreamGated() {
+        let commands = defaultPaletteCommands()
+        guard let command = commands.first(where: { $0.id == "changes.submitReview" }) else {
+            return XCTFail("changes.submitReview not registered")
+        }
+        XCTAssertFalse(command.isAvailable(PaletteContext(workstreamActive: false, editorActive: false)))
+        XCTAssertTrue(command.isAvailable(PaletteContext(workstreamActive: true, editorActive: false)))
+    }
 }

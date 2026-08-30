@@ -16,6 +16,7 @@ func defaultPaletteCommands() -> [PaletteCommand] {
     let tabs = NSLocalizedString("Tabs", comment: "Palette category")
     let editorCategory = NSLocalizedString("Editor", comment: "Palette category")
     let run = NSLocalizedString("Run", comment: "Palette category")
+    let changes = NSLocalizedString("Changes", comment: "Palette category")
     let external = NSLocalizedString("External", comment: "Palette category")
     let navigation = NSLocalizedString("Navigation", comment: "Palette category")
     let app = NSLocalizedString("Application", comment: "Palette category")
@@ -49,6 +50,9 @@ func defaultPaletteCommands() -> [PaletteCommand] {
 
         PaletteCommand(id: "run.startRerun", title: NSLocalizedString("Start/Rerun", comment: ""), category: run,
                        shortcut: "⌘⇧↩", isAvailable: workstream, action: post(.rerunScript)),
+
+        PaletteCommand(id: "changes.submitReview", title: NSLocalizedString("Submit Review Comments", comment: ""), category: changes,
+                       isAvailable: workstream, action: post(.submitChangeReview)),
 
         PaletteCommand(id: "external.browser", title: NSLocalizedString("Open in External Browser", comment: ""), category: external,
                        shortcut: "⌘⌥B", isAvailable: workstream, action: post(.openExternalBrowser)),
