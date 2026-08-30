@@ -187,6 +187,21 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertFalse(model.isEditorTabActive)
         XCTAssertFalse(model.isActiveEditorDirty)
     }
+
+    func testBridgesAreCreatedOnceAndReused() {
+        let model = makeModel()
+
+        XCTAssertNil(model.editorBridge)
+        XCTAssertNil(model.diffBridge)
+
+        let editor = model.ensureEditorBridge()
+        let diff = model.ensureDiffBridge()
+
+        XCTAssertTrue(model.ensureEditorBridge() === editor)
+        XCTAssertTrue(model.ensureDiffBridge() === diff)
+        XCTAssertNotNil(model.editorBridge)
+        XCTAssertNotNil(model.diffBridge)
+    }
 }
 
 @MainActor

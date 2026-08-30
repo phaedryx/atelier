@@ -325,8 +325,6 @@ struct TerminalContainerView: View {
     @AppStorage("atelier.editorTabActive") private var editorTabActive: Bool = false
     @AppStorage("atelier.editorFileDirty") private var editorFileDirty: Bool = false
     @State private var scriptConfig: ScriptConfig = .empty
-    @State private var editorBridge: MonacoEditorBridge?
-    @State private var diffBridge: MonacoDiffBridge?
     @State private var fileTree: [FileNode] = []
     @State private var gitFileStatuses = GitFileStatusProvider()
     @State private var directoryWatcher: DirectoryWatcher?
@@ -777,7 +775,7 @@ struct TerminalContainerView: View {
                 onRestart: restartRun
             )
         case .changes:
-            if let bridge = diffBridge {
+            if let bridge = model.diffBridge {
                 ChangesView(
                     workingDirectory: workingDirectory,
                     projectDirectory: projectDirectory,
@@ -832,7 +830,7 @@ struct TerminalContainerView: View {
             BrowserView(defaultURL: browserDefaultURL, isWaitingForServer: isWaitingForServer, tabID: id, webView: surfaceCache.webView(for: id))
                 .id(id)
         case let .editor(id):
-            if let bridge = editorBridge {
+            if let bridge = model.editorBridge {
                 EditorView(
                     workingDirectory: workingDirectory,
                     fileTree: fileTree,
@@ -979,6 +977,10 @@ struct TerminalContainerView: View {
             surfaceCache.updateOcclusion(visibleSurfaceIDs: visibleSurfaceIDs)
             WorkspaceStateStore.save(RestorableWorkspaceTab(activeTab: model.activeTab), for: workstreamID)
             appEnv.refreshWorktreeState(for: workingDirectory, projectDirectory: projectDirectory)
+        }
+        .onChange(of: model.isActiveEditorDirty) {
+            guard isActive else { return }
+            editorFileDirty = model.isActiveEditorDirty
         }
         .onReceive(NotificationCenter.default.publisher(for: .terminalActivity)) { notification in
             guard isActive else { return }
@@ -1414,22 +1416,19 @@ struct TerminalContainerView: View {
     }
 
     private func createEditorBridgeIfNeeded() {
-        guard editorBridge == nil else { return }
-        let bridge = MonacoEditorBridge()
-        bridge.onContentChanged = { [self] modelId, dirty in
-            if let uuid = UUID(uuidString: modelId) {
-                model.editorDirtyState[uuid] = dirty
-                if case .editor(uuid) = model.activeTab {
-                    editorFileDirty = dirty
-                }
-            }
+        guard model.editorBridge == nil else { return }
+        let bridge = model.ensureEditorBridge()
+        // `weak`, not a strong capture: the model owns the bridge, the bridge owns
+        // this closure, so a strong `model` here would retain a whole Monaco
+        // WebView per workstream forever.
+        bridge.onContentChanged = { [weak model] modelId, dirty in
+            guard let model, let uuid = UUID(uuidString: modelId) else { return }
+            model.editorDirtyState[uuid] = dirty
         }
-        editorBridge = bridge
     }
 
     private func createDiffBridgeIfNeeded() {
-        guard diffBridge == nil else { return }
-        diffBridge = MonacoDiffBridge()
+        model.ensureDiffBridge()
     }
 
     private func closeTab(_ tab: WorkspaceTab) {
@@ -1458,17 +1457,15 @@ struct TerminalContainerView: View {
         case .alertFirstButtonReturn:
             // Save then close — async to wait for bridge.getContent()
             Task {
-                if let bridge = editorBridge,
+                if let bridge = model.editorBridge,
                    let relativePath = model.editorFilePaths[id]
                 {
                     let fullPath = (workingDirectory as NSString)
                         .appendingPathComponent(relativePath)
                     // A nil result means this bridge never opened the model.
-                    // The bridge is rebuilt on every mount while the dirty flag
-                    // now lives on the model and survives navigation, so the
-                    // two can disagree. There is nothing to write, but the
-                    // close must still happen — a Save the user asked for can
-                    // never silently do nothing.
+                    // There is nothing to write, but the close must still
+                    // happen — a Save the user asked for can never silently
+                    // do nothing.
                     if let content = await bridge.getContent(modelId: id.uuidString) {
                         do {
                             try content.write(toFile: fullPath, atomically: true, encoding: .utf8)
@@ -1503,7 +1500,7 @@ struct TerminalContainerView: View {
             // The browser tab owns the dev server: closing the last one stops it.
             if !model.hasBrowserTabs { stopRun() }
         case let .editor(id):
-            editorBridge?.closeModel(modelId: id.uuidString)
+            model.editorBridge?.closeModel(modelId: id.uuidString)
         default:
             break
         }

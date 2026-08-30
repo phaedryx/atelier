@@ -34,6 +34,28 @@ final class WorkspaceModel: ObservableObject {
     private(set) var browserCount: Int
     private(set) var editorCount: Int
 
+    /// Monaco WebViews are expensive (~17 MB of JS), so both bridges are created
+    /// on demand and then kept for the workstream's lifetime — closing the last
+    /// editor tab must not tear them down.
+    @Published private(set) var editorBridge: MonacoEditorBridge?
+    @Published private(set) var diffBridge: MonacoDiffBridge?
+
+    @discardableResult
+    func ensureEditorBridge() -> MonacoEditorBridge {
+        if let editorBridge { return editorBridge }
+        let bridge = MonacoEditorBridge()
+        editorBridge = bridge
+        return bridge
+    }
+
+    @discardableResult
+    func ensureDiffBridge() -> MonacoDiffBridge {
+        if let diffBridge { return diffBridge }
+        let bridge = MonacoDiffBridge()
+        diffBridge = bridge
+        return bridge
+    }
+
     init(workstreamID: UUID, snapshot: WorkspaceTabSnapshot) {
         self.workstreamID = workstreamID
         tabs = snapshot.tabs
