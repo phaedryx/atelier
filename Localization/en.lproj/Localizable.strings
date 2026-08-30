@@ -279,6 +279,12 @@
 "Binary file (not shown)" = "Binary file (not shown)";
 "Large file — %d changes, click to load" = "Large file — %d changes, click to load";
 
+/* Changes diff - review comments */
+"Add review comment…" = "Add review comment…";
+"Edit" = "Edit";
+"Delete" = "Delete";
+"Line no longer in diff" = "Line no longer in diff";
+
 /* Changes sidebar - Files changed tree */
 "Files changed" = "Files changed";
 "Added" = "Added";

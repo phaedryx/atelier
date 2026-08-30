@@ -206,3 +206,40 @@ enum ChangeReviewFormatter {
         return "\(location) (\(comment.side.rawValue))"
     }
 }
+
+/// A comment mutation reported by diff.js. Parsed from the WKScriptMessage body
+/// as a pure function so the decoding is testable without a WebView.
+enum ReviewCommentEvent: Equatable {
+    case added(filePath: String, side: DiffSide, line: Int, endLine: Int?, lineText: String, text: String)
+    case edited(id: UUID, text: String)
+    case deleted(id: UUID)
+
+    static func parse(_ body: [String: Any]) -> ReviewCommentEvent? {
+        switch body["type"] as? String {
+        case "commentAdded":
+            guard let filePath = body["filePath"] as? String,
+                  let sideRaw = body["side"] as? String,
+                  let side = DiffSide(rawValue: sideRaw),
+                  let line = body["line"] as? Int,
+                  let text = body["text"] as? String
+            else { return nil }
+            return .added(
+                filePath: filePath,
+                side: side,
+                line: line,
+                endLine: body["endLine"] as? Int,
+                lineText: body["lineText"] as? String ?? "",
+                text: text
+            )
+        case "commentEdited":
+            guard let idString = body["id"] as? String, let id = UUID(uuidString: idString),
+                  let text = body["text"] as? String else { return nil }
+            return .edited(id: id, text: text)
+        case "commentDeleted":
+            guard let idString = body["id"] as? String, let id = UUID(uuidString: idString) else { return nil }
+            return .deleted(id: id)
+        default:
+            return nil
+        }
+    }
+}
