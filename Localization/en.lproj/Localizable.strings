@@ -421,3 +421,20 @@
 "Lets coding agents in this project see and message each other. Messages are delivered when the recipient checks its inbox. Takes effect the next time a Coding Agent starts. Only applies to %@." = "Lets coding agents in this project see and message each other. Messages are delivered when the recipient checks its inbox. Takes effect the next time a Coding Agent starts. Only applies to %@.";
 "Nudge idle agents" = "Nudge idle agents";
 "When a message arrives for an agent that has finished its turn, Atelier types a notice into its terminal. That is typed input: an agent running without permission prompts will act on it." = "When a message arrives for an agent that has finished its turn, Atelier types a notice into its terminal. That is typed input: an agent running without permission prompts will act on it.";
+
+/* Command Palette */
+"Tabs" = "Tabs";
+"External" = "External";
+"Application" = "Application";
+"Show Info" = "Show Info";
+"Show Coding Agent" = "Show Coding Agent";
+"Show Changes" = "Show Changes";
+"Show Environment" = "Show Environment";
+"New Editor" = "New Editor";
+"Close Tab" = "Close Tab";
+"Save As…" = "Save As…";
+"Start/Rerun" = "Start/Rerun";
+"Open in External Browser" = "Open in External Browser";
+"Back to Project" = "Back to Project";
+"Archive Workstream" = "Archive Workstream";
+"Settings…" = "Settings…";
