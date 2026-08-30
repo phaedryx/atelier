@@ -1,0 +1,63 @@
+// ABOUTME: Holds the palette's commands; searches by fuzzy score plus persisted usage frequency.
+// ABOUTME: Frequency lives in UserDefaults so ranking survives relaunch.
+
+import Foundation
+
+@MainActor
+final class CommandRegistry: ObservableObject {
+    private static let usageKey = "atelier.paletteUsage"
+
+    private(set) var commands: [PaletteCommand] = []
+    private var usage: [String: Int]
+    private let defaults: UserDefaults
+
+    init(commands: [PaletteCommand], defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        if let data = defaults.data(forKey: Self.usageKey),
+           let saved = try? JSONDecoder().decode([String: Int].self, from: data)
+        {
+            usage = saved
+        } else {
+            usage = [:]
+        }
+        for command in commands {
+            register(command)
+        }
+    }
+
+    /// Adds a command. On a duplicate id the first registration wins, so the
+    /// palette never shows two rows for one action. Silently ignoring (rather
+    /// than asserting) keeps the rule testable — an `assertionFailure` here
+    /// would crash the debug test build instead of letting the duplicate test
+    /// observe the behavior.
+    func register(_ command: PaletteCommand) {
+        guard !commands.contains(where: { $0.id == command.id }) else { return }
+        commands.append(command)
+    }
+
+    /// Available commands matching `query`, best first. An empty query lists
+    /// everything available, most-used first, then alphabetically.
+    func search(_ query: String, context: PaletteContext) -> [PaletteCommand] {
+        let available = commands.filter { $0.isAvailable(context) }
+        if query.isEmpty {
+            return available.sorted {
+                let (ua, ub) = (usage[$0.id, default: 0], usage[$1.id, default: 0])
+                return ua == ub ? $0.title < $1.title : ua > ub
+            }
+        }
+        return available
+            .compactMap { command -> (PaletteCommand, Int)? in
+                let score = FuzzyMatcher.score(query: query, candidate: command.title)
+                guard score > 0 else { return nil }
+                return (command, score + usage[command.id, default: 0])
+            }
+            .sorted { $0.1 > $1.1 }
+            .map(\.0)
+    }
+
+    func recordUsage(_ commandID: String) {
+        usage[commandID, default: 0] += 1
+        guard let data = try? JSONEncoder().encode(usage) else { return }
+        defaults.set(data, forKey: Self.usageKey)
+    }
+}
