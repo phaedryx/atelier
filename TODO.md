@@ -125,6 +125,6 @@
 ## Changes review comments
 
 - **Submit Review Comments silently no-ops unless Changes tab is mounted.** The palette command "Submit Review Comments" is gated only on an active workstream; it should check whether the Changes tab is mounted. Proper fix: add a changesActive field to PaletteContext (threaded from the palette presenter), or auto-switch to the Changes tab before submitting.
-- **Comment view zones don't set showInHiddenAreas.** Comments disappear silently when their anchor line gets folded by hideUnchangedRegions.
 - **Deletion block at file start can't be clicked to comment.** A deletion block with modifiedStartLineNumber == 0 can't be clicked to open the comment input because the view-zone afterLineNumber clamps to 1 and never matches.
 - **Gutter line-number DRAG opens comment instead of range-selecting.** Click a line number should range-select; currently DRAG opens the comment input on mousedown instead. The intended range gesture is text-drag (or select) then click a line number inside the selection.
+- **A background refresh (setComments) discards an in-progress comment input, losing typed text.**

@@ -312,7 +312,8 @@ function renderComments(filePath) {
         added.push(accessor.addZone({
           afterLineNumber: afterLine,
           heightInLines: 2,
-          domNode: buildCommentNode(comment)
+          domNode: buildCommentNode(comment),
+          showInHiddenAreas: true
         }))
       }
     })
@@ -407,7 +408,7 @@ function openInputZone(filePath, spec) {
   }
 
   modified.changeViewZones((accessor) => {
-    const zoneId = accessor.addZone({ afterLineNumber: afterLine, heightInLines: 2, domNode: node })
+    const zoneId = accessor.addZone({ afterLineNumber: afterLine, heightInLines: 2, domNode: node, showInHiddenAreas: true })
     inputZoneState = { filePath, zoneId }
   })
   resizeDiffEditor(entry.editor, entry.host.querySelector('.diff-body') || entry.host)

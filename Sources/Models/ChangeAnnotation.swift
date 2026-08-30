@@ -57,7 +57,7 @@ final class ChangeAnnotationStore: ObservableObject {
             side: side,
             line: line,
             endLine: endLine,
-            lineText: lineText.trimmingCharacters(in: .whitespaces),
+            lineText: Self.sanitize(lineText),
             text: sanitized
         )
         comments.append(comment)
@@ -106,7 +106,7 @@ final class ChangeAnnotationStore: ObservableObject {
             let content = updated.side == .old ? fileTexts.original : fileTexts.modified
             let normalized = content.hasSuffix("\n") ? String(content.dropLast()) : content
             let lines = normalized.components(separatedBy: "\n")
-                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .map { Self.sanitize($0) }
 
             if updated.lineText.isEmpty {
                 // A blank anchor matches everything; only an exact positional hold counts.

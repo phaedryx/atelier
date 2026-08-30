@@ -68,6 +68,12 @@ final class ChangeAnnotationStoreTests: XCTestCase {
         XCTAssertTrue(store.comments.isEmpty)
     }
 
+    func testAddSanitizesAnchorLineText() throws {
+        let store = ChangeAnnotationStore()
+        let c = try XCTUnwrap(store.add(filePath: "a.swift", mode: .branch, side: .new, line: 1, endLine: nil, lineText: "  let x\u{1B}[31m = 1  ", text: "note"))
+        XCTAssertEqual(c.lineText, "let x[31m = 1")
+    }
+
     // MARK: - Re-anchoring
 
     private func addComment(
@@ -82,6 +88,20 @@ final class ChangeAnnotationStoreTests: XCTestCase {
         _ = addComment(store, line: 2, lineText: "beta")
         store.reanchor(mode: .uncommitted, texts: ["a.swift": (original: "", modified: "alpha\nbeta\ngamma")], presentPaths: ["a.swift"])
         XCTAssertEqual(store.comments.first?.line, 2)
+        XCTAssertFalse(store.comments.first!.isOrphaned)
+    }
+
+    func testReanchorMatchesLineWithInteriorTab() {
+        // The anchor is sanitized on add (tabs collapsed to spaces); the
+        // re-anchor haystack must normalize the same way or every line with
+        // an interior tab falsely orphans on refresh.
+        let store = ChangeAnnotationStore()
+        _ = addComment(store, line: 2, lineText: "case 1:\tprint(x)")
+        store.reanchor(
+            mode: .uncommitted,
+            texts: ["a.swift": (original: "", modified: "first\ncase 1:\tprint(x)\n")],
+            presentPaths: ["a.swift"]
+        )
         XCTAssertFalse(store.comments.first!.isOrphaned)
     }
 
