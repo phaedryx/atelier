@@ -51,7 +51,7 @@
 - [x] GitHub integration: repo info, open PRs, branch PR status (via gh CLI)
 - [x] Keyboard shortcuts: all documented in HelpView, README, AGENTS.md, and website
 - [x] Help view with app icon, skyline, shortcuts, credits, sponsor/bug/feature links
-- [x] Settings: environment, CLI install (auto-hidden), tmux, bypass, teams, auto-rename, appearance, language, base dir, branch prefix, external apps, bleeding edge, danger zone
+- [x] Settings: environment, CLI install (auto-hidden), tmux, bypass, teams, auto-rename, appearance, language, base dir, branch prefix, external apps, danger zone
 - [x] Project overview with editable name, git info, GitHub info, worktree list with prune, doc tabs
 - [x] Workstream info with project icon, branch copy, directory, PR status, scripts, docs
 - [x] Drag-and-drop directories to sidebar
@@ -72,7 +72,6 @@
 - [x] Tmux session restore for run scripts on app relaunch
 - [x] Preload agent and setup terminals in background
 - [x] Occlude non-visible terminal surfaces (ghostty_surface_set_occlusion)
-- [x] Update notification: versions.json check + sidebar badge + /get page
 - [x] App icon with Poblenou skyline
 - [x] Project icon detection (icon.svg, icon.png, logo.svg, logo.png)
 - [x] Ghostty submodule pinned to v1.3.1, weekly CI compatibility test

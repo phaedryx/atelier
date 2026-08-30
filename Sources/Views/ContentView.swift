@@ -86,9 +86,7 @@ struct ContentView: View {
 
     @StateObject private var surfaceCache = TerminalSurfaceCache()
     @StateObject private var appEnvironment = AppEnvironment()
-    @StateObject private var updateChecker = UpdateChecker()
     @ObservedObject private var agentStateTracker = WorkstreamAgentStateTracker.shared
-    @EnvironmentObject private var updater: Updater
     @State private var saveWork: DispatchWorkItem?
     @State private var workstreamToRemove: UUID?
     @State private var workstreamToPurge: UUID?
@@ -370,8 +368,6 @@ struct ContentView: View {
         }
         .environmentObject(surfaceCache)
         .environmentObject(appEnvironment)
-        .environmentObject(updateChecker)
-        .environmentObject(updater)
         .environmentObject(agentStateTracker)
         .onAppear {
             // The nudge needs the live surfaces this cache owns; it is a
@@ -381,7 +377,6 @@ struct ContentView: View {
             appEnvironment.refreshAllRepoInfo(projects: projects)
             appEnvironment.refreshPathValidity(projects: projects)
             appEnvironment.fetchOrigin(projects: projects)
-            updateChecker.check()
             refreshAgentStateLookup(projects: projects)
             // Apply saved appearance
             switch UserDefaults.standard.string(forKey: "atelier.appearance") ?? "system" {
@@ -486,9 +481,6 @@ struct ContentView: View {
             appEnvironment.refreshAllBranchPRs(projects: projects)
             appEnvironment.fetchOrigin(projects: projects)
             syncWorkstreamNamesFromBranches()
-        }
-        .onReceive(Timer.publish(every: 6 * 60 * 60, on: .main, in: .common).autoconnect()) { _ in
-            updateChecker.check()
         }
     }
 

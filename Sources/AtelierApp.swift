@@ -158,7 +158,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 @main
 struct AtelierApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @StateObject private var updater = Updater()
     @AppStorage("atelier.editorTabActive") private var isEditorActive = false
     @AppStorage("atelier.editorFileDirty") private var isEditorDirty = false
     @State private var pendingURLDirectory: String?
@@ -244,7 +243,6 @@ struct AtelierApp: App {
                 EmptyView()
             } else {
                 ContentView()
-                    .environmentObject(updater)
                     .onAppear {
                         Telemetry.shared.trackLaunch()
                         if let dir = Self.launchDirectory {

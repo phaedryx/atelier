@@ -9,15 +9,10 @@ Atelier ships via two channels:
    - Upgrade: `brew upgrade --cask atelier`
 2. **Direct DMG** via GitHub Releases
    - CLI available from Settings > Environment
+   - Upgrade by downloading a new DMG manually
 
-## Update notification
-
-Atelier has no in-app updater. `UpdateChecker` polls the GitHub Releases
-API for `phaedryx/atelier` on launch and shows a sidebar badge when a newer
-release is published; drafts and pre-releases are ignored.
-
-Clicking the badge shows the `brew upgrade --cask atelier` command. DMG
-users download the new release manually.
+There is no update checking of any kind — see
+[Auto-update (not shipped)](#auto-update-not-shipped).
 
 ## Release flow
 
@@ -37,9 +32,9 @@ it, so add the new version's entries before tagging or it silently rots.
    - Notarize via stored keychain profile
    - Create and sign DMG
    - Create the GitHub release as a draft, upload the DMG, then publish it, so
-     the update badge never points at a release with no asset
+     the release is never visible without its asset
    - Update Homebrew cask in `phaedryx/homebrew-tap`
-5. Users see the update badge on next app launch
+5. Users upgrade via `brew upgrade --cask atelier` or the GitHub release page
 
 Re-running the workflow (`workflow_dispatch` from the tag) reuses the existing
 release and re-uploads the DMG with `--clobber`.
@@ -86,4 +81,3 @@ After a release, verify:
 
 1. GitHub release exists with notarized DMG attached
 2. Homebrew cask points to the new DMG
-3. App shows the update badge when running an older version

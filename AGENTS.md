@@ -69,7 +69,7 @@ rewritten at build time and the bump is never committed.
 - **Single-window** app via `Window` (not `WindowGroup`)
 - **`atelier://`** URL scheme for single-instance behavior
 - **AppConstants** (`appID`, `appName`, `configDirectory`, `cacheDirectory`)
-- **`UpdateChecker`** polls the GitHub Releases API for the update badge (no in-app updater)
+- **No update checking** — no in-app updater and no release polling; users upgrade via Homebrew or GitHub Releases
 - **prek** pre-commit hooks (`prek.toml`)
 
 ### Key directories

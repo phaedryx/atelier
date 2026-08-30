@@ -202,30 +202,20 @@ struct ProjectSidebar: View {
     }
 
     private var bottomBar: some View {
-        VStack(spacing: 4) {
-            if let version = updateChecker.availableVersion {
-                UpdateBanner(
-                    version: version,
-                    pendingReleases: updateChecker.pendingReleases,
-                    updater: updater
-                )
+        HStack {
+            SidebarBottomButton(icon: "plus") {
+                showingAddProjectChoice = true
             }
-
-            HStack {
-                SidebarBottomButton(icon: "plus") {
-                    showingAddProjectChoice = true
-                }
-                .accessibilityLabel("Add project")
-                Spacer()
-                SidebarBottomButton(icon: "questionmark.circle") {
-                    NotificationCenter.default.post(name: .openHelp, object: nil)
-                }
-                .accessibilityLabel("Help")
-                SidebarBottomButton(icon: "gear") {
-                    NotificationCenter.default.post(name: .openSettings, object: nil)
-                }
-                .accessibilityLabel("Settings")
+            .accessibilityLabel("Add project")
+            Spacer()
+            SidebarBottomButton(icon: "questionmark.circle") {
+                NotificationCenter.default.post(name: .openHelp, object: nil)
             }
+            .accessibilityLabel("Help")
+            SidebarBottomButton(icon: "gear") {
+                NotificationCenter.default.post(name: .openSettings, object: nil)
+            }
+            .accessibilityLabel("Settings")
         }
         .padding(.horizontal, 4)
         .padding(.bottom, 4)
@@ -526,8 +516,6 @@ struct ProjectSidebar: View {
 
     @EnvironmentObject private var surfaceCache: TerminalSurfaceCache
     @EnvironmentObject private var appEnv: AppEnvironment
-    @EnvironmentObject private var updateChecker: UpdateChecker
-    @EnvironmentObject private var updater: Updater
     @EnvironmentObject private var agentStateTracker: WorkstreamAgentStateTracker
 
     private func confirmPurge(_ workstream: Workstream) {
