@@ -264,6 +264,9 @@ function buildCommentNode(comment) {
     line: comment.line,
     endLine: comment.endLine ?? null,
     lineText: comment.lineText,
+    // An orphan renders pinned at the top; its input must open there too, not
+    // at the stale line the comment no longer corresponds to.
+    isOrphaned: comment.isOrphaned,
     editingId: comment.id,
     initialText: comment.text
   }))
@@ -392,9 +395,16 @@ function openInputZone(filePath, spec) {
     if (e.key === 'Escape') { e.preventDefault(); closeInputZone() }
   })
 
-  const afterLine = spec.side === 'old'
-    ? anchorForOldLine(entry.editor, spec.endLine ?? spec.line)
-    : (spec.endLine ?? spec.line)
+  // Mirrors renderComments' anchoring so the input opens exactly where the
+  // comment it edits sits (an orphan is pinned above the first line).
+  let afterLine
+  if (spec.isOrphaned) {
+    afterLine = 0
+  } else if (spec.side === 'old') {
+    afterLine = anchorForOldLine(entry.editor, spec.endLine ?? spec.line)
+  } else {
+    afterLine = spec.endLine ?? spec.line
+  }
 
   modified.changeViewZones((accessor) => {
     const zoneId = accessor.addZone({ afterLineNumber: afterLine, heightInLines: 2, domNode: node })
@@ -409,15 +419,27 @@ function attachCommentHandlers(filePath, diffEditor) {
   const modified = diffEditor.getModifiedEditor()
   const MT = monaco.editor.MouseTargetType
 
+  // A selection that ends at column 1 stops *above* its last line — Monaco's
+  // own line-number selection (selectOnLineNumbers) makes a single gutter click
+  // Range(N,1,N+1,1), which is one line, not two. Normalize before any
+  // multi-line test, at both the cache write and the gutter read: without it
+  // every gutter click reads as a 2-line range, and a real range selection is
+  // replaced by the click that was meant to comment on it.
+  const normEnd = (s) => (s.endColumn === 1 ? s.endLineNumber - 1 : s.endLineNumber)
+
   // Remember the last multi-line selection rather than reading the selection
-  // inside onMouseDown: a gutter click collapses the selection, and whether
-  // that happens before or after our handler runs is Monaco's business.
+  // inside onMouseDown: Monaco runs its line-selection before emitting
+  // onMouseDown, so by then the live selection is already the clicked line.
   let lastRange = null
   modified.onDidChangeCursorSelection((e) => {
     const s = e.selection
-    if (s && s.startLineNumber !== s.endLineNumber) {
-      lastRange = { startLineNumber: s.startLineNumber, endLineNumber: s.endLineNumber }
-    }
+    if (!s) return
+    const end = normEnd(s)
+    // Drop a stale range as soon as the selection collapses, or it could
+    // hijack an unrelated later click that happens to fall inside it.
+    lastRange = end > s.startLineNumber
+      ? { startLineNumber: s.startLineNumber, endLineNumber: end }
+      : null
   })
 
   modified.onMouseDown((e) => {
@@ -430,10 +452,11 @@ function attachCommentHandlers(filePath, diffEditor) {
       const sel = lastRange || modified.getSelection()
       let start = line
       let end = null
-      if (sel && sel.startLineNumber !== sel.endLineNumber &&
-          line >= sel.startLineNumber && line <= sel.endLineNumber) {
+      const selEnd = sel ? normEnd(sel) : 0
+      if (sel && selEnd > sel.startLineNumber &&
+          line >= sel.startLineNumber && line <= selEnd) {
         start = sel.startLineNumber
-        end = sel.endLineNumber
+        end = selEnd
         lastRange = null // the range is consumed; the next click is single-line
       }
       const lineText = modified.getModel().getLineContent(start).trim()
