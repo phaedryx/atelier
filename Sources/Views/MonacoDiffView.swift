@@ -27,6 +27,10 @@ final class MonacoDiffBridge: ObservableObject {
     /// ChangesView installs this so the bridge has the current workDir + base ref.
     var onLoadFile: ((_ filePath: String) -> (original: String, modified: String, languageId: String))?
 
+    /// Fired when diff.js reports a comment mutation (add/edit/delete).
+    /// ChangesView installs this to route events into the ChangeAnnotationStore.
+    var onCommentEvent: ((ReviewCommentEvent) -> Void)?
+
     /// Git fingerprint from the last successful setFiles() call. ChangesView uses
     /// it to skip reloading when nothing in git has changed between tab visits.
     var lastFingerprint: String?
@@ -94,6 +98,16 @@ final class MonacoDiffBridge: ObservableObject {
             guard let webView = self.webView else { return }
             guard let json = Self.jsonString(from: files) else { return }
             webView.evaluateJavaScript("window.diffAPI.setFiles(\(json))")
+        }
+    }
+
+    /// Render the given review comments (current mode only). Each dict carries:
+    /// id, filePath, side, line, endLine (optional), lineText, text, isOrphaned.
+    func setComments(_ comments: [[String: Any]]) {
+        enqueue {
+            guard let webView = self.webView else { return }
+            guard let json = Self.jsonString(from: comments) else { return }
+            webView.evaluateJavaScript("window.diffAPI.setComments(\(json))")
         }
     }
 
@@ -175,6 +189,13 @@ final class MonacoDiffBridge: ObservableObject {
             "noChanges": NSLocalizedString("No changes", comment: "Changes tab: empty state"),
             "copyFile": NSLocalizedString("Copy File Path", comment: "Changes diff header: copy file path button"),
             "copied": NSLocalizedString("File path copied", comment: "Changes diff header: copy confirmation"),
+            "addComment": NSLocalizedString("Add review comment…", comment: "Changes diff: comment input placeholder"),
+            "commentAdd": NSLocalizedString("Add", comment: "Changes diff: confirm new comment"),
+            "commentSave": NSLocalizedString("Save", comment: "Changes diff: confirm comment edit"),
+            "commentCancel": NSLocalizedString("Cancel", comment: "Changes diff: cancel comment input"),
+            "commentEdit": NSLocalizedString("Edit", comment: "Changes diff: edit a comment"),
+            "commentDelete": NSLocalizedString("Delete", comment: "Changes diff: delete a comment"),
+            "commentOrphaned": NSLocalizedString("Line no longer in diff", comment: "Changes diff: orphaned comment badge"),
         ]
         guard let json = Self.jsonString(from: strings) else { return }
         webView.evaluateJavaScript("window.diffAPI.setStrings(\(json))")
@@ -289,6 +310,10 @@ final class MonacoDiffBridge: ObservableObject {
                 case "error":
                     if let msg = body["message"] as? String {
                         print("[MonacoDiff] JS error: \(msg)")
+                    }
+                case "commentAdded", "commentEdited", "commentDeleted":
+                    if let event = ReviewCommentEvent.parse(body) {
+                        self.bridge.onCommentEvent?(event)
                     }
                 default:
                     break

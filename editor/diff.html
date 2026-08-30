@@ -174,6 +174,86 @@
       opacity: 0.6;
     }
 
+    /* Review comments — rendered into Monaco view zones by diff.js. The rgba
+       values are theme-neutral so they read on both light and dark editors. */
+    .review-comment, .review-input {
+      /* Monaco paints .view-lines after .view-zones, and neither sets a
+         z-index — so the text layer covers zone content and swallows every
+         click (and paints its I-beam over our buttons). Positioning these
+         rows lifts them above it; without this the buttons are unclickable. */
+      position: relative;
+      z-index: 1;
+      cursor: default;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px;
+      margin-left: 60px;
+      font: 12px -apple-system, system-ui, sans-serif;
+      background: rgba(9, 105, 218, 0.08);
+      border-left: 3px solid rgba(9, 105, 218, 0.7);
+      border-radius: 4px;
+      box-sizing: border-box;
+      height: 100%;
+    }
+    .review-text {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .review-orphaned {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 8px;
+      background: rgba(154, 103, 0, 0.25);
+      white-space: nowrap;
+    }
+    .review-input input {
+      flex: 1;
+      font: 12px -apple-system, system-ui, sans-serif;
+      padding: 2px 6px;
+      border-radius: 4px;
+      border: 1px solid rgba(128, 128, 128, 0.4);
+      background: transparent;
+      color: inherit;
+      outline: none;
+    }
+    .review-btn {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      border: 1px solid rgba(128, 128, 128, 0.4);
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+    }
+    .review-btn:hover {
+      background: rgba(128, 128, 128, 0.15);
+    }
+    .review-btn-delete {
+      color: #d1242f;
+    }
+    /* Discoverability: line numbers are click targets; hovering shows a "+"
+       cue. This selector ties Monaco's own rule on specificity, so which sheet
+       wins depends on injection order — never declare a property Monaco also
+       sets here, layout properties above all. `position: relative` did exactly
+       that (Monaco uses `position: absolute; bottom: 0`) and detached every
+       number from its line box: numbers drifted a line out of step and click
+       targets stopped matching what was on screen. Monaco's own absolute
+       positioning already anchors the ::after cue. */
+    .monaco-editor .margin-view-overlays .line-numbers {
+      cursor: pointer;
+    }
+    .monaco-editor .margin-view-overlays .line-numbers:hover::after {
+      content: '+';
+      position: absolute;
+      left: 0;
+      top: 0;
+      color: rgb(9, 105, 218);
+      font-weight: bold;
+    }
+
     /* macOS-style overlay scrollbars */
     .monaco-scrollable-element > .scrollbar {
       background: transparent !important;

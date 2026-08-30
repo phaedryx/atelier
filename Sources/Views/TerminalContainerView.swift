@@ -19,6 +19,7 @@ extension Notification.Name {
     static let terminalTitleChanged = Notification.Name("atelier.terminalTitleChanged")
     static let toggleEditor = Notification.Name("atelier.toggleEditor")
     static let toggleChanges = Notification.Name("atelier.toggleChanges")
+    static let submitChangeReview = Notification.Name("atelier.submitChangeReview")
     static let toggleEnvironment = Notification.Name("atelier.toggleEnvironment")
     static let saveEditor = Notification.Name("atelier.saveEditor")
     static let saveEditorAs = Notification.Name("atelier.saveEditorAs")
@@ -644,9 +645,11 @@ struct TerminalContainerView: View {
         case .changes:
             if let bridge = model.diffBridge {
                 ChangesView(
+                    workstreamID: workstreamID,
                     workingDirectory: workingDirectory,
                     projectDirectory: projectDirectory,
-                    bridge: bridge
+                    bridge: bridge,
+                    annotations: model.annotationStore
                 )
             } else {
                 ProgressView()

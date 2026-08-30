@@ -278,6 +278,18 @@
 "Refresh changes" = "Refresh changes";
 "Binary file (not shown)" = "Binary file (not shown)";
 "Large file — %d changes, click to load" = "Large file — %d changes, click to load";
+"%d comment(s)" = "%d comment(s)";
+"Submit Review" = "Submit Review";
+"Discard" = "Discard";
+"Discard all review comments?" = "Discard all review comments?";
+"No Coding Agent terminal is running for this workstream." = "No Coding Agent terminal is running for this workstream.";
+"The Coding Agent is busy. Submit again once it finishes its turn." = "The Coding Agent is busy. Submit again once it finishes its turn.";
+"Submit Review Comments" = "Submit Review Comments";
+
+/* Changes diff - review comments. "Add", "Save", "Cancel", "Edit" and
+   "Delete" are already defined above and deliberately reused. */
+"Add review comment…" = "Add review comment…";
+"Line no longer in diff" = "Line no longer in diff";
 
 /* Changes sidebar - Files changed tree */
 "Files changed" = "Files changed";

@@ -202,6 +202,12 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertNotNil(model.editorBridge)
         XCTAssertNotNil(model.diffBridge)
     }
+
+    func testAnnotationStoreIsStablePerModel() {
+        let model = makeModel()
+        let first = model.annotationStore
+        XCTAssertTrue(first === model.annotationStore)
+    }
 }
 
 @MainActor

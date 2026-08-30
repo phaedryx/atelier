@@ -23,14 +23,46 @@ enum ChangesMode: String, CaseIterable {
 /// computed live from git. Supports Branch/Uncommitted modes, fingerprint-gated
 /// refresh, and a per-file binary/large-file guard with click-to-load.
 struct ChangesView: View {
+    let workstreamID: UUID
     let workingDirectory: String
     let projectDirectory: String
     let bridge: MonacoDiffBridge
+    @ObservedObject var annotations: ChangeAnnotationStore
+    @EnvironmentObject private var surfaceCache: TerminalSurfaceCache
 
     @State private var isLoading = true
     @State private var isRefreshing = false
     @State private var fileCount = 0
     @State private var mode: ChangesMode = .branch
+    @State private var submitBlocked: SubmitBlocker?
+    @State private var confirmDiscard = false
+
+    /// Why a submit was refused. Both cases keep the comments — the user gets
+    /// them back to retry, rather than losing what they wrote.
+    enum SubmitBlocker: String, Identifiable {
+        /// No live Coding Agent surface to type into.
+        case noAgent
+        /// The agent is mid-turn, or sitting on a permission prompt where a
+        /// synthetic Return would answer it.
+        case busy
+
+        var id: String { rawValue }
+
+        var message: String {
+            switch self {
+            case .noAgent:
+                return NSLocalizedString(
+                    "No Coding Agent terminal is running for this workstream.",
+                    comment: "Changes tab: submit refused, no agent surface"
+                )
+            case .busy:
+                return NSLocalizedString(
+                    "The Coding Agent is busy. Submit again once it finishes its turn.",
+                    comment: "Changes tab: submit refused, agent mid-turn"
+                )
+            }
+        }
+    }
 
     /// The current changed-file set, surfaced for the sidebar tree. Captured
     /// from the same load that builds the diff payload (no extra git read).
@@ -43,10 +75,18 @@ struct ChangesView: View {
     /// final value on release.
     @State private var sidebarWidth: Double
 
-    init(workingDirectory: String, projectDirectory: String, bridge: MonacoDiffBridge) {
+    init(
+        workstreamID: UUID,
+        workingDirectory: String,
+        projectDirectory: String,
+        bridge: MonacoDiffBridge,
+        annotations: ChangeAnnotationStore
+    ) {
+        self.workstreamID = workstreamID
         self.workingDirectory = workingDirectory
         self.projectDirectory = projectDirectory
         self.bridge = bridge
+        self.annotations = annotations
         _sidebarWidth = State(initialValue: Self.loadSidebarWidth())
     }
 
@@ -95,6 +135,7 @@ struct ChangesView: View {
             // Make sure the bridge can resolve content for click-to-load before
             // any deferred-file click can happen.
             configureLoadHandler()
+            configureCommentHandler()
 
             if bridge.hasContent && bridge.lastMode == mode.rawValue {
                 // Cached content exists for this mode — show it, refresh in background.
@@ -102,6 +143,7 @@ struct ChangesView: View {
                 fileCount = bridge.lastFileCount
                 diffFiles = bridge.lastDiffFiles
                 backgroundRefreshIfNeeded()
+                pushComments()
             } else {
                 fullLoad()
             }
@@ -110,7 +152,11 @@ struct ChangesView: View {
             // Mode changed — always do a full load.
             bridge.lastFingerprint = nil
             configureLoadHandler()
+            configureCommentHandler()
             fullLoad()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .submitChangeReview)) { _ in
+            submitReview()
         }
     }
 
@@ -150,6 +196,24 @@ struct ChangesView: View {
                 .foregroundStyle(.secondary)
             }
 
+            if !annotations.comments(mode: mode).isEmpty {
+                let count = annotations.comments(mode: mode).count
+                Divider().frame(height: 14)
+                Text(String(
+                    format: NSLocalizedString("%d comment(s)", comment: "Changes tab: pending review comment count"),
+                    count
+                ))
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+
+                Button("Submit Review") { submitReview() }
+                    .controlSize(.small)
+                    .disabled(isLoading || isRefreshing)
+
+                Button("Discard") { confirmDiscard = true }
+                    .controlSize(.small)
+            }
+
             Spacer()
 
             Button {
@@ -166,6 +230,18 @@ struct ChangesView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(.bar)
+        .confirmationDialog(
+            Text("Discard all review comments?"),
+            isPresented: $confirmDiscard
+        ) {
+            Button("Discard", role: .destructive) {
+                annotations.clear(mode: mode)
+                pushComments()
+            }
+        }
+        .alert(item: $submitBlocked) { blocker in
+            Alert(title: Text(blocker.message), dismissButton: .cancel(Text("OK")))
+        }
     }
 
     // MARK: - Refresh
@@ -174,6 +250,7 @@ struct ChangesView: View {
     private func refresh() {
         bridge.lastFingerprint = nil
         configureLoadHandler()
+        configureCommentHandler()
         fullLoad()
     }
 
@@ -208,7 +285,13 @@ struct ChangesView: View {
                 bridge.onContentReady = {
                     isLoading = false
                 }
+                annotations.reanchor(
+                    mode: currentMode,
+                    texts: Self.reanchorTexts(from: contents.payload),
+                    presentPaths: Set(contents.files.map(\.relativePath))
+                )
                 bridge.setFiles(contents.payload)
+                pushComments()
             }
         }
     }
@@ -251,7 +334,13 @@ struct ChangesView: View {
                 bridge.onContentReady = {
                     isRefreshing = false
                 }
+                annotations.reanchor(
+                    mode: currentMode,
+                    texts: Self.reanchorTexts(from: contents.payload),
+                    presentPaths: Set(contents.files.map(\.relativePath))
+                )
                 bridge.setFiles(contents.payload)
+                pushComments()
             }
         }
     }
@@ -277,6 +366,136 @@ struct ChangesView: View {
             let languageId = MonacoLanguage.id(for: (filePath as NSString).lastPathComponent)
             return (original, modified, languageId)
         }
+    }
+
+    // MARK: - Review comments
+
+    /// Route comment mutations from diff.js into the store, then push the
+    /// authoritative set back down. The webview never owns comment state.
+    private func configureCommentHandler() {
+        let currentMode = mode
+        bridge.onCommentEvent = { event in
+            switch event {
+            case let .added(filePath, side, line, endLine, lineText, text):
+                annotations.add(
+                    filePath: filePath, mode: currentMode, side: side,
+                    line: line, endLine: endLine, lineText: lineText, text: text
+                )
+            case let .edited(id, text):
+                annotations.updateText(id: id, text: text)
+            case let .deleted(id):
+                annotations.delete(id: id)
+            }
+            pushComments()
+        }
+    }
+
+    /// Push the active mode's comments to diff.js for rendering.
+    private func pushComments() {
+        let payload = annotations.comments(mode: mode).map { c -> [String: Any] in
+            var entry: [String: Any] = [
+                "id": c.id.uuidString,
+                "filePath": c.filePath,
+                "side": c.side.rawValue,
+                "line": c.line,
+                "lineText": c.lineText,
+                "text": c.text,
+                "isOrphaned": c.isOrphaned,
+            ]
+            if let endLine = c.endLine { entry["endLine"] = endLine }
+            return entry
+        }
+        bridge.setComments(payload)
+    }
+
+    /// Format the active mode's comments and paste them into the workstream's
+    /// Coding Agent surface. Liveness and turn state are re-checked at send
+    /// time, after the background git hop, and only the comments actually sent
+    /// are removed — a comment added mid-flight, or a surface that died or
+    /// started a turn in the meantime, all survive with their comments intact.
+    ///
+    /// The turn check matters more here than anywhere else the app types into a
+    /// pane: the user is looking at the Changes tab, not at the agent, so they
+    /// cannot see that the pane is sitting on a permission prompt where the
+    /// synthetic Return would answer it. Same nil-permissive rule as
+    /// `PromptInjector` — refuse only on evidence of a live turn.
+    private func submitReview() {
+        // The toolbar button is disabled mid-refresh; the palette command and
+        // the notification reach here directly, so the guard lives here too.
+        // Submitting now would send anchors the running re-anchor is rewriting.
+        guard !isLoading, !isRefreshing else { return }
+
+        let toSend = annotations.comments(mode: mode)
+        guard !toSend.isEmpty else { return }
+        guard let blocker = submitBlocker(for: workstreamID, cache: surfaceCache) else {
+            submitBlocked = nil
+            return proceedWithSubmit(toSend)
+        }
+        submitBlocked = blocker
+    }
+
+    /// Why `surfaceID` cannot be typed into right now, or nil when it can be.
+    private func submitBlocker(for surfaceID: UUID, cache: TerminalSurfaceCache) -> SubmitBlocker? {
+        guard cache.hasLiveSurface(surfaceID) else { return .noAgent }
+        let state = WorkstreamAgentStateTracker.shared.state(forSurface: surfaceID)
+        return PromptInjector.canInject(state: state) ? nil : .busy
+    }
+
+    private func proceedWithSubmit(_ toSend: [ReviewComment]) {
+
+        let workDir = workingDirectory
+        let projDir = projectDirectory
+        let currentMode = mode
+        let cache = surfaceCache
+        let target = workstreamID
+
+        // repoInfo shells out to git — resolve the labels off the main thread.
+        DispatchQueue.global(qos: .userInitiated).async {
+            let branch = GitOperations.repoInfo(at: workDir).branch
+            let base = GitOperations.repoInfo(at: projDir).branch
+            let payload = ChangeReviewFormatter.payload(
+                comments: toSend, mode: currentMode, branch: branch, baseBranch: base
+            )
+            DispatchQueue.main.async {
+                // The surface can die — or the agent can start a turn — during
+                // the git hop above, so both are re-checked here rather than
+                // silently no-oping or interrupting a turn that just began.
+                if let blocker = submitBlocker(for: target, cache: cache) {
+                    submitBlocked = blocker
+                    return
+                }
+                // Between the paste and either Return, liveness alone gates:
+                // refusing a Return once the payload is already in the pane
+                // would strand it there unsubmitted, with the comments gone.
+                cache.typeAndSubmit(payload, into: target) {
+                    cache.hasLiveSurface(target)
+                }
+                // Delete exactly what was sent, not the whole mode — a
+                // comment added during the git hop above must survive.
+                for comment in toSend {
+                    annotations.delete(id: comment.id)
+                }
+                pushComments()
+            }
+        }
+    }
+
+    /// Pull (original, modified) texts out of the setFiles payload for
+    /// re-anchoring. Binary and deferred entries carry empty texts and are
+    /// excluded — reanchor() must leave their comments untouched.
+    nonisolated static func reanchorTexts(
+        from payload: [[String: Any]]
+    ) -> [String: (original: String, modified: String)] {
+        var texts: [String: (original: String, modified: String)] = [:]
+        for entry in payload {
+            guard entry["binary"] == nil, entry["deferred"] == nil,
+                  let path = entry["filePath"] as? String,
+                  let original = entry["originalText"] as? String,
+                  let modified = entry["modifiedText"] as? String
+            else { continue }
+            texts[path] = (original: original, modified: modified)
+        }
+        return texts
     }
 
     // MARK: - Sidebar width persistence
