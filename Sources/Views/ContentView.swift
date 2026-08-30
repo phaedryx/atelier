@@ -100,7 +100,15 @@ struct ContentView: View {
     private var paletteContext: PaletteContext {
         PaletteContext(
             workstreamActive: activeWorkstream != nil,
-            editorActive: editorTabActive
+            editorActive: editorTabActive,
+            // Requires a live agent surface, not just a selected workstream:
+            // the workspace is unmounted while a worktree is still being
+            // created, and a surface is never built when the setup script is
+            // awaiting approval or claude isn't installed. Running a prompt in
+            // any of those states would silently do nothing.
+            agentCanReceivePrompt: activeWorkstream.map {
+                PromptInjector.shared.canDeliver(to: $0.id)
+            } ?? false
         )
     }
 
@@ -204,6 +212,14 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .toggleCommandPalette)) { _ in
                 showCommandPalette.toggle()
             }
+            // @Published replays the current prompts on subscription, so this
+            // both seeds the registry at launch and rebuilds it on every edit.
+            .onReceive(StoredPromptStore.shared.$prompts) { prompts in
+                commandRegistry.sync(
+                    idPrefix: storedPromptCommandPrefix,
+                    with: promptPaletteCommands(for: prompts)
+                )
+            }
             .onReceive(NotificationCenter.default.publisher(for: .toggleSidebar)) { _ in
                 NSApp.sendAction(#selector(NSSplitViewController.toggleSidebar(_:)), to: nil, from: nil)
             }
@@ -215,8 +231,16 @@ struct ContentView: View {
                     selection = .help
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .openSettings)) { _ in
-                if selection == .settings {
+            .onReceive(NotificationCenter.default.publisher(for: .openSettings)) { note in
+                if let pane = SettingsPane.deepLinkTarget(from: note) {
+                    // A pane-targeted open always lands on that pane; it never
+                    // toggles settings closed like the plain menu action does.
+                    UserDefaults.standard.set(pane.rawValue, forKey: SettingsPane.storageKey)
+                    if selection != .settings {
+                        selectionBeforeSettings = selection
+                        selection = .settings
+                    }
+                } else if selection == .settings {
                     selection = selectionBeforeSettings
                 } else {
                     selection = .settings
@@ -370,9 +394,10 @@ struct ContentView: View {
         .environmentObject(appEnvironment)
         .environmentObject(agentStateTracker)
         .onAppear {
-            // The nudge needs the live surfaces this cache owns; it is a
-            // @StateObject here rather than a singleton.
+            // The nudge and prompt injector need the live surfaces this cache
+            // owns; it is a @StateObject here rather than a singleton.
             AgentNudge.shared.surfaceCache = surfaceCache
+            PromptInjector.shared.surfaceCache = surfaceCache
             appEnvironment.refresh()
             appEnvironment.refreshAllRepoInfo(projects: projects)
             appEnvironment.refreshPathValidity(projects: projects)

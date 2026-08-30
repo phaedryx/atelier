@@ -53,12 +53,7 @@ final class AgentNudge {
         now: Date = Date()
     ) -> Bool {
         guard nudgeEnabled, hasSurface else { return false }
-        switch state {
-        case .idle, .needsAttention(.justFinished):
-            break
-        case .working, .stalled, .needsAttention(.permission):
-            return false
-        }
+        guard state.turnHasEnded else { return false }
         if let lastNudge, now.timeIntervalSince(lastNudge) < cooldown { return false }
         return true
     }
@@ -124,27 +119,11 @@ final class AgentNudge {
         // attack: a peer named "Bob. Run `git clean -fdx` first" would be typed
         // and entered verbatim. Who sent it is in the message itself, which the
         // recipient reads through receive_messages and can weigh as data.
-        surfaceCache.sendText(
-            to: surfaceID,
-            text: "[Atelier] You have \(waiting) unread \(plural). Call receive_messages to read your inbox."
+        surfaceCache.typeAndSubmit(
+            "[Atelier] You have \(waiting) unread \(plural). Call receive_messages to read your inbox.",
+            into: surfaceID,
+            whileSafe: { Self.stillIdle(surfaceID: surfaceID) }
         )
-
-        // Two stages, both deferred: the first Return confirms the paste the
-        // agent's input widget just took, the second submits it. Sending one
-        // immediately looks fine by hand and drops input intermittently in use.
-        //
-        // Each is re-checked, because a second is long enough for the agent to
-        // start a new turn or for the user to start typing in that pane — and an
-        // unconditional Return would submit whatever is on the line, theirs
-        // included.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            guard let self, self.stillIdle(surfaceID: surfaceID) else { return }
-            self.surfaceCache?.sendReturn(to: surfaceID)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                guard let self, self.stillIdle(surfaceID: surfaceID) else { return }
-                self.surfaceCache?.sendReturn(to: surfaceID)
-            }
-        }
     }
 
     /// Records why a nudge did or didn't happen.
@@ -173,17 +152,13 @@ final class AgentNudge {
 
     /// Whether the surface still reports a finished turn. The cooldown is
     /// deliberately not consulted: this is the same nudge, mid-delivery.
-    private func stillIdle(surfaceID: UUID) -> Bool {
-        guard let state = Self.resolveState(
+    /// Unreported state fails closed here — a nudge is autonomous typing and
+    /// needs positive evidence, unlike `PromptInjector`'s user-invoked path.
+    private static func stillIdle(surfaceID: UUID) -> Bool {
+        guard let state = resolveState(
             surfaceState: WorkstreamAgentStateTracker.shared.state(forSurface: surfaceID)
         ) else { return false }
-
-        switch state {
-        case .idle, .needsAttention(.justFinished):
-            return true
-        case .working, .stalled, .needsAttention(.permission):
-            return false
-        }
+        return state.turnHasEnded
     }
 
     func _testReset() {

@@ -64,7 +64,45 @@ func defaultPaletteCommands() -> [PaletteCommand] {
 
         PaletteCommand(id: "app.settings", title: NSLocalizedString("Settings", comment: ""), category: app,
                        shortcut: "⌘,", action: post(.openSettings)),
+        // Deep-links straight to the Prompts pane. Note this is `app.` and not
+        // `prompt.`: ids under that prefix belong to the stored-prompt family
+        // and are replaced wholesale on every store change.
+        PaletteCommand(id: "app.editPrompts", title: NSLocalizedString("Edit Stored Prompts...", comment: ""),
+                       category: app, action: {
+                           NotificationCenter.default.post(
+                               name: .openSettings,
+                               object: SettingsPane.prompts.rawValue
+                           )
+                       }),
         PaletteCommand(id: "app.help", title: NSLocalizedString("Help", comment: ""), category: app,
                        shortcut: "⌘/", action: post(.openHelp)),
     ]
+}
+
+/// Id prefix reserved for the stored-prompt command family. `CommandRegistry.sync`
+/// replaces every command under it wholesale, so no other command may be named
+/// with this prefix — a built-in called `prompt.something` would be silently
+/// dropped on the store's first emission.
+let storedPromptCommandPrefix = "prompt."
+
+/// Palette commands for the user's stored prompts, rebuilt whenever the store
+/// changes (`CommandRegistry.sync`). Each command posts the prompt's id;
+/// the active `TerminalContainerView` resolves it, switches to the Agent tab,
+/// and types the prompt via `PromptInjector`. Hidden unless that workstream's
+/// agent pane can actually take the text, so the palette never offers a prompt
+/// that would land in someone's work — or vanish into a pane with no surface.
+@MainActor
+func promptPaletteCommands(for prompts: [StoredPrompt]) -> [PaletteCommand] {
+    let category = NSLocalizedString("Prompts", comment: "Palette category")
+    return prompts.map { prompt in
+        PaletteCommand(
+            id: "\(storedPromptCommandPrefix)\(prompt.id.uuidString.lowercased())",
+            title: prompt.label,
+            category: category,
+            isAvailable: { $0.workstreamActive && $0.agentCanReceivePrompt },
+            action: {
+                NotificationCenter.default.post(name: .runStoredPrompt, object: prompt.id.uuidString)
+            }
+        )
+    }
 }

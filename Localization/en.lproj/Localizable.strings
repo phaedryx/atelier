@@ -75,6 +75,7 @@
 
 /* Settings */
 "Settings" = "Settings";
+"Edit Stored Prompts..." = "Edit Stored Prompts...";
 "Session" = "Session";
 "Tmux Mode" = "Tmux Mode";
 "Coding Agent sessions persist across app restarts. The Terminal tab is not affected. Sessions are lost on system restart." = "Coding Agent sessions persist across app restarts. The Terminal tab is not affected. Sessions are lost on system restart.";
@@ -144,6 +145,7 @@
 
 /* Settings - Environment */
 "Environment" = "Environment";
+"Detected Tools" = "Detected Tools";
 "Installed" = "Installed";
 "Install..." = "Install...";
 
@@ -162,6 +164,16 @@
 "Auto-rename branch" = "Auto-rename branch";
 "On the first request, the agent renames the branch to match the task and writes a short description visible in the sidebar." = "On the first request, the agent renames the branch to match the task and writes a short description visible in the sidebar.";
 "External Browser" = "External Browser";
+
+/* Settings - Prompts */
+"Prompts" = "Prompts";
+"No stored prompts yet." = "No stored prompts yet.";
+"Add Prompt..." = "Add Prompt...";
+"Edit" = "Edit";
+"Delete" = "Delete";
+"Label" = "Label";
+"Prompt" = "Prompt";
+"Stored prompts appear in the command palette. Running one switches to the Coding Agent tab and types the prompt for you. They stay hidden while the agent is mid-turn." = "Stored prompts appear in the command palette. Running one switches to the Coding Agent tab and types the prompt for you. They stay hidden while the agent is mid-turn.";
 
 /* Settings - Advanced */
 "Advanced" = "Advanced";

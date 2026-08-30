@@ -35,6 +35,18 @@ final class CommandRegistry: ObservableObject {
         commands.append(command)
     }
 
+    /// Replaces every command whose id begins with `idPrefix` with `newCommands`,
+    /// leaving all others untouched. Used for dynamic command families (stored
+    /// prompts) that are rebuilt whenever their source of truth changes; usage
+    /// frequency survives because it is keyed by id, and a prompt's id is
+    /// stable across edits.
+    func sync(idPrefix: String, with newCommands: [PaletteCommand]) {
+        commands.removeAll { $0.id.hasPrefix(idPrefix) }
+        for command in newCommands {
+            register(command)
+        }
+    }
+
     /// Available commands matching `query`, best first. An empty query lists
     /// everything available, most-used first, then alphabetically.
     func search(_ query: String, context: PaletteContext) -> [PaletteCommand] {
