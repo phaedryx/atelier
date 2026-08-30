@@ -210,20 +210,24 @@ struct ProjectSidebar: View {
     }
 
     private var bottomBar: some View {
-        HStack {
-            SidebarBottomButton(icon: "plus") {
-                showingAddProjectChoice = true
+        VStack(spacing: 4) {
+            UsageMeterView()
+
+            HStack {
+                SidebarBottomButton(icon: "plus") {
+                    showingAddProjectChoice = true
+                }
+                .accessibilityLabel("Add project")
+                Spacer()
+                SidebarBottomButton(icon: "questionmark.circle") {
+                    NotificationCenter.default.post(name: .openHelp, object: nil)
+                }
+                .accessibilityLabel("Help")
+                SidebarBottomButton(icon: "gear") {
+                    NotificationCenter.default.post(name: .openSettings, object: nil)
+                }
+                .accessibilityLabel("Settings")
             }
-            .accessibilityLabel("Add project")
-            Spacer()
-            SidebarBottomButton(icon: "questionmark.circle") {
-                NotificationCenter.default.post(name: .openHelp, object: nil)
-            }
-            .accessibilityLabel("Help")
-            SidebarBottomButton(icon: "gear") {
-                NotificationCenter.default.post(name: .openSettings, object: nil)
-            }
-            .accessibilityLabel("Settings")
         }
         .padding(.horizontal, 4)
         .padding(.bottom, 4)
