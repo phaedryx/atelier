@@ -137,10 +137,29 @@ enum WorkspaceTab: Hashable {
     case browser(UUID)
     case editor(UUID)
 
-    var isCloseable: Bool {
+    var isCloseable: Bool { kind.isCloseable }
+}
+
+extension WorkspaceTab {
+    var kind: WorkspaceTabKind {
         switch self {
-        case .info, .agent, .changes: return false
-        case .terminal, .browser, .editor: return true
+        case .info: return .info
+        case .agent: return .agent
+        case .changes: return .changes
+        case .terminal: return .terminal
+        case .browser: return .browser
+        case .editor: return .editor
+        }
+    }
+
+    /// Identifier used by the tab bar's drag-and-drop: instance UUID for
+    /// closeable tabs, the kind id for pinned ones.
+    var dragIdentifier: String {
+        switch self {
+        case let .terminal(id), let .browser(id), let .editor(id):
+            return id.uuidString
+        default:
+            return kind.id
         }
     }
 }
@@ -681,7 +700,7 @@ struct TerminalContainerView: View {
             button
                 .onDrag {
                     draggedCustomTab = tab
-                    return NSItemProvider(object: NSString(string: tabDragIdentifier(tab)))
+                    return NSItemProvider(object: NSString(string: tab.dragIdentifier))
                 }
                 .onDrop(of: [.text], delegate: WorkspaceTabDropDelegate {
                     moveCustomTab(to: tab)
@@ -1073,12 +1092,8 @@ struct TerminalContainerView: View {
     }
 
     private func tabLabel(_ tab: WorkspaceTab) -> String? {
+        if let fixed = tab.kind.staticLabel { return fixed }
         switch tab {
-        case .info: return NSLocalizedString("Info", comment: "")
-        case .agent: return NSLocalizedString("Agent", comment: "")
-        case .changes: return NSLocalizedString("Changes", comment: "")
-        case .terminal:
-            return nil
         case let .browser(id):
             guard !useCompactTabs else { return nil }
             guard let title = model.browserTitles[id], !title.isEmpty else { return nil }
@@ -1087,18 +1102,13 @@ struct TerminalContainerView: View {
             guard let path = model.editorFilePaths[id] else { return nil }
             let name = (path as NSString).lastPathComponent
             return name.count > 20 ? String(name.prefix(20)) + "..." : name
+        default:
+            return nil
         }
     }
 
     private func tabIcon(_ tab: WorkspaceTab) -> String {
-        switch tab {
-        case .info: return "info.circle"
-        case .agent: return "sparkle"
-        case .changes: return "arrow.triangle.branch"
-        case .terminal: return "terminal"
-        case .browser: return "globe"
-        case .editor: return "doc.text"
-        }
+        tab.kind.icon
     }
 
     private func closeableTabShortcut(_ tab: WorkspaceTab) -> String? {
@@ -1109,25 +1119,7 @@ struct TerminalContainerView: View {
     }
 
     private func tabShortcut(_ tab: WorkspaceTab) -> String? {
-        switch tab {
-        case .info: return "1"
-        case .agent: return "\u{21A9}"
-        case .changes: return "D"
-        default: return nil
-        }
-    }
-
-    private func tabDragIdentifier(_ tab: WorkspaceTab) -> String {
-        switch tab {
-        case let .terminal(id), let .browser(id), let .editor(id):
-            return id.uuidString
-        case .info:
-            return "info"
-        case .agent:
-            return "agent"
-        case .changes:
-            return "changes"
-        }
+        tab.kind.shortcutBadge
     }
 
     private func addTerminal() {
