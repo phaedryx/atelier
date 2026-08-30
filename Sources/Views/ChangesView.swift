@@ -382,8 +382,10 @@ struct ChangesView: View {
     }
 
     /// Format the active mode's comments and paste them into the workstream's
-    /// Coding Agent surface. Comments are cleared only after a successful send;
-    /// a missing surface keeps them and tells the user.
+    /// Coding Agent surface. Liveness is re-checked at send time, after the
+    /// background git hop, and only the comments actually sent are removed —
+    /// a comment added mid-flight, or a surface that died in the meantime,
+    /// both survive with their comments intact and (for the latter) an alert.
     private func submitReview() {
         let toSend = annotations.comments(mode: mode)
         guard !toSend.isEmpty else { return }
@@ -406,6 +408,13 @@ struct ChangesView: View {
                 comments: toSend, mode: currentMode, branch: branch, baseBranch: base
             )
             DispatchQueue.main.async {
+                // The surface can die during the git hop above; re-check
+                // before sending so a dead surface keeps the comments and
+                // tells the user, instead of silently no-oping.
+                guard cache.hasLiveSurface(target) else {
+                    showNoAgentAlert = true
+                    return
+                }
                 cache.sendText(to: target, text: payload)
                 // Same two-stage Return as AgentNudge (AgentNudge.swift:140-147):
                 // the first confirms the bracketed paste, the second submits.
@@ -416,7 +425,11 @@ struct ChangesView: View {
                         cache.sendReturn(to: target)
                     }
                 }
-                annotations.clear(mode: currentMode)
+                // Delete exactly what was sent, not the whole mode — a
+                // comment added during the git hop above must survive.
+                for comment in toSend {
+                    annotations.delete(id: comment.id)
+                }
                 pushComments()
             }
         }
