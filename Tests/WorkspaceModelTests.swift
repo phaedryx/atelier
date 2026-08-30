@@ -202,12 +202,6 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertNotNil(model.editorBridge)
         XCTAssertNotNil(model.diffBridge)
     }
-
-    func testAutoFocusAgentOnlyForUnvisitedWorkstreams() {
-        XCTAssertTrue(shouldAutoFocusAgent(hasExistingModel: false, savedTab: nil))
-        XCTAssertFalse(shouldAutoFocusAgent(hasExistingModel: false, savedTab: .changes))
-        XCTAssertFalse(shouldAutoFocusAgent(hasExistingModel: true, savedTab: nil))
-    }
 }
 
 @MainActor
@@ -310,14 +304,21 @@ final class WorkspaceModelCacheTests: XCTestCase {
         XCTAssertFalse(first === second)
     }
 
-    func testHasWorkspaceModelDoesNotCreateOne() {
+    /// The one-time jump to the Coding Agent fires on a model's first mount, so
+    /// the flag must start false, survive later lookups of the same workstream,
+    /// and come back false once the workstream is archived and re-created.
+    func testPresentationFlagStartsFalseAndResetsWithTheWorkstream() {
         let cache = TerminalSurfaceCache()
         let workstreamID = UUID()
 
-        XCTAssertFalse(cache.hasWorkspaceModel(for: workstreamID))
+        let model = cache.workspaceModel(for: workstreamID, seed: seed())
+        XCTAssertFalse(model.hasBeenPresented)
 
-        _ = cache.workspaceModel(for: workstreamID, seed: seed())
+        model.hasBeenPresented = true
+        XCTAssertTrue(cache.workspaceModel(for: workstreamID, seed: seed()).hasBeenPresented)
 
-        XCTAssertTrue(cache.hasWorkspaceModel(for: workstreamID))
+        cache.removeWorkstreamSurfaces(for: workstreamID)
+
+        XCTAssertFalse(cache.workspaceModel(for: workstreamID, seed: seed()).hasBeenPresented)
     }
 }

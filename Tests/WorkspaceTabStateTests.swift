@@ -6,7 +6,7 @@ import AppKit
 import XCTest
 
 final class WorkspaceTabSnapshotTests: XCTestCase {
-    func testStartupStateUsesSavedFixedTabWithoutSnapshot() {
+    func testStartupStateUsesSavedFixedTab() {
         let state = startupWorkspaceTabState(savedTab: .agent)
 
         // The seed is always the three fixed tabs; only the active tab varies.

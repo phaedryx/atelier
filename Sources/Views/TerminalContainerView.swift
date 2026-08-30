@@ -178,16 +178,6 @@ func startupWorkspaceTabState(savedTab: RestorableWorkspaceTab?) -> WorkspaceTab
     )
 }
 
-/// Whether selecting a workstream from the sidebar should auto-focus the Coding Agent.
-///
-/// New workstreams open on the Coding Agent; previously-visited ones keep
-/// whatever tab they were left on. A workstream is "previously visited" exactly
-/// when it already has a workspace model, so callers must ask before the model
-/// for that selection is created.
-func shouldAutoFocusAgent(hasExistingModel: Bool, savedTab: RestorableWorkspaceTab?) -> Bool {
-    !hasExistingModel && savedTab == nil
-}
-
 func workspaceEnvironmentVariables(
     workstreamID: UUID,
     projectName: String,
@@ -903,6 +893,18 @@ struct TerminalContainerView: View {
             // `TerminalSurfaceCache.removeTerminalTab(surfaceID:)` seeing it —
             // that prune handles the ordinary shell exit, on screen or off.
             model.reconcile(liveSurfaceIDs: surfaceCache.liveSurfaceIDs())
+            // New workstreams open on the Coding Agent; previously-visited ones
+            // keep whatever tab they were left on. First mount is the only place
+            // that can be asked without ambiguity — the model's mere existence
+            // cannot answer it, since `ContentView`'s body creates the model
+            // while deciding what to render. Runs after `reconcile` so this is
+            // the last word on the selection.
+            if !model.hasBeenPresented {
+                model.hasBeenPresented = true
+                if WorkspaceStateStore.load(for: workstreamID) == nil {
+                    model.activeTab = .agent
+                }
+            }
             if isActive {
                 editorTabActive = model.isEditorTabActive
                 editorFileDirty = model.isActiveEditorDirty
@@ -2521,13 +2523,6 @@ final class TerminalSurfaceCache: ObservableObject {
         let model = WorkspaceModel(workstreamID: workstreamID, snapshot: seed())
         workspaceModels[workstreamID] = model
         return model
-    }
-
-    /// Whether this workstream has been visited this run, without creating a
-    /// model for it. Asking through `workspaceModel(for:seed:)` would answer
-    /// yes for every workstream, since the accessor creates what it reports.
-    func hasWorkspaceModel(for workstreamID: UUID) -> Bool {
-        workspaceModels[workstreamID] != nil
     }
 
     /// Drops the tab that owned a terminal surface which has just exited.

@@ -21,6 +21,13 @@ final class WorkspaceModel: ObservableObject {
     @Published var editorFilePaths: [UUID: String]
     @Published var editorDirtyState: [UUID: Bool] = [:]
 
+    /// Whether this workstream's workspace has been on screen yet. A fresh
+    /// model means a workstream nobody has visited this session, which is what
+    /// decides the one-time jump to the Coding Agent. Deliberately not
+    /// `@Published` — nothing renders from it, so publishing it from `.onAppear`
+    /// would invalidate the view for no reason.
+    var hasBeenPresented = false
+
     /// Dev-server state. Held here rather than in the view for the same reason
     /// the tab list is: it must survive the view going away when the user
     /// navigates to another workstream.

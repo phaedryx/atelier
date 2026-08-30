@@ -316,19 +316,6 @@ struct ContentView: View {
                 if newValue != .settings && newValue != .help {
                     newValue?.save()
                 }
-                // Auto-focus Coding Agent only when there's no tab state to honor.
-                // Must be asked before the workspace model for this selection
-                // exists — having one is what marks the workstream as visited.
-                if case let .workstream(wsID) = newValue,
-                   shouldAutoFocusAgent(
-                       hasExistingModel: surfaceCache.hasWorkspaceModel(for: wsID),
-                       savedTab: WorkspaceStateStore.load(for: wsID)
-                   )
-                {
-                    DispatchQueue.main.async {
-                        NotificationCenter.default.post(name: .focusAgent, object: nil)
-                    }
-                }
                 let wsID: UUID? = {
                     if case let .workstream(id) = newValue { return id }
                     return nil
