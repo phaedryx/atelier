@@ -44,7 +44,7 @@ func defaultPaletteCommands() -> [PaletteCommand] {
                        shortcut: "⌘P", isAvailable: editor, action: post(.toggleFileFinder)),
         PaletteCommand(id: "editor.save", title: NSLocalizedString("Save", comment: ""), category: editorCategory,
                        shortcut: "⌘S", isAvailable: editor, action: post(.saveEditor)),
-        PaletteCommand(id: "editor.saveAs", title: NSLocalizedString("Save As…", comment: ""), category: editorCategory,
+        PaletteCommand(id: "editor.saveAs", title: NSLocalizedString("Save As...", comment: ""), category: editorCategory,
                        shortcut: "⌘⇧S", isAvailable: editor, action: post(.saveEditorAs)),
 
         PaletteCommand(id: "run.startRerun", title: NSLocalizedString("Start/Rerun", comment: ""), category: run,
@@ -60,7 +60,7 @@ func defaultPaletteCommands() -> [PaletteCommand] {
         PaletteCommand(id: "workstream.archive", title: NSLocalizedString("Archive Workstream", comment: ""), category: navigation,
                        shortcut: "⌘⇧W", isAvailable: workstream, action: post(.archiveWorkstream)),
 
-        PaletteCommand(id: "app.settings", title: NSLocalizedString("Settings…", comment: ""), category: app,
+        PaletteCommand(id: "app.settings", title: NSLocalizedString("Settings", comment: ""), category: app,
                        shortcut: "⌘,", action: post(.openSettings)),
         PaletteCommand(id: "app.help", title: NSLocalizedString("Help", comment: ""), category: app,
                        shortcut: "⌘/", action: post(.openHelp)),
