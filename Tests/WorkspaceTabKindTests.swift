@@ -6,7 +6,7 @@ import XCTest
 
 final class WorkspaceTabKindTests: XCTestCase {
     func testPinnedKindsAreNotCloseable() {
-        for kind in [WorkspaceTabKind.info, .agent, .changes] {
+        for kind in [WorkspaceTabKind.info, .agent, .changes, .environment] {
             XCTAssertFalse(kind.isCloseable, "\(kind.id) must be pinned")
             XCTAssertNotNil(kind.staticLabel, "\(kind.id) has a fixed label")
         }
@@ -39,6 +39,12 @@ final class WorkspaceTabKindTests: XCTestCase {
         XCTAssertEqual(WorkspaceTabKind.info.shortcutBadge, "1")
         XCTAssertEqual(WorkspaceTabKind.agent.shortcutBadge, "\u{21A9}")
         XCTAssertEqual(WorkspaceTabKind.changes.shortcutBadge, "D")
+
+        XCTAssertEqual(WorkspaceTab.environment.kind, .environment)
+        XCTAssertEqual(WorkspaceTabKind.environment.icon, "play.circle")
+        // Positional: Environment is the fourth pinned tab, reachable at ⌘4
+        // through the switchByNumber monitor. No dedicated binding exists.
+        XCTAssertEqual(WorkspaceTabKind.environment.shortcutBadge, "4")
     }
 
     func testDragIdentifierIsUUIDForInstancedAndKindIDForPinned() {
@@ -49,6 +55,7 @@ final class WorkspaceTabKindTests: XCTestCase {
         XCTAssertEqual(WorkspaceTab.info.dragIdentifier, "info")
         XCTAssertEqual(WorkspaceTab.agent.dragIdentifier, "agent")
         XCTAssertEqual(WorkspaceTab.changes.dragIdentifier, "changes")
+        XCTAssertEqual(WorkspaceTab.environment.dragIdentifier, "environment")
     }
 
     func testIsCloseableDelegatesToKind() {

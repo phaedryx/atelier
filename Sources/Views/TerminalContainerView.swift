@@ -19,6 +19,7 @@ extension Notification.Name {
     static let terminalTitleChanged = Notification.Name("atelier.terminalTitleChanged")
     static let toggleEditor = Notification.Name("atelier.toggleEditor")
     static let toggleChanges = Notification.Name("atelier.toggleChanges")
+    static let toggleEnvironment = Notification.Name("atelier.toggleEnvironment")
     static let saveEditor = Notification.Name("atelier.saveEditor")
     static let saveEditorAs = Notification.Name("atelier.saveEditorAs")
     static let toggleFileFinder = Notification.Name("atelier.toggleFileFinder")
@@ -36,6 +37,8 @@ enum RestorableWorkspaceTab: String, Codable {
             self = .agent
         case .changes:
             self = .changes
+        case .environment:
+            self = .environment
         case .info, .terminal, .browser, .editor:
             self = .info
         }
@@ -43,12 +46,14 @@ enum RestorableWorkspaceTab: String, Codable {
 
     func workspaceTab() -> WorkspaceTab {
         switch self {
-        case .info, .environment:
+        case .info:
             return .info
         case .agent:
             return .agent
         case .changes:
             return .changes
+        case .environment:
+            return .environment
         }
     }
 }
@@ -133,6 +138,7 @@ enum WorkspaceTab: Hashable {
     case info
     case agent
     case changes
+    case environment
     case terminal(UUID)
     case browser(UUID)
     case editor(UUID)
@@ -146,6 +152,7 @@ extension WorkspaceTab {
         case .info: return .info
         case .agent: return .agent
         case .changes: return .changes
+        case .environment: return .environment
         case .terminal: return .terminal
         case .browser: return .browser
         case .editor: return .editor
@@ -183,11 +190,11 @@ struct WorkspaceTabSnapshot {
 }
 
 /// The state a workstream's model starts life with. Tab lists are never
-/// persisted across launches, so a fresh workstream always opens with the three
+/// persisted across launches, so a fresh workstream always opens with the four
 /// fixed tabs; only the last-active tab *kind* is restored.
 func startupWorkspaceTabState(savedTab: RestorableWorkspaceTab?) -> WorkspaceTabSnapshot {
     WorkspaceTabSnapshot(
-        tabs: [.info, .agent, .changes],
+        tabs: [.info, .agent, .changes, .environment],
         terminalCount: 0,
         browserCount: 0,
         editorCount: 0,
@@ -369,7 +376,7 @@ struct TerminalContainerView: View {
             }
             return [claudeID]
         case let .terminal(id): return [id]
-        case .info, .changes, .browser, .editor: return []
+        case .info, .changes, .environment, .browser, .editor: return []
         }
     }
 
@@ -631,7 +638,7 @@ struct TerminalContainerView: View {
 
     private var tabBar: some View {
         HStack(spacing: 0) {
-            // Fixed tabs (Info, Agent)
+            // Fixed tabs (Info, Agent, Changes, Environment)
             ForEach(fixedTabs, id: \.self) { tab in
                 tabButton(for: tab)
             }
@@ -721,20 +728,7 @@ struct TerminalContainerView: View {
                 projectName: projectName,
                 projectDirectory: projectDirectory,
                 scriptConfig: scriptConfig,
-                useTmux: useTmux,
-                environmentVars: runEnvironmentVars,
-                runCommand: runCommandString,
-                runCommandIsGated: runCommandIsGated,
-                devCommand: resolvedDevCommand,
-                devCommandOverride: $devCommandOverride,
-                runStoppedManually: $model.runStoppedManually,
-                runStarted: $model.runStarted,
-                scriptsApproved: $scriptsApproved,
-                runGeneration: $runGeneration,
-                sessionMode: sessionMode,
-                onStart: doStartRun,
-                onStop: stopRun,
-                onRestart: restartRun
+                scriptsApproved: $scriptsApproved
             )
         case .changes:
             if let bridge = model.diffBridge {
@@ -746,6 +740,32 @@ struct TerminalContainerView: View {
             } else {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        case .environment:
+            if sessionMode == .waitingForTools {
+                terminalLoadingView(message: "Checking terminal tools...")
+            } else {
+                EnvironmentTabView(
+                    workstreamID: workstreamID,
+                    workingDirectory: workingDirectory,
+                    projectName: projectName,
+                    projectDirectory: projectDirectory,
+                    workstreamName: workstreamName,
+                    scriptConfig: scriptConfig,
+                    useTmux: useTmux,
+                    environmentVars: runEnvironmentVars,
+                    runCommand: runCommandString,
+                    runCommandIsGated: runCommandIsGated,
+                    devCommand: resolvedDevCommand,
+                    devCommandOverride: $devCommandOverride,
+                    runStoppedManually: $model.runStoppedManually,
+                    runStarted: $model.runStarted,
+                    scriptsApproved: $scriptsApproved,
+                    runGeneration: $runGeneration,
+                    onStart: doStartRun,
+                    onStop: stopRun,
+                    onRestart: restartRun
+                )
             }
         case .agent:
             if setupGateState == .awaitingApproval {
@@ -863,7 +883,7 @@ struct TerminalContainerView: View {
                 } else {
                     startRunIfNeeded()
                 }
-                model.activeTab = .info
+                model.activeTab = .environment
             }
             .onReceive(NotificationCenter.default.publisher(for: .toggleTerminal)) { _ in
                 guard isActive else { return }
@@ -886,6 +906,10 @@ struct TerminalContainerView: View {
             .onReceive(NotificationCenter.default.publisher(for: .toggleChanges)) { _ in
                 guard isActive else { return }
                 addChanges()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .toggleEnvironment)) { _ in
+                guard isActive else { return }
+                model.activeTab = .environment
             }
             .onReceive(NotificationCenter.default.publisher(for: .closeTerminal)) { _ in
                 guard isActive else { return }

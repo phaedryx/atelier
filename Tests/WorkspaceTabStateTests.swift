@@ -9,8 +9,8 @@ final class WorkspaceTabSnapshotTests: XCTestCase {
     func testStartupStateUsesSavedFixedTab() {
         let state = startupWorkspaceTabState(savedTab: .agent)
 
-        // The seed is always the three fixed tabs; only the active tab varies.
-        XCTAssertEqual(state.tabs, [.info, .agent, .changes])
+        // The seed is always the four fixed tabs; only the active tab varies.
+        XCTAssertEqual(state.tabs, [.info, .agent, .changes, .environment])
         XCTAssertEqual(state.activeTab, .agent)
     }
 
@@ -85,8 +85,14 @@ final class WorkspaceTabStateTests: XCTestCase {
         XCTAssertEqual(RestorableWorkspaceTab(activeTab: .browser(UUID())), .info)
     }
 
-    func testEnvironmentRestoresToInfo() {
-        XCTAssertEqual(RestorableWorkspaceTab.environment.workspaceTab(), .info)
+    func testEnvironmentRestoresToEnvironment() {
+        XCTAssertEqual(RestorableWorkspaceTab.environment.workspaceTab(), .environment)
+        XCTAssertEqual(RestorableWorkspaceTab(activeTab: .environment), .environment)
+    }
+
+    func testStartupTabsIncludeEnvironmentAfterChanges() {
+        let state = startupWorkspaceTabState(savedTab: nil)
+        XCTAssertEqual(state.tabs, [.info, .agent, .changes, .environment])
     }
 
     func testChangesTabRoundTrips() {

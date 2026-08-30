@@ -32,6 +32,10 @@ struct WorkspaceTabKind: Equatable, Hashable {
         id: "changes", isCloseable: false, icon: "arrow.triangle.branch",
         staticLabel: NSLocalizedString("Changes", comment: ""), shortcutBadge: "D"
     )
+    static let environment = WorkspaceTabKind(
+        id: "environment", isCloseable: false, icon: "play.circle",
+        staticLabel: NSLocalizedString("Environment", comment: ""), shortcutBadge: "4"
+    )
     static let terminal = WorkspaceTabKind(
         id: "terminal", isCloseable: true, icon: "terminal",
         staticLabel: nil, shortcutBadge: nil

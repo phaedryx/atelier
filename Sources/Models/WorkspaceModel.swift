@@ -145,8 +145,8 @@ final class WorkspaceModel: ObservableObject {
     /// so callers can skip their own teardown.
     ///
     /// Callers must pass closeable tabs only — fixed tabs (Info, Agent,
-    /// Changes) are permanent, and like the original closeTab contract this
-    /// method does not guard against them.
+    /// Changes, Environment) are permanent, and like the original closeTab
+    /// contract this method does not guard against them.
     @discardableResult
     func removeTab(_ tab: WorkspaceTab) -> Bool {
         guard let index = tabs.firstIndex(of: tab) else { return false }
@@ -160,7 +160,7 @@ final class WorkspaceModel: ObservableObject {
         case let .editor(id):
             editorFilePaths.removeValue(forKey: id)
             editorDirtyState.removeValue(forKey: id)
-        case .info, .agent, .changes:
+        case .info, .agent, .changes, .environment:
             break
         }
 

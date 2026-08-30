@@ -1,5 +1,5 @@
-// ABOUTME: Info panel for a workstream showing metadata, environment, and docs.
-// ABOUTME: First tab in the workspace, combining project info with run script controls.
+// ABOUTME: Info panel for a workstream showing metadata and docs.
+// ABOUTME: First tab in the workspace, combining project info with the docs viewer.
 
 import SwiftUI
 
@@ -10,20 +10,7 @@ struct WorkstreamInfoView: View {
     let projectName: String
     let projectDirectory: String
     var scriptConfig: ScriptConfig = .empty
-    var useTmux: Bool = false
-    var environmentVars: [String: String] = [:]
-    var runCommand: String? = nil
-    var runCommandIsGated: Bool = false
-    var devCommand: DevCommand? = nil
-    @Binding var devCommandOverride: String?
-    @Binding var runStoppedManually: Bool
-    @Binding var runStarted: Bool
     @Binding var scriptsApproved: Bool
-    @Binding var runGeneration: Int
-    var sessionMode: TerminalSessionMode = .standard
-    var onStart: () -> Void = {}
-    var onStop: () -> Void = {}
-    var onRestart: () -> Void = {}
 
     @EnvironmentObject var appEnv: AppEnvironment
     @AppStorage("atelier.defaultTerminal") private var defaultTerminal: String = ""
@@ -221,50 +208,13 @@ struct WorkstreamInfoView: View {
             }
             .formStyle(.grouped)
 
-            // Environment (run script) section
-            if runCommand != nil || devCommand != nil || scriptConfig.loadError != nil {
+            // Markdown content fills remaining space when a doc is selected
+            if let selected = selectedDoc,
+               let doc = docFiles.first(where: { $0.name == selected })
+            {
                 Divider()
-                if sessionMode == .waitingForTools {
-                    VStack(spacing: 12) {
-                        ProgressView()
-                            .controlSize(.regular)
-                        Text("Checking terminal tools...")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    EnvironmentTabView(
-                        workstreamID: workstreamID,
-                        workingDirectory: workingDirectory,
-                        projectName: projectName,
-                        projectDirectory: projectDirectory,
-                        workstreamName: workstreamName,
-                        scriptConfig: scriptConfig,
-                        useTmux: useTmux,
-                        environmentVars: environmentVars,
-                        runCommand: runCommand,
-                        runCommandIsGated: runCommandIsGated,
-                        devCommand: devCommand,
-                        devCommandOverride: $devCommandOverride,
-                        runStoppedManually: $runStoppedManually,
-                        runStarted: $runStarted,
-                        scriptsApproved: $scriptsApproved,
-                        runGeneration: $runGeneration,
-                        onStart: onStart,
-                        onStop: onStop,
-                        onRestart: onRestart
-                    )
-                }
-            } else {
-                // Markdown content fills remaining space when a doc is selected
-                if let selected = selectedDoc,
-                   let doc = docFiles.first(where: { $0.name == selected })
-                {
-                    Divider()
-                    MarkdownContentView(markdown: doc.content)
-                        .id(selected)
-                }
+                MarkdownContentView(markdown: doc.content)
+                    .id(selected)
             }
 
             // Doc tabs pinned to bottom
