@@ -104,7 +104,8 @@ final class ChangeAnnotationStore: ObservableObject {
             }
 
             let content = updated.side == .old ? fileTexts.original : fileTexts.modified
-            let lines = content.components(separatedBy: "\n")
+            let normalized = content.hasSuffix("\n") ? String(content.dropLast()) : content
+            let lines = normalized.components(separatedBy: "\n")
                 .map { $0.trimmingCharacters(in: .whitespaces) }
 
             if updated.lineText.isEmpty {

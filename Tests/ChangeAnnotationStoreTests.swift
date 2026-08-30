@@ -165,4 +165,12 @@ final class ChangeAnnotationStoreTests: XCTestCase {
         XCTAssertNil(ChangeAnnotationStore.matchLine(anchor: "needle", near: 1, in: lines, window: 50))
         XCTAssertEqual(ChangeAnnotationStore.matchLine(anchor: "needle", near: 100, in: lines, window: 50), 121)
     }
+
+    func testReanchorIgnoresPhantomLineFromTrailingNewline() {
+        let store = ChangeAnnotationStore()
+        _ = addComment(store, line: 3, lineText: "")
+        // File has 2 real lines + trailing newline; line 3 must NOT hold on the phantom "".
+        store.reanchor(mode: .uncommitted, texts: ["a.swift": (original: "", modified: "alpha\nbeta\n")], presentPaths: ["a.swift"])
+        XCTAssertTrue(store.comments.first!.isOrphaned)
+    }
 }
