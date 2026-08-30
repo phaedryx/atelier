@@ -88,21 +88,24 @@ enum SetupStateStore {
 enum WorkspaceStateStore {
     private static let userDefaultsKey = "atelier.workspaceTabs"
 
-    static func load(for workstreamID: UUID) -> RestorableWorkspaceTab? {
+    /// Decoded per entry, not as one dictionary: a tag this build does not
+    /// recognise — written by a newer build, or by a tab kind since removed —
+    /// must drop that one workstream's saved tab, not everyone's.
+    private static func loadAll() -> [String: String] {
         guard let data = UserDefaults.standard.data(forKey: userDefaultsKey),
-              let saved = try? JSONDecoder().decode([String: RestorableWorkspaceTab].self, from: data)
-        else { return nil }
-        return saved[workstreamID.uuidString]
+              let saved = try? JSONDecoder().decode([String: String].self, from: data)
+        else { return [:] }
+        return saved
+    }
+
+    static func load(for workstreamID: UUID) -> RestorableWorkspaceTab? {
+        guard let raw = loadAll()[workstreamID.uuidString] else { return nil }
+        return RestorableWorkspaceTab(rawValue: raw)
     }
 
     static func save(_ tab: RestorableWorkspaceTab, for workstreamID: UUID) {
-        var saved: [String: RestorableWorkspaceTab] = [:]
-        if let data = UserDefaults.standard.data(forKey: userDefaultsKey),
-           let existing = try? JSONDecoder().decode([String: RestorableWorkspaceTab].self, from: data)
-        {
-            saved = existing
-        }
-        saved[workstreamID.uuidString] = tab
+        var saved = loadAll()
+        saved[workstreamID.uuidString] = tab.rawValue
         guard let data = try? JSONEncoder().encode(saved) else { return }
         UserDefaults.standard.set(data, forKey: userDefaultsKey)
     }

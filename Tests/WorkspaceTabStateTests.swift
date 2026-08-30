@@ -32,6 +32,22 @@ final class WorkspaceTabSnapshotTests: XCTestCase {
         XCTAssertEqual(vars["ATELIER_DEFAULT_BRANCH"], "develop")
         XCTAssertEqual(vars["CONDUCTOR_DEFAULT_BRANCH"], "develop")
     }
+
+    func testUnknownSavedTabDoesNotDiscardOtherWorkstreams() throws {
+        let key = "atelier.workspaceTabs"
+        let known = UUID()
+        let defaults = UserDefaults.standard
+        let original = defaults.data(forKey: key)
+        defer {
+            if let original { defaults.set(original, forKey: key) } else { defaults.removeObject(forKey: key) }
+        }
+
+        // A tag written by a future build (or a removed tab kind).
+        let raw: [String: String] = [known.uuidString: "changes", UUID().uuidString: "somethingNew"]
+        defaults.set(try JSONEncoder().encode(raw), forKey: key)
+
+        XCTAssertEqual(WorkspaceStateStore.load(for: known), .changes)
+    }
 }
 
 final class WorkspaceTabStateTests: XCTestCase {
