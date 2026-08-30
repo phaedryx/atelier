@@ -34,8 +34,35 @@ struct ChangesView: View {
     @State private var isRefreshing = false
     @State private var fileCount = 0
     @State private var mode: ChangesMode = .branch
-    @State private var showNoAgentAlert = false
+    @State private var submitBlocked: SubmitBlocker?
     @State private var confirmDiscard = false
+
+    /// Why a submit was refused. Both cases keep the comments — the user gets
+    /// them back to retry, rather than losing what they wrote.
+    enum SubmitBlocker: String, Identifiable {
+        /// No live Coding Agent surface to type into.
+        case noAgent
+        /// The agent is mid-turn, or sitting on a permission prompt where a
+        /// synthetic Return would answer it.
+        case busy
+
+        var id: String { rawValue }
+
+        var message: String {
+            switch self {
+            case .noAgent:
+                return NSLocalizedString(
+                    "No Coding Agent terminal is running for this workstream.",
+                    comment: "Changes tab: submit refused, no agent surface"
+                )
+            case .busy:
+                return NSLocalizedString(
+                    "The Coding Agent is busy. Submit again once it finishes its turn.",
+                    comment: "Changes tab: submit refused, agent mid-turn"
+                )
+            }
+        }
+    }
 
     /// The current changed-file set, surfaced for the sidebar tree. Captured
     /// from the same load that builds the diff payload (no extra git read).
@@ -212,8 +239,8 @@ struct ChangesView: View {
                 pushComments()
             }
         }
-        .alert(Text("No Coding Agent terminal is running for this workstream."), isPresented: $showNoAgentAlert) {
-            Button("OK", role: .cancel) {}
+        .alert(item: $submitBlocked) { blocker in
+            Alert(title: Text(blocker.message), dismissButton: .cancel(Text("OK")))
         }
     }
 
@@ -382,17 +409,39 @@ struct ChangesView: View {
     }
 
     /// Format the active mode's comments and paste them into the workstream's
-    /// Coding Agent surface. Liveness is re-checked at send time, after the
-    /// background git hop, and only the comments actually sent are removed —
-    /// a comment added mid-flight, or a surface that died in the meantime,
-    /// both survive with their comments intact and (for the latter) an alert.
+    /// Coding Agent surface. Liveness and turn state are re-checked at send
+    /// time, after the background git hop, and only the comments actually sent
+    /// are removed — a comment added mid-flight, or a surface that died or
+    /// started a turn in the meantime, all survive with their comments intact.
+    ///
+    /// The turn check matters more here than anywhere else the app types into a
+    /// pane: the user is looking at the Changes tab, not at the agent, so they
+    /// cannot see that the pane is sitting on a permission prompt where the
+    /// synthetic Return would answer it. Same nil-permissive rule as
+    /// `PromptInjector` — refuse only on evidence of a live turn.
     private func submitReview() {
+        // The toolbar button is disabled mid-refresh; the palette command and
+        // the notification reach here directly, so the guard lives here too.
+        // Submitting now would send anchors the running re-anchor is rewriting.
+        guard !isLoading, !isRefreshing else { return }
+
         let toSend = annotations.comments(mode: mode)
         guard !toSend.isEmpty else { return }
-        guard surfaceCache.hasLiveSurface(workstreamID) else {
-            showNoAgentAlert = true
-            return
+        guard let blocker = submitBlocker(for: workstreamID, cache: surfaceCache) else {
+            submitBlocked = nil
+            return proceedWithSubmit(toSend)
         }
+        submitBlocked = blocker
+    }
+
+    /// Why `surfaceID` cannot be typed into right now, or nil when it can be.
+    private func submitBlocker(for surfaceID: UUID, cache: TerminalSurfaceCache) -> SubmitBlocker? {
+        guard cache.hasLiveSurface(surfaceID) else { return .noAgent }
+        let state = WorkstreamAgentStateTracker.shared.state(forSurface: surfaceID)
+        return PromptInjector.canInject(state: state) ? nil : .busy
+    }
+
+    private func proceedWithSubmit(_ toSend: [ReviewComment]) {
 
         let workDir = workingDirectory
         let projDir = projectDirectory
@@ -408,17 +457,16 @@ struct ChangesView: View {
                 comments: toSend, mode: currentMode, branch: branch, baseBranch: base
             )
             DispatchQueue.main.async {
-                // The surface can die during the git hop above; re-check
-                // before sending so a dead surface keeps the comments and
-                // tells the user, instead of silently no-oping.
-                guard cache.hasLiveSurface(target) else {
-                    showNoAgentAlert = true
+                // The surface can die — or the agent can start a turn — during
+                // the git hop above, so both are re-checked here rather than
+                // silently no-oping or interrupting a turn that just began.
+                if let blocker = submitBlocker(for: target, cache: cache) {
+                    submitBlocked = blocker
                     return
                 }
-                // The pane can also die between the paste and either Return, so
-                // the liveness check is the guard for every stage, not just the
-                // first. Anything more (an idle check, as AgentNudge uses) would
-                // be wrong here: the user asked for this send explicitly.
+                // Between the paste and either Return, liveness alone gates:
+                // refusing a Return once the payload is already in the pane
+                // would strand it there unsubmitted, with the comments gone.
                 cache.typeAndSubmit(payload, into: target) {
                     cache.hasLiveSurface(target)
                 }
