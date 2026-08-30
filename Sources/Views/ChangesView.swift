@@ -415,15 +415,12 @@ struct ChangesView: View {
                     showNoAgentAlert = true
                     return
                 }
-                cache.sendText(to: target, text: payload)
-                // Same two-stage Return as AgentNudge (AgentNudge.swift:140-147):
-                // the first confirms the bracketed paste, the second submits.
-                // One immediate Return drops input intermittently.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    cache.sendReturn(to: target)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        cache.sendReturn(to: target)
-                    }
+                // The pane can also die between the paste and either Return, so
+                // the liveness check is the guard for every stage, not just the
+                // first. Anything more (an idle check, as AgentNudge uses) would
+                // be wrong here: the user asked for this send explicitly.
+                cache.typeAndSubmit(payload, into: target) {
+                    cache.hasLiveSurface(target)
                 }
                 // Delete exactly what was sent, not the whole mode — a
                 // comment added during the git hop above must survive.
