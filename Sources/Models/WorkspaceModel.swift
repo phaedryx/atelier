@@ -143,6 +143,10 @@ final class WorkspaceModel: ObservableObject {
     /// Removes a tab and its per-tab state, moving the selection to a neighbour
     /// if the removed tab was active. Returns false when the tab is not open,
     /// so callers can skip their own teardown.
+    ///
+    /// Callers must pass closeable tabs only — fixed tabs (Info, Agent,
+    /// Changes) are permanent, and like the original closeTab contract this
+    /// method does not guard against them.
     @discardableResult
     func removeTab(_ tab: WorkspaceTab) -> Bool {
         guard let index = tabs.firstIndex(of: tab) else { return false }
@@ -198,6 +202,9 @@ final class WorkspaceModel: ObservableObject {
 
     // MARK: - Snapshot
 
+    /// The inverse of `init(workstreamID:snapshot:)`. No production caller —
+    /// kept deliberately: the round-trip test is how the seeding contract
+    /// stays verified. Not dead code; do not delete.
     func snapshot() -> WorkspaceTabSnapshot {
         WorkspaceTabSnapshot(
             tabs: tabs,

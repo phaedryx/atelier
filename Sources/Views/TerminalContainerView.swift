@@ -912,7 +912,7 @@ struct TerminalContainerView: View {
                 editorTabActive = model.isEditorTabActive
                 editorFileDirty = model.isActiveEditorDirty
             }
-            if model.tabs.contains(where: { if case .editor = $0 { return true } else { return false } }) {
+            if model.hasEditorTabs {
                 startFileTreeWatcherIfNeeded()
             }
         }
@@ -1003,12 +1003,9 @@ struct TerminalContainerView: View {
                     // The dev-server session died; no port is coming.
                     browserStartPending = false
                 }
-                if let tab = model.tabs.first(where: {
-                    if case let .terminal(id) = $0 { return id == surfaceID }
-                    return false
-                }) {
-                    closeTab(tab)
-                }
+                // Tab removal for exited terminals happens at exit time, in
+                // handleSurfaceClosed via removeTerminalTab(surfaceID:) — by
+                // the time this notification arrives the tab is already gone.
             }
             .onReceive(NotificationCenter.default.publisher(for: .browserTitleChanged)) { notification in
                 guard let tabID = notification.object as? UUID else { return }
@@ -1355,7 +1352,9 @@ struct TerminalContainerView: View {
             directoryWatcher = nil
             fileTree = []
             gitFileStatuses = GitFileStatusProvider()
-            // Keep editorBridge alive — the WebView is expensive to recreate (~17 MB JS)
+            // The Monaco bridge is deliberately untouched here: it lives on
+            // WorkspaceModel (model.editorBridge) precisely so closing the
+            // last editor tab never tears down the ~17 MB WebView.
         }
     }
 

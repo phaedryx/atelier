@@ -24,6 +24,10 @@
 - [ ] PR management: create and manage PRs from workstreams (currently view-only)
 - [ ] Horizontal terminal splits within a tab (ghostty C API supports splits)
 - [ ] System notifications when agent needs attention (bell/urgency from Ghostty)
+- [ ] WorkspaceModel retains both Monaco WebViews (editor + diff bridges, ~17 MB each) for every
+  visited workstream until it is archived — Changes is a fixed tab, so most visited workstreams pin
+  one. Deliberate (it is what makes unsaved editor content survive navigation), but unbounded: add an
+  eviction policy (e.g. drop bridges for non-active workstreams after a while and recreate lazily).
 
 ## Done
 
