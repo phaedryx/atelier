@@ -23,6 +23,8 @@ extension Notification.Name {
     static let saveEditor = Notification.Name("atelier.saveEditor")
     static let saveEditorAs = Notification.Name("atelier.saveEditorAs")
     static let toggleFileFinder = Notification.Name("atelier.toggleFileFinder")
+    /// Object is a stored prompt's id (uuidString): run it in the active workstream.
+    static let runStoredPrompt = Notification.Name("atelier.runStoredPrompt")
 }
 
 enum RestorableWorkspaceTab: String, Codable {
@@ -773,6 +775,14 @@ struct TerminalContainerView: View {
             .onReceive(NotificationCenter.default.publisher(for: .focusAgent)) { _ in
                 guard isActive else { return }
                 model.activeTab = .agent
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .runStoredPrompt)) { note in
+                guard isActive else { return }
+                guard let idString = note.object as? String,
+                      let id = UUID(uuidString: idString),
+                      let prompt = StoredPromptStore.shared.prompt(id: id) else { return }
+                model.activeTab = .agent
+                PromptInjector.shared.inject(prompt.text, into: workstreamID)
             }
             .onReceive(NotificationCenter.default.publisher(for: .rerunScript)) { _ in
                 guard isActive else { return }
@@ -2531,6 +2541,38 @@ final class TerminalSurfaceCache: ObservableObject {
     }
 
     // MARK: - Text injection
+
+    /// Whether a live surface exists for `id`. Callers that type into a pane
+    /// must check this first: `sendText` and `sendReturn` drop silently when
+    /// the surface was never created (no agent command resolved, setup script
+    /// still awaiting approval), which reads to the user as the input vanishing.
+    func hasLiveSurface(_ id: UUID) -> Bool {
+        surfaces[id]?.surface != nil
+    }
+
+    /// Type `text` into a surface and submit it.
+    ///
+    /// Two stages, both deferred: the first Return confirms the paste the
+    /// agent's input widget just took, the second submits it. Sending one
+    /// immediately looks fine by hand and drops input intermittently in use.
+    /// Each Return is re-checked through `whileSafe`, because half a second is
+    /// long enough for a turn to start or for the user to start typing in that
+    /// pane — an unconditional Return would submit whatever is on the line,
+    /// theirs included.
+    ///
+    /// The 0.5s spacing is tuned to terminal paste behavior; it lives here so
+    /// both callers (`AgentNudge`, `PromptInjector`) retune together.
+    func typeAndSubmit(_ text: String, into surfaceID: UUID, whileSafe: @escaping @MainActor () -> Bool) {
+        sendText(to: surfaceID, text: text)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self, whileSafe() else { return }
+            self.sendReturn(to: surfaceID)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self, whileSafe() else { return }
+                self.sendReturn(to: surfaceID)
+            }
+        }
+    }
 
     /// Send text to a terminal surface as if it were typed.
     func sendText(to surfaceID: UUID, text: String) {

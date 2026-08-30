@@ -9,6 +9,9 @@ import Foundation
 struct PaletteContext {
     var workstreamActive: Bool
     var editorActive: Bool
+    /// Whether the active workstream's Coding Agent can accept typed input
+    /// right now (see `PromptInjector.canInject`). Gates stored-prompt commands.
+    var agentCanReceivePrompt: Bool = false
 }
 
 struct PaletteCommand: Identifiable {

@@ -32,6 +32,25 @@ final class WorkstreamAgentStateTracker: ObservableObject {
         /// No hook events for a while although the turn hasn't ended.
         case stalled
         case needsAttention(NeedsReason)
+
+        /// Whether the agent's turn has ended, i.e. typing into its pane would
+        /// land at a prompt rather than in the middle of someone's work.
+        ///
+        /// `.idle` and `.needsAttention(.justFinished)` are the same fact seen
+        /// from two places — the tracker reports the first for the workstream
+        /// the user is looking at and the second for the rest. Everything else
+        /// means mid-turn, waiting on a permission prompt (where typed input
+        /// would answer the prompt itself), or stalled without having ended
+        /// the turn. Both typing paths — `AgentNudge` and `PromptInjector` —
+        /// classify through this, so a policy change lands once.
+        var turnHasEnded: Bool {
+            switch self {
+            case .idle, .needsAttention(.justFinished):
+                return true
+            case .working, .stalled, .needsAttention(.permission):
+                return false
+            }
+        }
     }
 
     /// One live agent (main or subagent) inside a workstream.
