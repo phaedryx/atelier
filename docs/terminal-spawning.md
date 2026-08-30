@@ -29,7 +29,6 @@ builds the environment injected into every workstream terminal:
 | `ATELIER_WORKTREE_DIR` | Worktree / working directory |
 | `ATELIER_PORT` | Port number derived from working directory |
 | `ATELIER_DEFAULT_BRANCH` | Default branch (main, master, etc.) |
-| `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` | `1` if agent teams flag is on |
 
 For non-tmux terminal tabs, `TMUX` and `TMUX_PANE` are explicitly cleared to
 prevent session inheritance from a parent tmux.
@@ -41,7 +40,6 @@ prevent session inheritance from a parent tmux.
 `buildClaudeCommand()` in TerminalContainerView constructs the command:
 
 - `claude --resume <sessionID>` (or `--session-id` for a fresh session)
-- `--teammate-mode tmux` if tmux mode is enabled
 - `--dangerously-skip-permissions` if bypass flag is set
 - `CommandBuilder.withFallback()` provides graceful fallback from resume to fresh
 

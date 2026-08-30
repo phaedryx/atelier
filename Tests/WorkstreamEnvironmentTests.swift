@@ -5,14 +5,13 @@
 import XCTest
 
 final class WorkstreamEnvironmentTests: XCTestCase {
-    private let baseParams: (UUID, String, String, String, String, Int, Bool) = (
+    private let baseParams: (UUID, String, String, String, String, Int) = (
         UUID(uuidString: "12345678-1234-1234-1234-123456789abc")!,
         "my-project",
         "coral-reef",
         "/Users/test/my-project",
         "/Users/test/.atelier/worktrees/my-project/coral-reef",
-        42847,
-        false
+        42847
     )
 
     // MARK: - Core ATELIER_* variables
@@ -25,7 +24,6 @@ final class WorkstreamEnvironmentTests: XCTestCase {
             projectDirectory: baseParams.3,
             workingDirectory: baseParams.4,
             port: baseParams.5,
-            agentTeams: baseParams.6,
             defaultBranch: "main",
             scriptSource: nil
         )
@@ -36,23 +34,8 @@ final class WorkstreamEnvironmentTests: XCTestCase {
         XCTAssertEqual(vars["ATELIER_WORKTREE_DIR"], "/Users/test/.atelier/worktrees/my-project/coral-reef")
         XCTAssertEqual(vars["ATELIER_PORT"], "42847")
         XCTAssertEqual(vars["ATELIER_DEFAULT_BRANCH"], "main")
-        XCTAssertNil(vars["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"])
     }
 
-    func testAgentTeamsFlag() {
-        let vars = WorkstreamEnvironment.variables(
-            workstreamID: baseParams.0,
-            projectName: baseParams.1,
-            workstreamName: baseParams.2,
-            projectDirectory: baseParams.3,
-            workingDirectory: baseParams.4,
-            port: baseParams.5,
-            agentTeams: true,
-            defaultBranch: "main",
-            scriptSource: nil
-        )
-        XCTAssertEqual(vars["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"], "1")
-    }
 
     // MARK: - Conductor aliases
 
@@ -64,7 +47,6 @@ final class WorkstreamEnvironmentTests: XCTestCase {
             projectDirectory: baseParams.3,
             workingDirectory: baseParams.4,
             port: baseParams.5,
-            agentTeams: baseParams.6,
             defaultBranch: "main",
             scriptSource: "conductor.json"
         )
@@ -85,7 +67,6 @@ final class WorkstreamEnvironmentTests: XCTestCase {
             projectDirectory: baseParams.3,
             workingDirectory: baseParams.4,
             port: baseParams.5,
-            agentTeams: baseParams.6,
             defaultBranch: "develop",
             scriptSource: ".emdash.json"
         )
@@ -107,7 +88,6 @@ final class WorkstreamEnvironmentTests: XCTestCase {
             projectDirectory: baseParams.3,
             workingDirectory: baseParams.4,
             port: baseParams.5,
-            agentTeams: baseParams.6,
             defaultBranch: "main",
             scriptSource: ".superset/config.json"
         )
@@ -126,7 +106,6 @@ final class WorkstreamEnvironmentTests: XCTestCase {
             projectDirectory: baseParams.3,
             workingDirectory: baseParams.4,
             port: baseParams.5,
-            agentTeams: baseParams.6,
             defaultBranch: "main",
             scriptSource: ".atelier.json"
         )
@@ -143,7 +122,6 @@ final class WorkstreamEnvironmentTests: XCTestCase {
             projectDirectory: baseParams.3,
             workingDirectory: baseParams.4,
             port: baseParams.5,
-            agentTeams: baseParams.6,
             defaultBranch: "main",
             scriptSource: nil
         )
@@ -162,7 +140,6 @@ final class WorkstreamEnvironmentTests: XCTestCase {
             projectDirectory: baseParams.3,
             workingDirectory: baseParams.4,
             port: baseParams.5,
-            agentTeams: baseParams.6,
             defaultBranch: "main",
             scriptSource: nil
         )
@@ -174,19 +151,4 @@ final class WorkstreamEnvironmentTests: XCTestCase {
         }
     }
 
-    func testAgentTeamsFlagIsNotAliased() {
-        let vars = WorkstreamEnvironment.variables(
-            workstreamID: baseParams.0,
-            projectName: baseParams.1,
-            workstreamName: baseParams.2,
-            projectDirectory: baseParams.3,
-            workingDirectory: baseParams.4,
-            port: baseParams.5,
-            agentTeams: true,
-            defaultBranch: "main",
-            scriptSource: nil
-        )
-        XCTAssertEqual(vars["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"], "1")
-        XCTAssertNil(vars["FF_CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"])
-    }
 }
