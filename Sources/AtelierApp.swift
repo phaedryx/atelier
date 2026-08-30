@@ -348,32 +348,12 @@ struct AtelierApp: App {
                 }
                 .keyboardShortcut(.return, modifiers: .command)
 
-                Button("New Terminal") {
-                    NotificationCenter.default.post(name: .toggleTerminal, object: nil)
-                }
-                .keyboardShortcut("t", modifiers: .command)
-
-                Button("New Browser") {
-                    NotificationCenter.default.post(name: .toggleBrowser, object: nil)
-                }
-                .keyboardShortcut("b", modifiers: .command)
-
-                Button("New Editor") {
-                    NotificationCenter.default.post(name: .toggleEditor, object: nil)
-                }
-                .keyboardShortcut("o", modifiers: .command)
-
                 if isEditorActive {
                     Button("Find File") {
                         NotificationCenter.default.post(name: .toggleFileFinder, object: nil)
                     }
                     .keyboardShortcut("p", modifiers: .command)
                 }
-
-                Button("Changes") {
-                    NotificationCenter.default.post(name: .toggleChanges, object: nil)
-                }
-                .keyboardShortcut("d", modifiers: .command)
 
                 Button("Start/Rerun") {
                     NotificationCenter.default.post(name: .rerunScript, object: nil)

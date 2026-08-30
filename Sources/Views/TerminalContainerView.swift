@@ -399,7 +399,7 @@ struct TerminalContainerView: View {
     private var portSubtitle: String {
         let label = appEnv.taskDescription(for: workingDirectory) ?? projectName
         if let port = portDetector.selectedPort {
-            return "\(label) · localhost:\(port) · \u{2318}B for browser"
+            return "\(label) · localhost:\(port) · \u{2318}\u{21E7}P for browser"
         }
         return label
     }
@@ -657,9 +657,9 @@ struct TerminalContainerView: View {
 
             // Quick actions to add tabs
             HStack(spacing: 2) {
-                TabBarActionButton(icon: "terminal", shortcut: "\u{2318}T", tooltip: "New Terminal (\u{2318}T)", action: addTerminal)
-                TabBarActionButton(icon: "globe", shortcut: "\u{2318}B", tooltip: "New Browser (\u{2318}B)", action: addBrowser)
-                TabBarActionButton(icon: "doc.text", shortcut: "\u{2318}O", tooltip: "New Editor (\u{2318}O)", action: openEditor)
+                TabBarActionButton(icon: "terminal", tooltip: "New Terminal", action: addTerminal)
+                TabBarActionButton(icon: "globe", tooltip: "New Browser", action: addBrowser)
+                TabBarActionButton(icon: "doc.text", tooltip: "New Editor", action: openEditor)
             }
             .fixedSize()
 
@@ -1791,7 +1791,6 @@ private struct WorkspaceTabButton: View {
 
 private struct TabBarActionButton: View {
     let icon: String
-    let shortcut: String
     let tooltip: String
     let action: () -> Void
 
@@ -1799,17 +1798,13 @@ private struct TabBarActionButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 3) {
-                Image(systemName: icon)
-                    .font(.system(size: 11))
-                Text(shortcut)
-                    .font(.system(size: 9, weight: .medium, design: .monospaced))
-            }
-            .foregroundStyle(isHovering ? .primary : .tertiary)
-            .padding(.horizontal, 6)
-            .frame(minHeight: 24)
-            .background(isHovering ? Color.primary.opacity(0.08) : .clear)
-            .clipShape(RoundedRectangle(cornerRadius: 5))
+            Image(systemName: icon)
+                .font(.system(size: 11))
+                .foregroundStyle(isHovering ? .primary : .tertiary)
+                .padding(.horizontal, 6)
+                .frame(minHeight: 24)
+                .background(isHovering ? Color.primary.opacity(0.08) : .clear)
+                .clipShape(RoundedRectangle(cornerRadius: 5))
         }
         .buttonStyle(.borderless)
         .onHover { isHovering = $0 }

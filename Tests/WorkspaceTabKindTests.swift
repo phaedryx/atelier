@@ -38,7 +38,9 @@ final class WorkspaceTabKindTests: XCTestCase {
         XCTAssertEqual(WorkspaceTabKind.editor.icon, "doc.text")
         XCTAssertEqual(WorkspaceTabKind.info.shortcutBadge, "1")
         XCTAssertEqual(WorkspaceTabKind.agent.shortcutBadge, "\u{21A9}")
-        XCTAssertEqual(WorkspaceTabKind.changes.shortcutBadge, "D")
+        // ⌘D was retired in favour of the palette; ⌘3 is the positional
+        // binding from the switchByNumber monitor, which still exists.
+        XCTAssertEqual(WorkspaceTabKind.changes.shortcutBadge, "3")
 
         XCTAssertEqual(WorkspaceTab.environment.kind, .environment)
         XCTAssertEqual(WorkspaceTabKind.environment.icon, "play.circle")

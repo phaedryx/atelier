@@ -30,7 +30,9 @@ struct WorkspaceTabKind: Equatable, Hashable {
     )
     static let changes = WorkspaceTabKind(
         id: "changes", isCloseable: false, icon: "arrow.triangle.branch",
-        staticLabel: NSLocalizedString("Changes", comment: ""), shortcutBadge: "D"
+        // Positional: Changes is the third pinned tab, reachable at ⌘3
+        // through the switchByNumber monitor. No dedicated menu binding exists.
+        staticLabel: NSLocalizedString("Changes", comment: ""), shortcutBadge: "3"
     )
     static let environment = WorkspaceTabKind(
         id: "environment", isCloseable: false, icon: "play.circle",

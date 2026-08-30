@@ -234,7 +234,7 @@ struct EnvironmentTabView: View {
             }
 
             if devCommand == nil, !isCustomizingDevCommand {
-                Text("Press \u{2318}B to start the dev server and open a browser tab.")
+                Text("Press \u{2318}\u{21E7}P to start the dev server and open a browser tab.")
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
             }

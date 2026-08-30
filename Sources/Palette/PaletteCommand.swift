@@ -15,7 +15,7 @@ struct PaletteCommand: Identifiable {
     let id: String
     let title: String
     let category: String
-    /// Display-only shortcut badge, e.g. "⌘T". The real key binding lives on
+    /// Display-only shortcut badge, e.g. "⌘W". The real key binding lives on
     /// the menu item in AtelierApp; nil for palette-only commands.
     let shortcut: String?
     let isAvailable: @MainActor @Sendable (PaletteContext) -> Bool

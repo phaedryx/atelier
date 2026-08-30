@@ -195,7 +195,6 @@
 "Info panel" = "Info panel";
 "New Terminal" = "New Terminal";
 "New Browser" = "New Browser";
-"New Browser (starts dev server)" = "New Browser (starts dev server)";
 "Close tab" = "Close tab";
 "Address bar" = "Address bar";
 "Back to project" = "Back to project";
@@ -258,7 +257,7 @@
 "Custom" = "Custom";
 "From package.json" = "From package.json";
 "No dev command found. Add a dev script to package.json or set one below." = "No dev command found. Add a dev script to package.json or set one below.";
-"Press ⌘B to start the dev server and open a browser tab." = "Press ⌘B to start the dev server and open a browser tab.";
+"Press ⌘⇧P to start the dev server and open a browser tab." = "Press ⌘⇧P to start the dev server and open a browser tab.";
 
 /* Tab labels */
 "Info" = "Info";
