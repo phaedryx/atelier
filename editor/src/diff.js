@@ -41,8 +41,10 @@ let commentsByFile = new Map() // filePath -> [comment]
 const commentZones = new Map() // filePath -> [zoneId]
 let inputZoneState = null // { filePath, zoneId } for the single open input zone
 // Guard against re-entrant rendering: renderComments() lays the editor out,
-// and a layout must never be able to drive another render.
-let renderingComments = false
+// and a layout must never be able to drive another render of the same file.
+// Holds the file currently rendering (not a bare flag) so a layout that
+// cascades into a *different* file's onDidUpdateDiff still renders it.
+let renderingFor = null
 // Editors awaiting their first onDidUpdateDiff before we report contentReady.
 let pendingCount = 0
 let reported = false
@@ -282,11 +284,12 @@ function buildCommentNode(comment) {
 // changed — old-side anchors need the computed diff, and hideUnchangedRegions
 // re-folding invalidates earlier zone placement).
 function renderComments(filePath) {
-  if (renderingComments) return
+  if (renderingFor === filePath) return
   const entry = sections.get(filePath)
   if (!entry || !entry.editor) return
 
-  renderingComments = true
+  const previous = renderingFor
+  renderingFor = filePath
   try {
     const modified = entry.editor.getModifiedEditor()
     const list = commentsByFile.get(filePath) || []
@@ -314,7 +317,7 @@ function renderComments(filePath) {
     // The zones changed the content height; re-fit the section to it.
     resizeDiffEditor(entry.editor, entry.host.querySelector('.diff-body') || entry.host)
   } finally {
-    renderingComments = false
+    renderingFor = previous
   }
 }
 
