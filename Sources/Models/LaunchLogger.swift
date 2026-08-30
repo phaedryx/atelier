@@ -13,7 +13,6 @@ struct LaunchLogEntry: Codable {
     struct Settings: Codable {
         let tmuxMode: Bool
         let bypassPermissions: Bool
-        let agentTeams: Bool
         let autoRenameBranch: Bool
         let allowOutsideWorktree: Bool
     }

@@ -244,7 +244,6 @@ func workspaceEnvironmentVariables(
     projectDirectory: String,
     workingDirectory: String,
     port: Int,
-    agentTeams: Bool,
     defaultBranch: String,
     scriptSource: String?
 ) -> [String: String] {
@@ -255,7 +254,6 @@ func workspaceEnvironmentVariables(
         projectDirectory: projectDirectory,
         workingDirectory: workingDirectory,
         port: port,
-        agentTeams: agentTeams,
         defaultBranch: defaultBranch,
         scriptSource: scriptSource
     )
@@ -308,7 +306,6 @@ struct TerminalContainerView: View {
     @EnvironmentObject var appEnv: AppEnvironment
     @AppStorage("atelier.defaultBrowser") private var defaultBrowser: String = ""
     @AppStorage("atelier.tmuxMode") private var tmuxMode: Bool = false
-    @AppStorage("atelier.agentTeams") private var agentTeams: Bool = false
     @AppStorage("atelier.autoRenameBranch") private var autoRenameBranch: Bool = false
     @AppStorage("atelier.allowOutsideWorktree") private var allowOutsideWorktree: Bool = false
     @AppStorage(AgentIPCSettings.enabledKey) private var agentIPC: Bool = false
@@ -525,7 +522,6 @@ struct TerminalContainerView: View {
         if appEnv.toolStatus.claudeSupportsSessionName {
             resume.option("--name", workstreamName)
         }
-        if useTmux { resume.flag("--teammate-mode"); resume.arg("tmux") }
         if bypassPermissions { resume.flag("--dangerously-skip-permissions") }
         if let combinedSystemPrompt {
             resume.option("--append-system-prompt", combinedSystemPrompt)
@@ -539,7 +535,6 @@ struct TerminalContainerView: View {
         if appEnv.toolStatus.claudeSupportsSessionName {
             fresh.option("--name", workstreamName)
         }
-        if useTmux { fresh.flag("--teammate-mode"); fresh.arg("tmux") }
         if bypassPermissions { fresh.flag("--dangerously-skip-permissions") }
         if let combinedSystemPrompt {
             fresh.option("--append-system-prompt", combinedSystemPrompt)
@@ -583,7 +578,6 @@ struct TerminalContainerView: View {
             settings: LaunchLogEntry.Settings(
                 tmuxMode: tmuxMode,
                 bypassPermissions: bypassPermissions,
-                agentTeams: agentTeams,
                 autoRenameBranch: autoRenameBranch,
                 allowOutsideWorktree: allowOutsideWorktree
             ),
@@ -1254,7 +1248,6 @@ struct TerminalContainerView: View {
             settings: LaunchLogEntry.Settings(
                 tmuxMode: useTmux,
                 bypassPermissions: false,
-                agentTeams: false,
                 autoRenameBranch: false,
                 allowOutsideWorktree: false
             ),
@@ -1590,7 +1583,6 @@ struct TerminalContainerView: View {
             projectDirectory: projectDirectory,
             workingDirectory: workingDirectory,
             port: workstreamPort,
-            agentTeams: agentTeams,
             defaultBranch: defaultBranch,
             scriptSource: scriptConfig.source
         )

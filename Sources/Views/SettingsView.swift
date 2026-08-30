@@ -7,7 +7,6 @@ struct SettingsView: View {
     @AppStorage("atelier.tmuxMode") private var tmuxMode: Bool = false
     @AppStorage("atelier.bypassPermissions") private var bypassPermissions: Bool = false
     @AppStorage("atelier.allowOutsideWorktree") private var allowOutsideWorktree: Bool = false
-    @AppStorage("atelier.agentTeams") private var agentTeams: Bool = false
     @AppStorage("atelier.autoRenameBranch") private var autoRenameBranch: Bool = false
     @AppStorage(AgentIPCSettings.enabledKey) private var agentIPC: Bool = false
     @AppStorage(AgentIPCSettings.nudgeKey) private var agentIPCNudge: Bool = false
@@ -28,9 +27,9 @@ struct SettingsView: View {
     @EnvironmentObject private var appEnv: AppEnvironment
     @State private var showingClearConfirm = false
     #if DEBUG
-        private static let cliName = "atelier-debug"
+        private static let cliName = "atl-debug"
     #else
-        private static let cliName = "atelier"
+        private static let cliName = "atl"
     #endif
     @State private var cliInstalled = Self.isCliCorrectlyInstalled()
 
@@ -161,12 +160,6 @@ struct SettingsView: View {
                     isOn: $allowOutsideWorktree,
                     description: "When enabled, the coding agent can modify files anywhere on disk. When disabled, writes are restricted to the worktree directory.",
                     descriptionStyle: allowOutsideWorktree ? .warning : .secondary
-                )
-
-                SettingToggle(
-                    "Agent Teams",
-                    isOn: $agentTeams,
-                    description: NSLocalizedString("Enables experimental multi-agent coordination. Agents can spawn teammates, delegate tasks, and collaborate across workstreams. Only applies to Claude Code.", comment: "Agent Teams setting description")
                 )
 
                 SettingToggle(

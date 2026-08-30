@@ -14,7 +14,6 @@ enum WorkstreamEnvironment {
         projectDirectory: String,
         workingDirectory: String,
         port: Int,
-        agentTeams: Bool,
         defaultBranch: String = "main",
         scriptSource: String? = nil
     ) -> [String: String] {
@@ -37,11 +36,6 @@ enum WorkstreamEnvironment {
         for (key, value) in Array(vars) {
             guard let suffix = key.stripping(prefix: "ATELIER_") else { continue }
             vars["FF_" + suffix] = value
-        }
-
-        // Agent Teams is a Claude Code experimental feature.
-        if agentTeams {
-            vars["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
         }
 
         switch scriptSource {
