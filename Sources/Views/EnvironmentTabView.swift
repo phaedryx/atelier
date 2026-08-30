@@ -71,13 +71,6 @@ struct EnvironmentTabView: View {
 
     private var environmentContent: some View {
         runPane()
-            .onChange(of: scriptsApproved) { _, approved in
-                // Withdrawing approval stops what the repository is already running.
-                if !approved, runStarted { onStop() }
-            }
-            .onAppear {
-                restoreRunState()
-            }
     }
 
     @ViewBuilder
@@ -323,20 +316,6 @@ struct EnvironmentTabView: View {
 
     private var runControlsEnabled: Bool {
         runCommandPreference != nil && (runCommandIsGated ? scriptsApproved : true)
-    }
-
-    private func restoreRunState() {
-        guard !runStarted,
-              useTmux,
-              runCommandPreference != nil,
-              let tmuxPath = appEnv.toolStatus.tmux.path else { return }
-        let session = TmuxSession.sessionName(project: projectName, workstream: workstreamName, role: "run")
-        let hasExistingRunSession = TmuxSession.sessionExists(tmuxPath: tmuxPath, sessionName: session)
-        // Dev commands (package.json / override) are never gated.
-        let approved = runCommandIsGated ? scriptsApproved : true
-        if shouldRestoreRunSession(useTmux: useTmux, hasRunScript: runCommandPreference != nil, hasExistingRunSession: hasExistingRunSession, wasStoppedManually: runStoppedManually, isApproved: approved) {
-            runStarted = true
-        }
     }
 }
 

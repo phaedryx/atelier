@@ -865,6 +865,11 @@ struct TerminalContainerView: View {
             .onChange(of: appEnv.isDetecting) {
                 rebuildAgentCommand()
                 if isActive { preloadSurfaces() }
+                // Tmux mode isn't resolvable until detection finishes; restore
+                // the run session then, not just on the Environment tab's own
+                // appearance, so a live session is picked up even if that tab
+                // is never opened.
+                restoreRunState()
             }
             .onReceive(NotificationCenter.default.publisher(for: .toggleInfo)) { _ in
                 guard isActive else { return }
@@ -958,6 +963,7 @@ struct TerminalContainerView: View {
             if model.hasEditorTabs {
                 startFileTreeWatcherIfNeeded()
             }
+            restoreRunState()
         }
         .onDisappear {
             if isActive {
@@ -988,7 +994,13 @@ struct TerminalContainerView: View {
         mainContent
             .onChange(of: scriptsApproved) { _, approved in
                 // Approving from the Info tab releases a waiting setup script.
-                if approved { startApprovedSetup() }
+                if approved {
+                    startApprovedSetup()
+                } else if model.runStarted {
+                    // Withdrawing approval stops what the repository is
+                    // already running — the entry gate alone is not enough.
+                    stopRun()
+                }
             }
             .onChange(of: devCommandOverride) { _, newValue in
                 DevCommandResolver.saveOverride(newValue, for: workstreamID)
@@ -1292,6 +1304,32 @@ struct TerminalContainerView: View {
         guard useTmux, let tmuxPath = appEnv.toolStatus.tmux.path else { return }
         let session = TmuxSession.sessionName(project: projectName, workstream: workstreamName, role: "run")
         TmuxSession.killSession(tmuxPath: tmuxPath, sessionName: session)
+    }
+
+    /// Restores `runStarted` from a run session already alive in tmux —
+    /// survives relaunch, or a session started before this container existed.
+    /// Lives here rather than on the Environment tab because it must run
+    /// before the user ever opens that tab: on launch (once tool detection
+    /// has resolved whether tmux is usable) and whenever detection state
+    /// changes. The guards make re-invocation harmless.
+    private func restoreRunState() {
+        guard !model.runStarted,
+              useTmux,
+              resolvedRunCommand != nil,
+              let tmuxPath = appEnv.toolStatus.tmux.path else { return }
+        let session = TmuxSession.sessionName(project: projectName, workstream: workstreamName, role: "run")
+        let hasExistingRunSession = TmuxSession.sessionExists(tmuxPath: tmuxPath, sessionName: session)
+        // Dev commands (package.json / override) are never gated.
+        let approved = runCommandIsGated ? scriptsApproved : true
+        if shouldRestoreRunSession(
+            useTmux: useTmux,
+            hasRunScript: resolvedRunCommand != nil,
+            hasExistingRunSession: hasExistingRunSession,
+            wasStoppedManually: model.runStoppedManually,
+            isApproved: approved
+        ) {
+            model.runStarted = true
+        }
     }
 
     private func openEditor() {
