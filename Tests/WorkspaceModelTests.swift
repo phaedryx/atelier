@@ -202,12 +202,18 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertNotNil(model.editorBridge)
         XCTAssertNotNil(model.diffBridge)
     }
+
+    func testAutoFocusAgentOnlyForUnvisitedWorkstreams() {
+        XCTAssertTrue(shouldAutoFocusAgent(hasExistingModel: false, savedTab: nil))
+        XCTAssertFalse(shouldAutoFocusAgent(hasExistingModel: false, savedTab: .changes))
+        XCTAssertFalse(shouldAutoFocusAgent(hasExistingModel: true, savedTab: nil))
+    }
 }
 
 @MainActor
 final class WorkspaceModelCacheTests: XCTestCase {
     private func seed() -> WorkspaceTabSnapshot {
-        startupWorkspaceTabState(snapshot: nil, savedTab: nil)
+        startupWorkspaceTabState(savedTab: nil)
     }
 
     func testCacheReturnsTheSameModelForTheSameWorkstream() {
@@ -302,5 +308,16 @@ final class WorkspaceModelCacheTests: XCTestCase {
         let second = cache.workspaceModel(for: workstreamID, seed: seed())
 
         XCTAssertFalse(first === second)
+    }
+
+    func testHasWorkspaceModelDoesNotCreateOne() {
+        let cache = TerminalSurfaceCache()
+        let workstreamID = UUID()
+
+        XCTAssertFalse(cache.hasWorkspaceModel(for: workstreamID))
+
+        _ = cache.workspaceModel(for: workstreamID, seed: seed())
+
+        XCTAssertTrue(cache.hasWorkspaceModel(for: workstreamID))
     }
 }

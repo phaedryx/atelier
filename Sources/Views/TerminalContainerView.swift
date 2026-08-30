@@ -142,7 +142,11 @@ enum WorkspaceTab: Hashable {
     }
 }
 
-/// Captured workspace tab state for a workstream, used to survive navigation.
+/// A workstream's workspace tab state as plain data.
+///
+/// Seeds a new `WorkspaceModel` and is the inverse of `WorkspaceModel.snapshot()`.
+/// It is no longer stored anywhere: the model itself survives navigation, so
+/// there is nothing to save and restore.
 struct WorkspaceTabSnapshot {
     var tabs: [WorkspaceTab]
     var terminalCount: Int
@@ -154,70 +158,14 @@ struct WorkspaceTabSnapshot {
     var editorFilePaths: [UUID: String]
     var runStarted: Bool
     var runStoppedManually: Bool
-
-    /// Returns a copy with dead terminal tabs removed.
-    /// Browser and editor tabs are kept regardless (they don't use terminal surfaces).
-    func reconciled(liveSurfaceIDs: Set<UUID>) -> WorkspaceTabSnapshot {
-        let filteredTabs = tabs.filter { tab in
-            if case let .terminal(id) = tab {
-                return liveSurfaceIDs.contains(id)
-            }
-            return true
-        }
-        let resolvedActiveTab = filteredTabs.contains(activeTab) ? activeTab : .agent
-        return WorkspaceTabSnapshot(
-            tabs: filteredTabs,
-            terminalCount: terminalCount,
-            browserCount: browserCount,
-            editorCount: editorCount,
-            activeTab: resolvedActiveTab,
-            browserTitles: browserTitles,
-            terminalTitles: terminalTitles,
-            editorFilePaths: editorFilePaths,
-            runStarted: runStarted,
-            runStoppedManually: runStoppedManually
-        )
-    }
 }
 
-/// Normalizes a restored snapshot without discarding tabs. The previous version
-/// filtered against an allowlist that omitted `.editor`, so every workstream
-/// switch silently closed open editor tabs — contradicting
-/// `reconciled(liveSurfaceIDs:)`, which keeps them on purpose. Info and Agent are
-/// guaranteed present, duplicates collapse, and the active tab is reset only when
-/// it is genuinely absent.
-private func sanitizedWorkspaceTabSnapshot(_ snapshot: WorkspaceTabSnapshot) -> WorkspaceTabSnapshot {
-    var cleaned = snapshot
-    // The permanent tabs always lead, in their canonical Cmd+1/Cmd+2 order;
-    // every other tab keeps the order the snapshot captured. Restoring them by
-    // prepending only the missing one would seat Agent ahead of Info.
-    var tabs: [WorkspaceTab] = [.info, .agent]
-    for tab in snapshot.tabs where !tabs.contains(tab) {
-        tabs.append(tab)
-    }
-    cleaned.tabs = tabs
-    // Migrate older snapshots that predate the fixed Changes tab: insert it
-    // immediately after Agent (or at a sensible fixed index if Agent is
-    // absent). Idempotent — never inserts when .changes is already present.
-    if !cleaned.tabs.contains(.changes) {
-        let insertIndex = cleaned.tabs.firstIndex(of: .agent).map { $0 + 1 }
-            ?? min(2, cleaned.tabs.count)
-        cleaned.tabs.insert(.changes, at: insertIndex)
-    }
-    if !cleaned.tabs.contains(cleaned.activeTab) {
-        cleaned.activeTab = .info
-    }
-    return cleaned
-}
-
-func startupWorkspaceTabState(snapshot: WorkspaceTabSnapshot?, savedTab: RestorableWorkspaceTab?) -> WorkspaceTabSnapshot {
-    if let snapshot {
-        return sanitizedWorkspaceTabSnapshot(snapshot)
-    }
-
-    let tabs: [WorkspaceTab] = [.info, .agent, .changes]
-    return WorkspaceTabSnapshot(
-        tabs: tabs,
+/// The state a workstream's model starts life with. Tab lists are never
+/// persisted across launches, so a fresh workstream always opens with the three
+/// fixed tabs; only the last-active tab *kind* is restored.
+func startupWorkspaceTabState(savedTab: RestorableWorkspaceTab?) -> WorkspaceTabSnapshot {
+    WorkspaceTabSnapshot(
+        tabs: [.info, .agent, .changes],
         terminalCount: 0,
         browserCount: 0,
         editorCount: 0,
@@ -231,10 +179,13 @@ func startupWorkspaceTabState(snapshot: WorkspaceTabSnapshot?, savedTab: Restora
 }
 
 /// Whether selecting a workstream from the sidebar should auto-focus the Coding Agent.
-/// Returns true only when there is no tab state to restore — new workstreams open on
-/// the Coding Agent, previously-visited ones restore their last-active tab.
-func shouldAutoFocusAgent(snapshot: WorkspaceTabSnapshot?, savedTab: RestorableWorkspaceTab?) -> Bool {
-    snapshot == nil && savedTab == nil
+///
+/// New workstreams open on the Coding Agent; previously-visited ones keep
+/// whatever tab they were left on. A workstream is "previously visited" exactly
+/// when it already has a workspace model, so callers must ask before the model
+/// for that selection is created.
+func shouldAutoFocusAgent(hasExistingModel: Bool, savedTab: RestorableWorkspaceTab?) -> Bool {
+    !hasExistingModel && savedTab == nil
 }
 
 func workspaceEnvironmentVariables(
@@ -343,7 +294,6 @@ struct TerminalContainerView: View {
     @State private var runCommandString: String?
     @State private var devCommandOverride: String?
     @State private var resolvedDevCommand: DevCommand?
-    @State private var workspaceStarted = false
     @State private var defaultBranch = "main"
     @State private var setupGateState: SetupGateState = .notNeeded
     @State private var scriptsApproved = false
@@ -848,7 +798,6 @@ struct TerminalContainerView: View {
                         } else {
                             model.editorFilePaths.removeValue(forKey: id)
                         }
-                        saveTabSnapshot()
                     },
                     onExpandFolder: { path in
                         expandFileTreeFolder(path)
@@ -950,9 +899,9 @@ struct TerminalContainerView: View {
             }
         }
         .onAppear {
-            // Terminal tabs whose shell exited while this workstream was off
-            // screen were never seen by `.terminalTabExited` — that handler only
-            // runs on a mounted view. Drop them now, on the way back in.
+            // Safety net for terminal tabs whose surface disappeared without
+            // `TerminalSurfaceCache.removeTerminalTab(surfaceID:)` seeing it —
+            // that prune handles the ordinary shell exit, on screen or off.
             model.reconcile(liveSurfaceIDs: surfaceCache.liveSurfaceIDs())
             if isActive {
                 editorTabActive = model.isEditorTabActive
@@ -967,8 +916,6 @@ struct TerminalContainerView: View {
                 editorTabActive = false
                 editorFileDirty = false
             }
-            guard workspaceStarted else { return }
-            surfaceCache.saveTabSnapshot(for: workstreamID, snapshot: currentTabSnapshot())
         }
         .onChange(of: model.activeTab) {
             guard isActive else { return }
@@ -1110,8 +1057,6 @@ struct TerminalContainerView: View {
                 editorFileDirty = active && model.isActiveEditorDirty
                 if active {
                     surfaceCache.updateOcclusion(visibleSurfaceIDs: visibleSurfaceIDs)
-                } else {
-                    surfaceCache.saveTabSnapshot(for: workstreamID, snapshot: currentTabSnapshot())
                 }
             }
     }
@@ -1185,14 +1130,12 @@ struct TerminalContainerView: View {
 
     private func addTerminal() {
         _ = model.addTerminal()
-        saveTabSnapshot()
         Telemetry.shared.track("tab_opened", url: "/tab/terminal", title: "Terminal Tab", data: ["kind": "terminal"])
     }
 
     private func addBrowser() {
         startRunIfNeeded()
         _ = model.addBrowser()
-        saveTabSnapshot()
         Telemetry.shared.track("tab_opened", url: "/tab/browser", title: "Browser Tab", data: ["kind": "browser"])
     }
 
@@ -1222,7 +1165,6 @@ struct TerminalContainerView: View {
         model.runStarted = true
         markBrowserStartPending()
         preloadRunSurface()
-        saveTabSnapshot()
         Telemetry.shared.track(
             "dev_server_start",
             url: "/tab/browser",
@@ -1239,7 +1181,6 @@ struct TerminalContainerView: View {
         browserStartPending = false
         runCommandString = nil
         runGeneration += 1
-        saveTabSnapshot()
     }
 
     private func restartRun() {
@@ -1254,7 +1195,6 @@ struct TerminalContainerView: View {
         }
         model.runStarted = true
         preloadRunSurface()
-        saveTabSnapshot()
     }
 
     /// Marks the start so browser tabs hold the waiting overlay until a port
@@ -1350,7 +1290,6 @@ struct TerminalContainerView: View {
         createEditorBridgeIfNeeded()
         _ = model.addEditor(filePath: filePath)
         startFileTreeWatcherIfNeeded()
-        saveTabSnapshot()
         Telemetry.shared.track("tab_opened", url: "/tab/editor", title: "Editor Tab", data: ["kind": "editor"])
     }
 
@@ -1505,15 +1444,6 @@ struct TerminalContainerView: View {
             break
         }
         stopFileTreeWatcherIfUnneeded()
-        saveTabSnapshot()
-    }
-
-    private func currentTabSnapshot() -> WorkspaceTabSnapshot {
-        model.snapshot()
-    }
-
-    private func saveTabSnapshot() {
-        surfaceCache.saveTabSnapshot(for: workstreamID, snapshot: currentTabSnapshot())
     }
 
     private func moveCustomTab(to targetTab: WorkspaceTab) {
@@ -1524,7 +1454,6 @@ struct TerminalContainerView: View {
 
     @MainActor
     private func startWorkspace(defaultBranch: String) {
-        workspaceStarted = true
         self.defaultBranch = defaultBranch
         quickActionRunner.onSuccess = { action in
             appEnv.refreshWorktreeState(for: workingDirectory, projectDirectory: projectDirectory)
@@ -2449,7 +2378,6 @@ extension Notification.Name {
 final class TerminalSurfaceCache: ObservableObject {
     private var surfaces: [UUID: TerminalView] = [:]
     private var surfaceParams: [UUID: SurfaceParams] = [:]
-    private var tabSnapshots: [UUID: WorkspaceTabSnapshot] = [:]
     private var webViews: [UUID: WKWebView] = [:]
     private var quickActionRunners: [UUID: QuickActionRunner] = [:]
     private var workspaceModels: [UUID: WorkspaceModel] = [:]
@@ -2540,6 +2468,12 @@ final class TerminalSurfaceCache: ObservableObject {
         )
     }
 
+    /// The surfaces that currently exist. Feeds `WorkspaceModel.reconcile`, which
+    /// drops terminal tabs whose surface is gone.
+    func liveSurfaceIDs() -> Set<UUID> {
+        Set(surfaces.keys)
+    }
+
     /// Retry creating a surface that previously failed.
     func retrySurface(for id: UUID) {
         guard let params = surfaceParams[id],
@@ -2589,6 +2523,13 @@ final class TerminalSurfaceCache: ObservableObject {
         return model
     }
 
+    /// Whether this workstream has been visited this run, without creating a
+    /// model for it. Asking through `workspaceModel(for:seed:)` would answer
+    /// yes for every workstream, since the accessor creates what it reports.
+    func hasWorkspaceModel(for workstreamID: UUID) -> Bool {
+        workspaceModels[workstreamID] != nil
+    }
+
     /// Drops the tab that owned a terminal surface which has just exited.
     ///
     /// This has to happen here, at exit, rather than as a prune when a
@@ -2620,7 +2561,6 @@ final class TerminalSurfaceCache: ObservableObject {
     }
 
     func removeWorkstreamSurfaces(for workstreamID: UUID) {
-        tabSnapshots.removeValue(forKey: workstreamID)
         workspaceModels.removeValue(forKey: workstreamID)
         if let runner = quickActionRunners.removeValue(forKey: workstreamID) {
             runner.cancel()
@@ -2729,24 +2669,5 @@ final class TerminalSurfaceCache: ObservableObject {
         _ = ghostty_surface_key(surface, keyEvent)
         keyEvent.action = GHOSTTY_ACTION_RELEASE
         _ = ghostty_surface_key(surface, keyEvent)
-    }
-
-    // MARK: - Workspace tab snapshots
-
-    func saveTabSnapshot(for workstreamID: UUID, snapshot: WorkspaceTabSnapshot) {
-        tabSnapshots[workstreamID] = snapshot
-    }
-
-    func liveSurfaceIDs() -> Set<UUID> {
-        Set(surfaces.keys)
-    }
-
-    func restoreTabSnapshot(for workstreamID: UUID) -> WorkspaceTabSnapshot? {
-        guard let snapshot = tabSnapshots[workstreamID] else { return nil }
-        return snapshot.reconciled(liveSurfaceIDs: liveSurfaceIDs())
-    }
-
-    func removeTabSnapshot(for workstreamID: UUID) {
-        tabSnapshots.removeValue(forKey: workstreamID)
     }
 }

@@ -143,7 +143,6 @@ struct ContentView: View {
                 let workspaceModel = surfaceCache.workspaceModel(
                     for: workstreamID,
                     seed: startupWorkspaceTabState(
-                        snapshot: surfaceCache.restoreTabSnapshot(for: workstreamID),
                         savedTab: WorkspaceStateStore.load(for: workstreamID)
                     )
                 )
@@ -317,10 +316,12 @@ struct ContentView: View {
                 if newValue != .settings && newValue != .help {
                     newValue?.save()
                 }
-                // Auto-focus Coding Agent only when there's no restored tab state to honor
+                // Auto-focus Coding Agent only when there's no tab state to honor.
+                // Must be asked before the workspace model for this selection
+                // exists — having one is what marks the workstream as visited.
                 if case let .workstream(wsID) = newValue,
                    shouldAutoFocusAgent(
-                       snapshot: surfaceCache.restoreTabSnapshot(for: wsID),
+                       hasExistingModel: surfaceCache.hasWorkspaceModel(for: wsID),
                        savedTab: WorkspaceStateStore.load(for: wsID)
                    )
                 {

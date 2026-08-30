@@ -174,9 +174,12 @@ final class WorkspaceModel: ObservableObject {
             return false
         }
         guard !deadTabs.isEmpty else { return }
-        // `removeTab` would hand the selection to whichever tab happened to sit
-        // next to the dead one. Arriving into a workstream whose active tab did
-        // not survive should land on Agent instead.
+        // Note this differs from the primary path: a shell that exits is caught
+        // by `TerminalSurfaceCache.removeTerminalTab(surfaceID:)`, which goes
+        // through `removeTab` and hands the selection to the dead tab's
+        // neighbour. This is the safety net for a surface that disappeared
+        // without that hook running, and it lands on Agent instead — a
+        // workstream being re-entered has no meaningful neighbour context.
         let activeDied = deadTabs.contains(activeTab)
         for tab in deadTabs {
             removeTab(tab)
