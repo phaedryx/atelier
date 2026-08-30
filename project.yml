@@ -84,7 +84,7 @@ targets:
         buildPhase: resources
       - path: Localization/en.lproj/InfoPlist.strings
         buildPhase: resources
-      - path: Resources/Scripts/atelier
+      - path: Resources/Scripts/atl
         buildPhase: resources
       - path: Resources/Scripts/atelier-hook
         buildPhase: resources

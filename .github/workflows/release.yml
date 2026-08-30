@@ -289,7 +289,7 @@ jobs:
             depends_on macos: ">= :sonoma"
 
             app "Atelier.app"
-            binary "#{appdir}/Atelier.app/Contents/Resources/atelier", target: "atelier"
+            binary "#{appdir}/Atelier.app/Contents/Resources/atl", target: "atl"
 
             zap trash: [
               "~/.config/atelier",
