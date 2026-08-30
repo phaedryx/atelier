@@ -56,6 +56,10 @@ struct ProjectSidebar: View {
     @State private var newWorkstreamPlaceholder = ""
     @State private var pendingWorkstreamProjectID: UUID?
     @State private var pendingWorkstreamBypass: Bool?
+    /// Workstream whose row is showing the inline rename field; at most one
+    /// at a time. Held here (not per-row) so periodic project mutations
+    /// don't drop the edit state when rows rebuild.
+    @State private var renamingWorkstreamID: UUID?
 
     private func recomputeSortedIDs() -> [UUID] {
         projects
@@ -181,9 +185,13 @@ struct ProjectSidebar: View {
                                 prTitle: pr?.title,
                                 prNumber: pr?.number,
                                 prState: pr?.state,
+                                isRenaming: Binding(
+                                    get: { renamingWorkstreamID == workstream.id },
+                                    set: { renamingWorkstreamID = $0 ? workstream.id : nil }
+                                ),
                                 onRemove: { workstreamToRemove = workstream.id },
                                 onPurge: { confirmPurge(workstream) },
-                                onRename: { promptRenameWorkstream(workstream) }
+                                onRenameCommit: { commitRename(workstreamID: workstream.id, input: $0) }
                             )
 
                             if !subRuns.isEmpty {
@@ -354,6 +362,9 @@ struct ProjectSidebar: View {
                 } else {
                     showingAddProjectChoice = true
                 }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .renameWorkstream)) { _ in
+                beginRenameOfSelectedWorkstream()
             }
             .onReceive(NotificationCenter.default.publisher(for: .openDirectory)) { notification in
                 guard let directory = notification.object as? String else { return }
@@ -549,34 +560,20 @@ struct ProjectSidebar: View {
         }
     }
 
-    private func promptRenameWorkstream(_ workstream: Workstream) {
-        let alert = NSAlert()
-        alert.alertStyle = .informational
-        alert.messageText = NSLocalizedString("Rename workstream", comment: "Title of the rename workstream dialog")
-        alert.informativeText = NSLocalizedString(
-            "Leave blank to use the branch name.",
-            comment: "Helper text in the rename workstream dialog"
-        )
-        alert.addButton(withTitle: NSLocalizedString("Rename", comment: "Confirm button in the rename workstream dialog"))
-        alert.addButton(withTitle: NSLocalizedString("Cancel", comment: "Cancel button"))
-
-        let textField = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
-        textField.stringValue = workstream.label
-        textField.placeholderString = workstream.name
-        alert.accessoryView = textField
-        alert.window.initialFirstResponder = textField
-
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-
-        let trimmed = textField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let pi = projects.firstIndex(where: { $0.id == workstreamProjectID(for: workstream.id) }),
-              let wi = projects[pi].workstreams.firstIndex(where: { $0.id == workstream.id }) else { return }
-        if trimmed.isEmpty || trimmed == projects[pi].workstreams[wi].name {
-            projects[pi].workstreams[wi].displayName = nil
-        } else {
-            projects[pi].workstreams[wi].displayName = trimmed
-        }
+    private func commitRename(workstreamID: UUID, input: String) {
+        guard let pi = projects.firstIndex(where: { $0.id == workstreamProjectID(for: workstreamID) }),
+              let wi = projects[pi].workstreams.firstIndex(where: { $0.id == workstreamID }) else { return }
+        projects[pi].workstreams[wi].applyRename(input)
         onProjectsChanged()
+    }
+
+    /// Begin an inline rename of the selected workstream (⌘⇧R / palette),
+    /// expanding its project so the row is visible.
+    private func beginRenameOfSelectedWorkstream() {
+        guard case let .workstream(wsID) = selection,
+              let projectID = workstreamProjectID(for: wsID) else { return }
+        expandedProjects.insert(projectID)
+        renamingWorkstreamID = wsID
     }
 
     private func workstreamProjectID(for workstreamID: UUID) -> UUID? {
@@ -870,9 +867,12 @@ private struct WorkstreamRow: View {
     var prTitle: String?
     var prNumber: Int?
     var prState: String?
+    /// True while the row shows the inline rename field. Owned by the
+    /// sidebar so the edit survives row rebuilds and stays exclusive.
+    @Binding var isRenaming: Bool
     let onRemove: () -> Void
     let onPurge: () -> Void
-    let onRename: () -> Void
+    let onRenameCommit: (String) -> Void
 
     @State private var isHovering = false
 
@@ -986,11 +986,26 @@ private struct WorkstreamRow: View {
             }
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(headline)
-                    .font(.system(size: 11))
-                    .strikethrough(!isPathValid)
-                    .foregroundStyle(isPathValid ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-                    .lineLimit(2)
+                if isRenaming {
+                    // Edits the workstream label (not the PR/task headline),
+                    // so it is prefilled with `name` rather than `headline`.
+                    InlineTextField(
+                        initialText: name,
+                        accessibilityID: "workstream-rename-field",
+                        onCommit: { value in
+                            isRenaming = false
+                            onRenameCommit(value)
+                        },
+                        onCancel: { isRenaming = false }
+                    )
+                } else {
+                    Text(headline)
+                        .font(.system(size: 11))
+                        .strikethrough(!isPathValid)
+                        .foregroundStyle(isPathValid ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                        .lineLimit(2)
+                        .gesture(TapGesture(count: 2).onEnded { isRenaming = true })
+                }
 
                 if let subtitle {
                     HStack(spacing: 3) {
@@ -1066,7 +1081,7 @@ private struct WorkstreamRow: View {
                 }
             }
             Divider()
-            Button(action: onRename) {
+            Button { isRenaming = true } label: {
                 Label("Rename…", systemImage: "pencil")
             }
             Button(action: onRemove) {

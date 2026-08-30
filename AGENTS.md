@@ -173,6 +173,7 @@ Current shortcuts:
 - **Cmd+S**: Save (Editor)
 - **Cmd+Shift+S**: Save As (Editor)
 - **Cmd+W**: Close tab
+- **Cmd+Shift+R**: Rename workstream
 - **Cmd+Shift+W**: Archive workstream
 - **Cmd+L**: Address bar (browser)
 - **Cmd+Shift+Return**: Start/Rerun

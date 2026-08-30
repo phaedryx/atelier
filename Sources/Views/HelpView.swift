@@ -99,6 +99,7 @@ struct HelpView: View {
                         ShortcutRow(keys: "S", description: "Save (Editor)")
                         ShortcutRow(keys: "S", shift: true, description: "Save As (Editor)")
                         ShortcutRow(keys: "W", description: "Close tab")
+                        ShortcutRow(keys: "R", shift: true, description: "Rename workstream")
                         ShortcutRow(keys: "W", shift: true, description: "Archive workstream")
                         ShortcutRow(keys: "L", description: "Address bar")
                         ShortcutRow(keys: "Return", shift: true, description: "Start/Rerun")

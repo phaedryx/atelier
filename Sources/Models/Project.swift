@@ -27,6 +27,14 @@ struct Workstream: Identifiable, Hashable, Codable, Sendable {
         return name
     }
 
+    /// Commit a rename from the user. An empty input or one matching the
+    /// branch-tracked `name` clears the override so the label follows the
+    /// branch again; anything else becomes the `displayName` override.
+    mutating func applyRename(_ input: String) {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        displayName = (trimmed.isEmpty || trimmed == name) ? nil : trimmed
+    }
+
     /// The working directory for this workstream's terminals.
     /// Uses the worktree path if available, otherwise falls back to the project directory.
     func workingDirectory(projectDirectory: String) -> String {

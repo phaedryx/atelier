@@ -33,6 +33,7 @@ extension Notification.Name {
     static let nextProject = Notification.Name("atelier.nextProject")
     static let prevProject = Notification.Name("atelier.prevProject")
     static let archiveWorkstream = Notification.Name("atelier.archiveWorkstream")
+    static let renameWorkstream = Notification.Name("atelier.renameWorkstream")
     static let toggleCommandPalette = Notification.Name("atelier.toggleCommandPalette")
 }
 
@@ -416,6 +417,11 @@ struct AtelierApp: App {
                 .keyboardShortcut("t", modifiers: [.command, .option])
 
                 Divider()
+
+                Button("Rename Workstream") {
+                    NotificationCenter.default.post(name: .renameWorkstream, object: nil)
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
 
                 Button("Archive Workstream") {
                     NotificationCenter.default.post(name: .archiveWorkstream, object: nil)

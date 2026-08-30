@@ -195,6 +195,34 @@ final class ProjectTests: XCTestCase {
         XCTAssertEqual(loaded.first?.workstreams.map(\.name), ["dev", "main"])
     }
 
+    // MARK: - Inline rename
+
+    func testApplyRenameSetsDisplayNameOverride() {
+        var ws = Workstream(name: "feat-auth")
+        ws.applyRename("Login rework")
+        XCTAssertEqual(ws.displayName, "Login rework")
+        XCTAssertEqual(ws.label, "Login rework")
+    }
+
+    func testApplyRenameTrimsWhitespace() {
+        var ws = Workstream(name: "feat-auth")
+        ws.applyRename("  Login rework \n")
+        XCTAssertEqual(ws.displayName, "Login rework")
+    }
+
+    func testApplyRenameEmptyInputClearsOverride() {
+        var ws = Workstream(name: "feat-auth", displayName: "Login rework")
+        ws.applyRename("   ")
+        XCTAssertNil(ws.displayName)
+        XCTAssertEqual(ws.label, "feat-auth")
+    }
+
+    func testApplyRenameMatchingBranchNameClearsOverride() {
+        var ws = Workstream(name: "feat-auth", displayName: "Login rework")
+        ws.applyRename("feat-auth")
+        XCTAssertNil(ws.displayName, "renaming back to the branch-tracked name should drop the override")
+    }
+
     /// The pre-harness Workstream shape must also still decode.
     func testLegacyWorkstreamJSONDecodes() throws {
         let json = """
