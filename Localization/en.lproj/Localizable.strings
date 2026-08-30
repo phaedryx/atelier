@@ -388,6 +388,16 @@
 "Context: %1$lld tokens · %2$lld%%" = "Context: %1$lld tokens · %2$lld%%";
 "%lld agents active" = "%lld agents active";
 
+/* Sidebar usage meter */
+"5h" = "5h";
+"wk" = "wk";
+"fb" = "fb";
+"Current session" = "Current session";
+"Current week (all models)" = "Current week (all models)";
+"Current week (%@)" = "Current week (%@)";
+"model" = "model";
+"%1$@ — resets %2$@" = "%1$@ — resets %2$@";
+
 /* Coding agent */
 "Claude Code" = "Claude Code";
 /* Quick action results */
