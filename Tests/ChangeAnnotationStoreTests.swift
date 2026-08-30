@@ -67,4 +67,102 @@ final class ChangeAnnotationStoreTests: XCTestCase {
         XCTAssertNil(c)
         XCTAssertTrue(store.comments.isEmpty)
     }
+
+    // MARK: - Re-anchoring
+
+    private func addComment(
+        _ store: ChangeAnnotationStore, path: String = "a.swift", side: DiffSide = .new,
+        line: Int, endLine: Int? = nil, lineText: String, mode: ChangesMode = .uncommitted
+    ) -> ReviewComment {
+        store.add(filePath: path, mode: mode, side: side, line: line, endLine: endLine, lineText: lineText, text: "note")!
+    }
+
+    func testReanchorExactHoldKeepsLine() {
+        let store = ChangeAnnotationStore()
+        _ = addComment(store, line: 2, lineText: "beta")
+        store.reanchor(mode: .uncommitted, texts: ["a.swift": (original: "", modified: "alpha\nbeta\ngamma")], presentPaths: ["a.swift"])
+        XCTAssertEqual(store.comments.first?.line, 2)
+        XCTAssertFalse(store.comments.first!.isOrphaned)
+    }
+
+    func testReanchorFollowsMovedLineAndShiftsRange() {
+        let store = ChangeAnnotationStore()
+        _ = addComment(store, line: 2, endLine: 3, lineText: "beta")
+        // Two lines inserted above: beta moved from 2 to 4.
+        store.reanchor(mode: .uncommitted, texts: ["a.swift": (original: "", modified: "new1\nnew2\nalpha\nbeta\ngamma")], presentPaths: ["a.swift"])
+        XCTAssertEqual(store.comments.first?.line, 4)
+        XCTAssertEqual(store.comments.first?.endLine, 5)
+        XCTAssertFalse(store.comments.first!.isOrphaned)
+    }
+
+    func testReanchorTieBreaksToEarlierLine() {
+        // "dup" appears at equal distance before and after the old anchor: earlier wins.
+        let store = ChangeAnnotationStore()
+        _ = addComment(store, line: 3, lineText: "dup")
+        store.reanchor(mode: .uncommitted, texts: ["a.swift": (original: "", modified: "x\ndup\nmoved\ndup\ny")], presentPaths: ["a.swift"])
+        XCTAssertEqual(store.comments.first?.line, 2)
+    }
+
+    func testReanchorOldSideMatchesAgainstOriginalText() {
+        let store = ChangeAnnotationStore()
+        _ = addComment(store, side: .old, line: 1, lineText: "removed line")
+        store.reanchor(mode: .uncommitted, texts: ["a.swift": (original: "header\nremoved line", modified: "header")], presentPaths: ["a.swift"])
+        XCTAssertEqual(store.comments.first?.line, 2)
+        XCTAssertFalse(store.comments.first!.isOrphaned)
+    }
+
+    func testReanchorOrphansWhenLineVanishes() {
+        let store = ChangeAnnotationStore()
+        _ = addComment(store, line: 2, lineText: "beta")
+        store.reanchor(mode: .uncommitted, texts: ["a.swift": (original: "", modified: "alpha\ngamma")], presentPaths: ["a.swift"])
+        XCTAssertTrue(store.comments.first!.isOrphaned)
+        XCTAssertEqual(store.comments.first?.line, 2) // line kept for the payload
+    }
+
+    func testReanchorOrphansWhenFileLeavesDiff() {
+        let store = ChangeAnnotationStore()
+        _ = addComment(store, line: 1, lineText: "x")
+        store.reanchor(mode: .uncommitted, texts: [:], presentPaths: [])
+        XCTAssertTrue(store.comments.first!.isOrphaned)
+    }
+
+    func testReanchorUnorphansWhenLineReturns() {
+        let store = ChangeAnnotationStore()
+        _ = addComment(store, line: 1, lineText: "back")
+        store.reanchor(mode: .uncommitted, texts: [:], presentPaths: [])
+        XCTAssertTrue(store.comments.first!.isOrphaned)
+        store.reanchor(mode: .uncommitted, texts: ["a.swift": (original: "", modified: "back")], presentPaths: ["a.swift"])
+        XCTAssertFalse(store.comments.first!.isOrphaned)
+    }
+
+    func testReanchorLeavesFileWithoutTextsAlone() {
+        // Present in the diff but deferred/binary (no texts): leave the comment untouched.
+        let store = ChangeAnnotationStore()
+        _ = addComment(store, line: 9, lineText: "x")
+        store.reanchor(mode: .uncommitted, texts: [:], presentPaths: ["a.swift"])
+        XCTAssertEqual(store.comments.first?.line, 9)
+        XCTAssertFalse(store.comments.first!.isOrphaned)
+    }
+
+    func testReanchorOnlyTouchesGivenMode() {
+        let store = ChangeAnnotationStore()
+        _ = addComment(store, line: 1, lineText: "gone", mode: .branch)
+        store.reanchor(mode: .uncommitted, texts: [:], presentPaths: [])
+        XCTAssertFalse(store.comments.first!.isOrphaned)
+    }
+
+    func testReanchorBlankAnchorOnlyHoldsExactPosition() {
+        let store = ChangeAnnotationStore()
+        _ = addComment(store, line: 2, lineText: "")
+        store.reanchor(mode: .uncommitted, texts: ["a.swift": (original: "", modified: "a\n\nb")], presentPaths: ["a.swift"])
+        XCTAssertFalse(store.comments.first!.isOrphaned)
+        store.reanchor(mode: .uncommitted, texts: ["a.swift": (original: "", modified: "a\nb")], presentPaths: ["a.swift"])
+        XCTAssertTrue(store.comments.first!.isOrphaned)
+    }
+
+    func testMatchLineRespectsWindow() {
+        let lines = Array(repeating: "filler", count: 120) + ["needle"]
+        XCTAssertNil(ChangeAnnotationStore.matchLine(anchor: "needle", near: 1, in: lines, window: 50))
+        XCTAssertEqual(ChangeAnnotationStore.matchLine(anchor: "needle", near: 100, in: lines, window: 50), 121)
+    }
 }

@@ -79,6 +79,74 @@ final class ChangeAnnotationStore: ObservableObject {
         comments.removeAll { $0.mode == mode }
     }
 
+    /// Re-anchor comments after the diff underneath them refreshed.
+    ///
+    /// - `texts`: per-path (original, modified) full file texts for files whose
+    ///   content was loaded this refresh (normal files only — binary/deferred
+    ///   files have no texts and their comments are left untouched).
+    /// - `presentPaths`: every path in the refreshed diff, including binary and
+    ///   deferred files. A comment whose file is absent is orphaned.
+    func reanchor(
+        mode: ChangesMode,
+        texts: [String: (original: String, modified: String)],
+        presentPaths: Set<String>
+    ) {
+        comments = comments.map { comment in
+            guard comment.mode == mode else { return comment }
+            var updated = comment
+
+            guard presentPaths.contains(updated.filePath) else {
+                updated.isOrphaned = true
+                return updated
+            }
+            guard let fileTexts = texts[updated.filePath] else {
+                return updated // deferred/binary: nothing to match against, leave as-is
+            }
+
+            let content = updated.side == .old ? fileTexts.original : fileTexts.modified
+            let lines = content.components(separatedBy: "\n")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+
+            if updated.lineText.isEmpty {
+                // A blank anchor matches everything; only an exact positional hold counts.
+                let holds = updated.line >= 1 && updated.line <= lines.count && lines[updated.line - 1].isEmpty
+                updated.isOrphaned = !holds
+                return updated
+            }
+
+            if let newLine = Self.matchLine(anchor: updated.lineText, near: updated.line, in: lines) {
+                let delta = newLine - updated.line
+                updated.line = newLine
+                if let end = updated.endLine { updated.endLine = end + delta }
+                updated.isOrphaned = false
+            } else {
+                updated.isOrphaned = true
+            }
+            return updated
+        }
+    }
+
+    /// Find `anchor` in `lines` (1-based result), nearest to `line` within
+    /// ±`window`. Exact position wins; ties between equal distances resolve to
+    /// the earlier line.
+    nonisolated static func matchLine(
+        anchor: String,
+        near line: Int,
+        in lines: [String],
+        window: Int = 50
+    ) -> Int? {
+        func matches(_ candidate: Int) -> Bool {
+            candidate >= 1 && candidate <= lines.count && lines[candidate - 1] == anchor
+        }
+        if matches(line) { return line }
+        guard window >= 1 else { return nil }
+        for distance in 1 ... window {
+            if matches(line - distance) { return line - distance } // earlier wins ties
+            if matches(line + distance) { return line + distance }
+        }
+        return nil
+    }
+
     /// Single-line, terminal-safe text: tabs and newlines become spaces, all
     /// other C0/C1 controls and DEL are stripped, ends trimmed. This text is
     /// later pasted into a terminal, so control characters must never survive.
