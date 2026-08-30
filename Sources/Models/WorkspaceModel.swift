@@ -47,6 +47,11 @@ final class WorkspaceModel: ObservableObject {
     @Published private(set) var editorBridge: MonacoEditorBridge?
     @Published private(set) var diffBridge: MonacoDiffBridge?
 
+    /// Review comments for the Changes tab. Cheap (unlike the bridges), so it is
+    /// created eagerly; lives here so unsent comments survive tab switches and
+    /// webview reloads, and die with the workstream.
+    let annotationStore = ChangeAnnotationStore()
+
     @discardableResult
     func ensureEditorBridge() -> MonacoEditorBridge {
         if let editorBridge { return editorBridge }

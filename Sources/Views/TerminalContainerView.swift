@@ -644,9 +644,11 @@ struct TerminalContainerView: View {
         case .changes:
             if let bridge = model.diffBridge {
                 ChangesView(
+                    workstreamID: workstreamID,
                     workingDirectory: workingDirectory,
                     projectDirectory: projectDirectory,
-                    bridge: bridge
+                    bridge: bridge,
+                    annotations: model.annotationStore
                 )
             } else {
                 ProgressView()

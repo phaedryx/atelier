@@ -23,9 +23,11 @@ enum ChangesMode: String, CaseIterable {
 /// computed live from git. Supports Branch/Uncommitted modes, fingerprint-gated
 /// refresh, and a per-file binary/large-file guard with click-to-load.
 struct ChangesView: View {
+    let workstreamID: UUID
     let workingDirectory: String
     let projectDirectory: String
     let bridge: MonacoDiffBridge
+    @ObservedObject var annotations: ChangeAnnotationStore
 
     @State private var isLoading = true
     @State private var isRefreshing = false
@@ -43,10 +45,18 @@ struct ChangesView: View {
     /// final value on release.
     @State private var sidebarWidth: Double
 
-    init(workingDirectory: String, projectDirectory: String, bridge: MonacoDiffBridge) {
+    init(
+        workstreamID: UUID,
+        workingDirectory: String,
+        projectDirectory: String,
+        bridge: MonacoDiffBridge,
+        annotations: ChangeAnnotationStore
+    ) {
+        self.workstreamID = workstreamID
         self.workingDirectory = workingDirectory
         self.projectDirectory = projectDirectory
         self.bridge = bridge
+        self.annotations = annotations
         _sidebarWidth = State(initialValue: Self.loadSidebarWidth())
     }
 
@@ -95,6 +105,7 @@ struct ChangesView: View {
             // Make sure the bridge can resolve content for click-to-load before
             // any deferred-file click can happen.
             configureLoadHandler()
+            configureCommentHandler()
 
             if bridge.hasContent && bridge.lastMode == mode.rawValue {
                 // Cached content exists for this mode — show it, refresh in background.
@@ -102,6 +113,7 @@ struct ChangesView: View {
                 fileCount = bridge.lastFileCount
                 diffFiles = bridge.lastDiffFiles
                 backgroundRefreshIfNeeded()
+                pushComments()
             } else {
                 fullLoad()
             }
@@ -110,6 +122,7 @@ struct ChangesView: View {
             // Mode changed — always do a full load.
             bridge.lastFingerprint = nil
             configureLoadHandler()
+            configureCommentHandler()
             fullLoad()
         }
     }
@@ -174,6 +187,7 @@ struct ChangesView: View {
     private func refresh() {
         bridge.lastFingerprint = nil
         configureLoadHandler()
+        configureCommentHandler()
         fullLoad()
     }
 
@@ -208,7 +222,13 @@ struct ChangesView: View {
                 bridge.onContentReady = {
                     isLoading = false
                 }
+                annotations.reanchor(
+                    mode: currentMode,
+                    texts: Self.reanchorTexts(from: contents.payload),
+                    presentPaths: Set(contents.files.map(\.relativePath))
+                )
                 bridge.setFiles(contents.payload)
+                pushComments()
             }
         }
     }
@@ -251,7 +271,13 @@ struct ChangesView: View {
                 bridge.onContentReady = {
                     isRefreshing = false
                 }
+                annotations.reanchor(
+                    mode: currentMode,
+                    texts: Self.reanchorTexts(from: contents.payload),
+                    presentPaths: Set(contents.files.map(\.relativePath))
+                )
                 bridge.setFiles(contents.payload)
+                pushComments()
             }
         }
     }
@@ -277,6 +303,64 @@ struct ChangesView: View {
             let languageId = MonacoLanguage.id(for: (filePath as NSString).lastPathComponent)
             return (original, modified, languageId)
         }
+    }
+
+    // MARK: - Review comments
+
+    /// Route comment mutations from diff.js into the store, then push the
+    /// authoritative set back down. The webview never owns comment state.
+    private func configureCommentHandler() {
+        let currentMode = mode
+        bridge.onCommentEvent = { event in
+            switch event {
+            case let .added(filePath, side, line, endLine, lineText, text):
+                annotations.add(
+                    filePath: filePath, mode: currentMode, side: side,
+                    line: line, endLine: endLine, lineText: lineText, text: text
+                )
+            case let .edited(id, text):
+                annotations.updateText(id: id, text: text)
+            case let .deleted(id):
+                annotations.delete(id: id)
+            }
+            pushComments()
+        }
+    }
+
+    /// Push the active mode's comments to diff.js for rendering.
+    private func pushComments() {
+        let payload = annotations.comments(mode: mode).map { c -> [String: Any] in
+            var entry: [String: Any] = [
+                "id": c.id.uuidString,
+                "filePath": c.filePath,
+                "side": c.side.rawValue,
+                "line": c.line,
+                "lineText": c.lineText,
+                "text": c.text,
+                "isOrphaned": c.isOrphaned,
+            ]
+            if let endLine = c.endLine { entry["endLine"] = endLine }
+            return entry
+        }
+        bridge.setComments(payload)
+    }
+
+    /// Pull (original, modified) texts out of the setFiles payload for
+    /// re-anchoring. Binary and deferred entries carry empty texts and are
+    /// excluded — reanchor() must leave their comments untouched.
+    nonisolated static func reanchorTexts(
+        from payload: [[String: Any]]
+    ) -> [String: (original: String, modified: String)] {
+        var texts: [String: (original: String, modified: String)] = [:]
+        for entry in payload {
+            guard entry["binary"] == nil, entry["deferred"] == nil,
+                  let path = entry["filePath"] as? String,
+                  let original = entry["originalText"] as? String,
+                  let modified = entry["modifiedText"] as? String
+            else { continue }
+            texts[path] = (original: original, modified: modified)
+        }
+        return texts
     }
 
     // MARK: - Sidebar width persistence
