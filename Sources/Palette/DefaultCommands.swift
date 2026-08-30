@@ -57,6 +57,8 @@ func defaultPaletteCommands() -> [PaletteCommand] {
 
         PaletteCommand(id: "nav.backToProject", title: NSLocalizedString("Back to Project", comment: ""), category: navigation,
                        shortcut: "⌘0", isAvailable: workstream, action: post(.switchToProject)),
+        PaletteCommand(id: "workstream.rename", title: NSLocalizedString("Rename Workstream", comment: ""), category: navigation,
+                       shortcut: "⌘⇧R", isAvailable: workstream, action: post(.renameWorkstream)),
         PaletteCommand(id: "workstream.archive", title: NSLocalizedString("Archive Workstream", comment: ""), category: navigation,
                        shortcut: "⌘⇧W", isAvailable: workstream, action: post(.archiveWorkstream)),
 

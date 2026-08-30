@@ -1,0 +1,122 @@
+// ABOUTME: A reusable inline text field for renaming items in place.
+// ABOUTME: Wraps NSTextField with click-outside-to-commit and Enter/Escape handling.
+
+import SwiftUI
+
+struct InlineTextField: NSViewRepresentable {
+    let initialText: String
+    let accessibilityID: String
+    var fontSize: CGFloat = 11
+    var fontWeight: NSFont.Weight = .regular
+    var onCommit: (String) -> Void
+    var onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onCommit: onCommit, onCancel: onCancel)
+    }
+
+    func makeNSView(context: Context) -> NSTextField {
+        let textField = NSTextField()
+        textField.isBordered = false
+        textField.drawsBackground = false
+        textField.focusRingType = .none
+        textField.cell?.isScrollable = true
+        textField.cell?.lineBreakMode = .byTruncatingTail
+        textField.stringValue = initialText
+        textField.delegate = context.coordinator
+        textField.setAccessibilityIdentifier(accessibilityID)
+        textField.font = NSFont.systemFont(ofSize: fontSize, weight: fontWeight)
+
+        context.coordinator.textField = textField
+
+        DispatchQueue.main.async {
+            textField.selectText(nil)
+        }
+        // Deferred so the click that started editing doesn't immediately
+        // commit through the outside-click monitor.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            context.coordinator.installClickMonitor()
+        }
+
+        return textField
+    }
+
+    func updateNSView(_ nsView: NSTextField, context: Context) {
+        context.coordinator.onCommit = onCommit
+        context.coordinator.onCancel = onCancel
+    }
+
+    class Coordinator: NSObject, NSTextFieldDelegate {
+        weak var textField: NSTextField?
+        var onCommit: (String) -> Void
+        var onCancel: () -> Void
+        private var clickMonitor: Any?
+        private var didEnd = false
+
+        init(onCommit: @escaping (String) -> Void, onCancel: @escaping () -> Void) {
+            self.onCommit = onCommit
+            self.onCancel = onCancel
+        }
+
+        func installClickMonitor() {
+            clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] event in
+                guard let self, !self.didEnd else { return event }
+                if let textField = self.textField,
+                   let eventWindow = event.window,
+                   eventWindow == textField.window
+                {
+                    let point = textField.convert(event.locationInWindow, from: nil)
+                    if textField.bounds.contains(point) {
+                        return event
+                    }
+                    if let editor = textField.currentEditor() {
+                        let editorPoint = editor.convert(event.locationInWindow, from: nil)
+                        if editor.bounds.contains(editorPoint) {
+                            return event
+                        }
+                    }
+                }
+                self.finish(commit: true)
+                return event
+            }
+        }
+
+        private func finish(commit: Bool) {
+            guard !didEnd else { return }
+            didEnd = true
+            removeClickMonitor()
+            if commit {
+                onCommit(textField?.stringValue ?? "")
+            } else {
+                onCancel()
+            }
+        }
+
+        private func removeClickMonitor() {
+            if let monitor = clickMonitor {
+                NSEvent.removeMonitor(monitor)
+                clickMonitor = nil
+            }
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                finish(commit: true)
+                return true
+            }
+            if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+                finish(commit: false)
+                return true
+            }
+            return false
+        }
+
+        func controlTextDidEndEditing(_ obj: Notification) {
+            finish(commit: true)
+        }
+
+        deinit {
+            removeClickMonitor()
+        }
+    }
+}
