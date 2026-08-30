@@ -182,6 +182,7 @@ Current shortcuts:
 - **Cmd+Up/Down**: Cycle projects
 - **Cmd+0**: Back to project
 - **Cmd+Shift+C**: Toggle sidebar
+- **Cmd+Shift+P**: Command Palette
 - **Cmd+Option+B**: External browser
 - **Cmd+Option+T**: External terminal
 - **Cmd+/**: Help

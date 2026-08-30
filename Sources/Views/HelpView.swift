@@ -85,6 +85,7 @@ struct HelpView: View {
                         ShortcutRow(keys: "N", description: "New workstream or project")
                         ShortcutRow(keys: "N", shift: true, description: "New project")
                         ShortcutRow(keys: "C", shift: true, description: "Toggle sidebar")
+                        ShortcutRow(keys: "P", shift: true, description: "Command Palette")
                     } header: {
                         ShortcutSectionHeader(title: "Global", description: "Available everywhere")
                     }

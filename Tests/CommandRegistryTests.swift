@@ -89,4 +89,11 @@ final class CommandRegistryTests: XCTestCase {
         XCTAssertEqual(registry.commands.count, 1)
         XCTAssertEqual(registry.commands.first?.title, "First")
     }
+
+    func testClampedPaletteSelection() {
+        XCTAssertEqual(clampedPaletteSelection(0, resultCount: 0), 0)
+        XCTAssertEqual(clampedPaletteSelection(5, resultCount: 3), 2)
+        XCTAssertEqual(clampedPaletteSelection(-1, resultCount: 3), 0)
+        XCTAssertEqual(clampedPaletteSelection(1, resultCount: 3), 1)
+    }
 }

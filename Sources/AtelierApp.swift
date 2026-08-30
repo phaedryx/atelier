@@ -33,6 +33,7 @@ extension Notification.Name {
     static let nextProject = Notification.Name("atelier.nextProject")
     static let prevProject = Notification.Name("atelier.prevProject")
     static let archiveWorkstream = Notification.Name("atelier.archiveWorkstream")
+    static let toggleCommandPalette = Notification.Name("atelier.toggleCommandPalette")
 }
 
 @MainActor
@@ -334,6 +335,11 @@ struct AtelierApp: App {
                     NotificationCenter.default.post(name: .toggleSidebar, object: nil)
                 }
                 .keyboardShortcut("c", modifiers: [.command, .shift])
+
+                Button("Command Palette…") {
+                    NotificationCenter.default.post(name: .toggleCommandPalette, object: nil)
+                }
+                .keyboardShortcut("p", modifiers: [.command, .shift])
             }
             // Tabs
             CommandGroup(after: .toolbar) {

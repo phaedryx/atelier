@@ -95,6 +95,16 @@ struct ContentView: View {
     @State private var purgeWarningMessage: String?
     @State private var removedProjectNames: [String] = []
     @State private var keyMonitorInstalled = false
+    @StateObject private var commandRegistry = CommandRegistry(commands: defaultPaletteCommands())
+    @State private var showCommandPalette = false
+    @AppStorage("atelier.editorTabActive") private var editorTabActive: Bool = false
+
+    private var paletteContext: PaletteContext {
+        PaletteContext(
+            workstreamActive: activeWorkstream != nil,
+            editorActive: editorTabActive
+        )
+    }
 
     private static func initialSelection() -> SidebarSelection? {
         let projects = ProjectStore.load()
@@ -196,6 +206,10 @@ struct ContentView: View {
 
     var body: some View {
         navigationView
+            .overlay { commandPaletteOverlay }
+            .onReceive(NotificationCenter.default.publisher(for: .toggleCommandPalette)) { _ in
+                showCommandPalette.toggle()
+            }
             .onReceive(NotificationCenter.default.publisher(for: .toggleSidebar)) { _ in
                 NSApp.sendAction(#selector(NSSplitViewController.toggleSidebar(_:)), to: nil, from: nil)
             }
@@ -479,6 +493,27 @@ struct ContentView: View {
         }
         .onReceive(Timer.publish(every: 6 * 60 * 60, on: .main, in: .common).autoconnect()) { _ in
             updateChecker.check()
+        }
+    }
+
+    /// The palette lives in its own property: `navigationViewBase`'s modifier
+    /// chain is long enough that inlining the ZStack tips the type checker over
+    /// its time limit.
+    @ViewBuilder
+    private var commandPaletteOverlay: some View {
+        if showCommandPalette {
+            ZStack(alignment: .top) {
+                Color.black.opacity(0.2)
+                    .ignoresSafeArea()
+                    .onTapGesture { showCommandPalette = false }
+                CommandPaletteView(
+                    registry: commandRegistry,
+                    context: paletteContext,
+                    onDismiss: { showCommandPalette = false }
+                )
+                .padding(.top, 120)
+            }
+            .transition(.opacity)
         }
     }
 
