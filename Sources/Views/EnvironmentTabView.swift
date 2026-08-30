@@ -20,9 +20,7 @@ func scriptCommand(script: String, role: String, shell: String = CommandBuilder.
 struct EnvironmentTabView: View {
     let workstreamID: UUID
     let workingDirectory: String
-    let projectName: String
     let projectDirectory: String
-    let workstreamName: String
     let scriptConfig: ScriptConfig
     let useTmux: Bool
     let environmentVars: [String: String]
@@ -33,7 +31,6 @@ struct EnvironmentTabView: View {
     /// The resolved dev command when no run script is configured.
     let devCommand: DevCommand?
     @Binding var devCommandOverride: String?
-    @Binding var runStoppedManually: Bool
     @Binding var runStarted: Bool
     @Binding var scriptsApproved: Bool
     @Binding var runGeneration: Int
@@ -42,7 +39,6 @@ struct EnvironmentTabView: View {
     let onRestart: () -> Void
 
     @EnvironmentObject var surfaceCache: TerminalSurfaceCache
-    @EnvironmentObject var appEnv: AppEnvironment
     @State private var isCustomizingDevCommand = false
     @State private var devCommandEditText = ""
 
@@ -234,7 +230,7 @@ struct EnvironmentTabView: View {
             }
 
             if devCommand == nil, !isCustomizingDevCommand {
-                Text("Press \u{2318}\u{21E7}P to start the dev server and open a browser tab.")
+                Text("Open the command palette (\u{2318}\u{21E7}P) and run New Browser to start the dev server.")
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
             }

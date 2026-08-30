@@ -80,7 +80,7 @@ struct IPCClientIdentity: Codable, Sendable {
     /// `ATELIER_SURFACE_ID`: the terminal surface this agent is running in.
     ///
     /// Every Atelier-launched terminal exports its own — the Coding Agent tab
-    /// and each Cmd+T tab alike — so a nudge can be typed into the pane the
+    /// and each terminal tab alike — so a nudge can be typed into the pane the
     /// recipient actually occupies rather than assumed to be the Agent tab.
     /// Absent for anything Atelier didn't launch, which is then pull-only.
     let surfaceID: String?

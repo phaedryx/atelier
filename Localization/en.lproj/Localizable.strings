@@ -257,7 +257,7 @@
 "Custom" = "Custom";
 "From package.json" = "From package.json";
 "No dev command found. Add a dev script to package.json or set one below." = "No dev command found. Add a dev script to package.json or set one below.";
-"Press ⌘⇧P to start the dev server and open a browser tab." = "Press ⌘⇧P to start the dev server and open a browser tab.";
+"Open the command palette (⌘⇧P) and run New Browser to start the dev server." = "Open the command palette (⌘⇧P) and run New Browser to start the dev server.";
 
 /* Tab labels */
 "Info" = "Info";

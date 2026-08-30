@@ -399,7 +399,7 @@ struct TerminalContainerView: View {
     private var portSubtitle: String {
         let label = appEnv.taskDescription(for: workingDirectory) ?? projectName
         if let port = portDetector.selectedPort {
-            return "\(label) · localhost:\(port) · \u{2318}\u{21E7}P for browser"
+            return "\(label) · localhost:\(port) · New Browser via \u{2318}\u{21E7}P"
         }
         return label
     }
@@ -748,9 +748,7 @@ struct TerminalContainerView: View {
                 EnvironmentTabView(
                     workstreamID: workstreamID,
                     workingDirectory: workingDirectory,
-                    projectName: projectName,
                     projectDirectory: projectDirectory,
-                    workstreamName: workstreamName,
                     scriptConfig: scriptConfig,
                     useTmux: useTmux,
                     environmentVars: runEnvironmentVars,
@@ -758,7 +756,6 @@ struct TerminalContainerView: View {
                     runCommandIsGated: runCommandIsGated,
                     devCommand: resolvedDevCommand,
                     devCommandOverride: $devCommandOverride,
-                    runStoppedManually: $model.runStoppedManually,
                     runStarted: $model.runStarted,
                     scriptsApproved: $scriptsApproved,
                     runGeneration: $runGeneration,

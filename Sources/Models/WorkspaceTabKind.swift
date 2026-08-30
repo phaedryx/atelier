@@ -6,7 +6,8 @@ import Foundation
 /// The static facts about one kind of workspace tab. The tab bar renders from
 /// this table instead of switching on the enum at every call site, so adding a
 /// kind means one entry here, one case in `WorkspaceTab`, and one case in
-/// `tabContent` — nothing else.
+/// `tabContent`; the remaining per-kind switches (restore mapping, occlusion,
+/// seeding, removal) are exhaustive, so the compiler walks you to each one.
 struct WorkspaceTabKind: Equatable, Hashable {
     /// Stable identifier; doubles as the drag identifier for pinned tabs.
     let id: String
