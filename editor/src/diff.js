@@ -21,11 +21,28 @@ const STR = {
   binary: 'Binary file (not shown)',
   largeFile: 'Large file — %d changes, click to load',
   copyFile: 'Copy File Path',
-  copied: 'File path copied'
+  copied: 'File path copied',
+  addComment: 'Add review comment…',
+  commentAdd: 'Add',
+  commentSave: 'Save',
+  commentCancel: 'Cancel',
+  commentEdit: 'Edit',
+  commentDelete: 'Delete',
+  commentOrphaned: 'Line no longer in diff'
 }
 
 // Active diff editors keyed by file path: { host, editor, original, modified }.
 const sections = new Map()
+
+// --- Review comments (state pushed from Swift; JS never owns it) ---
+// Swift is the single source of truth: every mutation is posted up, the store
+// answers with a full setComments(), and only then do the zones change.
+let commentsByFile = new Map() // filePath -> [comment]
+const commentZones = new Map() // filePath -> [zoneId]
+let inputZoneState = null // { filePath, zoneId } for the single open input zone
+// Guard against re-entrant rendering: renderComments() lays the editor out,
+// and a layout must never be able to drive another render.
+let renderingComments = false
 // Editors awaiting their first onDidUpdateDiff before we report contentReady.
 let pendingCount = 0
 let reported = false
@@ -41,6 +58,8 @@ const sharedDiffOptions = {
   scrollBeyondLastLine: false,
   overviewRulerLanes: 0,
   hideUnchangedRegions: { enabled: true },
+  // The glyph margin is the click/hover target that advertises commenting.
+  glyphMargin: true,
   // The page scrolls, not the editor: hide the editor's own vertical scrollbar
   // and let wheel events bubble so the container can be sized to content.
   scrollbar: {
@@ -91,6 +110,11 @@ function disposeSection(entry) {
 function clearDiffs() {
   for (const entry of sections.values()) disposeSection(entry)
   sections.clear()
+  // The zone ids died with their editors. Drop them without touching
+  // commentsByFile: Swift owns that, and the next render must still find it.
+  // Bare assignment, not closeInputZone() — the editors are already disposed.
+  commentZones.clear()
+  inputZoneState = null
   // Remove every child except the empty-state placeholder.
   for (const child of Array.from(container.children)) {
     if (child !== emptyState) child.remove()
@@ -189,6 +213,249 @@ function scaleWheelDelta(raw, deltaMode) {
   return raw
 }
 
+// --- Comment zones ---
+// Every zone lives in the modified editor: with renderSideBySide off there is
+// only one visible editor, and deleted lines render there as inline view zones.
+
+// Anchor an old-side (deleted) line to the modified-editor line its block
+// renders after. A pure deletion reports modifiedEndLineNumber === 0 and its
+// block is drawn after modifiedStartLineNumber; a modification block occupies
+// modifiedStart..modifiedEnd, so its comment belongs below the last line.
+// Returns 0 (above the first line) when the line is no longer in any change.
+function anchorForOldLine(diffEditor, oldLine) {
+  const changes = diffEditor.getLineChanges() || []
+  for (const ch of changes) {
+    if (ch.originalStartLineNumber <= oldLine && oldLine <= ch.originalEndLineNumber) {
+      return ch.modifiedEndLineNumber === 0
+        ? ch.modifiedStartLineNumber
+        : ch.modifiedEndLineNumber
+    }
+  }
+  return 0
+}
+
+function buildCommentNode(comment) {
+  const node = document.createElement('div')
+  node.className = 'review-comment'
+  // Keep clicks on the comment block from re-triggering the editor's mouse
+  // handling (which would read this zone as a deletion block and open an input).
+  node.addEventListener('mousedown', (e) => e.stopPropagation())
+
+  if (comment.isOrphaned) {
+    const badge = document.createElement('span')
+    badge.className = 'review-orphaned'
+    badge.textContent = STR.commentOrphaned
+    node.appendChild(badge)
+  }
+
+  const text = document.createElement('span')
+  text.className = 'review-text'
+  text.textContent = comment.text
+  node.appendChild(text)
+
+  const edit = document.createElement('button')
+  edit.type = 'button'
+  edit.className = 'review-btn'
+  edit.textContent = STR.commentEdit
+  edit.addEventListener('click', () => openInputZone(comment.filePath, {
+    side: comment.side,
+    line: comment.line,
+    endLine: comment.endLine ?? null,
+    lineText: comment.lineText,
+    editingId: comment.id,
+    initialText: comment.text
+  }))
+  node.appendChild(edit)
+
+  const del = document.createElement('button')
+  del.type = 'button'
+  del.className = 'review-btn review-btn-delete'
+  del.textContent = STR.commentDelete
+  del.addEventListener('click', () => postToSwift({ type: 'commentDeleted', id: comment.id }))
+  node.appendChild(del)
+
+  return node
+}
+
+// Rebuild every comment zone for one file. Called from setComments (state
+// changed) and from onDidUpdateDiff (the geometry the anchors depend on
+// changed — old-side anchors need the computed diff, and hideUnchangedRegions
+// re-folding invalidates earlier zone placement).
+function renderComments(filePath) {
+  if (renderingComments) return
+  const entry = sections.get(filePath)
+  if (!entry || !entry.editor) return
+
+  renderingComments = true
+  try {
+    const modified = entry.editor.getModifiedEditor()
+    const list = commentsByFile.get(filePath) || []
+    const existing = commentZones.get(filePath) || []
+    const added = []
+    modified.changeViewZones((accessor) => {
+      for (const id of existing) accessor.removeZone(id)
+      for (const comment of list) {
+        let afterLine
+        if (comment.isOrphaned) {
+          afterLine = 0 // pin orphans above the first line of the file's diff
+        } else if (comment.side === 'old') {
+          afterLine = anchorForOldLine(entry.editor, comment.endLine ?? comment.line)
+        } else {
+          afterLine = comment.endLine ?? comment.line
+        }
+        added.push(accessor.addZone({
+          afterLineNumber: afterLine,
+          heightInLines: 2,
+          domNode: buildCommentNode(comment)
+        }))
+      }
+    })
+    commentZones.set(filePath, added)
+    // The zones changed the content height; re-fit the section to it.
+    resizeDiffEditor(entry.editor, entry.host.querySelector('.diff-body') || entry.host)
+  } finally {
+    renderingComments = false
+  }
+}
+
+function closeInputZone() {
+  if (!inputZoneState) return
+  const state = inputZoneState
+  inputZoneState = null
+  const entry = sections.get(state.filePath)
+  if (entry && entry.editor) {
+    entry.editor.getModifiedEditor().changeViewZones((a) => a.removeZone(state.zoneId))
+    // Shrink the section back: a cancelled input produces no setComments, so
+    // this is the only chance to reclaim the space the zone took.
+    resizeDiffEditor(entry.editor, entry.host.querySelector('.diff-body') || entry.host)
+  }
+}
+
+// Open the single comment input zone. spec: {side, line, endLine, lineText,
+// editingId?, initialText?}. Submitting posts to Swift and closes; Swift
+// answers with setComments, which is what actually renders the comment.
+function openInputZone(filePath, spec) {
+  closeInputZone()
+  const entry = sections.get(filePath)
+  if (!entry || !entry.editor) return
+  const modified = entry.editor.getModifiedEditor()
+
+  const node = document.createElement('div')
+  node.className = 'review-input'
+  node.addEventListener('mousedown', (e) => e.stopPropagation())
+
+  const field = document.createElement('input')
+  field.type = 'text'
+  field.placeholder = STR.addComment
+  field.value = spec.initialText || ''
+  node.appendChild(field)
+
+  const confirm = document.createElement('button')
+  confirm.type = 'button'
+  confirm.className = 'review-btn'
+  confirm.textContent = spec.editingId ? STR.commentSave : STR.commentAdd
+  node.appendChild(confirm)
+
+  const cancel = document.createElement('button')
+  cancel.type = 'button'
+  cancel.className = 'review-btn'
+  cancel.textContent = STR.commentCancel
+  cancel.addEventListener('click', closeInputZone)
+  node.appendChild(cancel)
+
+  const submit = () => {
+    const text = field.value.trim()
+    if (!text) { closeInputZone(); return }
+    if (spec.editingId) {
+      postToSwift({ type: 'commentEdited', id: spec.editingId, text })
+    } else {
+      const msg = {
+        type: 'commentAdded',
+        filePath,
+        side: spec.side,
+        line: spec.line,
+        lineText: spec.lineText || '',
+        text
+      }
+      if (spec.endLine) msg.endLine = spec.endLine
+      postToSwift(msg)
+    }
+    closeInputZone()
+    // Swift responds with setComments, which re-renders the zones.
+  }
+  confirm.addEventListener('click', submit)
+  field.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); submit() }
+    if (e.key === 'Escape') { e.preventDefault(); closeInputZone() }
+  })
+
+  const afterLine = spec.side === 'old'
+    ? anchorForOldLine(entry.editor, spec.endLine ?? spec.line)
+    : (spec.endLine ?? spec.line)
+
+  modified.changeViewZones((accessor) => {
+    const zoneId = accessor.addZone({ afterLineNumber: afterLine, heightInLines: 2, domNode: node })
+    inputZoneState = { filePath, zoneId }
+  })
+  resizeDiffEditor(entry.editor, entry.host.querySelector('.diff-body') || entry.host)
+  setTimeout(() => field.focus())
+}
+
+// Wire the gutter/deleted-block click targets for one mounted editor.
+function attachCommentHandlers(filePath, diffEditor) {
+  const modified = diffEditor.getModifiedEditor()
+  const MT = monaco.editor.MouseTargetType
+
+  // Remember the last multi-line selection rather than reading the selection
+  // inside onMouseDown: a gutter click collapses the selection, and whether
+  // that happens before or after our handler runs is Monaco's business.
+  let lastRange = null
+  modified.onDidChangeCursorSelection((e) => {
+    const s = e.selection
+    if (s && s.startLineNumber !== s.endLineNumber) {
+      lastRange = { startLineNumber: s.startLineNumber, endLineNumber: s.endLineNumber }
+    }
+  })
+
+  modified.onMouseDown((e) => {
+    const t = e.target
+    if (t.type === MT.GUTTER_LINE_NUMBERS || t.type === MT.GUTTER_GLYPH_MARGIN) {
+      // New-side comment. If the click lands inside a multi-line selection,
+      // comment on the whole selected range (select-then-click = range comment).
+      if (!t.position) return
+      const line = t.position.lineNumber
+      const sel = lastRange || modified.getSelection()
+      let start = line
+      let end = null
+      if (sel && sel.startLineNumber !== sel.endLineNumber &&
+          line >= sel.startLineNumber && line <= sel.endLineNumber) {
+        start = sel.startLineNumber
+        end = sel.endLineNumber
+        lastRange = null // the range is consumed; the next click is single-line
+      }
+      const lineText = modified.getModel().getLineContent(start).trim()
+      openInputZone(filePath, { side: 'new', line: start, endLine: end, lineText })
+    } else if (t.type === MT.GUTTER_VIEW_ZONE || t.type === MT.CONTENT_VIEW_ZONE) {
+      // A deleted block rendered inline. Comment on the whole old-side block.
+      const after = t.detail && typeof t.detail.afterLineNumber === 'number'
+        ? t.detail.afterLineNumber
+        : null
+      if (after === null) return
+      const changes = diffEditor.getLineChanges() || []
+      const ch = changes.find(c => c.modifiedEndLineNumber === 0 && c.modifiedStartLineNumber === after)
+      if (!ch) return // not a deletion zone (e.g. one of our own comment zones)
+      const original = diffEditor.getOriginalEditor().getModel()
+      const lineText = original.getLineContent(ch.originalStartLineNumber).trim()
+      openInputZone(filePath, {
+        side: 'old',
+        line: ch.originalStartLineNumber,
+        endLine: ch.originalEndLineNumber > ch.originalStartLineNumber ? ch.originalEndLineNumber : null,
+        lineText
+      })
+    }
+  })
+}
+
 window.diffAPI = {
   setFiles(files) {
     reported = false
@@ -254,16 +521,20 @@ window.diffAPI = {
 
       const mounted = mountDiffEditor(host, file)
       mounted.host = section
+      attachCommentHandlers(file.filePath, mounted.editor)
+      // Registered before the diff callback so renderComments() can find it.
+      sections.set(file.filePath, mounted)
 
       // Once the diff is computed (and unchanged regions folded), size the
       // container to the exact content height so no empty editor area remains.
       mounted.editor.onDidUpdateDiff(() => {
         resizeDiffEditor(mounted.editor, host)
+        // Comments already pushed by Swift render here: setComments can land
+        // before this editor has a computed diff to anchor against.
+        renderComments(file.filePath)
         pendingCount--
         if (pendingCount <= 0) reportContentReady()
       })
-
-      sections.set(file.filePath, mounted)
     }
 
     // No normal editors to wait on (all binary/deferred/empty) — ready now.
@@ -287,10 +558,29 @@ window.diffAPI = {
 
     const mounted = mountDiffEditor(host, file)
     mounted.host = section
+    attachCommentHandlers(file.filePath, mounted.editor)
+    // Registered before the diff callback so renderComments() can find it.
+    sections.set(file.filePath, mounted)
     mounted.editor.onDidUpdateDiff(() => {
       resizeDiffEditor(mounted.editor, host)
+      // A deferred file's comments were held in commentsByFile while it was a
+      // placeholder; this is the first chance to render them.
+      renderComments(file.filePath)
     })
-    sections.set(file.filePath, mounted)
+  },
+
+  // Replace the rendered comment set wholesale. Swift pushes this after every
+  // store mutation and right after every setFiles; JS never edits the list.
+  setComments(list) {
+    commentsByFile = new Map()
+    for (const c of (list || [])) {
+      if (!commentsByFile.has(c.filePath)) commentsByFile.set(c.filePath, [])
+      commentsByFile.get(c.filePath).push(c)
+    }
+    closeInputZone()
+    // Only already-mounted sections render now; editors still mounting pick
+    // their comments up in onDidUpdateDiff.
+    for (const path of sections.keys()) renderComments(path)
   },
 
   setStrings(strings) {
