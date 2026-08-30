@@ -435,11 +435,21 @@ function attachCommentHandlers(filePath, diffEditor) {
     const s = e.selection
     if (!s) return
     const end = normEnd(s)
-    // Drop a stale range as soon as the selection collapses, or it could
-    // hijack an unrelated later click that happens to fall inside it.
-    lastRange = end > s.startLineNumber
-      ? { startLineNumber: s.startLineNumber, endLineNumber: end }
-      : null
+    if (end > s.startLineNumber) {
+      lastRange = { startLineNumber: s.startLineNumber, endLineNumber: end }
+      return
+    }
+    // The selection collapsed. Clearing unconditionally would kill the whole
+    // gesture: the consuming click itself collapses the selection before
+    // onMouseDown fires. A collapse landing *inside* the cached range is
+    // indistinguishable from — and usually is — that click's own artifact, and
+    // a deliberate later click inside a still-cached range is precisely the
+    // range-comment gesture. A collapse outside it is a real new cursor
+    // placement, so the cache is stale and goes.
+    const inside = lastRange &&
+      s.startLineNumber >= lastRange.startLineNumber &&
+      s.startLineNumber <= lastRange.endLineNumber
+    if (!inside) lastRange = null
   })
 
   modified.onMouseDown((e) => {
@@ -449,14 +459,19 @@ function attachCommentHandlers(filePath, diffEditor) {
       // comment on the whole selected range (select-then-click = range comment).
       if (!t.position) return
       const line = t.position.lineNumber
-      const sel = lastRange || modified.getSelection()
+      // Prefer a live multi-line selection; fall back to the cache, which is
+      // what survives the consuming click's own collapse. Both are normalized.
+      const live = modified.getSelection()
+      const liveEnd = live ? normEnd(live) : 0
+      const sel = (live && liveEnd > live.startLineNumber)
+        ? { startLineNumber: live.startLineNumber, endLineNumber: liveEnd }
+        : lastRange
+
       let start = line
       let end = null
-      const selEnd = sel ? normEnd(sel) : 0
-      if (sel && selEnd > sel.startLineNumber &&
-          line >= sel.startLineNumber && line <= selEnd) {
+      if (sel && line >= sel.startLineNumber && line <= sel.endLineNumber) {
         start = sel.startLineNumber
-        end = selEnd
+        end = sel.endLineNumber
         lastRange = null // the range is consumed; the next click is single-line
       }
       const lineText = modified.getModel().getLineContent(start).trim()
