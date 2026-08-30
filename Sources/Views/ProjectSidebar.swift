@@ -56,8 +56,6 @@ struct ProjectSidebar: View {
     @State private var newWorkstreamPlaceholder = ""
     @State private var pendingWorkstreamProjectID: UUID?
     @State private var pendingWorkstreamBypass: Bool?
-    @State private var pendingWorkstreamHarness: CodingHarness = .claudeCode
-    @AppStorage("atelier.defaultHarness") private var defaultHarnessRaw: String = CodingHarness.claudeCode.rawValue
 
     private func recomputeSortedIDs() -> [UUID] {
         projects
@@ -171,7 +169,6 @@ struct ProjectSidebar: View {
                                 isPathValid: appEnv.isPathValid(workstream.worktreePath),
                                 agentState: agentStateTracker.state(for: workstream.id),
                                 hasLiveSession: agentStateTracker.hasLiveSession(for: workstream.id),
-                                portraitName: workstream.harness.portraitName,
                                 mainActivity: mainRun?.activity,
                                 // Passed regardless of whether the main run
                                 // is still rostered: the tracker keeps the
@@ -184,8 +181,6 @@ struct ProjectSidebar: View {
                                 prTitle: pr?.title,
                                 prNumber: pr?.number,
                                 prState: pr?.state,
-                                harness: workstream.harness,
-                                onSwitchHarness: { switchHarness(workstream, to: $0) },
                                 onRemove: { workstreamToRemove = workstream.id },
                                 onPurge: { confirmPurge(workstream) },
                                 onRename: { promptRenameWorkstream(workstream) }
@@ -215,31 +210,6 @@ struct ProjectSidebar: View {
                     updater: updater
                 )
             }
-
-            // Credit
-            VStack(spacing: 2) {
-                HStack(spacing: 0) {
-                    Text("by ")
-                        .foregroundStyle(.tertiary)
-                    Link("David Poblador i Garcia.", destination: URL(string: "https://davidpoblador.com/")!)
-                        .foregroundStyle(.secondary)
-                }
-                HStack(spacing: 0) {
-                    Text("Enhanced by ")
-                        .foregroundStyle(.tertiary)
-                    Link("Andrés González.", destination: URL(string: "https://github.com/AndresGonzalez5")!)
-                        .foregroundStyle(.secondary)
-                }
-                HStack(spacing: 0) {
-                    Text("Help ")
-                        .foregroundStyle(.tertiary)
-                    Link("supporting", destination: sponsorURL)
-                        .foregroundStyle(.secondary)
-                    Text(" the development.")
-                        .foregroundStyle(.tertiary)
-                }
-            }
-            .font(.system(size: 10))
 
             HStack {
                 SidebarBottomButton(icon: "plus") {
@@ -363,13 +333,11 @@ struct ProjectSidebar: View {
                     error: $newWorkstreamError,
                     projectName: pendingWorkstreamProjectID.flatMap { id in projects.first(where: { $0.id == id })?.name } ?? "",
                     placeholder: newWorkstreamPlaceholder,
-                    harness: $pendingWorkstreamHarness,
                     onAdd: { createWorkstream() },
                     onCancel: {
                         showingNewWorkstreamName = false
                         pendingWorkstreamProjectID = nil
                         pendingWorkstreamBypass = nil
-                        pendingWorkstreamHarness = CodingHarness(rawValue: defaultHarnessRaw) ?? .claudeCode
                     }
                 )
             }
@@ -476,7 +444,6 @@ struct ProjectSidebar: View {
         newWorkstreamPlaceholder = NameGenerator.generate(avoiding: existingNames)
         pendingWorkstreamProjectID = projectID
         pendingWorkstreamBypass = bypassPermissions
-        pendingWorkstreamHarness = CodingHarness(rawValue: defaultHarnessRaw) ?? .claudeCode
         showingNewWorkstreamName = true
     }
 
@@ -514,7 +481,7 @@ struct ProjectSidebar: View {
         showingNewWorkstreamName = false
         pendingWorkstreamProjectID = nil
         pendingWorkstreamBypass = nil
-        let workstream = Workstream(name: name, worktreePath: nil, bypassPermissions: bypass, harness: pendingWorkstreamHarness)
+        let workstream = Workstream(name: name, worktreePath: nil, bypassPermissions: bypass)
         expandedProjects.insert(projectID)
         NotificationCenter.default.post(
             name: .workstreamCreated,
@@ -619,27 +586,6 @@ struct ProjectSidebar: View {
         return nil
     }
 
-    /// Flips a workstream's coding agent. Tears down the current agent surface
-    /// (and its tmux session) so the next spawn relaunches under the new harness.
-    private func switchHarness(_ workstream: Workstream, to harness: CodingHarness) {
-        guard workstream.harness != harness,
-              let pi = projects.firstIndex(where: { $0.id == workstreamProjectID(for: workstream.id) }),
-              let wi = projects[pi].workstreams.firstIndex(where: { $0.id == workstream.id })
-        else { return }
-
-        logger.warning("[Atelier] switchHarness \(workstream.harness.rawValue, privacy: .public) -> \(harness.rawValue, privacy: .public) for \(workstream.name, privacy: .public)")
-
-        surfaceCache.removeSurface(for: workstream.id)
-        let tmuxSession = TmuxSession.sessionName(project: projects[pi].name, workstream: workstream.name, role: "agent")
-        if let tmuxPath = appEnv.toolStatus.tmux.path {
-            TmuxSession.killSession(tmuxPath: tmuxPath, sessionName: tmuxSession)
-        }
-        agentStateTracker.clear(workstreamID: workstream.id)
-
-        projects[pi].workstreams[wi].harness = harness
-        onProjectsChanged()
-    }
-
     private func performRemove() {
         guard let wsID = workstreamToRemove,
               let pi = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
@@ -702,8 +648,6 @@ struct ProjectSidebar: View {
         }
         return true
     }
-
-    private var sponsorURL: URL { AppConstants.sponsorURL }
 
     @AppStorage("atelier.baseDirectory") private var baseDirectory: String = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first ?? ""
 
@@ -916,7 +860,6 @@ private struct WorkstreamRow: View {
     let isPathValid: Bool
     var agentState: WorkstreamAgentStateTracker.AgentRunState = .idle
     var hasLiveSession: Bool = false
-    var portraitName: String = "Claude"
     var mainActivity: String?
     var mainContextUsage: WorkstreamAgentStateTracker.ContextUsage?
     /// When this workstream's main run was first seen this launch; drives
@@ -927,8 +870,6 @@ private struct WorkstreamRow: View {
     var prTitle: String?
     var prNumber: Int?
     var prState: String?
-    var harness: CodingHarness = .claudeCode
-    var onSwitchHarness: (CodingHarness) -> Void = { _ in }
     let onRemove: () -> Void
     let onPurge: () -> Void
     let onRename: () -> Void
@@ -971,9 +912,18 @@ private struct WorkstreamRow: View {
         }
     }
 
-    /// Dot/word color mirroring the portrait ring; nil when dormant.
+    /// Dot/word color for the status meta line: blue = working, yellow =
+    /// stalled, orange = awaiting permission, green = finished, secondary =
+    /// idle with a live session. Nil when dormant, which hides the line.
     private var statusColor: Color? {
-        MainAgentPortrait.ringColor(for: agentState, hasLiveSession: hasLiveSession)
+        switch agentState {
+        case .working: .blue
+        case .stalled: .yellow
+        case .needsAttention(.permission): .orange
+        case .needsAttention(.justFinished): .green
+        case .idle where hasLiveSession: .secondary
+        case .idle: nil
+        }
     }
 
     private var statusText: LocalizedStringKey? {
@@ -1025,12 +975,15 @@ private struct WorkstreamRow: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 6) {
-            MainAgentPortrait(
-                state: agentState,
-                isPathValid: isPathValid,
-                hasLiveSession: hasLiveSession,
-                portraitName: portraitName
-            )
+            // No status dot here: the meta line below the name already
+            // carries one, with the state word beside it. A missing worktree
+            // has no such line, so it keeps a marker.
+            if !isPathValid {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.orange)
+                    .frame(width: 12)
+            }
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(headline)
@@ -1113,37 +1066,6 @@ private struct WorkstreamRow: View {
                 }
             }
             Divider()
-            Menu {
-                ForEach(CodingHarness.allCases, id: \.self) { candidate in
-                    Button {
-                        onSwitchHarness(candidate)
-                    } label: {
-                        if candidate == harness {
-                            Label(candidate.displayName, systemImage: "checkmark")
-                        } else {
-                            Label {
-                                Text(candidate.displayName)
-                            } icon: {
-                                Image(nsImage: candidate.makeBrandDotImage())
-                            }
-                        }
-                    }
-                }
-            } label: {
-                Label {
-                    Text("Coding Agent")
-                } icon: {
-                    if let img = AgentSpriteStore.shared.avatar(name: harness.portraitName, palette: 0, variant: 0) {
-                        Image(nsImage: img)
-                            .resizable()
-                            .interpolation(.none)
-                            .frame(width: 16, height: 16)
-                            .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
-                    } else {
-                        Image(nsImage: harness.makeBrandDotImage())
-                    }
-                }
-            }
             Button(action: onRename) {
                 Label("Rename…", systemImage: "pencil")
             }
@@ -1274,12 +1196,10 @@ private struct NewWorkstreamSheet: View {
     @Binding var error: String
     let projectName: String
     let placeholder: String
-    @Binding var harness: CodingHarness
     let onAdd: () -> Void
     let onCancel: () -> Void
 
     @FocusState private var isFocused: Bool
-    @State private var tabMonitor: Any?
 
     var body: some View {
         VStack(spacing: 18) {
@@ -1319,15 +1239,6 @@ private struct NewWorkstreamSheet: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Coding Agent")
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .foregroundStyle(.secondary)
-                HarnessPicker(selection: $harness)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
             if !error.isEmpty {
                 Text(error)
                     .font(.caption)
@@ -1346,38 +1257,7 @@ private struct NewWorkstreamSheet: View {
         }
         .padding(20)
         .frame(width: 400)
-        .onAppear {
-            isFocused = true
-            installTabMonitor()
-        }
-        .onDisappear { removeTabMonitor() }
-    }
-
-    private func installTabMonitor() {
-        guard tabMonitor == nil else { return }
-        tabMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard event.keyCode == 48,
-                  !event.modifierFlags.contains(.command),
-                  !event.modifierFlags.contains(.control),
-                  !event.modifierFlags.contains(.option) else {
-                return event
-            }
-            let forward = !event.modifierFlags.contains(.shift)
-            let all = CodingHarness.allCases
-            if let idx = all.firstIndex(of: self.harness) {
-                let next = (idx + (forward ? 1 : -1) + all.count) % all.count
-                self.harness = all[next]
-                self.isFocused = true
-            }
-            return nil
-        }
-    }
-
-    private func removeTabMonitor() {
-        if let monitor = tabMonitor {
-            NSEvent.removeMonitor(monitor)
-            tabMonitor = nil
-        }
+        .onAppear { isFocused = true }
     }
 }
 

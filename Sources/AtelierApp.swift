@@ -189,12 +189,9 @@ struct AtelierApp: App {
             HookInstaller.install(hookScriptPath: hookURL.path)
         }
 
-        // Install the Atelier plugin so OpenCode forwards events
-        if let pluginURL = Bundle.main.url(forResource: "atelier-opencode", withExtension: "js", subdirectory: "Scripts")
-            ?? Bundle.main.url(forResource: "atelier-opencode", withExtension: "js")
-        {
-            OpencodePluginInstaller.install(bundledPath: pluginURL.path)
-        }
+        // Earlier builds installed an OpenCode plugin into the user's global
+        // plugin directory; it outlives Atelier unless we take it back out.
+        OpencodePluginRemover.uninstall()
 
         let crashReportingEnabled = UserDefaults.standard.object(forKey: "atelier.crashReportingEnabled") as? Bool ?? true
         if crashReportingEnabled, let sentryDSN = AppConstants.sentryDSN {
@@ -289,6 +286,13 @@ struct AtelierApp: App {
         .commands {
             // Remove the default Help menu so Cmd+Shift+/ doesn't open it
             CommandGroup(replacing: .help) {}
+
+            // Feed the stock About panel our own credits.
+            CommandGroup(replacing: .appInfo) {
+                Button("About \(AppConstants.appName)") {
+                    AboutPanel.show()
+                }
+            }
 
             CommandGroup(replacing: .newItem) {
                 // Cmd+N: context-sensitive (add project if none selected, else add workstream)

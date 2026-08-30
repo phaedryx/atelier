@@ -161,8 +161,6 @@
 "Dark" = "Dark";
 
 /* Settings - Coding Agent */
-"Agent Teams" = "Agent Teams";
-"Enables experimental multi-agent coordination. Agents can spawn teammates, delegate tasks, and collaborate across workstreams." = "Enables experimental multi-agent coordination. Agents can spawn teammates, delegate tasks, and collaborate across workstreams.";
 "Auto-rename branch" = "Auto-rename branch";
 "On the first request, the agent renames the branch to match the task and writes a short description visible in the sidebar." = "On the first request, the agent renames the branch to match the task and writes a short description visible in the sidebar.";
 "External Browser" = "External Browser";
@@ -303,13 +301,11 @@
 "Version %@" = "Version %@";
 "Made with " = "Made with ";
 " in Poblenou, Barcelona" = " in Poblenou, Barcelona";
-"Built by David Poblador i Garcia" = "Built by David Poblador i Garcia";
-"with the support of" = "with the support of";
-"by " = "by ";
-"Enhanced by " = "Enhanced by ";
 "Forked by " = "Forked by ";
-"Help " = "Help ";
-" the development." = " the development.";
+"based on " = "based on ";
+" by " = " by ";
+"and additional work by " = "and additional work by ";
+"About %@" = "About %@";
 
 
 /* Help */
@@ -398,26 +394,14 @@
 "Context: %1$lld tokens · %2$lld%%" = "Context: %1$lld tokens · %2$lld%%";
 "%lld agents active" = "%lld agents active";
 
-/* Multi-harness support */
+/* Coding agent */
 "Claude Code" = "Claude Code";
-"OpenCode" = "OpenCode";
-"Default coding agent" = "Default coding agent";
-"Used when creating new workstreams. Each workstream can override this choice." = "Used when creating new workstreams. Each workstream can override this choice.";
-"Enables experimental multi-agent coordination. Agents can spawn teammates, delegate tasks, and collaborate across workstreams. Only applies to %@." = "Enables experimental multi-agent coordination. Agents can spawn teammates, delegate tasks, and collaborate across workstreams. Only applies to %@.";
-"%@ not found" = "%@ not found";
-"Install %@ to use the Coding Agent." = "Install %@ to use the Coding Agent.";
-"Install %@" = "Install %@";
-"%@ is not installed." = "%@ is not installed.";
-
 /* Quick action results */
 "Raw output" = "Raw output";
-"Open Pull Request" = "Open Pull Request";
-"Open Link" = "Open Link";
-"Working…" = "Working…";
 
 /* Agent IPC */
 "Agent messaging" = "Agent messaging";
-"Lets coding agents in this project see and message each other. Messages are delivered when the recipient checks its inbox. Takes effect the next time a Coding Agent starts. Only applies to %@." = "Lets coding agents in this project see and message each other. Messages are delivered when the recipient checks its inbox. Takes effect the next time a Coding Agent starts. Only applies to %@.";
+"Lets coding agents in this project see and message each other. Messages are delivered when the recipient checks its inbox. Takes effect the next time a Coding Agent starts. Only applies to Claude Code." = "Lets coding agents in this project see and message each other. Messages are delivered when the recipient checks its inbox. Takes effect the next time a Coding Agent starts. Only applies to Claude Code.";
 "Nudge idle agents" = "Nudge idle agents";
 "When a message arrives for an agent that has finished its turn, Atelier types a notice into its terminal. That is typed input: an agent running without permission prompts will act on it." = "When a message arrives for an agent that has finished its turn, Atelier types a notice into its terminal. That is typed input: an agent running without permission prompts will act on it.";
 

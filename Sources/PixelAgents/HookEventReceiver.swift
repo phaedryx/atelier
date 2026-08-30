@@ -30,13 +30,6 @@ final class HookEventReceiver: @unchecked Sendable {
     private var currentPort: UInt16?
     private var connections: [NWConnection] = []
 
-    /// Per-project state for tracking subagent palettes.
-    private struct ProjectState {
-        var nextPalette: Int = 1 // 0 is reserved for main
-        var knownAgents: Set<String> = []
-    }
-
-    private var projectState: [String: ProjectState] = [:] // keyed by projectDir
 
     private init() {}
 
@@ -197,8 +190,6 @@ final class HookEventReceiver: @unchecked Sendable {
 
         // The atelier-hook script wraps the Claude Code input as:
         //   { "event_input": { ... }, "project_dir": "..." }
-        // The Atelier opencode plugin posts the same envelope plus
-        //   "source": "opencode" with pre-digested event_input payloads.
         guard let projectDir = json["project_dir"] as? String else {
             logger.warning("Hook event missing project_dir")
             sendResponse(on: connection, status: "200 OK", body: "{\"ok\":true}")
@@ -216,17 +207,9 @@ final class HookEventReceiver: @unchecked Sendable {
         // session started anywhere else, which the hook installs globally for.
         let surfaceID = (json["surface_id"] as? String).flatMap { $0.isEmpty ? nil : $0 }
 
-        let source = json["source"] as? String
-        var events: [AgentEvent]
-        if source == "opencode" {
-            let kind = eventInput["kind"] as? String ?? ""
-            logger.info("OpenCode event received: \(kind, privacy: .public) for project: \(projectDir, privacy: .public)")
-            events = mapOpencodeEvent(eventInput: eventInput, projectDir: projectDir)
-        } else {
-            let hookEventName = eventInput["hook_event_name"] as? String ?? ""
-            logger.info("Hook event received: \(hookEventName, privacy: .public) for project: \(projectDir, privacy: .public) surface: \(surfaceID ?? "none", privacy: .public)")
-            events = mapHookEvent(hookEventName: hookEventName, eventInput: eventInput, projectDir: projectDir)
-        }
+        let hookEventName = eventInput["hook_event_name"] as? String ?? ""
+        logger.info("Hook event received: \(hookEventName, privacy: .public) for project: \(projectDir, privacy: .public) surface: \(surfaceID ?? "none", privacy: .public)")
+        var events = mapHookEvent(hookEventName: hookEventName, eventInput: eventInput, projectDir: projectDir)
         if let surfaceID {
             events = events.map { event in
                 var stamped = event
@@ -260,27 +243,14 @@ final class HookEventReceiver: @unchecked Sendable {
         !agentId.isEmpty && agentId != "main"
     }
 
-    /// Assigns a roster palette slot for an agent within a project.
-    /// Must be called on `self.queue`.
-    private func assignPalette(projectDir: String, agentId: String) -> Int {
-        var state = projectState[projectDir] ?? ProjectState()
-        let palette = state.nextPalette % 6
-        if !state.knownAgents.contains(agentId) {
-            state.nextPalette += 1
-            state.knownAgents.insert(agentId)
-        }
-        projectState[projectDir] = state
-        return palette
-    }
-
     /// Maps a tool name (and, when available, its input) to a short human-readable
     /// activity description for the sidebar roster, e.g. "Editing Foo.swift".
     static func activityDescription(toolName: String, toolInput: [String: Any]?) -> String? {
         let filePath = (toolInput?["file_path"] as? String) ?? (toolInput?["notebook_path"] as? String)
         let baseName = filePath.map { URL(fileURLWithPath: $0).lastPathComponent }
 
-        // Claude Code tools are PascalCase ("Edit"); OpenCode tools are
-        // lowercase ("edit"). Match case-insensitively so both harnesses share one table.
+        // Claude Code tool names are PascalCase ("Edit"); match case-
+        // insensitively so a differently-cased payload still resolves.
         switch toolName.lowercased() {
         case "edit", "write", "multiedit", "notebookedit", "patch":
             if let baseName {
@@ -307,15 +277,6 @@ final class HookEventReceiver: @unchecked Sendable {
             // something specific about what's running.
             return toolName.isEmpty ? nil : toolName
         }
-    }
-
-    /// Trims and caps an OpenCode subtask description so oversized prompts
-    /// don't bloat payloads or roster rows. Returns nil when empty.
-    static func cappedTaskDescription(_ raw: String?) -> String? {
-        guard let raw else { return nil }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        return String(trimmed.prefix(120))
     }
 
     /// Maps a Claude Code hook event to zero or more `AgentEvent` values.
@@ -364,10 +325,8 @@ final class HookEventReceiver: @unchecked Sendable {
             guard isSubagent(aid) else { return [] }
             let agentType = eventInput["agent_type"] as? String ?? "Sub-agent"
             let name = String(agentType.prefix(20))
-            let palette = assignPalette(projectDir: projectDir, agentId: aid)
-
-            logger.info("Hook SubagentStart: \(aid, privacy: .public) name=\(name, privacy: .public) palette=\(palette)")
-            return [AgentEvent.created(agentId: aid, name: name, palette: palette, parentAgentId: "main")]
+            logger.info("Hook SubagentStart: \(aid, privacy: .public) name=\(name, privacy: .public)")
+            return [AgentEvent.created(agentId: aid, name: name, parentAgentId: "main")]
 
         case "SubagentStop":
             let aid = agentId(from: eventInput)
@@ -388,89 +347,6 @@ final class HookEventReceiver: @unchecked Sendable {
 
         default:
             logger.debug("Unhandled hook event: \(hookEventName, privacy: .public)")
-            return []
-        }
-    }
-
-    // MARK: - OpenCode Mapping
-
-    /// Maps a Atelier opencode plugin payload to zero or more `AgentEvent`s.
-    /// Payload shape: `{ kind, agent_id, name?, tool?, file_path?, session_id?, parent_session_id? }`.
-    /// Must be called on `self.queue`.
-    private func mapOpencodeEvent(eventInput: [String: Any], projectDir: String) -> [AgentEvent] {
-        let kind = eventInput["kind"] as? String ?? ""
-        let aid = eventInput["agent_id"] as? String ?? "main"
-        let name = eventInput["name"] as? String
-
-        switch kind {
-        case "tool_start":
-            let toolName = eventInput["tool"] as? String ?? "unknown"
-            var toolInput: [String: Any]?
-            if let filePath = eventInput["file_path"] as? String {
-                toolInput = ["file_path": filePath]
-            }
-            let activity = Self.activityDescription(toolName: toolName, toolInput: toolInput)
-            var event = AgentEvent.toolStart(agentId: aid, tool: toolName, activity: activity)
-            event.name = name
-            return [event]
-
-        case "tool_done":
-            var event = AgentEvent.toolDone(agentId: aid)
-            event.name = name
-            return [event]
-
-        case "working":
-            // Heartbeat while streaming a response — keeps the run alive
-            // without changing its activity description.
-            var event = AgentEvent.toolStart(agentId: aid, tool: "respond")
-            event.name = name
-            return [event]
-
-        case "waiting":
-            var event = AgentEvent.waiting(agentId: aid)
-            event.name = name
-            return [event]
-
-        case "agent_info":
-            // Attribute refresh (display name, model, context) — no state change.
-            // Prefer the plugin-computed total; older plugins may send the raw
-            // token dict instead, so fall back to summing it.
-            let model = eventInput["model"] as? String
-            var contextUsed: Int?
-            if let reported = eventInput["context_used"] as? Int {
-                contextUsed = reported > 0 ? reported : nil
-            } else if let tokens = eventInput["tokens"] as? [String: Any] {
-                let used = TranscriptContextReader.usedTokens(fromOpencodeTokens: tokens)
-                contextUsed = used > 0 ? used : nil
-            }
-            return [AgentEvent.info(agentId: aid, name: name, model: model, contextUsedTokens: contextUsed)]
-
-        case "idle":
-            return [AgentEvent.idle(agentId: aid)]
-
-        case "permission_required":
-            // Permission and question prompts both block on user input;
-            // they surface identically as row-level attention.
-            return [AgentEvent.status(agentId: "main", status: "permissionRequired")]
-
-        case "session_created":
-            guard let sessionID = eventInput["session_id"] as? String, !sessionID.isEmpty,
-                  let parentID = eventInput["parent_session_id"] as? String, !parentID.isEmpty,
-                  isSubagent(sessionID)
-            else { return [] }
-            let agentType = (eventInput["agent_type"] as? String) ?? "Sub-agent"
-            let subName = String(agentType.prefix(20))
-            let taskDescription = Self.cappedTaskDescription(eventInput["description"] as? String)
-            let palette = assignPalette(projectDir: projectDir, agentId: sessionID)
-            if let taskDescription {
-                logger.info("OpenCode subagent: \(sessionID, privacy: .public) name=\(subName, privacy: .public) desc=\(taskDescription, privacy: .public) palette=\(palette)")
-            } else {
-                logger.info("OpenCode subagent: \(sessionID, privacy: .public) name=\(subName, privacy: .public) palette=\(palette) (no description)")
-            }
-            return [AgentEvent.created(agentId: sessionID, name: subName, palette: palette, parentAgentId: "main", taskDescription: taskDescription)]
-
-        default:
-            logger.debug("Unhandled opencode event: \(kind, privacy: .public)")
             return []
         }
     }

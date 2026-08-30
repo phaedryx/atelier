@@ -1,4 +1,4 @@
-// ABOUTME: Extracts context-window usage from harness transcripts and payloads.
+// ABOUTME: Extracts context-window usage from harness transcripts.
 // ABOUTME: Claude Code transcripts are append-only JSONL; only the file tail is read.
 
 import Foundation
@@ -45,15 +45,6 @@ enum TranscriptContextReader {
             latest = (used, ContextLimits.limitTokens(forModel: message["model"] as? String))
         }
         return latest
-    }
-
-    /// Sums an OpenCode tokens payload (`{ input, output, cache: { read, write } }`)
-    /// into context-used tokens. Missing or non-numeric fields count as zero.
-    static func usedTokens(fromOpencodeTokens tokens: [String: Any]) -> Int {
-        guard let cache = tokens["cache"] as? [String: Any] else {
-            return int(tokens, "input")
-        }
-        return int(tokens, "input") + int(cache, "read") + int(cache, "write")
     }
 
     private static func int(_ dict: [String: Any], _ key: String) -> Int {

@@ -1,11 +1,10 @@
 # Agent Roster — Architecture
 
-The sidebar shows live agent status per workstream: each row leads with the
-main agent's pixel portrait inside a circular state ring — the portrait
-carries the main agent's state, current activity, and context meter — and
-while subagents are running, a compact roster of two-line mini cards under
-the row shows who is doing what right now. The main agent is not listed in
-the roster; everything it does is visible on the row itself.
+The sidebar shows live agent status per workstream: under each row's name a
+status line carries the main agent's state, current activity, and context
+meter — and while subagents are running, a compact roster of two-line mini
+cards under the row shows who is doing what right now. The main agent is not
+listed in the roster; everything it does is visible on the row itself.
 
 ## How it works
 
@@ -20,7 +19,7 @@ Claude Code hooks (settings.json)
   → curl POST http://127.0.0.1:{port}/hook
   → HookEventReceiver (NWListener, Swift)
   → AtelierApp.onEvent → HookEventRouter (fan-out) + WorkstreamAgentStateTracker.handle
-  → Sidebar: MainAgentPortrait state ring on the row + WorkstreamAgentRosterView cards
+  → Sidebar: status line on the workstream row + WorkstreamAgentRosterView cards
 ```
 
 ## Hook registration
@@ -73,57 +72,52 @@ worktree paths match.
 | File | Role |
 |---|---|
 | `Resources/Scripts/atelier-hook` | Shell script invoked by Claude Code hooks. Reads stdin JSON, wraps with `CLAUDE_PROJECT_DIR`, POSTs to localhost. |
-| `Sources/PixelAgents/HookEventReceiver.swift` | NWListener singleton. Parses HTTP POST, maps hook events to `AgentEvent`, derives activity strings from tool name + input, attaches `transcript_path` and OpenCode context figures. |
+| `Sources/PixelAgents/HookEventReceiver.swift` | NWListener singleton. Parses HTTP POST, maps hook events to `AgentEvent`, derives activity strings from tool name + input, attaches `transcript_path`. |
 | `Sources/PixelAgents/HookEventRouter.swift` | Singleton registry routing events by normalized path. |
 | `Sources/PixelAgents/HookInstaller.swift` | Idempotent install/uninstall of hook entries in `~/.claude/settings.json`. |
-| `Sources/PixelAgents/AgentEvent.swift` | Event model: `agentCreated`, `agentRemoved`, `agentStatus`, `agentToolStart`, `agentToolDone`, `agentIdle`, `agentWaiting`, `agentInfo`. |
-| `Sources/PixelAgents/TranscriptContextReader.swift` | Extracts context-window usage from Claude Code transcript tails and OpenCode token payloads. |
+| `Sources/PixelAgents/AgentEvent.swift` | Event model: `agentCreated`, `agentRemoved`, `agentStatus`, `agentToolStart`, `agentToolDone`, `agentIdle`, `agentWaiting`. |
+| `Sources/PixelAgents/TranscriptContextReader.swift` | Extracts context-window usage from Claude Code transcript tails. |
 | `Sources/PixelAgents/ContextLimits.swift` | Maps model IDs to context-window limits (200k default, 1M extended). |
-| `Sources/PixelAgents/AgentSpriteStore.swift` | Loads agent portraits for the roster (`avatar_<type>_<k>.png` sets with palette-slot fallback). |
 | `Sources/Models/WorkstreamAgentStateTracker.swift` | Per-workstream roster + row-level state machine + stall sweep + live-session tracking + context usage. |
-| `Sources/Views/MainAgentPortrait.swift` | Circular pixel portrait leading each workstream row; ring color/pulse encodes state. |
 | `Sources/Views/WorkstreamAgentRosterView.swift` | Subagent mini cards under each workstream row. |
 | `Sources/Views/ContextMeter.swift` | Context-window meter (bar + percentage) shared by the row and roster cards. |
-| `Resources/AgentSprites/` | Avatar art (6 palettes). |
-| `scripts/generate-avatars.swift` | Regenerates the 64×64 avatar PNGs from high-resolution source art. |
 
 ## Row-level states (`AgentRunState`)
 
-Each workstream row leads with the main agent's portrait (~28pt, circular).
-The ring around the character — and how much of the character shows through —
-encodes the state:
+Under the workstream name, a status line pairs a 5pt dot with the state
+word (`WorkstreamRow.statusMeta`). One color drives both:
 
-| State | Portrait treatment | Trigger |
+| State | Status line | Trigger |
 |---|---|---|
-| `.idle` (live session) | Desaturated, slightly dimmed character with a thin gray ring | No active turn, but ≥1 hook event seen since app launch |
-| `.idle` (dormant) | Character at ~20% opacity, no ring | No active turn and no harness activity this launch |
-| `.working` | Full color, pulsing green ring + subtle green glow | `UserPromptSubmit`, tool activity after a permission grant |
-| `.stalled` | Pulsing orange ring | No hook events for 45s mid-turn (swept every 15s) |
-| `.needsAttention(.permission)` | Static orange ring + orange exclamation badge | Notification hook reports a permission prompt |
-| `.needsAttention(.justFinished)` | Static blue ring | `Stop` on an unselected workstream; cleared by `markSeen` when selected |
+| `.idle` (live session) | Secondary gray · "Idle" | No active turn, but ≥1 hook event seen since app launch |
+| `.idle` (dormant) | Not rendered | No active turn and no agent activity this launch |
+| `.working` | Blue · "Working" | `UserPromptSubmit`, tool activity after a permission grant |
+| `.stalled` | Yellow · "Stalled" | No hook events for 45s mid-turn (swept every 15s) |
+| `.needsAttention(.permission)` | Orange · "Waiting for approval" | Notification hook reports a permission prompt |
+| `.needsAttention(.justFinished)` | Green · "Done" | `Stop` on an unselected workstream; cleared by `markSeen` when selected |
 
 Whether an idle workstream counts as "live" comes from
 `WorkstreamAgentStateTracker.liveSessionIDs` — an in-memory set of
-workstreams that saw any harness event this app launch. It is deliberately
+workstreams that saw any agent event this app launch. It is deliberately
 not persisted: a workstream nobody touched today renders dormant regardless
 of past sessions.
 
-An invalid worktree path overrides all of the above: the row shows a dimmed
-character with an orange warning-triangle badge instead of any state ring
-(`MainAgentPortrait.isPathValid`).
+An invalid worktree path overrides all of the above: the name is struck
+through and dimmed, and an orange warning triangle leads the row. That
+marker is the row's only leading element — a healthy workstream reserves no
+space for it.
 
 ## Roster lifecycle
 
 - A run exists exactly from its create event (`UserPromptSubmit` /
   `SubagentStart`) to its stop event (`Stop` / `SubagentStop`) — no artificial
   collapse timers.
-- The roster lists **subagents only**. The main agent's state ring, current
+- The roster lists **subagents only**. The main agent's status dot, current
   activity line, and context meter render on the workstream row itself
   (`WorkstreamRow`), so no information is duplicated.
-- Each live subagent renders as a two-line mini card: a 20pt circular portrait
-  with its own state ring (green pulsing while working, orange when stalled),
-  the agent name plus model chip on the first line, and the current activity
-  on the second.
+- Each live subagent renders as a two-line mini card: the agent name on the
+  first line and its own status line on the second (blue while working,
+  yellow when stalled, then the current activity and elapsed time).
 - The trailing side of a card shows, in order of precedence: **"Stalled"**
   (orange label) → **context-window meter** (when the harness reports per-run
   usage) → **elapsed time** since the run started.
@@ -134,10 +128,9 @@ character with an orange warning-triangle badge instead of any state ring
 
 ## Context window usage
 
-How full the agent's context window is, shown as a small meter. Two sources
-depending on harness:
+How full the agent's context window is, shown as a small meter.
 
-**Claude Code** — every hook payload carries `transcript_path`. On main-agent
+Every Claude Code hook payload carries `transcript_path`. On main-agent
 events the tracker re-reads the transcript through `TranscriptContextReader`.
 Transcripts are append-only JSONL, so only the last 256KB is parsed; the
 reader takes the *last* assistant entry carrying `message.usage` and sums
@@ -146,68 +139,16 @@ Reads are throttled to one per 5 seconds per workstream — except at turn end
 (`Stop`), where the read is forced so the final totals always land. A failed
 read keeps the previously known value.
 
-**OpenCode** — the bundled plugin (`atelier-opencode.js`) sums each
-assistant message's cumulative tokens (`input` + `cache.read` +
-`cache.write`) and forwards the total as `context_used` on `agent_info`
-events. The dedup fingerprint includes the total, so refreshed figures flow
-through even when name and model are unchanged.
-
 Limits come from `ContextLimits`: 200k tokens by default, 1M when the model
 ID contains `[1m]` or `-1m` (case-insensitive, e.g.
 `claude-sonnet-4-5[1m]`).
 
-Display scope is the same for both harnesses: the main session's meter shows
-on the workstream row itself (visible while the main agent is working or
-stalled), preferring the transcript-derived figure and falling back to the
-per-run totals OpenCode reports (`WorkstreamAgentStateTracker.mainContextUsage(for:)`),
-while OpenCode child sessions carry their own figures
-(`AgentRun.contextUsedTokens` / `contextLimitTokens`) from `agent_info`
-events, shown on their roster cards. The meter itself is a 40×3pt bar plus a
-percentage: green below 60%, orange below 85%, red at 85% or more
-(`ContextMeter`).
-
-## Avatars
-
-`AgentSpriteStore` serves one portrait per agent run, resolved in order:
-
-1. **Numbered per-type sets** — `Resources/AgentSprites/avatar_<type>_1.png`,
-   `avatar_<type>_2.png`, … where `<type>` is the agent type normalized to
-   lowercase alphanumerics (`avatar_explore_1.png`, `avatar_claude_1.png`,
-   `avatar_generalpurpose_2.png`). Concurrent same-type agents pick distinct
-   sprites: the tracker assigns each run the lowest variant index not held by
-   a live same-type run, and the sprite shown is
-   `set[variantIndex % count]` — so the 5th of 4 Explore sprites cycles back
-   to sprite 1. A run keeps its sprite for its whole lifetime.
-2. **Single type portrait** — `avatar_<type>.png` for types without variants.
-3. **Palette slots** — `avatar_<0-5>.png` fallback.
-
-Types with no art at all resolve to nil; views substitute a neutral SF Symbol
-placeholder (`person.crop.circle.fill`).
-
-Types can also **alias** to another set (`typeAliases` in `AgentSpriteStore`),
-covering harnesses whose built-ins lack dedicated art: OpenCode's `build` →
-claude, `general` → generalpurpose, `ask`/`scout` → explore. A type's own art
-always wins — dropping `avatar_<type>_1.png` immediately overrides the alias,
-no code changes.
-
-Assets are 64×64 PNGs normalized to 32pt (`AgentSpriteStore.pointSize`);
-views render them with `.interpolation(.none)` for crisp pixels on Retina.
-
-To regenerate the numbered avatars from source art (1024×1024 PNGs):
-
-```bash
-swift scripts/generate-avatars.swift <source-dir> <output-dir>
-```
-
-The script crops each mapped source to its alpha bounding box, adds ~4%
-padding per axis, squares the frame around the character's center, downscales
-to exactly 64×64 with high-quality interpolation, and preserves transparency.
-Its source map lives at the top of the script; add an entry there when
-introducing new art (e.g. a new agent type).
-
-To add sprites for a new agent type (or extend a set): drop 64×64
-`avatar_<type>_<k>.png` files into `Resources/AgentSprites/` — they are
-enumerated automatically, no code changes.
+The main session's meter shows on the workstream row itself (visible while
+the main agent is working or stalled), reading the transcript-derived figure
+(`WorkstreamAgentStateTracker.mainContextUsage(for:)`). Subagent roster cards
+carry no meter — Claude Code hooks report no per-run token figures. The meter
+itself is a 40×3pt bar plus a percentage: green below 60%, orange below 85%,
+red at 85% or more (`ContextMeter`).
 
 ## Testing
 

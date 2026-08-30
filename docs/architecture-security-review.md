@@ -336,7 +336,6 @@ build setting and is empty by default, so a plain build reports nothing.
 
 `WorkstreamEnvironment.variables()` builds a controlled set:
 - `ATELIER_PROJECT`, `ATELIER_WORKSTREAM`, `ATELIER_PROJECT_DIR`, `ATELIER_WORKTREE_DIR`, `ATELIER_PORT`
-- Optional: `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`
 - No user input directly injected into env vars
 - C environment array properly lifetime-managed in TerminalView
 

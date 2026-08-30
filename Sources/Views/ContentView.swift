@@ -164,15 +164,11 @@ struct ContentView: View {
                     workstreamName: workstream.name,
                     workstreamLabel: workstream.label,
                     bypassPermissions: workstream.bypassPermissions,
-                    harness: workstream.harness,
                     isActive: true,
                     scriptConfig: scriptConfig,
                     model: workspaceModel
                 )
-                // Harness is part of the identity so switching coding agents
-                // rebuilds the workspace from scratch — no stale cached
-                // commands or surfaces can survive a switch.
-                .id("\(workstreamID)-\(workstream.harness.rawValue)")
+                .id(workstreamID)
                 .navigationTitle(appEnvironment.taskDescription(for: workstream.worktreePath) ?? workstream.label)
                 .navigationSubtitle(workstreamSubtitle(project: project, workstream: workstream))
             } else {

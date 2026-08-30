@@ -24,32 +24,30 @@ struct HelpView: View {
                 .padding(.top, 24)
                 .padding(.bottom, -4)
 
-                VStack(spacing: 4) {
-                    HStack(spacing: 0) {
-                        Text("by ")
-                            .foregroundStyle(.tertiary)
-                        Link("David Poblador i Garcia.", destination: URL(string: "https://davidpoblador.com/")!)
-                            .foregroundStyle(.secondary)
-                    }
-                    HStack(spacing: 0) {
-                        Text("Enhanced by ")
-                            .foregroundStyle(.tertiary)
-                        Link("Andrés González.", destination: URL(string: "https://github.com/AndresGonzalez5")!)
-                            .foregroundStyle(.secondary)
-                    }
+                VStack(spacing: 6) {
                     HStack(spacing: 0) {
                         Text("Forked by ")
                             .foregroundStyle(.tertiary)
-                        Link("phaedryx.", destination: AppConstants.repositoryURL)
+                        Link("Tad Thorley", destination: AppConstants.repositoryURL)
                             .foregroundStyle(.secondary)
                     }
-                    HStack(spacing: 0) {
-                        Text("Help ")
-                            .foregroundStyle(.tertiary)
-                        Link("supporting", destination: AppConstants.sponsorURL)
-                            .foregroundStyle(.secondary)
-                        Text(" the development.")
-                            .foregroundStyle(.tertiary)
+                    VStack(spacing: 2) {
+                        HStack(spacing: 0) {
+                            Text("based on ")
+                                .foregroundStyle(.tertiary)
+                            Link("Factory Floor", destination: AppConstants.upstreamURL)
+                                .foregroundStyle(.secondary)
+                            Text(" by ")
+                                .foregroundStyle(.tertiary)
+                            Link("David Poblador i Garcia", destination: AppConstants.upstreamAuthorURL)
+                                .foregroundStyle(.secondary)
+                        }
+                        HStack(spacing: 0) {
+                            Text("and additional work by ")
+                                .foregroundStyle(.tertiary)
+                            Link("Andrés González", destination: AppConstants.upstreamEnhancerURL)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
                 .font(.system(size: 11))
@@ -128,30 +126,6 @@ struct HelpView: View {
                 .formStyle(.grouped)
                 .scrollDisabled(true)
                 .scrollContentBackground(.hidden)
-
-                // Credits
-                VStack(spacing: 4) {
-                    Text("Built by David Poblador i Garcia")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    HStack(spacing: 4) {
-                        Text("with the support of")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                        Link("All Tuner Labs", destination: URL(string: "https://alltuner.com")!)
-                            .font(.caption)
-                    }
-                    Link("davidpoblador.com", destination: URL(string: "https://davidpoblador.com")!)
-                        .font(.caption)
-                    HStack(spacing: 4) {
-                        Text("Enhanced by ")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Link("Andrés González", destination: URL(string: "https://github.com/AndresGonzalez5")!)
-                            .font(.caption)
-                    }
-                    .padding(.top, 4)
-                }
                 .padding(.bottom, 32)
             }
         }

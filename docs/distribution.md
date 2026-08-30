@@ -5,7 +5,7 @@
 Atelier ships via two channels:
 
 1. **Homebrew cask** (primary): `brew install --cask phaedryx/tap/atelier`
-   - Installs the app and the `ff` CLI automatically
+   - Installs the app and the `atl` CLI automatically
    - Upgrade: `brew upgrade --cask atelier`
 2. **Direct DMG** via GitHub Releases
    - CLI available from Settings > Environment

@@ -1,5 +1,5 @@
-// ABOUTME: Event types for the Swift-to-JS pixel agents bridge protocol.
-// ABOUTME: Encoded as JSON and sent to the WKWebView via evaluateJavaScript.
+// ABOUTME: Event types the hook receiver produces from Claude Code hook payloads.
+// ABOUTME: Consumed by WorkstreamAgentStateTracker to drive the sidebar roster.
 
 import Foundation
 
@@ -7,26 +7,15 @@ struct AgentEvent: Codable, Sendable {
     let type: EventType
     let agentId: String
     var name: String?
-    var palette: Int?
     var tool: String?
     /// Human-readable description of what the agent is doing right now
     /// (e.g. "Editing Foo.swift"), derived from the tool and its input.
     var activity: String?
     var status: String?
     var parentAgentId: String?
-    /// Model identifier reported by the harness (e.g. "claude-sonnet-4-5").
-    var model: String?
     /// Harness transcript location (Claude Code hook payloads); the tracker
     /// reads context-window usage from its tail.
     var transcriptPath: String?
-    /// Tokens consumed so far in the session context, when the harness reports
-    /// them directly (OpenCode agent_info payloads).
-    var contextUsedTokens: Int?
-    /// Model-derived context-window ceiling accompanying `contextUsedTokens`.
-    var contextLimitTokens: Int?
-    /// Short task description OpenCode attaches to delegated subagents
-    /// (e.g. "Map people/task completion code"), shown as a roster subtitle.
-    var taskDescription: String?
     /// The Atelier terminal surface the reporting agent runs in, when the hook
     /// inherited `ATELIER_SURFACE_ID`. Deliberately absent from `CodingKeys`:
     /// this is app-internal routing, not part of the bridge protocol the
@@ -41,23 +30,17 @@ struct AgentEvent: Codable, Sendable {
         case agentToolDone
         case agentIdle
         case agentWaiting
-        case agentInfo
     }
 
     enum CodingKeys: String, CodingKey {
         case type
         case agentId
         case name
-        case palette
         case tool
         case activity
         case status
         case parentAgentId
-        case model
         case transcriptPath
-        case contextUsedTokens
-        case contextLimitTokens
-        case taskDescription
     }
 
     // -- Factory methods --
@@ -65,13 +48,9 @@ struct AgentEvent: Codable, Sendable {
     static func created(
         agentId: String,
         name: String,
-        palette: Int,
-        parentAgentId: String? = nil,
-        taskDescription: String? = nil
+        parentAgentId: String? = nil
     ) -> AgentEvent {
-        var event = AgentEvent(type: .agentCreated, agentId: agentId, name: name, palette: palette, parentAgentId: parentAgentId)
-        event.taskDescription = taskDescription
-        return event
+        AgentEvent(type: .agentCreated, agentId: agentId, name: name, parentAgentId: parentAgentId)
     }
 
     static func removed(agentId: String) -> AgentEvent {
@@ -96,22 +75,5 @@ struct AgentEvent: Codable, Sendable {
 
     static func waiting(agentId: String, transcriptPath: String? = nil) -> AgentEvent {
         AgentEvent(type: .agentWaiting, agentId: agentId, transcriptPath: transcriptPath)
-    }
-
-    /// Attribute refresh for an existing roster run (display name, model,
-    /// context-window figures).
-    static func info(
-        agentId: String,
-        name: String?,
-        model: String? = nil,
-        contextUsedTokens: Int? = nil,
-        transcriptPath: String? = nil
-    ) -> AgentEvent {
-        var event = AgentEvent(type: .agentInfo, agentId: agentId, transcriptPath: transcriptPath)
-        event.name = name
-        event.model = model
-        event.contextUsedTokens = contextUsedTokens
-        event.contextLimitTokens = ContextLimits.limitTokens(forModel: model)
-        return event
     }
 }
