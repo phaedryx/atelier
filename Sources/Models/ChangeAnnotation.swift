@@ -97,3 +97,43 @@ final class ChangeAnnotationStore: ObservableObject {
         return String(out).trimmingCharacters(in: .whitespaces)
     }
 }
+
+/// Formats a set of review comments into the text block pasted into the agent's
+/// terminal. Pure and nonisolated so it is trivially testable.
+enum ChangeReviewFormatter {
+    static func payload(
+        comments: [ReviewComment],
+        mode: ChangesMode,
+        branch: String?,
+        baseBranch: String?
+    ) -> String {
+        let scope: String
+        switch mode {
+        case .uncommitted: scope = "uncommitted changes"
+        case .branch: scope = "vs \(baseBranch ?? "base")"
+        }
+
+        var lines = ["[Code Review] \(branch ?? "worktree") (\(scope))"]
+        let grouped = Dictionary(grouping: comments, by: \.filePath)
+        for path in grouped.keys.sorted() {
+            lines.append("")
+            lines.append(path)
+            let sorted = grouped[path]!.sorted { a, b in
+                if a.line != b.line { return a.line < b.line }
+                return (a.endLine ?? a.line) < (b.endLine ?? b.line)
+            }
+            for comment in sorted {
+                lines.append("  \(label(for: comment)): \(comment.text)")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    static func label(for comment: ReviewComment) -> String {
+        let location = comment.endLine.map { "L\(comment.line)-L\($0)" } ?? "L\(comment.line)"
+        if comment.isOrphaned {
+            return "\(location) (orphaned, was: \"\(comment.lineText)\")"
+        }
+        return "\(location) (\(comment.side.rawValue))"
+    }
+}
