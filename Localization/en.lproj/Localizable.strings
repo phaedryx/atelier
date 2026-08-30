@@ -193,7 +193,6 @@
 "Info panel" = "Info panel";
 "New Terminal" = "New Terminal";
 "New Browser" = "New Browser";
-"New Browser (starts dev server)" = "New Browser (starts dev server)";
 "Close tab" = "Close tab";
 "Address bar" = "Address bar";
 "Back to project" = "Back to project";
@@ -256,7 +255,7 @@
 "Custom" = "Custom";
 "From package.json" = "From package.json";
 "No dev command found. Add a dev script to package.json or set one below." = "No dev command found. Add a dev script to package.json or set one below.";
-"Press ⌘B to start the dev server and open a browser tab." = "Press ⌘B to start the dev server and open a browser tab.";
+"Open the command palette (⌘⇧P) and run New Browser to start the dev server." = "Open the command palette (⌘⇧P) and run New Browser to start the dev server.";
 
 /* Tab labels */
 "Info" = "Info";
@@ -405,3 +404,22 @@
 "Lets coding agents in this project see and message each other. Messages are delivered when the recipient checks its inbox. Takes effect the next time a Coding Agent starts. Only applies to Claude Code." = "Lets coding agents in this project see and message each other. Messages are delivered when the recipient checks its inbox. Takes effect the next time a Coding Agent starts. Only applies to Claude Code.";
 "Nudge idle agents" = "Nudge idle agents";
 "When a message arrives for an agent that has finished its turn, Atelier types a notice into its terminal. That is typed input: an agent running without permission prompts will act on it." = "When a message arrives for an agent that has finished its turn, Atelier types a notice into its terminal. That is typed input: an agent running without permission prompts will act on it.";
+
+/* Command Palette */
+"Tabs" = "Tabs";
+"External" = "External";
+"Application" = "Application";
+"Show Info" = "Show Info";
+"Show Coding Agent" = "Show Coding Agent";
+"Show Changes" = "Show Changes";
+"Show Environment" = "Show Environment";
+"New Editor" = "New Editor";
+"Close Tab" = "Close Tab";
+"Start/Rerun" = "Start/Rerun";
+"Open in External Browser" = "Open in External Browser";
+"Back to Project" = "Back to Project";
+"Archive Workstream" = "Archive Workstream";
+"Command Palette…" = "Command Palette…";
+"Command Palette" = "Command Palette";
+"Type a command…" = "Type a command…";
+"No matching commands" = "No matching commands";

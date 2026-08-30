@@ -19,6 +19,7 @@ extension Notification.Name {
     static let terminalTitleChanged = Notification.Name("atelier.terminalTitleChanged")
     static let toggleEditor = Notification.Name("atelier.toggleEditor")
     static let toggleChanges = Notification.Name("atelier.toggleChanges")
+    static let toggleEnvironment = Notification.Name("atelier.toggleEnvironment")
     static let saveEditor = Notification.Name("atelier.saveEditor")
     static let saveEditorAs = Notification.Name("atelier.saveEditorAs")
     static let toggleFileFinder = Notification.Name("atelier.toggleFileFinder")
@@ -36,6 +37,8 @@ enum RestorableWorkspaceTab: String, Codable {
             self = .agent
         case .changes:
             self = .changes
+        case .environment:
+            self = .environment
         case .info, .terminal, .browser, .editor:
             self = .info
         }
@@ -43,12 +46,14 @@ enum RestorableWorkspaceTab: String, Codable {
 
     func workspaceTab() -> WorkspaceTab {
         switch self {
-        case .info, .environment:
+        case .info:
             return .info
         case .agent:
             return .agent
         case .changes:
             return .changes
+        case .environment:
+            return .environment
         }
     }
 }
@@ -88,21 +93,24 @@ enum SetupStateStore {
 enum WorkspaceStateStore {
     private static let userDefaultsKey = "atelier.workspaceTabs"
 
-    static func load(for workstreamID: UUID) -> RestorableWorkspaceTab? {
+    /// Decoded per entry, not as one dictionary: a tag this build does not
+    /// recognise — written by a newer build, or by a tab kind since removed —
+    /// must drop that one workstream's saved tab, not everyone's.
+    private static func loadAll() -> [String: String] {
         guard let data = UserDefaults.standard.data(forKey: userDefaultsKey),
-              let saved = try? JSONDecoder().decode([String: RestorableWorkspaceTab].self, from: data)
-        else { return nil }
-        return saved[workstreamID.uuidString]
+              let saved = try? JSONDecoder().decode([String: String].self, from: data)
+        else { return [:] }
+        return saved
+    }
+
+    static func load(for workstreamID: UUID) -> RestorableWorkspaceTab? {
+        guard let raw = loadAll()[workstreamID.uuidString] else { return nil }
+        return RestorableWorkspaceTab(rawValue: raw)
     }
 
     static func save(_ tab: RestorableWorkspaceTab, for workstreamID: UUID) {
-        var saved: [String: RestorableWorkspaceTab] = [:]
-        if let data = UserDefaults.standard.data(forKey: userDefaultsKey),
-           let existing = try? JSONDecoder().decode([String: RestorableWorkspaceTab].self, from: data)
-        {
-            saved = existing
-        }
-        saved[workstreamID.uuidString] = tab
+        var saved = loadAll()
+        saved[workstreamID.uuidString] = tab.rawValue
         guard let data = try? JSONEncoder().encode(saved) else { return }
         UserDefaults.standard.set(data, forKey: userDefaultsKey)
     }
@@ -130,19 +138,44 @@ enum WorkspaceTab: Hashable {
     case info
     case agent
     case changes
+    case environment
     case terminal(UUID)
     case browser(UUID)
     case editor(UUID)
 
-    var isCloseable: Bool {
+    var isCloseable: Bool { kind.isCloseable }
+}
+
+extension WorkspaceTab {
+    var kind: WorkspaceTabKind {
         switch self {
-        case .info, .agent, .changes: return false
-        case .terminal, .browser, .editor: return true
+        case .info: return .info
+        case .agent: return .agent
+        case .changes: return .changes
+        case .environment: return .environment
+        case .terminal: return .terminal
+        case .browser: return .browser
+        case .editor: return .editor
+        }
+    }
+
+    /// Identifier used by the tab bar's drag-and-drop: instance UUID for
+    /// closeable tabs, the kind id for pinned ones.
+    var dragIdentifier: String {
+        switch self {
+        case let .terminal(id), let .browser(id), let .editor(id):
+            return id.uuidString
+        default:
+            return kind.id
         }
     }
 }
 
-/// Captured workspace tab state for a workstream, used to survive navigation.
+/// A workstream's workspace tab state as plain data.
+///
+/// Seeds a new `WorkspaceModel` and is the inverse of `WorkspaceModel.snapshot()`.
+/// It is no longer stored anywhere: the model itself survives navigation, so
+/// there is nothing to save and restore.
 struct WorkspaceTabSnapshot {
     var tabs: [WorkspaceTab]
     var terminalCount: Int
@@ -154,70 +187,14 @@ struct WorkspaceTabSnapshot {
     var editorFilePaths: [UUID: String]
     var runStarted: Bool
     var runStoppedManually: Bool
-
-    /// Returns a copy with dead terminal tabs removed.
-    /// Browser and editor tabs are kept regardless (they don't use terminal surfaces).
-    func reconciled(liveSurfaceIDs: Set<UUID>) -> WorkspaceTabSnapshot {
-        let filteredTabs = tabs.filter { tab in
-            if case let .terminal(id) = tab {
-                return liveSurfaceIDs.contains(id)
-            }
-            return true
-        }
-        let resolvedActiveTab = filteredTabs.contains(activeTab) ? activeTab : .agent
-        return WorkspaceTabSnapshot(
-            tabs: filteredTabs,
-            terminalCount: terminalCount,
-            browserCount: browserCount,
-            editorCount: editorCount,
-            activeTab: resolvedActiveTab,
-            browserTitles: browserTitles,
-            terminalTitles: terminalTitles,
-            editorFilePaths: editorFilePaths,
-            runStarted: runStarted,
-            runStoppedManually: runStoppedManually
-        )
-    }
 }
 
-/// Normalizes a restored snapshot without discarding tabs. The previous version
-/// filtered against an allowlist that omitted `.editor`, so every workstream
-/// switch silently closed open editor tabs — contradicting
-/// `reconciled(liveSurfaceIDs:)`, which keeps them on purpose. Info and Agent are
-/// guaranteed present, duplicates collapse, and the active tab is reset only when
-/// it is genuinely absent.
-private func sanitizedWorkspaceTabSnapshot(_ snapshot: WorkspaceTabSnapshot) -> WorkspaceTabSnapshot {
-    var cleaned = snapshot
-    // The permanent tabs always lead, in their canonical Cmd+1/Cmd+2 order;
-    // every other tab keeps the order the snapshot captured. Restoring them by
-    // prepending only the missing one would seat Agent ahead of Info.
-    var tabs: [WorkspaceTab] = [.info, .agent]
-    for tab in snapshot.tabs where !tabs.contains(tab) {
-        tabs.append(tab)
-    }
-    cleaned.tabs = tabs
-    // Migrate older snapshots that predate the fixed Changes tab: insert it
-    // immediately after Agent (or at a sensible fixed index if Agent is
-    // absent). Idempotent — never inserts when .changes is already present.
-    if !cleaned.tabs.contains(.changes) {
-        let insertIndex = cleaned.tabs.firstIndex(of: .agent).map { $0 + 1 }
-            ?? min(2, cleaned.tabs.count)
-        cleaned.tabs.insert(.changes, at: insertIndex)
-    }
-    if !cleaned.tabs.contains(cleaned.activeTab) {
-        cleaned.activeTab = .info
-    }
-    return cleaned
-}
-
-func startupWorkspaceTabState(snapshot: WorkspaceTabSnapshot?, savedTab: RestorableWorkspaceTab?) -> WorkspaceTabSnapshot {
-    if let snapshot {
-        return sanitizedWorkspaceTabSnapshot(snapshot)
-    }
-
-    let tabs: [WorkspaceTab] = [.info, .agent, .changes]
-    return WorkspaceTabSnapshot(
-        tabs: tabs,
+/// The state a workstream's model starts life with. Tab lists are never
+/// persisted across launches, so a fresh workstream always opens with the four
+/// fixed tabs; only the last-active tab *kind* is restored.
+func startupWorkspaceTabState(savedTab: RestorableWorkspaceTab?) -> WorkspaceTabSnapshot {
+    WorkspaceTabSnapshot(
+        tabs: [.info, .agent, .changes, .environment],
         terminalCount: 0,
         browserCount: 0,
         editorCount: 0,
@@ -228,13 +205,6 @@ func startupWorkspaceTabState(snapshot: WorkspaceTabSnapshot?, savedTab: Restora
         runStarted: false,
         runStoppedManually: false
     )
-}
-
-/// Whether selecting a workstream from the sidebar should auto-focus the Coding Agent.
-/// Returns true only when there is no tab state to restore — new workstreams open on
-/// the Coding Agent, previously-visited ones restore their last-active tab.
-func shouldAutoFocusAgent(snapshot: WorkspaceTabSnapshot?, savedTab: RestorableWorkspaceTab?) -> Bool {
-    snapshot == nil && savedTab == nil
 }
 
 func workspaceEnvironmentVariables(
@@ -304,6 +274,12 @@ struct TerminalContainerView: View {
 
     @EnvironmentObject var surfaceCache: TerminalSurfaceCache
     @EnvironmentObject var appEnv: AppEnvironment
+    /// Per-workstream tab state. Resolved by `ContentView` from the surface
+    /// cache and passed in, because `surfaceCache` is an `@EnvironmentObject`
+    /// and so is not available here in `init`. It must stay a stored
+    /// `@ObservedObject`: a computed property re-resolving it on each access
+    /// would never subscribe, and the view would silently render stale tabs.
+    @ObservedObject var model: WorkspaceModel
     @AppStorage("atelier.defaultBrowser") private var defaultBrowser: String = ""
     @AppStorage("atelier.tmuxMode") private var tmuxMode: Bool = false
     @AppStorage("atelier.autoRenameBranch") private var autoRenameBranch: Bool = false
@@ -312,18 +288,7 @@ struct TerminalContainerView: View {
     @AppStorage("atelier.quickActionDebug") private var quickActionDebug: Bool = false
     @AppStorage("atelier.editorTabActive") private var editorTabActive: Bool = false
     @AppStorage("atelier.editorFileDirty") private var editorFileDirty: Bool = false
-    @State private var activeTab: WorkspaceTab = .info
-    @State private var tabs: [WorkspaceTab] = [.info, .agent]
-    @State private var terminalCount = 0
-    @State private var browserCount = 0
-    @State private var editorCount = 0
     @State private var scriptConfig: ScriptConfig = .empty
-    @State private var browserTitles: [UUID: String] = [:]
-    @State private var terminalTitles: [UUID: String] = [:]
-    @State private var editorFilePaths: [UUID: String] = [:]
-    @State private var editorDirtyState: [UUID: Bool] = [:]
-    @State private var editorBridge: MonacoEditorBridge?
-    @State private var diffBridge: MonacoDiffBridge?
     @State private var fileTree: [FileNode] = []
     @State private var gitFileStatuses = GitFileStatusProvider()
     @State private var directoryWatcher: DirectoryWatcher?
@@ -334,13 +299,10 @@ struct TerminalContainerView: View {
     @State private var draggedCustomTab: WorkspaceTab?
     @StateObject private var portDetector: PortDetector
     @State private var browserStartPending = false
-    @State private var runStoppedManually = false
-    @State private var runStarted = false
     @State private var runGeneration = 0
     @State private var runCommandString: String?
     @State private var devCommandOverride: String?
     @State private var resolvedDevCommand: DevCommand?
-    @State private var workspaceStarted = false
     @State private var defaultBranch = "main"
     @State private var setupGateState: SetupGateState = .notNeeded
     @State private var scriptsApproved = false
@@ -354,7 +316,7 @@ struct TerminalContainerView: View {
         bypassPermissions: Bool,
         isActive: Bool,
         scriptConfig: ScriptConfig = .empty,
-        initialTabState: WorkspaceTabSnapshot = startupWorkspaceTabState(snapshot: nil, savedTab: nil)
+        model: WorkspaceModel
     ) {
         self.workstreamID = workstreamID
         self.workingDirectory = workingDirectory
@@ -364,17 +326,8 @@ struct TerminalContainerView: View {
         self.workstreamLabel = workstreamLabel ?? workstreamName
         self.bypassPermissions = bypassPermissions
         self.isActive = isActive
-        _activeTab = State(initialValue: initialTabState.activeTab)
-        _tabs = State(initialValue: initialTabState.tabs)
-        _terminalCount = State(initialValue: initialTabState.terminalCount)
-        _browserCount = State(initialValue: initialTabState.browserCount)
+        self.model = model
         _scriptConfig = State(initialValue: scriptConfig)
-        _editorCount = State(initialValue: initialTabState.editorCount)
-        _browserTitles = State(initialValue: initialTabState.browserTitles)
-        _terminalTitles = State(initialValue: initialTabState.terminalTitles)
-        _editorFilePaths = State(initialValue: initialTabState.editorFilePaths)
-        _runStoppedManually = State(initialValue: initialTabState.runStoppedManually)
-        _runStarted = State(initialValue: initialTabState.runStarted)
         _portDetector = StateObject(wrappedValue: PortDetector(workstreamID: workstreamID))
 
         let savedOverride = DevCommandResolver.savedOverride(for: workstreamID)
@@ -399,19 +352,9 @@ struct TerminalContainerView: View {
         surfaceCache.quickActionRunner(for: workstreamID)
     }
 
-    private var isEditorTabActive: Bool {
-        if case .editor = activeTab { return true }
-        return false
-    }
-
-    private var isActiveEditorDirty: Bool {
-        if case let .editor(id) = activeTab { return editorDirtyState[id] == true }
-        return false
-    }
-
     /// Surface IDs that should be rendering for the active tab.
     private var visibleSurfaceIDs: Set<UUID>? {
-        switch activeTab {
+        switch model.activeTab {
         case .agent:
             if setupGateState == .awaitingApproval {
                 return []
@@ -421,7 +364,7 @@ struct TerminalContainerView: View {
             }
             return [claudeID]
         case let .terminal(id): return [id]
-        case .info, .changes, .browser, .editor: return []
+        case .info, .changes, .environment, .browser, .editor: return []
         }
     }
 
@@ -444,7 +387,7 @@ struct TerminalContainerView: View {
     private var portSubtitle: String {
         let label = appEnv.taskDescription(for: workingDirectory) ?? projectName
         if let port = portDetector.selectedPort {
-            return "\(label) · localhost:\(port) · \u{2318}B for browser"
+            return "\(label) · localhost:\(port) · New Browser via \u{2318}\u{21E7}P"
         }
         return label
     }
@@ -595,16 +538,16 @@ struct TerminalContainerView: View {
     }
 
     private var fixedTabs: [WorkspaceTab] {
-        tabs.filter { !$0.isCloseable }
+        model.tabs.filter { !$0.isCloseable }
     }
 
     private var closeableTabs: [WorkspaceTab] {
-        tabs.filter(\.isCloseable)
+        model.tabs.filter(\.isCloseable)
     }
 
     private var tabBar: some View {
         HStack(spacing: 0) {
-            // Fixed tabs (Info, Agent)
+            // Fixed tabs (Info, Agent, Changes, Environment)
             ForEach(fixedTabs, id: \.self) { tab in
                 tabButton(for: tab)
             }
@@ -613,7 +556,7 @@ struct TerminalContainerView: View {
             if !closeableTabs.isEmpty {
                 ScrollableTabStrip(
                     tabs: closeableTabs,
-                    activeTab: activeTab,
+                    activeTab: model.activeTab,
                     tabButton: { tab in tabButton(for: tab) }
                 )
                 .layoutPriority(-1)
@@ -623,9 +566,9 @@ struct TerminalContainerView: View {
 
             // Quick actions to add tabs
             HStack(spacing: 2) {
-                TabBarActionButton(icon: "terminal", shortcut: "\u{2318}T", tooltip: "New Terminal (\u{2318}T)", action: addTerminal)
-                TabBarActionButton(icon: "globe", shortcut: "\u{2318}B", tooltip: "New Browser (\u{2318}B)", action: addBrowser)
-                TabBarActionButton(icon: "doc.text", shortcut: "\u{2318}O", tooltip: "New Editor (\u{2318}O)", action: openEditor)
+                TabBarActionButton(icon: "terminal", tooltip: "New Terminal", action: addTerminal)
+                TabBarActionButton(icon: "globe", tooltip: "New Browser", action: addBrowser)
+                TabBarActionButton(icon: "doc.text", tooltip: "New Editor", action: openEditor)
             }
             .fixedSize()
 
@@ -655,11 +598,6 @@ struct TerminalContainerView: View {
         .background(.bar)
     }
 
-    private func isEditorDirty(_ tab: WorkspaceTab) -> Bool {
-        if case let .editor(id) = tab { return editorDirtyState[id] == true }
-        return false
-    }
-
     @ViewBuilder
     private func tabButton(for tab: WorkspaceTab) -> some View {
         let shortcut = tabShortcut(tab) ?? closeableTabShortcut(tab)
@@ -668,9 +606,9 @@ struct TerminalContainerView: View {
             label: tabLabel(tab),
             icon: tabIcon(tab),
             shortcut: shortcut,
-            isActive: activeTab == tab,
-            isDirty: isEditorDirty(tab),
-            onSelect: { activeTab = tab },
+            isActive: model.activeTab == tab,
+            isDirty: model.isEditorDirty(tab),
+            onSelect: { model.activeTab = tab },
             onClose: tab.isCloseable ? { closeTab(tab) } : nil
         )
 
@@ -678,7 +616,7 @@ struct TerminalContainerView: View {
             button
                 .onDrag {
                     draggedCustomTab = tab
-                    return NSItemProvider(object: NSString(string: tabDragIdentifier(tab)))
+                    return NSItemProvider(object: NSString(string: tab.dragIdentifier))
                 }
                 .onDrop(of: [.text], delegate: WorkspaceTabDropDelegate {
                     moveCustomTab(to: tab)
@@ -690,7 +628,7 @@ struct TerminalContainerView: View {
 
     @ViewBuilder
     private var tabContent: some View {
-        switch activeTab {
+        switch model.activeTab {
         case .info:
             WorkstreamInfoView(
                 workstreamID: workstreamID,
@@ -699,23 +637,10 @@ struct TerminalContainerView: View {
                 projectName: projectName,
                 projectDirectory: projectDirectory,
                 scriptConfig: scriptConfig,
-                useTmux: useTmux,
-                environmentVars: runEnvironmentVars,
-                runCommand: runCommandString,
-                runCommandIsGated: runCommandIsGated,
-                devCommand: resolvedDevCommand,
-                devCommandOverride: $devCommandOverride,
-                runStoppedManually: $runStoppedManually,
-                runStarted: $runStarted,
-                scriptsApproved: $scriptsApproved,
-                runGeneration: $runGeneration,
-                sessionMode: sessionMode,
-                onStart: doStartRun,
-                onStop: stopRun,
-                onRestart: restartRun
+                scriptsApproved: $scriptsApproved
             )
         case .changes:
-            if let bridge = diffBridge {
+            if let bridge = model.diffBridge {
                 ChangesView(
                     workingDirectory: workingDirectory,
                     projectDirectory: projectDirectory,
@@ -724,6 +649,29 @@ struct TerminalContainerView: View {
             } else {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        case .environment:
+            if sessionMode == .waitingForTools {
+                terminalLoadingView(message: "Checking terminal tools...")
+            } else {
+                EnvironmentTabView(
+                    workstreamID: workstreamID,
+                    workingDirectory: workingDirectory,
+                    projectDirectory: projectDirectory,
+                    scriptConfig: scriptConfig,
+                    useTmux: useTmux,
+                    environmentVars: runEnvironmentVars,
+                    runCommand: runCommandString,
+                    runCommandIsGated: runCommandIsGated,
+                    devCommand: resolvedDevCommand,
+                    devCommandOverride: $devCommandOverride,
+                    runStarted: $model.runStarted,
+                    scriptsApproved: $scriptsApproved,
+                    runGeneration: $runGeneration,
+                    onStart: doStartRun,
+                    onStop: stopRun,
+                    onRestart: restartRun
+                )
             }
         case .agent:
             if setupGateState == .awaitingApproval {
@@ -770,25 +718,24 @@ struct TerminalContainerView: View {
             BrowserView(defaultURL: browserDefaultURL, isWaitingForServer: isWaitingForServer, tabID: id, webView: surfaceCache.webView(for: id))
                 .id(id)
         case let .editor(id):
-            if let bridge = editorBridge {
+            if let bridge = model.editorBridge {
                 EditorView(
                     workingDirectory: workingDirectory,
                     fileTree: fileTree,
                     gitStatus: gitFileStatuses,
-                    initialFilePath: editorFilePaths[id],
+                    initialFilePath: model.editorFilePaths[id],
                     bridge: bridge,
                     modelId: id.uuidString,
                     isDirtyState: Binding(
-                        get: { editorDirtyState[id] ?? false },
-                        set: { editorDirtyState[id] = $0 }
+                        get: { model.editorDirtyState[id] ?? false },
+                        set: { model.editorDirtyState[id] = $0 }
                     ),
                     onFileChanged: { path in
                         if let path {
-                            editorFilePaths[id] = path
+                            model.editorFilePaths[id] = path
                         } else {
-                            editorFilePaths.removeValue(forKey: id)
+                            model.editorFilePaths.removeValue(forKey: id)
                         }
-                        saveTabSnapshot()
                     },
                     onExpandFolder: { path in
                         expandFileTreeFolder(path)
@@ -813,25 +760,30 @@ struct TerminalContainerView: View {
             .onChange(of: appEnv.isDetecting) {
                 rebuildClaudeCommand()
                 if isActive { preloadSurfaces() }
+                // Tmux mode isn't resolvable until detection finishes; restore
+                // the run session then, not just on the Environment tab's own
+                // appearance, so a live session is picked up even if that tab
+                // is never opened.
+                restoreRunState()
             }
             .onReceive(NotificationCenter.default.publisher(for: .toggleInfo)) { _ in
                 guard isActive else { return }
-                activeTab = .info
+                model.activeTab = .info
             }
             .onReceive(NotificationCenter.default.publisher(for: .focusAgent)) { _ in
                 guard isActive else { return }
-                activeTab = .agent
+                model.activeTab = .agent
             }
             .onReceive(NotificationCenter.default.publisher(for: .rerunScript)) { _ in
                 guard isActive else { return }
                 guard resolvedRunCommand != nil else { return }
                 guard !runCommandIsGated || scriptsApproved else { return }
-                if runStarted {
+                if model.runStarted {
                     restartRun()
                 } else {
                     startRunIfNeeded()
                 }
-                activeTab = .info
+                model.activeTab = .environment
             }
             .onReceive(NotificationCenter.default.publisher(for: .toggleTerminal)) { _ in
                 guard isActive else { return }
@@ -847,7 +799,7 @@ struct TerminalContainerView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .toggleFileFinder)) { _ in
                 guard isActive else { return }
-                if case .editor = activeTab {
+                if case .editor = model.activeTab {
                     fileFinderRequest += 1
                 }
             }
@@ -855,9 +807,13 @@ struct TerminalContainerView: View {
                 guard isActive else { return }
                 addChanges()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .toggleEnvironment)) { _ in
+                guard isActive else { return }
+                model.activeTab = .environment
+            }
             .onReceive(NotificationCenter.default.publisher(for: .closeTerminal)) { _ in
                 guard isActive else { return }
-                if activeTab.isCloseable { closeTab(activeTab) }
+                if model.activeTab.isCloseable { closeTab(model.activeTab) }
             }
     }
 
@@ -879,29 +835,48 @@ struct TerminalContainerView: View {
             }
         }
         .onAppear {
-            if isActive {
-                editorTabActive = isEditorTabActive
-                editorFileDirty = isActiveEditorDirty
+            // Safety net for terminal tabs whose surface disappeared without
+            // `TerminalSurfaceCache.removeTerminalTab(surfaceID:)` seeing it —
+            // that prune handles the ordinary shell exit, on screen or off.
+            model.reconcile(liveSurfaceIDs: surfaceCache.liveSurfaceIDs())
+            // New workstreams open on the Coding Agent; previously-visited ones
+            // keep whatever tab they were left on. First mount is the only place
+            // that can be asked without ambiguity — the model's mere existence
+            // cannot answer it, since `ContentView`'s body creates the model
+            // while deciding what to render. Runs after `reconcile` so this is
+            // the last word on the selection.
+            if !model.hasBeenPresented {
+                model.hasBeenPresented = true
+                if WorkspaceStateStore.load(for: workstreamID) == nil {
+                    model.activeTab = .agent
+                }
             }
-            if tabs.contains(where: { if case .editor = $0 { return true } else { return false } }) {
+            if isActive {
+                editorTabActive = model.isEditorTabActive
+                editorFileDirty = model.isActiveEditorDirty
+            }
+            if model.hasEditorTabs {
                 startFileTreeWatcherIfNeeded()
             }
+            restoreRunState()
         }
         .onDisappear {
             if isActive {
                 editorTabActive = false
                 editorFileDirty = false
             }
-            guard workspaceStarted else { return }
-            surfaceCache.saveTabSnapshot(for: workstreamID, snapshot: currentTabSnapshot())
         }
-        .onChange(of: activeTab) {
+        .onChange(of: model.activeTab) {
             guard isActive else { return }
-            editorTabActive = isEditorTabActive
-            editorFileDirty = isActiveEditorDirty
+            editorTabActive = model.isEditorTabActive
+            editorFileDirty = model.isActiveEditorDirty
             surfaceCache.updateOcclusion(visibleSurfaceIDs: visibleSurfaceIDs)
-            WorkspaceStateStore.save(RestorableWorkspaceTab(activeTab: activeTab), for: workstreamID)
+            WorkspaceStateStore.save(RestorableWorkspaceTab(activeTab: model.activeTab), for: workstreamID)
             appEnv.refreshWorktreeState(for: workingDirectory, projectDirectory: projectDirectory)
+        }
+        .onChange(of: model.isActiveEditorDirty) {
+            guard isActive else { return }
+            editorFileDirty = model.isActiveEditorDirty
         }
         .onReceive(NotificationCenter.default.publisher(for: .terminalActivity)) { notification in
             guard isActive else { return }
@@ -914,7 +889,13 @@ struct TerminalContainerView: View {
         mainContent
             .onChange(of: scriptsApproved) { _, approved in
                 // Approving from the Info tab releases a waiting setup script.
-                if approved { startApprovedSetup() }
+                if approved {
+                    startApprovedSetup()
+                } else if model.runStarted {
+                    // Withdrawing approval stops what the repository is
+                    // already running — the entry gate alone is not enough.
+                    stopRun()
+                }
             }
             .onChange(of: devCommandOverride) { _, newValue in
                 DevCommandResolver.saveOverride(newValue, for: workstreamID)
@@ -925,7 +906,7 @@ struct TerminalContainerView: View {
                     override: newValue
                 )
             }
-            .onChange(of: runStarted) { _, started in
+            .onChange(of: model.runStarted) { _, started in
                 // A session restored from tmux (or started before TerminalApp
                 // was ready) needs its command assembled on the container side
                 // so the restored surface reattaches to the existing session.
@@ -943,18 +924,18 @@ struct TerminalContainerView: View {
                 guard isActive else { return }
                 guard let n = notification.object as? Int, n >= 1 else { return }
                 // Cmd+1-9 maps to all tabs in display order
-                guard n <= tabs.count else { return }
-                activeTab = tabs[n - 1]
+                guard n <= model.tabs.count else { return }
+                model.activeTab = model.tabs[n - 1]
             }
             .onReceive(NotificationCenter.default.publisher(for: .nextTab)) { _ in
                 guard isActive else { return }
-                guard let currentIndex = tabs.firstIndex(of: activeTab) else { return }
-                activeTab = tabs[(currentIndex + 1) % tabs.count]
+                guard let currentIndex = model.tabs.firstIndex(of: model.activeTab) else { return }
+                model.activeTab = model.tabs[(currentIndex + 1) % model.tabs.count]
             }
             .onReceive(NotificationCenter.default.publisher(for: .prevTab)) { _ in
                 guard isActive else { return }
-                guard let currentIndex = tabs.firstIndex(of: activeTab) else { return }
-                activeTab = tabs[(currentIndex - 1 + tabs.count) % tabs.count]
+                guard let currentIndex = model.tabs.firstIndex(of: model.activeTab) else { return }
+                model.activeTab = model.tabs[(currentIndex - 1 + model.tabs.count) % model.tabs.count]
             }
             .onReceive(NotificationCenter.default.publisher(for: .terminalChildExited)) { notification in
                 guard let surfaceID = notification.object as? UUID, surfaceID == setupGateID,
@@ -972,20 +953,17 @@ struct TerminalContainerView: View {
                     // The dev-server session died; no port is coming.
                     browserStartPending = false
                 }
-                if let tab = tabs.first(where: {
-                    if case let .terminal(id) = $0 { return id == surfaceID }
-                    return false
-                }) {
-                    closeTab(tab)
-                }
+                // Tab removal for exited terminals happens at exit time, in
+                // handleSurfaceClosed via removeTerminalTab(surfaceID:) — by
+                // the time this notification arrives the tab is already gone.
             }
             .onReceive(NotificationCenter.default.publisher(for: .browserTitleChanged)) { notification in
                 guard let tabID = notification.object as? UUID else { return }
-                browserTitles[tabID] = notification.userInfo?["title"] as? String
+                model.browserTitles[tabID] = notification.userInfo?["title"] as? String
             }
             .onReceive(NotificationCenter.default.publisher(for: .terminalTitleChanged)) { notification in
                 guard let surfaceID = notification.object as? UUID else { return }
-                terminalTitles[surfaceID] = notification.userInfo?["title"] as? String
+                model.terminalTitles[surfaceID] = notification.userInfo?["title"] as? String
             }
             .onReceive(NotificationCenter.default.publisher(for: .openExternalBrowser)) { _ in
                 guard isActive else { return }
@@ -1026,12 +1004,10 @@ struct TerminalContainerView: View {
                 }
             }
             .onChange(of: isActive) { _, active in
-                editorTabActive = active && isEditorTabActive
-                editorFileDirty = active && isActiveEditorDirty
+                editorTabActive = active && model.isEditorTabActive
+                editorFileDirty = active && model.isActiveEditorDirty
                 if active {
                     surfaceCache.updateOcclusion(visibleSurfaceIDs: visibleSurfaceIDs)
-                } else {
-                    surfaceCache.saveTabSnapshot(for: workstreamID, snapshot: currentTabSnapshot())
                 }
             }
     }
@@ -1042,85 +1018,48 @@ struct TerminalContainerView: View {
     private static let compactTabThreshold = 3
 
     private var useCompactTabs: Bool {
-        tabs.filter(\.isCloseable).count > Self.compactTabThreshold
+        model.tabs.filter(\.isCloseable).count > Self.compactTabThreshold
     }
 
     private func tabLabel(_ tab: WorkspaceTab) -> String? {
+        if let fixed = tab.kind.staticLabel { return fixed }
         switch tab {
-        case .info: return NSLocalizedString("Info", comment: "")
-        case .agent: return NSLocalizedString("Agent", comment: "")
-        case .changes: return NSLocalizedString("Changes", comment: "")
-        case .terminal:
-            return nil
         case let .browser(id):
             guard !useCompactTabs else { return nil }
-            guard let title = browserTitles[id], !title.isEmpty else { return nil }
+            guard let title = model.browserTitles[id], !title.isEmpty else { return nil }
             return title.count > 20 ? String(title.prefix(20)) + "..." : title
         case let .editor(id):
-            guard let path = editorFilePaths[id] else { return nil }
+            guard let path = model.editorFilePaths[id] else { return nil }
             let name = (path as NSString).lastPathComponent
             return name.count > 20 ? String(name.prefix(20)) + "..." : name
+        default:
+            return nil
         }
     }
 
     private func tabIcon(_ tab: WorkspaceTab) -> String {
-        switch tab {
-        case .info: return "info.circle"
-        case .agent: return "sparkle"
-        case .changes: return "arrow.triangle.branch"
-        case .terminal: return "terminal"
-        case .browser: return "globe"
-        case .editor: return "doc.text"
-        }
+        tab.kind.icon
     }
 
     private func closeableTabShortcut(_ tab: WorkspaceTab) -> String? {
         guard tab.isCloseable,
-              let idx = tabs.firstIndex(of: tab),
+              let idx = model.tabs.firstIndex(of: tab),
               idx < 9 else { return nil }
         return "\(idx + 1)"
     }
 
     private func tabShortcut(_ tab: WorkspaceTab) -> String? {
-        switch tab {
-        case .info: return "1"
-        case .agent: return "\u{21A9}"
-        case .changes: return "D"
-        default: return nil
-        }
-    }
-
-    private func tabDragIdentifier(_ tab: WorkspaceTab) -> String {
-        switch tab {
-        case let .terminal(id), let .browser(id), let .editor(id):
-            return id.uuidString
-        case .info:
-            return "info"
-        case .agent:
-            return "agent"
-        case .changes:
-            return "changes"
-        }
+        tab.kind.shortcutBadge
     }
 
     private func addTerminal() {
-        terminalCount += 1
-        let id = derivedUUID(from: workstreamID, salt: "terminal-\(terminalCount)")
-        let tab = WorkspaceTab.terminal(id)
-        tabs.append(tab)
-        activeTab = tab
-        saveTabSnapshot()
+        _ = model.addTerminal()
         Telemetry.shared.track("tab_opened", url: "/tab/terminal", title: "Terminal Tab", data: ["kind": "terminal"])
     }
 
     private func addBrowser() {
         startRunIfNeeded()
-        browserCount += 1
-        let id = derivedUUID(from: workstreamID, salt: "browser-\(browserCount)")
-        let tab = WorkspaceTab.browser(id)
-        tabs.append(tab)
-        activeTab = tab
-        saveTabSnapshot()
+        _ = model.addBrowser()
         Telemetry.shared.track("tab_opened", url: "/tab/browser", title: "Browser Tab", data: ["kind": "browser"])
     }
 
@@ -1133,7 +1072,7 @@ struct TerminalContainerView: View {
         guard setupGateState != .awaitingApproval else { return }
         guard portDetector.status == .none else { return }
         if runCommandIsGated, !scriptsApproved { return }
-        if runStarted { stopRun() }
+        if model.runStarted { stopRun() }
         doStartRun()
     }
 
@@ -1144,13 +1083,12 @@ struct TerminalContainerView: View {
         guard let command = resolvedRunCommand else { return }
         killRunTmuxSession()
         surfaceCache.removeSurface(for: runID)
-        runStoppedManually = false
+        model.runStoppedManually = false
         runGeneration += 1
         runCommandString = buildRunCommand(script: command)
-        runStarted = true
+        model.runStarted = true
         markBrowserStartPending()
         preloadRunSurface()
-        saveTabSnapshot()
         Telemetry.shared.track(
             "dev_server_start",
             url: "/tab/browser",
@@ -1162,27 +1100,25 @@ struct TerminalContainerView: View {
     private func stopRun() {
         killRunTmuxSession()
         surfaceCache.removeSurface(for: runID)
-        runStoppedManually = true
-        runStarted = false
+        model.runStoppedManually = true
+        model.runStarted = false
         browserStartPending = false
         runCommandString = nil
         runGeneration += 1
-        saveTabSnapshot()
     }
 
     private func restartRun() {
         guard resolvedRunCommand != nil else { return }
         killRunTmuxSession()
         surfaceCache.removeSurface(for: runID)
-        runStoppedManually = false
+        model.runStoppedManually = false
         markBrowserStartPending()
         runGeneration += 1
         if let command = resolvedRunCommand {
             runCommandString = buildRunCommand(script: command)
         }
-        runStarted = true
+        model.runStarted = true
         preloadRunSurface()
-        saveTabSnapshot()
     }
 
     /// Marks the start so browser tabs hold the waiting overlay until a port
@@ -1263,28 +1199,46 @@ struct TerminalContainerView: View {
         TmuxSession.killSession(tmuxPath: tmuxPath, sessionName: session)
     }
 
+    /// Restores `runStarted` from a run session already alive in tmux —
+    /// survives relaunch, or a session started before this container existed.
+    /// Lives here rather than on the Environment tab because it must run
+    /// before the user ever opens that tab: on launch (once tool detection
+    /// has resolved whether tmux is usable) and whenever detection state
+    /// changes. The guards make re-invocation harmless.
+    private func restoreRunState() {
+        guard !model.runStarted,
+              useTmux,
+              resolvedRunCommand != nil,
+              let tmuxPath = appEnv.toolStatus.tmux.path else { return }
+        let session = TmuxSession.sessionName(project: projectName, workstream: workstreamName, role: "run")
+        let hasExistingRunSession = TmuxSession.sessionExists(tmuxPath: tmuxPath, sessionName: session)
+        // Dev commands (package.json / override) are never gated.
+        let approved = runCommandIsGated ? scriptsApproved : true
+        if shouldRestoreRunSession(
+            useTmux: useTmux,
+            hasRunScript: resolvedRunCommand != nil,
+            hasExistingRunSession: hasExistingRunSession,
+            wasStoppedManually: model.runStoppedManually,
+            isApproved: approved
+        ) {
+            model.runStarted = true
+        }
+    }
+
     private func openEditor() {
         addEditor()
     }
 
     /// Activate the always-present Changes tab.
     private func addChanges() {
-        activeTab = .changes
+        model.activateChanges()
     }
 
     private func addEditor(filePath: String? = nil) {
         // Create bridge before adding the tab — never during body evaluation
         createEditorBridgeIfNeeded()
-        editorCount += 1
-        let id = derivedUUID(from: workstreamID, salt: "editor-\(editorCount)")
-        if let filePath {
-            editorFilePaths[id] = filePath
-        }
-        let tab = WorkspaceTab.editor(id)
-        tabs.append(tab)
-        activeTab = tab
+        _ = model.addEditor(filePath: filePath)
         startFileTreeWatcherIfNeeded()
-        saveTabSnapshot()
         Telemetry.shared.track("tab_opened", url: "/tab/editor", title: "Editor Tab", data: ["kind": "editor"])
     }
 
@@ -1339,38 +1293,36 @@ struct TerminalContainerView: View {
     }
 
     private func stopFileTreeWatcherIfUnneeded() {
-        let hasEditorTabs = tabs.contains { if case .editor = $0 { return true } else { return false } }
-        if !hasEditorTabs {
+        if !model.hasEditorTabs {
             refreshGeneration += 1
             directoryWatcher?.stop()
             directoryWatcher = nil
             fileTree = []
             gitFileStatuses = GitFileStatusProvider()
-            // Keep editorBridge alive — the WebView is expensive to recreate (~17 MB JS)
+            // The Monaco bridge is deliberately untouched here: it lives on
+            // WorkspaceModel (model.editorBridge) precisely so closing the
+            // last editor tab never tears down the ~17 MB WebView.
         }
     }
 
     private func createEditorBridgeIfNeeded() {
-        guard editorBridge == nil else { return }
-        let bridge = MonacoEditorBridge()
-        bridge.onContentChanged = { [self] modelId, dirty in
-            if let uuid = UUID(uuidString: modelId) {
-                editorDirtyState[uuid] = dirty
-                if case .editor(uuid) = activeTab {
-                    editorFileDirty = dirty
-                }
-            }
+        guard model.editorBridge == nil else { return }
+        let bridge = model.ensureEditorBridge()
+        // `weak`, not a strong capture: the model owns the bridge, the bridge owns
+        // this closure, so a strong `model` here would retain a whole Monaco
+        // WebView per workstream forever.
+        bridge.onContentChanged = { [weak model] modelId, dirty in
+            guard let model, let uuid = UUID(uuidString: modelId) else { return }
+            model.editorDirtyState[uuid] = dirty
         }
-        editorBridge = bridge
     }
 
     private func createDiffBridgeIfNeeded() {
-        guard diffBridge == nil else { return }
-        diffBridge = MonacoDiffBridge()
+        model.ensureDiffBridge()
     }
 
     private func closeTab(_ tab: WorkspaceTab) {
-        if case let .editor(id) = tab, editorDirtyState[id] == true {
+        if case let .editor(id) = tab, model.editorDirtyState[id] == true {
             confirmCloseEditor(tab: tab, id: id)
             return
         }
@@ -1378,7 +1330,7 @@ struct TerminalContainerView: View {
     }
 
     private func confirmCloseEditor(tab: WorkspaceTab, id: UUID) {
-        let fileName = (editorFilePaths[id] as? NSString)?.lastPathComponent ?? "file"
+        let fileName = (model.editorFilePaths[id] as? NSString)?.lastPathComponent ?? "file"
         let alert = NSAlert()
         alert.messageText = String(
             format: NSLocalizedString("Do you want to save changes to \"%@\"?", comment: ""),
@@ -1395,18 +1347,23 @@ struct TerminalContainerView: View {
         case .alertFirstButtonReturn:
             // Save then close — async to wait for bridge.getContent()
             Task {
-                if let bridge = editorBridge,
-                   let relativePath = editorFilePaths[id]
+                if let bridge = model.editorBridge,
+                   let relativePath = model.editorFilePaths[id]
                 {
                     let fullPath = (workingDirectory as NSString)
                         .appendingPathComponent(relativePath)
-                    guard let content = await bridge.getContent(modelId: id.uuidString) else { return }
-                    do {
-                        try content.write(toFile: fullPath, atomically: true, encoding: .utf8)
-                    } catch {
-                        let errorAlert = NSAlert(error: error)
-                        errorAlert.runModal()
-                        return
+                    // A nil result means this bridge never opened the model.
+                    // There is nothing to write, but the close must still
+                    // happen — a Save the user asked for can never silently
+                    // do nothing.
+                    if let content = await bridge.getContent(modelId: id.uuidString) {
+                        do {
+                            try content.write(toFile: fullPath, atomically: true, encoding: .utf8)
+                        } catch {
+                            let errorAlert = NSAlert(error: error)
+                            errorAlert.runModal()
+                            return
+                        }
                     }
                 }
                 forceCloseTab(tab)
@@ -1421,64 +1378,33 @@ struct TerminalContainerView: View {
     }
 
     private func forceCloseTab(_ tab: WorkspaceTab) {
-        guard let index = tabs.firstIndex(of: tab) else { return }
-        tabs.remove(at: index)
-        // Clean up cached views
+        // The model drops the tab and moves the selection to a neighbour; the
+        // view is left to tear down the resources the tab was holding.
+        guard model.removeTab(tab) else { return }
+
         switch tab {
         case let .terminal(id):
             surfaceCache.removeSurface(for: id)
         case let .browser(id):
             surfaceCache.removeWebView(for: id)
             // The browser tab owns the dev server: closing the last one stops it.
-            let hasBrowserTabs = tabs.contains { tab in
-                if case .browser = tab { return true }
-                return false
-            }
-            if !hasBrowserTabs { stopRun() }
+            if !model.hasBrowserTabs { stopRun() }
         case let .editor(id):
-            editorFilePaths.removeValue(forKey: id)
-            editorDirtyState.removeValue(forKey: id)
-            editorBridge?.closeModel(modelId: id.uuidString)
+            model.editorBridge?.closeModel(modelId: id.uuidString)
         default:
             break
         }
         stopFileTreeWatcherIfUnneeded()
-        // Switch to previous tab or agent
-        if activeTab == tab {
-            let newIndex = min(index, tabs.count - 1)
-            activeTab = tabs[newIndex]
-        }
-        saveTabSnapshot()
-    }
-
-    private func currentTabSnapshot() -> WorkspaceTabSnapshot {
-        WorkspaceTabSnapshot(
-            tabs: tabs,
-            terminalCount: terminalCount,
-            browserCount: browserCount,
-            editorCount: editorCount,
-            activeTab: activeTab,
-            browserTitles: browserTitles,
-            terminalTitles: terminalTitles,
-            editorFilePaths: editorFilePaths,
-            runStarted: runStarted,
-            runStoppedManually: runStoppedManually
-        )
-    }
-
-    private func saveTabSnapshot() {
-        surfaceCache.saveTabSnapshot(for: workstreamID, snapshot: currentTabSnapshot())
     }
 
     private func moveCustomTab(to targetTab: WorkspaceTab) {
         guard let currentDraggedTab = draggedCustomTab else { return }
-        tabs = reorderedCustomTabs(tabs, dragging: currentDraggedTab, to: targetTab)
+        model.moveTab(dragging: currentDraggedTab, to: targetTab)
         draggedCustomTab = nil
     }
 
     @MainActor
     private func startWorkspace(defaultBranch: String) {
-        workspaceStarted = true
         self.defaultBranch = defaultBranch
         quickActionRunner.onSuccess = { action in
             appEnv.refreshWorktreeState(for: workingDirectory, projectDirectory: projectDirectory)
@@ -1756,7 +1682,6 @@ private struct WorkspaceTabButton: View {
 
 private struct TabBarActionButton: View {
     let icon: String
-    let shortcut: String
     let tooltip: String
     let action: () -> Void
 
@@ -1764,17 +1689,13 @@ private struct TabBarActionButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 3) {
-                Image(systemName: icon)
-                    .font(.system(size: 11))
-                Text(shortcut)
-                    .font(.system(size: 9, weight: .medium, design: .monospaced))
-            }
-            .foregroundStyle(isHovering ? .primary : .tertiary)
-            .padding(.horizontal, 6)
-            .frame(minHeight: 24)
-            .background(isHovering ? Color.primary.opacity(0.08) : .clear)
-            .clipShape(RoundedRectangle(cornerRadius: 5))
+            Image(systemName: icon)
+                .font(.system(size: 11))
+                .foregroundStyle(isHovering ? .primary : .tertiary)
+                .padding(.horizontal, 6)
+                .frame(minHeight: 24)
+                .background(isHovering ? Color.primary.opacity(0.08) : .clear)
+                .clipShape(RoundedRectangle(cornerRadius: 5))
         }
         .buttonStyle(.borderless)
         .onHover { isHovering = $0 }
@@ -2358,9 +2279,9 @@ extension Notification.Name {
 final class TerminalSurfaceCache: ObservableObject {
     private var surfaces: [UUID: TerminalView] = [:]
     private var surfaceParams: [UUID: SurfaceParams] = [:]
-    private var tabSnapshots: [UUID: WorkspaceTabSnapshot] = [:]
     private var webViews: [UUID: WKWebView] = [:]
     private var quickActionRunners: [UUID: QuickActionRunner] = [:]
+    private var workspaceModels: [UUID: WorkspaceModel] = [:]
     /// Surface IDs that should respawn when closed (e.g., the agent).
     var respawnableIDs: Set<UUID> = []
     /// Guards against concurrent respawns for the same surface ID.
@@ -2447,6 +2368,12 @@ final class TerminalSurfaceCache: ObservableObject {
         )
     }
 
+    /// The surfaces that currently exist. Feeds `WorkspaceModel.reconcile`, which
+    /// drops terminal tabs whose surface is gone.
+    func liveSurfaceIDs() -> Set<UUID> {
+        Set(surfaces.keys)
+    }
+
     /// Retry creating a surface that previously failed.
     func retrySurface(for id: UUID) {
         guard let params = surfaceParams[id],
@@ -2484,6 +2411,35 @@ final class TerminalSurfaceCache: ObservableObject {
         return runner
     }
 
+    /// The workstream's tab state. Created on first access from `seed`, which is
+    /// ignored on every later call — the model, not the seed, is the source of
+    /// truth once it exists.
+    func workspaceModel(for workstreamID: UUID, seed: @autoclosure () -> WorkspaceTabSnapshot) -> WorkspaceModel {
+        if let existing = workspaceModels[workstreamID] {
+            return existing
+        }
+        let model = WorkspaceModel(workstreamID: workstreamID, snapshot: seed())
+        workspaceModels[workstreamID] = model
+        return model
+    }
+
+    /// Drops the tab that owned a terminal surface which has just exited.
+    ///
+    /// This has to happen here, at exit, rather than as a prune when a
+    /// workstream is mounted: `TerminalSurfaceView.updateNSView` recreates any
+    /// missing surface the moment its tab renders, so a mount-time prune either
+    /// runs after the resurrection and sees a live id, or runs before it and
+    /// leaves the same render pass to spawn a shell for a tab that is already
+    /// gone. At exit the tab is dead and nothing is about to re-render it.
+    ///
+    /// A no-op for the agent, dev-server, and setup-gate surfaces, which no
+    /// workspace tab owns.
+    func removeTerminalTab(surfaceID: UUID) {
+        let tab = WorkspaceTab.terminal(surfaceID)
+        guard let owner = workspaceModels.values.first(where: { $0.tabs.contains(tab) }) else { return }
+        owner.removeTab(tab)
+    }
+
     func removeWebView(for id: UUID) {
         webViews.removeValue(forKey: id)
     }
@@ -2498,7 +2454,7 @@ final class TerminalSurfaceCache: ObservableObject {
     }
 
     func removeWorkstreamSurfaces(for workstreamID: UUID) {
-        tabSnapshots.removeValue(forKey: workstreamID)
+        workspaceModels.removeValue(forKey: workstreamID)
         if let runner = quickActionRunners.removeValue(forKey: workstreamID) {
             runner.cancel()
         }
@@ -2569,6 +2525,7 @@ final class TerminalSurfaceCache: ObservableObject {
             objectWillChange.send()
         } else {
             removeSurface(for: id)
+            removeTerminalTab(surfaceID: id)
             NotificationCenter.default.post(name: .terminalTabExited, object: id)
         }
     }
@@ -2605,21 +2562,5 @@ final class TerminalSurfaceCache: ObservableObject {
         _ = ghostty_surface_key(surface, keyEvent)
         keyEvent.action = GHOSTTY_ACTION_RELEASE
         _ = ghostty_surface_key(surface, keyEvent)
-    }
-
-    // MARK: - Workspace tab snapshots
-
-    func saveTabSnapshot(for workstreamID: UUID, snapshot: WorkspaceTabSnapshot) {
-        tabSnapshots[workstreamID] = snapshot
-    }
-
-    func restoreTabSnapshot(for workstreamID: UUID) -> WorkspaceTabSnapshot? {
-        guard let snapshot = tabSnapshots[workstreamID] else { return nil }
-        let liveSurfaceIDs = Set(surfaces.keys)
-        return snapshot.reconciled(liveSurfaceIDs: liveSurfaceIDs)
-    }
-
-    func removeTabSnapshot(for workstreamID: UUID) {
-        tabSnapshots.removeValue(forKey: workstreamID)
     }
 }

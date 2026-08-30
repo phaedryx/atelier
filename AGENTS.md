@@ -164,13 +164,11 @@ When adding, removing, or changing keyboard shortcuts:
 Current shortcuts:
 - **Cmd+1**: Info
 - **Cmd+2**: Coding Agent
-- **Cmd+D**: Changes
+- **Cmd+3**: Changes
+- **Cmd+4**: Environment
 - **Cmd+3-9**: Switch tab (all tabs in display order)
 - **Cmd+Shift+[/]**: Cycle tabs
 - **Cmd+Return**: Focus Coding Agent
-- **Cmd+T**: New Terminal
-- **Cmd+B**: New Browser (starts the dev server)
-- **Cmd+O**: New Editor
 - **Cmd+P**: Find File (Editor)
 - **Cmd+S**: Save (Editor)
 - **Cmd+Shift+S**: Save As (Editor)
@@ -182,6 +180,7 @@ Current shortcuts:
 - **Cmd+Up/Down**: Cycle projects
 - **Cmd+0**: Back to project
 - **Cmd+Shift+C**: Toggle sidebar
+- **Cmd+Shift+P**: Command Palette
 - **Cmd+Option+B**: External browser
 - **Cmd+Option+T**: External terminal
 - **Cmd+/**: Help

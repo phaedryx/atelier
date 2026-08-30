@@ -95,6 +95,16 @@ struct ContentView: View {
     @State private var purgeWarningMessage: String?
     @State private var removedProjectNames: [String] = []
     @State private var keyMonitorInstalled = false
+    @StateObject private var commandRegistry = CommandRegistry(commands: defaultPaletteCommands())
+    @State private var showCommandPalette = false
+    @AppStorage("atelier.editorTabActive") private var editorTabActive: Bool = false
+
+    private var paletteContext: PaletteContext {
+        PaletteContext(
+            workstreamActive: activeWorkstream != nil,
+            editorActive: editorTabActive
+        )
+    }
 
     private static func initialSelection() -> SidebarSelection? {
         let projects = ProjectStore.load()
@@ -140,9 +150,11 @@ struct ContentView: View {
         } else if let workstream = activeWorkstream, let project = activeProject {
             if let workstreamID = renderableWorkstreamID(in: project, selectedWorkstreamID: workstream.id) {
                 let scriptConfig = ScriptConfig.load(from: project.directory)
-                let initialTabState = startupWorkspaceTabState(
-                    snapshot: surfaceCache.restoreTabSnapshot(for: workstreamID),
-                    savedTab: WorkspaceStateStore.load(for: workstreamID)
+                let workspaceModel = surfaceCache.workspaceModel(
+                    for: workstreamID,
+                    seed: startupWorkspaceTabState(
+                        savedTab: WorkspaceStateStore.load(for: workstreamID)
+                    )
                 )
                 TerminalContainerView(
                     workstreamID: workstreamID,
@@ -154,7 +166,7 @@ struct ContentView: View {
                     bypassPermissions: workstream.bypassPermissions,
                     isActive: true,
                     scriptConfig: scriptConfig,
-                    initialTabState: initialTabState
+                    model: workspaceModel
                 )
                 .id(workstreamID)
                 .navigationTitle(appEnvironment.taskDescription(for: workstream.worktreePath) ?? workstream.label)
@@ -190,6 +202,10 @@ struct ContentView: View {
 
     var body: some View {
         navigationView
+            .overlay { commandPaletteOverlay }
+            .onReceive(NotificationCenter.default.publisher(for: .toggleCommandPalette)) { _ in
+                showCommandPalette.toggle()
+            }
             .onReceive(NotificationCenter.default.publisher(for: .toggleSidebar)) { _ in
                 NSApp.sendAction(#selector(NSSplitViewController.toggleSidebar(_:)), to: nil, from: nil)
             }
@@ -309,17 +325,6 @@ struct ContentView: View {
                 // Don't persist settings/help as saved selection
                 if newValue != .settings && newValue != .help {
                     newValue?.save()
-                }
-                // Auto-focus Coding Agent only when there's no restored tab state to honor
-                if case let .workstream(wsID) = newValue,
-                   shouldAutoFocusAgent(
-                       snapshot: surfaceCache.restoreTabSnapshot(for: wsID),
-                       savedTab: WorkspaceStateStore.load(for: wsID)
-                   )
-                {
-                    DispatchQueue.main.async {
-                        NotificationCenter.default.post(name: .focusAgent, object: nil)
-                    }
                 }
                 let wsID: UUID? = {
                     if case let .workstream(id) = newValue { return id }
@@ -484,6 +489,27 @@ struct ContentView: View {
         }
         .onReceive(Timer.publish(every: 6 * 60 * 60, on: .main, in: .common).autoconnect()) { _ in
             updateChecker.check()
+        }
+    }
+
+    /// The palette lives in its own property: `navigationViewBase`'s modifier
+    /// chain is long enough that inlining the ZStack tips the type checker over
+    /// its time limit.
+    @ViewBuilder
+    private var commandPaletteOverlay: some View {
+        if showCommandPalette {
+            ZStack(alignment: .top) {
+                Color.black.opacity(0.2)
+                    .ignoresSafeArea()
+                    .onTapGesture { showCommandPalette = false }
+                CommandPaletteView(
+                    registry: commandRegistry,
+                    context: paletteContext,
+                    onDismiss: { showCommandPalette = false }
+                )
+                .padding(.top, 120)
+            }
+            .transition(.opacity)
         }
     }
 

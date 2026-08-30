@@ -83,6 +83,7 @@ struct HelpView: View {
                         ShortcutRow(keys: "N", description: "New workstream or project")
                         ShortcutRow(keys: "N", shift: true, description: "New project")
                         ShortcutRow(keys: "C", shift: true, description: "Toggle sidebar")
+                        ShortcutRow(keys: "P", shift: true, description: "Command Palette")
                     } header: {
                         ShortcutSectionHeader(title: "Global", description: "Available everywhere")
                     }
@@ -90,14 +91,10 @@ struct HelpView: View {
                     Section {
                         ShortcutRow(keys: "1", description: "Info")
                         ShortcutRow(keys: "2", description: "Coding Agent")
-                        ShortcutRow(keys: "D", description: "Changes")
                         ShortcutRow(keys: "3-9", description: "Switch tab")
                         ShortcutRow(keys: "[", shift: true, description: "Previous tab")
                         ShortcutRow(keys: "]", shift: true, description: "Next tab")
                         ShortcutRow(keys: "Return", description: "Focus Coding Agent")
-                        ShortcutRow(keys: "T", description: "New Terminal")
-                        ShortcutRow(keys: "B", description: "New Browser (starts dev server)")
-                        ShortcutRow(keys: "O", description: "New Editor")
                         ShortcutRow(keys: "P", description: "Find File")
                         ShortcutRow(keys: "S", description: "Save (Editor)")
                         ShortcutRow(keys: "S", shift: true, description: "Save As (Editor)")
