@@ -177,6 +177,13 @@
     /* Review comments — rendered into Monaco view zones by diff.js. The rgba
        values are theme-neutral so they read on both light and dark editors. */
     .review-comment, .review-input {
+      /* Monaco paints .view-lines after .view-zones, and neither sets a
+         z-index — so the text layer covers zone content and swallows every
+         click (and paints its I-beam over our buttons). Positioning these
+         rows lifts them above it; without this the buttons are unclickable. */
+      position: relative;
+      z-index: 1;
+      cursor: default;
       display: flex;
       align-items: center;
       gap: 6px;
@@ -228,10 +235,13 @@
       color: #d1242f;
     }
     /* Discoverability: line numbers are click targets; hovering shows a "+"
-       cue. Prefixed with .monaco-editor to outrank Monaco's own rule. */
+       cue. Never set `position` here — Monaco lays these out with
+       `position: absolute; bottom: 0`, our selector has the same specificity,
+       and overriding it detaches every number from its line (numbers drift a
+       line out of step and the click targets stop matching what you see).
+       Monaco's own absolute positioning already anchors the ::after cue. */
     .monaco-editor .margin-view-overlays .line-numbers {
       cursor: pointer;
-      position: relative;
     }
     .monaco-editor .margin-view-overlays .line-numbers:hover::after {
       content: '+';
