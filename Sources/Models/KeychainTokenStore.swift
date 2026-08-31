@@ -19,7 +19,9 @@ struct KeychainTokenStore {
         self.service = service
     }
 
-    var hasToken: Bool { read() != nil }
+    var hasToken: Bool {
+        read() != nil
+    }
 
     func read() -> String? {
         var query = baseQuery
@@ -38,26 +40,35 @@ struct KeychainTokenStore {
     /// Writes the token, replacing any existing one. An empty or whitespace-only
     /// value clears the item instead, so a cleared SecureField reads as "no token"
     /// rather than storing a credential the client would send as an empty header.
-    func write(_ token: String) {
+    ///
+    /// Returns `errSecSuccess` or the failing status. The caller must not ignore it: a
+    /// locked keychain or a denied access prompt otherwise looks exactly like a save that
+    /// worked, and the user is left with a Shortcut button that never appears — or worse,
+    /// with an old token still on disk after they believed they had replaced or cleared it.
+    @discardableResult
+    func write(_ token: String) -> OSStatus {
         let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            delete()
-            return
-        }
+        guard !trimmed.isEmpty else { return delete() }
 
         let data = Data(trimmed.utf8)
         let attributes = [kSecValueData as String: data]
-        if SecItemUpdate(baseQuery as CFDictionary, attributes as CFDictionary) == errSecSuccess {
-            return
-        }
+        let updated = SecItemUpdate(baseQuery as CFDictionary, attributes as CFDictionary)
+        if updated == errSecSuccess { return errSecSuccess }
+        // Only "no item yet" justifies falling through to add. Treating every failure as
+        // not-found turned a locked keychain into a silent no-op, because the subsequent
+        // add came back errSecDuplicateItem and changed nothing.
+        guard updated == errSecItemNotFound else { return updated }
 
         var insert = baseQuery
         insert[kSecValueData as String] = data
-        SecItemAdd(insert as CFDictionary, nil)
+        return SecItemAdd(insert as CFDictionary, nil)
     }
 
-    func delete() {
-        SecItemDelete(baseQuery as CFDictionary)
+    @discardableResult
+    func delete() -> OSStatus {
+        let status = SecItemDelete(baseQuery as CFDictionary)
+        // Nothing stored is the outcome the caller wanted.
+        return status == errSecItemNotFound ? errSecSuccess : status
     }
 
     private var baseQuery: [String: Any] {

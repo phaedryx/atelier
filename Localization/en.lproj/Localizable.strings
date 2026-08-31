@@ -183,6 +183,9 @@
 "Test" = "Test";
 "Connected as %@ (%@)" = "Connected as %@ (%@)";
 "Branch Name Pattern" = "Branch Name Pattern";
+"Leave blank to use the branch name Shortcut suggests. Variables: %@ — for example %@. SLUG is the first six words of the title; SLUG_FULL is all of them." = "Leave blank to use the branch name Shortcut suggests. Variables: %@ — for example %@. SLUG is the first six words of the title; SLUG_FULL is all of them.";
+"Unknown variable %@. It will be used literally." = "Unknown variable %@. It will be used literally.";
+"Could not save to the Keychain (error %d)." = "Could not save to the Keychain (error %d).";
 "Preview" = "Preview";
 "git will not accept the branch name this produces." = "git will not accept the branch name this produces.";
 "Show Shortcut button in sidebar" = "Show Shortcut button in sidebar";

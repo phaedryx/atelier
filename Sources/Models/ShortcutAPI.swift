@@ -109,6 +109,12 @@ enum ShortcutError: Error, Equatable {
         }
     }
 
+    /// Whether Settings is where the user can fix this. Derived from the case, never from
+    /// the message text, which is localized.
+    var needsToken: Bool {
+        self == .noToken || self == .unauthorized
+    }
+
     var message: String {
         switch self {
         case .noToken:

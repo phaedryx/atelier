@@ -522,14 +522,14 @@ private struct IntegrationsSettingsPane: View {
                 VStack(alignment: .leading, spacing: 8) {
                     SecureField("API token", text: $token)
                         .textFieldStyle(.roundedBorder)
-                        .onSubmit(save)
+                        .onSubmit { save() }
 
                     Text("Create a token at Shortcut > Settings > API Tokens. Stored in your Keychain, not in preferences.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
                     HStack(spacing: 8) {
-                        Button("Save", action: save)
+                        Button("Save") { save() }
                             .disabled(token == savedToken)
                         Button("Test", action: test)
                             .disabled(token.isEmpty || isTesting)
@@ -608,23 +608,43 @@ private struct IntegrationsSettingsPane: View {
         }
     }
 
-    private func save() {
-        store.write(token)
+    /// Returns whether the write landed, so callers do not proceed on a failed save.
+    @discardableResult
+    private func save() -> Bool {
+        let status = store.write(token)
         // write() clears the item for an empty/whitespace value, so re-read rather than
         // assuming what landed.
         savedToken = store.read() ?? ""
         // Keychain presence is not observable, so the sidebar is told explicitly.
         NotificationCenter.default.post(name: ShortcutSettings.tokenChanged, object: nil)
+
+        guard status == errSecSuccess else {
+            // A silent failure here strands the user: the button never appears and the
+            // pane offers no reason why.
+            testResult = .failure(String(
+                format: NSLocalizedString("Could not save to the Keychain (error %d).", comment: "Keychain write failure"),
+                Int(status)
+            ))
+            return false
+        }
         testResult = nil
+        return true
     }
 
     private func test() {
-        save()
+        // Deliberately does not save first. Testing a replacement for a working token used
+        // to overwrite the good one before finding out the new one was rejected, leaving
+        // the user with no working token and no idea they had lost it.
+        let candidate = token
         isTesting = true
         testResult = nil
         Task {
             do {
-                let member = try await ShortcutClient().currentMember()
+                let member = try await ShortcutClient(token: { candidate }).currentMember()
+                // Only commit a token that actually authenticated.
+                store.write(candidate)
+                savedToken = store.read() ?? ""
+                NotificationCenter.default.post(name: ShortcutSettings.tokenChanged, object: nil)
                 testResult = .success(String(
                     format: NSLocalizedString("Connected as %@ (%@)", comment: "Shortcut token test success"),
                     member.name,

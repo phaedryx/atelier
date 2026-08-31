@@ -59,8 +59,10 @@ struct ProjectSidebar: View {
 
     @AppStorage(ShortcutSettings.buttonEnabledKey) private var shortcutButtonEnabled: Bool = true
     @AppStorage(ShortcutSettings.branchTemplateKey) private var branchTemplate: String = ""
-    /// Keychain presence is not observable, so this is refreshed on appear and whenever
-    /// Settings posts `ShortcutSettings.tokenChanged`.
+    /// Keychain presence is not observable, so this is seeded at init and refreshed
+    /// whenever Settings posts `ShortcutSettings.tokenChanged`. It can still go stale if
+    /// the item is removed outside the app; that surfaces as a `.noToken` error in the
+    /// dialog rather than a hidden button.
     @State private var hasShortcutToken = KeychainTokenStore().hasToken
     @State private var showingShortcutStory = false
     @State private var shortcutStoryInput = ""
@@ -68,6 +70,9 @@ struct ProjectSidebar: View {
     /// Set from the `ShortcutError` case, so the Settings link never depends on message wording.
     @State private var shortcutErrorNeedsToken = false
     @State private var shortcutFetching = false
+    /// Held so Cancel can actually stop it. Without this the fetch completes after the
+    /// sheet closes and creates a workstream the user thought they had cancelled.
+    @State private var shortcutFetchTask: Task<Void, Never>?
     /// Workstream whose row is showing the inline rename field; at most one
     /// at a time. Held here (not per-row) so periodic project mutations
     /// don't drop the edit state when rows rebuild.
@@ -377,6 +382,9 @@ struct ProjectSidebar: View {
                         )
                     },
                     onCancel: {
+                        shortcutFetchTask?.cancel()
+                        shortcutFetchTask = nil
+                        shortcutFetching = false
                         showingShortcutStory = false
                         pendingWorkstreamProjectID = nil
                     }
@@ -532,9 +540,13 @@ struct ProjectSidebar: View {
         shortcutError = ""
         shortcutFetching = true
 
-        Task {
+        shortcutFetchTask = Task {
             do {
                 let story = try await ShortcutClient().story(id: storyID)
+                // The sheet may have been cancelled while the request was in flight; the
+                // 15s timeout makes that window wide on a slow network. Creating a
+                // workstream after the user dismissed the dialog is the worst outcome here.
+                guard !Task.isCancelled, pendingWorkstreamProjectID == projectID else { return }
                 shortcutFetching = false
 
                 let name = ShortcutBranchName.render(branchTemplate, story: story)
@@ -545,10 +557,20 @@ struct ProjectSidebar: View {
                     )
                     return
                 }
-                guard !existingNames.contains(name) else {
+                // Two distinct collisions with two distinct messages. Checking only the name
+                // let the same story through twice under a changed Branch Name Pattern, and
+                // blamed the story when an unrelated workstream happened to match the name.
+                guard !project.workstreams.contains(where: { $0.shortcutStoryID == story.id }) else {
                     shortcutError = NSLocalizedString(
                         "A workstream for this story already exists.",
                         comment: "Error when a Shortcut story already has a workstream"
+                    )
+                    return
+                }
+                guard !existingNames.contains(name) else {
+                    shortcutError = NSLocalizedString(
+                        "A workstream with this name already exists.",
+                        comment: "Error when the workstream name collides with an existing workstream"
                     )
                     return
                 }
@@ -566,10 +588,12 @@ struct ProjectSidebar: View {
                     shortcutStoryID: story.id
                 )
             } catch let error as ShortcutError {
+                guard !Task.isCancelled, pendingWorkstreamProjectID == projectID else { return }
                 shortcutFetching = false
                 shortcutError = error.message
-                shortcutErrorNeedsToken = error == .noToken || error == .unauthorized
+                shortcutErrorNeedsToken = error.needsToken
             } catch {
+                guard !Task.isCancelled, pendingWorkstreamProjectID == projectID else { return }
                 shortcutFetching = false
                 shortcutError = error.localizedDescription
                 shortcutErrorNeedsToken = false

@@ -55,6 +55,18 @@ final class KeychainTokenStoreTests: XCTestCase {
         XCTAssertNil(store.read())
     }
 
+    func testWriteReportsSuccess() {
+        // The status is the only signal a locked keychain or a denied prompt gives; a
+        // discarded one looks exactly like a save that worked.
+        XCTAssertEqual(store.write("secret-token"), errSecSuccess)
+        XCTAssertEqual(store.write("replacement"), errSecSuccess, "update path must also report success")
+    }
+
+    func testDeleteOfAMissingItemReportsSuccess() {
+        // Nothing stored is the outcome the caller asked for, so it is not a failure.
+        XCTAssertEqual(store.delete(), errSecSuccess)
+    }
+
     func testHasTokenReflectsStoredState() {
         XCTAssertFalse(store.hasToken)
         store.write("secret-token")

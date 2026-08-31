@@ -55,14 +55,18 @@ struct WorktreeDetail {
         let path: String
         let isStaged: Bool
 
-        var id: String { "\(isStaged ? "S" : "U")\(path)" }
+        var id: String {
+            "\(isStaged ? "S" : "U")\(path)"
+        }
     }
 
     struct UnmergedCommit: Identifiable {
         let hash: String
         let message: String
 
-        var id: String { hash }
+        var id: String {
+            hash
+        }
     }
 
     let changes: [FileChange]
@@ -424,6 +428,22 @@ enum GitOperations {
         else { return central }
 
         let container = URL(fileURLWithPath: commonDir).deletingLastPathComponent()
+
+        // Require positive evidence of the README's layout: a `.git` *file* beside the
+        // repository, written by `echo "gitdir: ./.bare" > .git`.
+        //
+        // Inferring the layout from `--is-inside-work-tree` not being "true" is not enough,
+        // because `run` returns nil on failure and a false-or-failed probe covers three very
+        // different situations. A plain `git clone --bare foo.git` resolves its container to
+        // whatever directory happens to hold the repo, and a submodule resolves it to
+        // `<super>/.git/modules` — where `git worktree add` succeeds, silently planting a
+        // checkout inside the superproject's git directory.
+        var isDirectory: ObjCBool = false
+        let gitFile = container.appendingPathComponent(".git")
+        let hasGitFile = FileManager.default.fileExists(atPath: gitFile.path, isDirectory: &isDirectory)
+            && !isDirectory.boolValue
+        guard hasGitFile else { return central }
+
         let containerIsCheckout = run(args: ["rev-parse", "--is-inside-work-tree"], in: container.path)?
             .trimmingCharacters(in: .whitespacesAndNewlines) == "true"
         guard !containerIsCheckout else { return central }

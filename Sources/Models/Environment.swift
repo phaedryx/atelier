@@ -237,15 +237,31 @@ final class AppEnvironment: ObservableObject {
     }
 
     func registerShortcutStory(id: Int, for worktreePath: String) {
-        let alreadyMapped = shortcutStoryIDs[worktreePath] == id
-        let staged = shortcutStoryStaging[id]
-        guard !alreadyMapped || staged != nil else { return }
-
         shortcutStoryIDs[worktreePath] = id
-        // Promote the staged copy now that there is a path to key it by.
-        guard let staged, shortcutStoryCache[worktreePath] != staged else { return }
-        shortcutStoryStaging.removeValue(forKey: id)
+
+        // Promote the staged copy now that there is a path to key it by. The removal happens
+        // before the equality guard: leaving it after meant a re-registration with the story
+        // already cached returned early and stranded the staged copy for the session.
+        guard let staged = shortcutStoryStaging.removeValue(forKey: id) else { return }
+        guard shortcutStoryCache[worktreePath] != staged else { return }
         commitChanges { shortcutStoryCache[worktreePath] = staged }
+    }
+
+    /// Drops cache entries for worktrees that no longer exist.
+    ///
+    /// Unlike `taskDescriptionCache`, which is rebuilt wholesale on every refresh and so
+    /// prunes itself, these are only ever inserted into. Without this, archiving a
+    /// Shortcut workstream and creating a plain one that reuses the path — likelier now
+    /// that worktree directories are named after the branch — renders the old story.
+    func pruneShortcutStories(keeping livePaths: Set<String>) {
+        let stalePaths = Set(shortcutStoryIDs.keys).subtracting(livePaths)
+        guard !stalePaths.isEmpty else { return }
+        commitChanges {
+            for path in stalePaths {
+                shortcutStoryIDs.removeValue(forKey: path)
+                shortcutStoryCache.removeValue(forKey: path)
+            }
+        }
     }
 
     /// Re-reads one story and publishes it only when it changed.
@@ -258,14 +274,26 @@ final class AppEnvironment: ObservableObject {
     func refreshShortcutStory(for worktreePath: String) async {
         guard let storyID = shortcutStoryIDs[worktreePath] else { return }
 
-        if shortcutWorkflows.isEmpty,
-           let workflows = try? await ShortcutClient().workflows() {
-            commitChanges { shortcutWorkflows = workflows }
+        if shortcutWorkflows.isEmpty {
+            do {
+                let workflows = try await ShortcutClient().workflows()
+                commitChanges { shortcutWorkflows = workflows }
+            } catch {
+                // Only costs the state name; the story itself still renders.
+                logger.warning("[Atelier] shortcut: workflows fetch failed: \(String(describing: error), privacy: .public)")
+            }
         }
 
-        guard let story = try? await ShortcutClient().story(id: storyID) else { return }
-        guard shortcutStoryCache[worktreePath] != story else { return }
-        commitChanges { shortcutStoryCache[worktreePath] = story }
+        do {
+            let story = try await ShortcutClient().story(id: storyID)
+            guard shortcutStoryCache[worktreePath] != story else { return }
+            commitChanges { shortcutStoryCache[worktreePath] = story }
+        } catch {
+            // Any cached copy deliberately stays on screen rather than blanking the tab,
+            // but a revoked token or deleted story would otherwise be invisible — the
+            // stale copy would keep rendering as though it were current.
+            logger.warning("[Atelier] shortcut: story \(storyID, privacy: .public) refresh failed: \(String(describing: error), privacy: .public)")
+        }
     }
 
     func isGitRepo(_ directory: String) -> Bool {

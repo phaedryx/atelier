@@ -478,6 +478,10 @@ struct ContentView: View {
                     // branch the agent is about to rename, so it has to start
                     // being watched now rather than on some later mutation.
                     syncHeadWatcher(projects: projects)
+                    // And again: this is the moment a Shortcut workstream first has a path
+                    // to key its story by. Without this the story staged at creation is
+                    // never promoted and the info tab shows nothing for the whole session.
+                    syncShortcutStoryIDs(projects: projects)
                     logger.warning("[Atelier] workstreamWorktreeReady: updated \(workstreamID, privacy: .public) with path \(worktreePath, privacy: .public)")
                     // Trigger vibe background setup (env copy, symlinks, Claude settings, deps)
                     let projectPath = projects[pi].directory
@@ -641,12 +645,17 @@ struct ContentView: View {
     /// receives one, so the mapping has to be pushed here — this is the only place that
     /// holds both the project list and a reference to the environment.
     private func syncShortcutStoryIDs(projects: [Project]) {
+        var livePaths: Set<String> = []
         for project in projects {
             for ws in project.workstreams {
                 guard let path = ws.worktreePath, let storyID = ws.shortcutStoryID else { continue }
+                livePaths.insert(path)
                 appEnvironment.registerShortcutStory(id: storyID, for: path)
             }
         }
+        // Reconcile rather than only insert, the way syncHeadWatcher does — otherwise an
+        // archived workstream's story lingers and can surface on a reused path.
+        appEnvironment.pruneShortcutStories(keeping: livePaths)
     }
 
     /// Update workstream names to match their branch name.

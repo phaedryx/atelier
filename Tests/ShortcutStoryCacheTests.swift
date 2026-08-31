@@ -6,7 +6,7 @@ import XCTest
 
 @MainActor
 final class ShortcutStoryCacheTests: XCTestCase {
-    private func makeStory(id: Int, name: String = "A story", stateID: Int = 500000030) -> ShortcutStory {
+    private func makeStory(id: Int, name: String = "A story", stateID: Int = 500_000_030) -> ShortcutStory {
         let json = """
         {
           "id": \(id),
@@ -58,6 +58,40 @@ final class ShortcutStoryCacheTests: XCTestCase {
         env.registerShortcutStory(id: 1, for: "/tmp/wt")
         XCTAssertNotNil(env.shortcutStory(for: "/tmp/wt"))
         XCTAssertNil(env.shortcutStateName(for: "/tmp/wt"), "no workflows fetched yet")
+    }
+
+    func testPruningDropsStoriesForWorktreesThatAreGone() {
+        // Archiving a Shortcut workstream and creating a plain one that reuses the path
+        // would otherwise render the archived story — likelier now that worktree
+        // directories are named after the branch.
+        let env = AppEnvironment()
+        env.stageShortcutStory(makeStory(id: 1))
+        env.registerShortcutStory(id: 1, for: "/tmp/gone")
+        XCTAssertNotNil(env.shortcutStory(for: "/tmp/gone"))
+
+        env.pruneShortcutStories(keeping: ["/tmp/still-here"])
+        XCTAssertNil(env.shortcutStory(for: "/tmp/gone"))
+    }
+
+    func testPruningKeepsLivePaths() {
+        let env = AppEnvironment()
+        env.stageShortcutStory(makeStory(id: 1))
+        env.registerShortcutStory(id: 1, for: "/tmp/live")
+
+        env.pruneShortcutStories(keeping: ["/tmp/live"])
+        XCTAssertEqual(env.shortcutStory(for: "/tmp/live")?.id, 1)
+    }
+
+    func testPrunedPathDoesNotResurrectFromStaging() {
+        // The staged copy must have been consumed by the first registration, not left
+        // behind to reappear the next time the same path is registered.
+        let env = AppEnvironment()
+        env.stageShortcutStory(makeStory(id: 1))
+        env.registerShortcutStory(id: 1, for: "/tmp/reused")
+        env.pruneShortcutStories(keeping: [])
+
+        env.registerShortcutStory(id: 2, for: "/tmp/reused")
+        XCTAssertNil(env.shortcutStory(for: "/tmp/reused"), "story 1 must not come back on a reused path")
     }
 
     func testRepeatedRegistrationIsStable() {

@@ -93,6 +93,51 @@ final class WorktreeDestinationTests: XCTestCase {
         XCTAssertEqual(destination.lastPathComponent, "feature")
     }
 
+    /// `git clone --bare foo.git` with no `.bare`/`.git` container around it.
+    ///
+    /// The common directory *is* the repository, so the container resolves to its parent —
+    /// which is usually just wherever repos are kept. Placing worktrees there would scatter
+    /// them beside unrelated repositories, unscoped by project, and two projects each
+    /// creating a "feature" workstream would collide.
+    func testPlainBareCloneKeepsTheCentralLocation() throws {
+        let parent = tempDir.appendingPathComponent("repos")
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        git(["init", "--bare", "myproj.git"], in: parent)
+        let bare = parent.appendingPathComponent("myproj.git")
+
+        let destination = GitOperations.worktreeDestination(
+            projectPath: bare.path,
+            projectName: "myproj",
+            workstreamName: "feature"
+        )
+
+        XCTAssertTrue(
+            destination.path.hasPrefix(AppConstants.worktreesDirectory.path),
+            "expected the central location, got \(destination.path)"
+        )
+    }
+
+    /// A git directory whose parent is not a worktree container either — the shape a
+    /// submodule's `.git/modules/<name>` has. The worktree must not be created inside it.
+    func testGitDirectoryWithoutAContainerKeepsTheCentralLocation() throws {
+        let modules = tempDir.appendingPathComponent("super/.git/modules")
+        try FileManager.default.createDirectory(at: modules, withIntermediateDirectories: true)
+        git(["init", "--bare", "sub"], in: modules)
+        let sub = modules.appendingPathComponent("sub")
+
+        let destination = GitOperations.worktreeDestination(
+            projectPath: sub.path,
+            projectName: "sub",
+            workstreamName: "feature"
+        )
+
+        XCTAssertFalse(
+            destination.path.contains("/.git/"),
+            "must never create a worktree inside a .git directory, got \(destination.path)"
+        )
+        XCTAssertTrue(destination.path.hasPrefix(AppConstants.worktreesDirectory.path))
+    }
+
     func testNonRepositoryFallsBackToTheCentralLocation() throws {
         let plain = tempDir.appendingPathComponent("not-a-repo")
         try FileManager.default.createDirectory(at: plain, withIntermediateDirectories: true)

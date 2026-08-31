@@ -152,7 +152,12 @@ via FSEvents and retargets the embedded browser when a port is detected.
 ### Paths
 - Persistent data: UserDefaults (projects, sidebar state, workspace tabs)
 - Cache: `~/Library/Caches/atelier/` (run-state, tmux.conf)
-- Worktrees: `~/.atelier/worktrees/`
+- Worktrees: beside the repository when the project uses the README's bare-repo layout
+  (a `.bare` directory with a `.git` file next to it), so a worktree for `/repos/app` is
+  created at `/repos/app/<name>`. Any other layout — an ordinary clone, a plain
+  `git clone --bare`, a submodule — falls back to `~/.atelier/worktrees/<project>/<name>`,
+  because there the equivalent directory is the working tree or a git directory, and a
+  worktree must not be created inside either. See `GitOperations.worktreeDestination`.
 - URL scheme: `atelier://`
 - Bundle ID: `com.github.phaedryx.atelier`
 
