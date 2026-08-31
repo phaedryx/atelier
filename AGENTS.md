@@ -60,6 +60,16 @@ Releases are tag-driven. There is no automatic version bump:
 The tag is the single source of truth for the version; `project.yml` is only
 rewritten at build time and the bump is never committed.
 
+Because of that, the version committed in `project.yml` is the deliberate
+placeholder `0.0.0` / `0.0.0-dev`, and it means nothing: any build made outside
+the release workflow reports it. Do not read it as the current version, and do
+not bump it to "keep it current" — the value is overwritten by
+`scripts/set-version.sh` during a tagged release and nowhere else. (It used to
+carry `0.1.79`, inherited from Factory Floor, which made every local build claim
+a released version it had long since diverged from.) `CFBundleVersion` stays
+numeric because it must be period-separated integers; only the display string
+carries the `-dev` marker.
+
 ## Architecture
 
 - **SwiftUI sidebar** + **AppKit terminal views** (Metal GPU-rendered via libghostty)

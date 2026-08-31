@@ -4,6 +4,74 @@ Atelier was forked from [Factory Floor](https://github.com/alltuner/factoryfloor
 at v0.1.79. Everything below that release is Factory Floor's history; those links
 point at the upstream repository.
 
+## [0.2.0](https://github.com/phaedryx/atelier/compare/731cc14...v0.2.0) (2026-08-31)
+
+The first Atelier release: everything since the hard fork. The theme is
+subtraction — several upstream features were removed outright — plus a
+workspace rewrite and agent-facing additions built on top of it.
+
+### ⚠ BREAKING CHANGES
+
+* The app, bundle ID, URL scheme, and helper binaries are all renamed. Bundle ID
+  is now `com.github.phaedryx.atelier`, the URL scheme is `atelier://`, worktrees
+  live in `~/.atelier/worktrees/`, and the helpers are `atelier-run` /
+  `atelier-hook` / `atelier-mcp`. Settings and project lists stored under the old
+  identifiers are not migrated.
+* **cli:** the command is now `atl`, not `atelier` ([#11](https://github.com/phaedryx/atelier/pull/11)).
+* **Spaces are gone.** Projects are a flat list again; `Project.spaceID` and the
+  sidebar switcher were removed ([#6](https://github.com/phaedryx/atelier/pull/6)).
+* **OpenCode support is gone**, along with the `CodingHarness` abstraction and the
+  pixel avatars. Claude Code is assumed everywhere; a workstream no longer records
+  which agent it runs ([#9](https://github.com/phaedryx/atelier/pull/9)).
+* **Agent Teams are gone.** Inter-agent messaging is atelier-ipc only
+  ([#10](https://github.com/phaedryx/atelier/pull/10)).
+* **No update checking.** The release poller, update badge, and Sparkle stub were
+  all removed; upgrade via Homebrew or GitHub Releases
+  ([#14](https://github.com/phaedryx/atelier/pull/14)).
+* Non-English locales and the language picker were dropped. Strings still go
+  through `Localizable.strings`, so adding a locale back is a data-only change
+  ([#4](https://github.com/phaedryx/atelier/pull/4)).
+
+### Features
+
+* hard fork Factory Floor as Atelier ([731cc14](https://github.com/phaedryx/atelier/commit/731cc14))
+* **ipc:** let agents in a project message each other, over a loopback listener and
+  an `atelier-mcp` stdio helper ([#7](https://github.com/phaedryx/atelier/pull/7))
+* **workspace:** extract `WorkspaceModel` as the single home for tab state, and add
+  the extension system behind it — tab kinds, the Environment tab, and the command
+  palette ([#12](https://github.com/phaedryx/atelier/pull/12))
+* **sidebar:** inline workstream rename with Cmd+Shift+R
+  ([#13](https://github.com/phaedryx/atelier/pull/13))
+* **sidebar:** show Claude plan usage above the sidebar controls
+  ([#15](https://github.com/phaedryx/atelier/pull/15))
+* **settings:** tabbed settings panes, and stored prompts that run from the command
+  palette into the Coding Agent ([#17](https://github.com/phaedryx/atelier/pull/17))
+* **changes:** line-anchored review comments on diffs, submitted to the Coding Agent
+  as one block ([#18](https://github.com/phaedryx/atelier/pull/18))
+* **sidebar:** reflect branch renames immediately instead of on the 15s poll
+  ([#20](https://github.com/phaedryx/atelier/pull/20))
+* new app icon artwork ([#16](https://github.com/phaedryx/atelier/pull/16),
+  [#19](https://github.com/phaedryx/atelier/pull/19))
+* **credits:** move attribution out of the sidebar and into About
+  ([#8](https://github.com/phaedryx/atelier/pull/8))
+
+### Bug Fixes
+
+* make the release build compile, and drop the dead website deploy ([0939682](https://github.com/phaedryx/atelier/commit/0939682))
+* **ci:** make the test suite actually run — the scheme was selecting no tests, so
+  `xcodebuild` reported success over zero tests ([#5](https://github.com/phaedryx/atelier/pull/5))
+* **ci:** require an explicit version for local releases, and restore `project.yml`
+  afterwards ([83309a4](https://github.com/phaedryx/atelier/commit/83309a4))
+
+### Build System
+
+* replace release-please with tag-driven releases ([8cdcf77](https://github.com/phaedryx/atelier/commit/8cdcf77))
+* remove the PR title check, automated PR review, and reporter thank-you workflows ([cfff9dc](https://github.com/phaedryx/atelier/commit/cfff9dc))
+
+### Documentation
+
+* rewrite the README for the fork ([41992c6](https://github.com/phaedryx/atelier/commit/41992c6))
+
 ## [0.1.79](https://github.com/alltuner/factoryfloor/compare/v0.1.78...v0.1.79) (2026-07-30)
 
 
