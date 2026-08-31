@@ -529,9 +529,7 @@ struct ContentView: View {
             appEnvironment.fetchOrigin(projects: projects)
             syncWorkstreamNamesFromBranches()
         }
-        .onReceive(Timer.publish(every: 300, on: .main, in: .common).autoconnect()) { _ in
-            Task { await usageStore.refresh() }
-        }
+        .modifier(UsagePolling(store: usageStore))
     }
 
     /// The palette lives in its own property: `navigationViewBase`'s modifier
@@ -757,5 +755,34 @@ enum ProjectStore {
     static func save(_ projects: [Project], defaults: UserDefaults = .standard) {
         guard let data = try? JSONEncoder().encode(projects) else { return }
         defaults.set(data, forKey: userDefaultsKey)
+    }
+}
+
+/// Plan-usage polling, lifted out of `ContentView`'s modifier chain: that chain
+/// is already long enough that two more inline modifiers tip the type checker
+/// over its time limit.
+private struct UsagePolling: ViewModifier {
+    @Environment(\.scenePhase) private var scenePhase
+    let store: UsageStore
+
+    /// Matches `UsageStore`'s own throttle, so a tick that lands early is a
+    /// cheap no-op rather than a spawned process.
+    private static let interval: TimeInterval = 300
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(Timer.publish(every: Self.interval, on: .main, in: .common).autoconnect()) { _ in
+                // Each tick spawns a `claude` process. Skip it while the window
+                // is closed or miniaturized — nobody can read the meter, and
+                // the phase change below catches up when it returns.
+                guard scenePhase != .background else { return }
+                Task { await store.refresh() }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                // Back on screen: the meter may be a full interval stale.
+                // `refresh()` is still throttled, so this stays cheap.
+                guard phase != .background else { return }
+                Task { await store.refresh() }
+            }
     }
 }

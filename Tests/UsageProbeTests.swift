@@ -81,3 +81,43 @@ final class UsageProbeTests: XCTestCase {
         XCTAssertNil(UsageProbe.parse(Data("{\"result\":123}".utf8)))
     }
 }
+
+// MARK: - Child environment
+
+extension UsageProbeTests {
+    private func environment(base: [String: String]) -> [String: String] {
+        UsageProbe.childEnvironment(
+            base: base,
+            loginShellPath: { _ in "/login/bin" },
+            userName: "resolved-user",
+            homeDirectory: "/resolved/home"
+        )
+    }
+
+    /// Without USER, `claude -p /usage` returns the cost summary instead of the
+    /// plan-usage text and the parse finds nothing.
+    func testFillsInMissingUserName() {
+        XCTAssertEqual(environment(base: [:])["USER"], "resolved-user")
+        XCTAssertEqual(environment(base: ["USER": ""])["USER"], "resolved-user")
+    }
+
+    func testKeepsAnInheritedUserName() {
+        XCTAssertEqual(environment(base: ["USER": "inherited"])["USER"], "inherited")
+    }
+
+    func testFillsInMissingHomeDirectory() {
+        XCTAssertEqual(environment(base: [:])["HOME"], "/resolved/home")
+        XCTAssertEqual(environment(base: ["HOME": "/inherited"])["HOME"], "/inherited")
+    }
+
+    /// A GUI process inherits launchd's minimal PATH; the login shell's is the
+    /// one that resolves the tools `claude` shells out to.
+    func testSubstitutesTheLoginShellPath() {
+        let result = environment(base: ["SHELL": "/bin/fish", "PATH": "/usr/bin"])
+        XCTAssertEqual(result["PATH"], "/login/bin")
+    }
+
+    func testKeepsTheInheritedPathWhenNoShellIsSet() {
+        XCTAssertEqual(environment(base: ["PATH": "/usr/bin"])["PATH"], "/usr/bin")
+    }
+}
