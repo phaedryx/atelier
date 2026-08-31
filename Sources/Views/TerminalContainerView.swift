@@ -1,5 +1,5 @@
 // ABOUTME: Workspace view with dynamic tabs for agent, terminals, and browsers.
-// ABOUTME: Info and Agent are always present; terminals and browsers are added on demand.
+// ABOUTME: Info and Agent are always present; every other tab closes and reopens on demand.
 
 import os
 import SwiftUI
@@ -136,7 +136,9 @@ func reorderedCustomTabs(_ tabs: [WorkspaceTab], dragging draggedTab: WorkspaceT
     return reordered
 }
 
-/// A tab in the workspace. Info and Agent are permanent; terminals and browsers are closeable.
+/// A tab in the workspace. Info and Agent are permanent; everything else — the
+/// Changes and Environment singletons included — closes, reopens, and reorders
+/// by drag.
 enum WorkspaceTab: Hashable {
     case info
     case agent
@@ -146,7 +148,9 @@ enum WorkspaceTab: Hashable {
     case browser(UUID)
     case editor(UUID)
 
-    var isCloseable: Bool { kind.isCloseable }
+    var isCloseable: Bool {
+        kind.isCloseable
+    }
 }
 
 extension WorkspaceTab {
@@ -193,8 +197,13 @@ struct WorkspaceTabSnapshot {
 }
 
 /// The state a workstream's model starts life with. Tab lists are never
-/// persisted across launches, so a fresh workstream always opens with the four
-/// fixed tabs; only the last-active tab *kind* is restored.
+/// persisted across launches, so a fresh workstream always opens with the same
+/// four tabs; only the last-active tab *kind* is restored.
+///
+/// That unconditional seed is what makes restoring a saved `.changes` or
+/// `.environment` safe — the tab it names is always there. Closing either is a
+/// within-session state; if that ever becomes persistent, `activeTab` below has
+/// to be reconciled against `tabs` rather than trusted.
 func startupWorkspaceTabState(savedTab: RestorableWorkspaceTab?) -> WorkspaceTabSnapshot {
     WorkspaceTabSnapshot(
         tabs: [.info, .agent, .changes, .environment],
@@ -550,12 +559,12 @@ struct TerminalContainerView: View {
 
     private var tabBar: some View {
         HStack(spacing: 0) {
-            // Fixed tabs (Info, Agent, Changes, Environment)
+            // Permanent tabs (Info, Agent)
             ForEach(fixedTabs, id: \.self) { tab in
                 tabButton(for: tab)
             }
 
-            // Scrollable closeable tabs (terminals, browsers)
+            // Scrollable closeable tabs (Changes, Environment, terminals, browsers, editors)
             if !closeableTabs.isEmpty {
                 ScrollableTabStrip(
                     tabs: closeableTabs,
@@ -569,6 +578,19 @@ struct TerminalContainerView: View {
 
             // Quick actions to add tabs
             HStack(spacing: 2) {
+                // Shown only while the tab is closed. ⌘1-9 is positional over
+                // the tabs that are open, so no number reaches a closed one;
+                // this and the command palette are the way back.
+                if !model.tabs.contains(.changes) {
+                    TabBarActionButton(icon: WorkspaceTabKind.changes.icon, tooltip: "Show Changes") {
+                        model.activateSingleton(.changes)
+                    }
+                }
+                if !model.tabs.contains(.environment) {
+                    TabBarActionButton(icon: WorkspaceTabKind.environment.icon, tooltip: "Show Environment") {
+                        model.activateSingleton(.environment)
+                    }
+                }
                 TabBarActionButton(icon: "terminal", tooltip: "New Terminal", action: addTerminal)
                 TabBarActionButton(icon: "globe", tooltip: "New Browser", action: addBrowser)
                 TabBarActionButton(icon: "doc.text", tooltip: "New Editor", action: openEditor)
@@ -796,7 +818,7 @@ struct TerminalContainerView: View {
                 } else {
                     startRunIfNeeded()
                 }
-                model.activeTab = .environment
+                model.activateSingleton(.environment)
             }
             .onReceive(NotificationCenter.default.publisher(for: .toggleTerminal)) { _ in
                 guard isActive else { return }
@@ -822,7 +844,7 @@ struct TerminalContainerView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .toggleEnvironment)) { _ in
                 guard isActive else { return }
-                model.activeTab = .environment
+                model.activateSingleton(.environment)
             }
             .onReceive(NotificationCenter.default.publisher(for: .closeTerminal)) { _ in
                 guard isActive else { return }
@@ -1027,11 +1049,18 @@ struct TerminalContainerView: View {
 
     // MARK: - Tab management
 
-    /// Number of closeable tabs beyond which labels are hidden to save space.
+    /// Number of per-tab-titled tabs beyond which labels are hidden to save
+    /// space.
     private static let compactTabThreshold = 3
 
+    /// Counts the tabs whose title is per-tab, which is what this used to mean
+    /// when only those kinds were closeable. Changes and Environment are
+    /// closeable now but carry fixed labels, so counting them would trip
+    /// compact mode two tabs early and hide browser titles that still fit.
+    /// (Only `tabLabel`'s browser branch consults this; editor tabs keep their
+    /// filename either way.)
     private var useCompactTabs: Bool {
-        model.tabs.filter(\.isCloseable).count > Self.compactTabThreshold
+        model.tabs.filter { $0.kind.staticLabel == nil }.count > Self.compactTabThreshold
     }
 
     private func tabLabel(_ tab: WorkspaceTab) -> String? {
@@ -1234,9 +1263,9 @@ struct TerminalContainerView: View {
         addEditor()
     }
 
-    /// Activate the always-present Changes tab.
+    /// Show the Changes tab, reopening it first if the user closed it.
     private func addChanges() {
-        model.activateChanges()
+        model.activateSingleton(.changes)
     }
 
     private func addEditor(filePath: String? = nil) {

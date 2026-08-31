@@ -43,7 +43,7 @@ final class WorkspaceTabSnapshotTests: XCTestCase {
 
         // A tag written by a future build (or a removed tab kind).
         let raw: [String: String] = [known.uuidString: "changes", UUID().uuidString: "somethingNew"]
-        defaults.set(try JSONEncoder().encode(raw), forKey: key)
+        try defaults.set(JSONEncoder().encode(raw), forKey: key)
 
         XCTAssertEqual(WorkspaceStateStore.load(for: known), .changes)
     }
@@ -112,6 +112,20 @@ final class WorkspaceTabStateTests: XCTestCase {
         let reordered = reorderedCustomTabs(tabs, dragging: terminalC, to: terminalA)
 
         XCTAssertEqual(reordered, [.info, .agent, terminalC, terminalA, browserB])
+    }
+
+    func testReorderedCustomTabsRefusesToDisturbThePermanentTabs() throws {
+        let terminalA = try WorkspaceTab.terminal(XCTUnwrap(UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")))
+        let tabs: [WorkspaceTab] = [.info, .agent, .changes, terminalA]
+
+        // Info and Agent are neither draggable nor drop targets; Changes is
+        // both, so it must keep every other tab after index 1.
+        XCTAssertEqual(reorderedCustomTabs(tabs, dragging: terminalA, to: .agent), tabs)
+        XCTAssertEqual(reorderedCustomTabs(tabs, dragging: .info, to: terminalA), tabs)
+        XCTAssertEqual(
+            reorderedCustomTabs(tabs, dragging: terminalA, to: .changes),
+            [.info, .agent, terminalA, .changes]
+        )
     }
 
     func testRenderableWorkstreamIDKeepsOnlySelectedReadyWorkstream() throws {

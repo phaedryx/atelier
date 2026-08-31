@@ -26,12 +26,13 @@ func defaultPaletteCommands() -> [PaletteCommand] {
                        shortcut: "⌘I", isAvailable: workstream, action: post(.toggleInfo)),
         PaletteCommand(id: "tab.agent", title: NSLocalizedString("Show Coding Agent", comment: ""), category: tabs,
                        shortcut: "⌘↩", isAvailable: workstream, action: post(.focusAgent)),
-        // Positional badges (⌘3/⌘4) reflect the switchByNumber monitor; the
-        // open-tab commands have no binding at all — the palette IS their surface.
+        // No badge: these two close and reorder like any other tab, so the ⌘N
+        // that reaches them moves — and once closed, no number reaches them at
+        // all. The palette and the tab bar's reopen buttons are their surface.
         PaletteCommand(id: "tab.changes", title: NSLocalizedString("Show Changes", comment: ""), category: tabs,
-                       shortcut: "⌘3", isAvailable: workstream, action: post(.toggleChanges)),
+                       isAvailable: workstream, action: post(.toggleChanges)),
         PaletteCommand(id: "tab.environment", title: NSLocalizedString("Show Environment", comment: ""), category: tabs,
-                       shortcut: "⌘4", isAvailable: workstream, action: post(.toggleEnvironment)),
+                       isAvailable: workstream, action: post(.toggleEnvironment)),
         PaletteCommand(id: "tab.newTerminal", title: NSLocalizedString("New Terminal", comment: ""), category: tabs,
                        isAvailable: workstream, action: post(.toggleTerminal)),
         PaletteCommand(id: "tab.newBrowser", title: NSLocalizedString("New Browser", comment: ""), category: tabs,

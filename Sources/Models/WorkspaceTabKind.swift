@@ -8,17 +8,27 @@ import Foundation
 /// kind means one entry here, one case in `WorkspaceTab`, and one case in
 /// `tabContent`; the remaining per-kind switches (restore mapping, occlusion,
 /// seeding, removal) are exhaustive, so the compiler walks you to each one.
+///
+/// Only Info and Agent are permanent. Changes and Environment are singletons —
+/// there is exactly one of each — but they close and reopen like any terminal
+/// or browser, and they sit in the same draggable strip.
 struct WorkspaceTabKind: Equatable, Hashable {
-    /// Stable identifier; doubles as the drag identifier for pinned tabs.
+    /// Stable identifier; doubles as the drag identifier for the singleton
+    /// kinds, which have no instance UUID to drag by.
     let id: String
     let isCloseable: Bool
     /// SF Symbol name.
     let icon: String
-    /// Fixed tab title for pinned kinds; nil when the title is per-tab
-    /// (terminal process title, browser page title, editor filename).
+    /// Fixed tab title for the singleton kinds; nil when the title is per-tab
+    /// (terminal process title, browser page title, editor filename). Doubles
+    /// as the test for whether a tab counts toward compact mode — only tabs
+    /// whose label is per-tab lose it.
     let staticLabel: String?
-    /// Display-only shortcut badge shown in the tab bar. The real key binding
-    /// lives on the menu item in AtelierApp; these two must be kept in step.
+    /// Display-only shortcut badge shown in the tab bar, for the kinds with a
+    /// dedicated named binding. The real key binding lives on the menu item in
+    /// AtelierApp; these two must be kept in step. Closeable kinds leave this
+    /// nil and fall through to a positional badge — their ⌘N depends on what
+    /// else is open, so the tab bar derives it from the live tab order.
     let shortcutBadge: String?
 
     /// ⌘I is the dedicated menu binding; ⌘1 still reaches Info positionally
@@ -33,14 +43,12 @@ struct WorkspaceTabKind: Equatable, Hashable {
         staticLabel: NSLocalizedString("Agent", comment: ""), shortcutBadge: "\u{21A9}"
     )
     static let changes = WorkspaceTabKind(
-        id: "changes", isCloseable: false, icon: "arrow.triangle.branch",
-        // Positional: Changes is the third pinned tab, reachable at ⌘3
-        // through the switchByNumber monitor. No dedicated menu binding exists.
-        staticLabel: NSLocalizedString("Changes", comment: ""), shortcutBadge: "3"
+        id: "changes", isCloseable: true, icon: "arrow.triangle.branch",
+        staticLabel: NSLocalizedString("Changes", comment: ""), shortcutBadge: nil
     )
     static let environment = WorkspaceTabKind(
-        id: "environment", isCloseable: false, icon: "play.circle",
-        staticLabel: NSLocalizedString("Environment", comment: ""), shortcutBadge: "4"
+        id: "environment", isCloseable: true, icon: "play.circle",
+        staticLabel: NSLocalizedString("Environment", comment: ""), shortcutBadge: nil
     )
     static let terminal = WorkspaceTabKind(
         id: "terminal", isCloseable: true, icon: "terminal",

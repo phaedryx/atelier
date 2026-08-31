@@ -66,12 +66,44 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertNil(model.editorFilePaths[id])
     }
 
-    func testActivateChangesSelectsTheFixedChangesTab() {
+    func testActivateSingletonSelectsAnOpenTabWithoutDuplicatingIt() {
         let model = makeModel()
 
-        model.activateChanges()
+        model.activateSingleton(.changes)
 
+        XCTAssertEqual(model.tabs, [.info, .agent, .changes])
         XCTAssertEqual(model.activeTab, .changes)
+    }
+
+    func testClosingASingletonHandsSelectionToItsNeighbour() {
+        let model = makeModel(activeTab: .changes)
+
+        XCTAssertTrue(model.removeTab(.changes))
+
+        XCTAssertEqual(model.tabs, [.info, .agent])
+        XCTAssertEqual(model.activeTab, .agent)
+    }
+
+    func testReopeningASingletonAppendsItLikeAnyOtherTab() {
+        let model = makeModel()
+        model.removeTab(.changes)
+        let terminal = model.addTerminal()
+
+        model.activateSingleton(.changes)
+
+        XCTAssertEqual(model.tabs, [.info, .agent, .terminal(terminal), .changes])
+        XCTAssertEqual(model.activeTab, .changes)
+    }
+
+    func testSingletonsReorderByDragLikeInstancedTabs() {
+        let model = makeModel()
+        let terminal = model.addTerminal()
+
+        // Changes is an ordinary drop target now, so a terminal can be moved
+        // ahead of it.
+        model.moveTab(dragging: .terminal(terminal), to: .changes)
+
+        XCTAssertEqual(model.tabs, [.info, .agent, .terminal(terminal), .changes])
     }
 
     func testRemoveTabClearsEditorStateAndFallsBackToNeighbour() {
@@ -183,7 +215,7 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertTrue(model.isActiveEditorDirty)
         XCTAssertTrue(model.isEditorDirty(.editor(editor)))
 
-        model.activateChanges()
+        model.activateSingleton(.changes)
         XCTAssertFalse(model.isEditorTabActive)
         XCTAssertFalse(model.isActiveEditorDirty)
     }
