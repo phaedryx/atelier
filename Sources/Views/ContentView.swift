@@ -96,6 +96,9 @@ struct ContentView: View {
     @State private var keyMonitorInstalled = false
     @StateObject private var commandRegistry = CommandRegistry(commands: defaultPaletteCommands())
     @State private var showCommandPalette = false
+    /// Watches each worktree's git dir so `git branch -m` lands in the sidebar
+    /// immediately. Built once here and reconciled by `syncHeadWatcher`.
+    @State private var headWatcher: WorktreeHeadWatcher?
     @AppStorage("atelier.editorTabActive") private var editorTabActive: Bool = false
 
     private var paletteContext: PaletteContext {
@@ -197,7 +200,10 @@ struct ContentView: View {
                 onSelectWorkstream: { wsID in selection = .workstream(wsID) },
                 onRemoveWorkstream: { wsID in workstreamToRemove = wsID },
                 onPurgeWorkstream: { wsID in confirmPurge(wsID) },
-                onProjectChanged: { ProjectStore.save(projects) }
+                onProjectChanged: {
+                    ProjectStore.save(projects)
+                    syncHeadWatcher(projects: projects)
+                }
             )
             .navigationTitle(project.name)
             .navigationSubtitle(AppConstants.appName)
@@ -269,6 +275,7 @@ struct ContentView: View {
                 saveWork = work
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
                 refreshAgentStateLookup(projects: newValue)
+                syncHeadWatcher(projects: newValue)
             }
             .alert(
                 "Remove Workstream",
@@ -385,7 +392,10 @@ struct ContentView: View {
             ProjectSidebar(
                 projects: $projectList.items,
                 selection: $selection,
-                onProjectsChanged: { ProjectStore.save(projects) }
+                onProjectsChanged: {
+                    ProjectStore.save(projects)
+                    syncHeadWatcher(projects: projects)
+                }
             )
             .navigationSplitViewColumnWidth(min: 160, ideal: 200, max: 350)
         } detail: {
@@ -406,6 +416,7 @@ struct ContentView: View {
             appEnvironment.fetchOrigin(projects: projects)
             Task { await usageStore.refresh() }
             refreshAgentStateLookup(projects: projects)
+            startHeadWatcher()
             // Apply saved appearance
             switch UserDefaults.standard.string(forKey: "atelier.appearance") ?? "system" {
             case "light": NSApp.appearance = NSAppearance(named: .aqua)
@@ -462,6 +473,10 @@ struct ContentView: View {
                     // the agent-state lookup explicitly so hook events for this new workstream
                     // can resolve to its UUID.
                     refreshAgentStateLookup(projects: projects)
+                    // Same reason: a brand-new worktree is exactly the one whose
+                    // branch the agent is about to rename, so it has to start
+                    // being watched now rather than on some later mutation.
+                    syncHeadWatcher(projects: projects)
                     logger.warning("[Atelier] workstreamWorktreeReady: updated \(workstreamID, privacy: .public) with path \(worktreePath, privacy: .public)")
                     // Trigger vibe background setup (env copy, symlinks, Claude settings, deps)
                     let projectPath = projects[pi].directory
@@ -583,6 +598,43 @@ struct ContentView: View {
         }
     }
 
+    /// Creates the HEAD watcher and points it at the current worktrees.
+    ///
+    /// The callback arrives on the watcher's queue for any git activity in the
+    /// worktree, not just a rename, so it hops to the main actor and does the
+    /// cheapest possible thing: re-read that one branch. The 15s poll still
+    /// runs and remains the backstop for anything the vnode watch misses.
+    private func startHeadWatcher() {
+        guard headWatcher == nil else { return }
+        let watcher = WorktreeHeadWatcher { worktreePath in
+            Task { @MainActor in
+                // The name sync runs whether or not the cache moved: the 15s
+                // poll writes the same cache, so it can land the new branch
+                // first and leave this refresh with nothing to publish — and
+                // the sidebar name would then stay stale until the next tick.
+                // It is an in-memory walk that saves only on a real change.
+                appEnvironment.refreshBranchName(for: worktreePath) {
+                    syncWorkstreamNamesFromBranches()
+                }
+            }
+        }
+        headWatcher = watcher
+        syncHeadWatcher(projects: projects)
+    }
+
+    /// Reconcile the watched worktrees.
+    ///
+    /// Must be called explicitly from every path that adds or removes a
+    /// workstream. `onChange(of: projectList.items)` is not enough: Project and
+    /// Workstream equate by id only, so a list with a workstream removed still
+    /// compares equal to the list before it and the observer never fires.
+    /// Missing a removal leaks a resumed DispatchSource and an open descriptor
+    /// on a worktree nobody is watching for any more.
+    private func syncHeadWatcher(projects: [Project]) {
+        let paths = Set(projects.flatMap { $0.workstreams.compactMap(\.worktreePath) })
+        headWatcher?.sync(paths: paths)
+    }
+
     /// Update workstream names to match their branch name.
     /// Called periodically so that when the agent renames a branch, the sidebar reflects it.
     private func syncWorkstreamNamesFromBranches() {
@@ -648,6 +700,7 @@ struct ContentView: View {
         WorkstreamArchiver.remove(wsID, in: &projects[projectIndex], surfaceCache: surfaceCache, tmuxPath: appEnvironment.toolStatus.tmux.path)
         agentStateTracker.clear(workstreamID: wsID)
         ProjectStore.save(projects)
+        syncHeadWatcher(projects: projects)
         workstreamToRemove = nil
     }
 
@@ -658,6 +711,9 @@ struct ContentView: View {
         WorkstreamArchiver.purge(wsID, in: &projects[projectIndex], surfaceCache: surfaceCache, tmuxPath: appEnvironment.toolStatus.tmux.path)
         agentStateTracker.clear(workstreamID: wsID)
         ProjectStore.save(projects)
+        // Before anything else touches the deleted worktree: purge removes the
+        // directory this was watching.
+        syncHeadWatcher(projects: projects)
         if case let .workstream(id) = selection, id == wsID {
             selection = .project(projectID)
         }

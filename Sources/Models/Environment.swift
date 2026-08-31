@@ -166,6 +166,39 @@ final class AppEnvironment: ObservableObject {
         return branchNameCache[path]
     }
 
+    /// Re-read the branch for a single worktree and publish it if it changed.
+    ///
+    /// Deliberately narrow: this runs off a filesystem event from
+    /// `WorktreeHeadWatcher`, which fires on any git activity in the worktree,
+    /// so it must stay one `git rev-parse` for one path — not the full
+    /// `refreshPathValidity` sweep, which is roughly nine subprocesses per
+    /// worktree across every project.
+    ///
+    /// The cache write — and the `objectWillChange` it carries — happens only
+    /// when the branch actually moved, so an incidental event redraws nothing.
+    /// `completion` runs regardless, because the 15s poll writes this same
+    /// cache: it can land the new branch first, leaving this call with nothing
+    /// to publish, and a caller that only reacts to a cache change would then
+    /// skip work that still needs doing.
+    func refreshBranchName(for worktreePath: String, completion: (@MainActor () -> Void)? = nil) {
+        Task.detached { [weak self] in
+            let branch = GitOperations.currentBranch(at: worktreePath)
+            await MainActor.run {
+                guard let self else { return }
+                if self.branchNameCache[worktreePath] != branch {
+                    self.commitChanges {
+                        if let branch {
+                            self.branchNameCache[worktreePath] = branch
+                        } else {
+                            self.branchNameCache.removeValue(forKey: worktreePath)
+                        }
+                    }
+                }
+                completion?()
+            }
+        }
+    }
+
     func isGitRepo(_ directory: String) -> Bool {
         gitRepoCache[directory] ?? false
     }

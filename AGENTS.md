@@ -89,6 +89,12 @@ rewritten at build time and the bump is never committed.
 - **Settings** use `@AppStorage` (UserDefaults), keyed as `atelier.*`
 - **Terminal surfaces** cached in `TerminalSurfaceCache` (keyed by UUID)
 - **Git repo info** cached in `AppEnvironment`, refreshed async every 15s
+- **Branch renames** land immediately: `WorktreeHeadWatcher` watches each worktree's resolved
+  git directory (the one holding `HEAD`, which for a linked worktree is *not* `<worktree>/.git`)
+  and fires a debounced callback, which re-reads that one branch via
+  `AppEnvironment.refreshBranchName(for:)`. The 15s poll stays as the backstop; the watcher only
+  makes the common case instant. The callback fires on any git activity in the worktree, so
+  anything hung off it must stay cheap and no-op when the branch has not changed.
 - **Tool detection** runs at startup in `AppEnvironment.refresh()`
 - **Sidebar state** (selection, expanded sections) stored in UserDefaults (`atelier.selection`, `atelier.expandedProjects`)
 
