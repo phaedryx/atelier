@@ -8,6 +8,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     case environment
     case codingAgent
     case prompts
+    case integrations
     case advanced
 
     /// UserDefaults key remembering the last-selected pane.
@@ -21,6 +22,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .general: return NSLocalizedString("General", comment: "Settings pane")
         case .codingAgent: return NSLocalizedString("Coding Agent", comment: "Settings pane")
         case .prompts: return NSLocalizedString("Prompts", comment: "Settings pane")
+        case .integrations: return NSLocalizedString("Integrations", comment: "Settings pane")
         case .advanced: return NSLocalizedString("Advanced", comment: "Settings pane")
         }
     }
@@ -32,6 +34,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .general: return "gearshape"
         case .codingAgent: return "sparkles"
         case .prompts: return "text.bubble"
+        case .integrations: return "puzzlepiece.extension"
         case .advanced: return "gearshape.2"
         }
     }

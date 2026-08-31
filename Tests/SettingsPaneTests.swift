@@ -14,10 +14,20 @@ final class SettingsPaneTests: XCTestCase {
         XCTAssertEqual(SettingsPane.codingAgent.rawValue, "codingAgent")
         XCTAssertEqual(SettingsPane.prompts.rawValue, "prompts")
         XCTAssertEqual(SettingsPane.advanced.rawValue, "advanced")
+        XCTAssertEqual(SettingsPane.integrations.rawValue, "integrations")
     }
 
     func testTabOrderStartsWithGeneral() {
-        XCTAssertEqual(SettingsPane.allCases, [.general, .environment, .codingAgent, .prompts, .advanced])
+        XCTAssertEqual(
+            SettingsPane.allCases,
+            [.general, .environment, .codingAgent, .prompts, .integrations, .advanced]
+        )
+    }
+
+    func testIntegrationsIsDeepLinkable() {
+        // The Shortcut dialog's "unauthorized" error links straight to the token field.
+        let note = Notification(name: .openSettings, object: "integrations")
+        XCTAssertEqual(SettingsPane.deepLinkTarget(from: note), .integrations)
     }
 
     func testEveryPaneHasTitleAndIcon() {

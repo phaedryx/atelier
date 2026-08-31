@@ -237,4 +237,52 @@ final class ProjectTests: XCTestCase {
         XCTAssertEqual(decoded.name, "legacy")
         XCTAssertTrue(decoded.bypassPermissions)
     }
+
+    func testWorkstreamWithoutShortcutStoryIDDecodesToNil() throws {
+        let json = """
+        {
+          "id": "\(UUID().uuidString)",
+          "name": "no-story",
+          "bypassPermissions": false,
+          "lastAccessedAt": 0
+        }
+        """
+        let decoded = try JSONDecoder().decode(Workstream.self, from: Data(json.utf8))
+        XCTAssertNil(decoded.shortcutStoryID)
+    }
+
+    func testShortcutStoryIDRoundTrips() throws {
+        let original = Workstream(name: "tadthorley/sc-17411/some-title", shortcutStoryID: 17411)
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(Workstream.self, from: data)
+        XCTAssertEqual(decoded.shortcutStoryID, 17411)
+    }
+
+    /// The whole `[Project]` array is decoded from one UserDefaults key with `try?`, so a
+    /// single workstream failing to decode silently yields `[]` and wipes every project.
+    /// A build written before `shortcutStoryID` existed must therefore still load.
+    func testProjectListWrittenBeforeShortcutStoryIDStillDecodes() throws {
+        let json = """
+        [
+          {
+            "id": "\(UUID().uuidString)",
+            "name": "atelier",
+            "directory": "/tmp/atelier",
+            "lastAccessedAt": 0,
+            "workstreams": [
+              {
+                "id": "\(UUID().uuidString)",
+                "name": "older-workstream",
+                "bypassPermissions": false,
+                "lastAccessedAt": 0
+              }
+            ]
+          }
+        ]
+        """
+        let decoded = try JSONDecoder().decode([Project].self, from: Data(json.utf8))
+        XCTAssertEqual(decoded.count, 1, "a pre-upgrade project blob must not decode away to nothing")
+        XCTAssertEqual(decoded.first?.workstreams.count, 1)
+        XCTAssertNil(decoded.first?.workstreams.first?.shortcutStoryID)
+    }
 }

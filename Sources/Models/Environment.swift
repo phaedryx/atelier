@@ -199,6 +199,103 @@ final class AppEnvironment: ObservableObject {
         }
     }
 
+    // MARK: - Shortcut
+
+    /// Fetched story per worktree path. Keyed by path, not story id, because
+    /// `WorkstreamInfoView` receives `workingDirectory` but never the `Workstream`
+    /// itself — the same reason `taskDescriptionCache` is keyed this way.
+    private var shortcutStoryCache: [String: ShortcutStory] = [:]
+    /// Worktree path to story id, populated from the project list, which is the only
+    /// place that knows the mapping.
+    private var shortcutStoryIDs: [String: Int] = [:]
+    /// Workflow states are shared across all stories and change rarely, so they are
+    /// fetched once per launch rather than per story.
+    private var shortcutWorkflows: [ShortcutWorkflow] = []
+
+    func shortcutStory(for worktreePath: String?) -> ShortcutStory? {
+        guard let worktreePath else { return nil }
+        return shortcutStoryCache[worktreePath]
+    }
+
+    /// The story's workflow state name, e.g. "In Progress". Nil until the workflow
+    /// list has been fetched, since stories carry only a state id.
+    func shortcutStateName(for worktreePath: String?) -> String? {
+        guard let story = shortcutStory(for: worktreePath) else { return nil }
+        return shortcutWorkflows.stateName(for: story.workflowStateID)
+    }
+
+    /// Stories fetched before their worktree exists, held by story id until a path shows up.
+    ///
+    /// Creation fetches the story to learn its branch name, so the description is already
+    /// in hand — but the worktree path, which is how the cache is keyed, is only known once
+    /// `git worktree add` finishes. Staging keeps that first fetch instead of discarding it
+    /// and round-tripping again when the info tab opens.
+    private var shortcutStoryStaging: [Int: ShortcutStory] = [:]
+
+    func stageShortcutStory(_ story: ShortcutStory) {
+        shortcutStoryStaging[story.id] = story
+    }
+
+    func registerShortcutStory(id: Int, for worktreePath: String) {
+        shortcutStoryIDs[worktreePath] = id
+
+        // Promote the staged copy now that there is a path to key it by. The removal happens
+        // before the equality guard: leaving it after meant a re-registration with the story
+        // already cached returned early and stranded the staged copy for the session.
+        guard let staged = shortcutStoryStaging.removeValue(forKey: id) else { return }
+        guard shortcutStoryCache[worktreePath] != staged else { return }
+        commitChanges { shortcutStoryCache[worktreePath] = staged }
+    }
+
+    /// Drops cache entries for worktrees that no longer exist.
+    ///
+    /// Unlike `taskDescriptionCache`, which is rebuilt wholesale on every refresh and so
+    /// prunes itself, these are only ever inserted into. Without this, archiving a
+    /// Shortcut workstream and creating a plain one that reuses the path — likelier now
+    /// that worktree directories are named after the branch — renders the old story.
+    func pruneShortcutStories(keeping livePaths: Set<String>) {
+        let stalePaths = Set(shortcutStoryIDs.keys).subtracting(livePaths)
+        guard !stalePaths.isEmpty else { return }
+        commitChanges {
+            for path in stalePaths {
+                shortcutStoryIDs.removeValue(forKey: path)
+                shortcutStoryCache.removeValue(forKey: path)
+            }
+        }
+    }
+
+    /// Re-reads one story and publishes it only when it changed.
+    ///
+    /// Shaped after `refreshBranchName(for:)`: `@MainActor` with the network work
+    /// awaited off it, so the only value crossing an isolation boundary is the decoded
+    /// story. The info tab calls this on every appearance, so the equality guard is what
+    /// keeps a revisit from redrawing.
+    @MainActor
+    func refreshShortcutStory(for worktreePath: String) async {
+        guard let storyID = shortcutStoryIDs[worktreePath] else { return }
+
+        if shortcutWorkflows.isEmpty {
+            do {
+                let workflows = try await ShortcutClient().workflows()
+                commitChanges { shortcutWorkflows = workflows }
+            } catch {
+                // Only costs the state name; the story itself still renders.
+                logger.warning("[Atelier] shortcut: workflows fetch failed: \(String(describing: error), privacy: .public)")
+            }
+        }
+
+        do {
+            let story = try await ShortcutClient().story(id: storyID)
+            guard shortcutStoryCache[worktreePath] != story else { return }
+            commitChanges { shortcutStoryCache[worktreePath] = story }
+        } catch {
+            // Any cached copy deliberately stays on screen rather than blanking the tab,
+            // but a revoked token or deleted story would otherwise be invisible — the
+            // stale copy would keep rendering as though it were current.
+            logger.warning("[Atelier] shortcut: story \(storyID, privacy: .public) refresh failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
     func isGitRepo(_ directory: String) -> Bool {
         gitRepoCache[directory] ?? false
     }

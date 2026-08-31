@@ -151,6 +151,35 @@ struct WorkstreamInfoView: View {
                     }
                 }
 
+                if let story = appEnv.shortcutStory(for: workingDirectory) {
+                    Section("Shortcut") {
+                        LabeledContent {
+                            Text(story.name)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.trailing)
+                        } label: {
+                            Text(verbatim: "sc-\(story.id)")
+                                .font(.system(.body, design: .monospaced))
+                        }
+
+                        if let state = appEnv.shortcutStateName(for: workingDirectory) {
+                            LabeledContent("State") {
+                                Text(state)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+
+                        if let url = URL(string: story.appURL) {
+                            HStack {
+                                Spacer()
+                                Button("Open in Shortcut") {
+                                    NSWorkspace.shared.open(url)
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if scriptConfig.hasAnyScript {
                     Section {
                         if let setup = scriptConfig.setup {
@@ -210,7 +239,7 @@ struct WorkstreamInfoView: View {
 
             // Markdown content fills remaining space when a doc is selected
             if let selected = selectedDoc,
-               let doc = docFiles.first(where: { $0.name == selected })
+               let doc = displayedDocs.first(where: { $0.name == selected })
             {
                 Divider()
                 MarkdownContentView(markdown: doc.content)
@@ -218,10 +247,10 @@ struct WorkstreamInfoView: View {
             }
 
             // Doc tabs pinned to bottom
-            if !docFiles.isEmpty {
+            if !displayedDocs.isEmpty {
                 Divider()
                 HStack(spacing: 0) {
-                    ForEach(docFiles) { doc in
+                    ForEach(displayedDocs) { doc in
                         DocTabButton(
                             name: doc.name,
                             isActive: selectedDoc == doc.name,
@@ -297,6 +326,10 @@ struct WorkstreamInfoView: View {
             let found = DocFile.loadFrom(directory: dir)
             await updateDocFiles(found)
         }
+
+        // Re-read the story on every visit so an edit in Shortcut shows up. The cache
+        // publishes only when the story actually changed, so a revisit redraws nothing.
+        Task { await appEnv.refreshShortcutStory(for: workingDir) }
     }
 
     @MainActor
@@ -317,6 +350,20 @@ struct WorkstreamInfoView: View {
     @MainActor
     private func updateDocFiles(_ docFiles: [DocFile]) {
         self.docFiles = docFiles
+    }
+
+    /// Files found on disk, plus the Shortcut story description when there is one.
+    ///
+    /// The story is appended here rather than pushed into `docFiles` so it tracks the
+    /// `AppEnvironment` cache: the description arrives after the disk scan and can change
+    /// on a later refresh. Note this widens what a `DocFile` is — no longer strictly a
+    /// file on disk, but any Markdown panel the tab row can show.
+    private var displayedDocs: [DocFile] {
+        guard let story = appEnv.shortcutStory(for: workingDirectory),
+              let description = story.description,
+              !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return docFiles }
+        return docFiles + [DocFile(name: "Story", content: description)]
     }
 }
 

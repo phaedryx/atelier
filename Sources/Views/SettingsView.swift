@@ -28,6 +28,7 @@ struct SettingsView: View {
             case .general: GeneralSettingsPane()
             case .codingAgent: CodingAgentSettingsPane()
             case .prompts: PromptsSettingsPane()
+            case .integrations: IntegrationsSettingsPane()
             case .advanced: AdvancedSettingsPane()
             }
         }
@@ -479,6 +480,194 @@ private struct PromptEditorSheet: View {
         }
         .padding(20)
         .frame(width: 460)
+    }
+}
+
+// MARK: - Integrations
+
+/// Named for the category, not the vendor: a second integration becomes another
+/// `Section` here rather than a seventh pane.
+private struct IntegrationsSettingsPane: View {
+    @AppStorage(ShortcutSettings.buttonEnabledKey) private var shortcutButtonEnabled: Bool = true
+    @AppStorage(ShortcutSettings.branchTemplateKey) private var branchTemplate: String = ""
+
+    private var branchPreviewIsValid: Bool {
+        GitOperations.isValidBranchName(ShortcutBranchName.preview(branchTemplate))
+    }
+
+    /// Unknown variables joined for display, or nil when the pattern is clean.
+    private var branchTemplateUnknownVariables: String? {
+        let unknown = ShortcutBranchName.unknownVariables(in: branchTemplate)
+        guard !unknown.isEmpty else { return nil }
+        return unknown.map { "${\($0)}" }.joined(separator: ", ")
+    }
+
+    @State private var token: String = ""
+    /// What is actually in the Keychain, read once on appear. Compared against `token`
+    /// to enable Save — reading the Keychain in `body` would be a syscall per render.
+    @State private var savedToken: String = ""
+    @State private var testResult: TestResult?
+    @State private var isTesting = false
+
+    private enum TestResult {
+        case success(String)
+        case failure(String)
+    }
+
+    private let store = KeychainTokenStore()
+
+    var body: some View {
+        Form {
+            Section("Shortcut") {
+                VStack(alignment: .leading, spacing: 8) {
+                    SecureField("API token", text: $token)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit { save() }
+
+                    Text("Create a token at Shortcut > Settings > API Tokens. Stored in your Keychain, not in preferences.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    HStack(spacing: 8) {
+                        Button("Save") { save() }
+                            .disabled(token == savedToken)
+                        Button("Test", action: test)
+                            .disabled(token.isEmpty || isTesting)
+                        if isTesting {
+                            ProgressView().controlSize(.small)
+                        }
+                    }
+
+                    if let testResult {
+                        switch testResult {
+                        case let .success(message):
+                            Label(message, systemImage: "checkmark.circle")
+                                .font(.caption)
+                                .foregroundStyle(.green)
+                        case let .failure(message):
+                            Label(message, systemImage: "exclamationmark.triangle")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                }
+                .padding(.vertical, 2)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    // A real label, not "", so the field sits beside it the way the API
+                    // token field does — an empty label leaves the row unfocusable.
+                    // No prompt: greyed pattern text inside an empty field reads as a
+                    // value that is already set. The example lives in the caption below.
+                    TextField("Branch Name Pattern", text: $branchTemplate)
+                        .textFieldStyle(.roundedBorder)
+
+                    // Rendered against a sample story, so the pattern's effect is visible
+                    // without having to create a workstream to find out.
+                    LabeledContent("Preview") {
+                        Text(ShortcutBranchName.preview(branchTemplate))
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundStyle(branchPreviewIsValid ? Color.secondary : Color.red)
+                            .textSelection(.enabled)
+                    }
+
+                    Text("Leave blank to use the branch name Shortcut suggests. Variables: \(ShortcutBranchName.variables.map { "${\($0)}" }.joined(separator: ", ")) — for example \(ShortcutBranchName.examplePattern). SLUG is the first six words of the title; SLUG_FULL is all of them.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+
+                    // An unknown variable renders literally and is still a legal branch
+                    // name, so validation alone would let the typo through silently.
+                    if let unknown = branchTemplateUnknownVariables {
+                        Label("Unknown variable \(unknown). It will be used literally.", systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+
+                    if !branchPreviewIsValid {
+                        Label("git will not accept the branch name this produces.", systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                .padding(.vertical, 2)
+
+                SettingToggle(
+                    "Show Shortcut button in sidebar",
+                    isOn: $shortcutButtonEnabled,
+                    description: NSLocalizedString(
+                        "Adds a button to each project row that creates a workstream from a Shortcut story, using the story's suggested branch name. The button is hidden until an API token is saved.",
+                        comment: "Shortcut button setting description"
+                    )
+                )
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear {
+            savedToken = store.read() ?? ""
+            token = savedToken
+        }
+    }
+
+    /// Returns whether the write landed, so callers do not proceed on a failed save.
+    @discardableResult
+    private func save() -> Bool {
+        let status = store.write(token)
+        // write() clears the item for an empty/whitespace value, so re-read rather than
+        // assuming what landed.
+        savedToken = store.read() ?? ""
+        // Keychain presence is not observable, so the sidebar is told explicitly.
+        NotificationCenter.default.post(name: ShortcutSettings.tokenChanged, object: nil)
+
+        guard status == errSecSuccess else {
+            // A silent failure here strands the user: the button never appears and the
+            // pane offers no reason why.
+            testResult = .failure(String(
+                format: NSLocalizedString("Could not save to the Keychain (error %d).", comment: "Keychain write failure"),
+                Int(status)
+            ))
+            return false
+        }
+        testResult = nil
+        return true
+    }
+
+    private func test() {
+        // Deliberately does not save first. Testing a replacement for a working token used
+        // to overwrite the good one before finding out the new one was rejected, leaving
+        // the user with no working token and no idea they had lost it.
+        let candidate = token
+        isTesting = true
+        testResult = nil
+        Task {
+            do {
+                let member = try await ShortcutClient(token: { candidate }).currentMember()
+                // Only commit a token that actually authenticated — and only report success
+                // if committing it worked. Reporting "Connected as …" after a failed write
+                // is the worst of both: the token authenticated, nothing was stored, and the
+                // sidebar button never appears.
+                let status = store.write(candidate)
+                savedToken = store.read() ?? ""
+                NotificationCenter.default.post(name: ShortcutSettings.tokenChanged, object: nil)
+                guard status == errSecSuccess else {
+                    testResult = .failure(String(
+                        format: NSLocalizedString("Could not save to the Keychain (error %d).", comment: "Keychain write failure"),
+                        Int(status)
+                    ))
+                    isTesting = false
+                    return
+                }
+                testResult = .success(String(
+                    format: NSLocalizedString("Connected as %@ (%@)", comment: "Shortcut token test success"),
+                    member.name,
+                    member.workspaceName
+                ))
+            } catch let error as ShortcutError {
+                testResult = .failure(error.message)
+            } catch {
+                testResult = .failure(error.localizedDescription)
+            }
+            isTesting = false
+        }
     }
 }
 

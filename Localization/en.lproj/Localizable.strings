@@ -175,6 +175,43 @@
 "Prompt" = "Prompt";
 "Stored prompts appear in the command palette. Running one switches to the Coding Agent tab and types the prompt for you. They stay hidden while the agent is mid-turn." = "Stored prompts appear in the command palette. Running one switches to the Coding Agent tab and types the prompt for you. They stay hidden while the agent is mid-turn.";
 
+/* Settings - Integrations */
+"Integrations" = "Integrations";
+"Shortcut" = "Shortcut";
+"API token" = "API token";
+"Create a token at Shortcut > Settings > API Tokens. Stored in your Keychain, not in preferences." = "Create a token at Shortcut > Settings > API Tokens. Stored in your Keychain, not in preferences.";
+"Test" = "Test";
+"Connected as %@ (%@)" = "Connected as %@ (%@)";
+"Branch Name Pattern" = "Branch Name Pattern";
+"Leave blank to use the branch name Shortcut suggests. Variables: %@ — for example %@. SLUG is the first six words of the title; SLUG_FULL is all of them." = "Leave blank to use the branch name Shortcut suggests. Variables: %@ — for example %@. SLUG is the first six words of the title; SLUG_FULL is all of them.";
+"Unknown variable %@. It will be used literally." = "Unknown variable %@. It will be used literally.";
+"Could not save to the Keychain (error %d)." = "Could not save to the Keychain (error %d).";
+"Preview" = "Preview";
+"git will not accept the branch name this produces." = "git will not accept the branch name this produces.";
+"Show Shortcut button in sidebar" = "Show Shortcut button in sidebar";
+"Adds a button to each project row that creates a workstream from a Shortcut story, using the story's suggested branch name. The button is hidden until an API token is saved." = "Adds a button to each project row that creates a workstream from a Shortcut story, using the story's suggested branch name. The button is hidden until an API token is saved.";
+
+/* Shortcut - errors */
+"No Shortcut API token. Add one in Settings > Integrations." = "No Shortcut API token. Add one in Settings > Integrations.";
+"Shortcut rejected the API token." = "Shortcut rejected the API token.";
+"No such Shortcut story." = "No such Shortcut story.";
+"Shortcut returned HTTP %d." = "Shortcut returned HTTP %d.";
+"Could not read Shortcut's response." = "Could not read Shortcut's response.";
+"Enter a story id." = "Enter a story id.";
+"Shortcut suggested a branch name git will not accept." = "Shortcut suggested a branch name git will not accept.";
+"A workstream for this story already exists." = "A workstream for this story already exists.";
+
+/* Shortcut - new workstream sheet */
+"New Workstream from Shortcut" = "New Workstream from Shortcut";
+"Story" = "Story";
+"The branch and worktree are named using the Branch Name Pattern in Settings." = "The branch and worktree are named using the Branch Name Pattern in Settings.";
+
+"Open Settings" = "Open Settings";
+
+/* Shortcut - info tab */
+"State" = "State";
+"Open in Shortcut" = "Open in Shortcut";
+
 /* Settings - Advanced */
 "Advanced" = "Advanced";
 "Clear project list" = "Clear project list";
@@ -320,7 +357,6 @@
 " by " = " by ";
 "and additional work by " = "and additional work by ";
 "About %@" = "About %@";
-
 
 /* Help */
 "Report a Bug" = "Report a Bug";
