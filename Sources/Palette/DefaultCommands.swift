@@ -23,7 +23,7 @@ func defaultPaletteCommands() -> [PaletteCommand] {
 
     return [
         PaletteCommand(id: "tab.info", title: NSLocalizedString("Show Info", comment: ""), category: tabs,
-                       shortcut: "⌘1", isAvailable: workstream, action: post(.toggleInfo)),
+                       shortcut: "⌘I", isAvailable: workstream, action: post(.toggleInfo)),
         PaletteCommand(id: "tab.agent", title: NSLocalizedString("Show Coding Agent", comment: ""), category: tabs,
                        shortcut: "⌘↩", isAvailable: workstream, action: post(.focusAgent)),
         // Positional badges (⌘3/⌘4) reflect the switchByNumber monitor; the

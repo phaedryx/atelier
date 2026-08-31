@@ -21,9 +21,12 @@ struct WorkspaceTabKind: Equatable, Hashable {
     /// lives on the menu item in AtelierApp; these two must be kept in step.
     let shortcutBadge: String?
 
+    /// ⌘I is the dedicated menu binding; ⌘1 still reaches Info positionally
+    /// through the switchByNumber monitor, but the badge shows the named key —
+    /// the same precedence Agent's ↩ badge takes over its positional ⌘2.
     static let info = WorkspaceTabKind(
         id: "info", isCloseable: false, icon: "info.circle",
-        staticLabel: NSLocalizedString("Info", comment: ""), shortcutBadge: "1"
+        staticLabel: NSLocalizedString("Info", comment: ""), shortcutBadge: "I"
     )
     static let agent = WorkspaceTabKind(
         id: "agent", isCloseable: false, icon: "sparkle",
