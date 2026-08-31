@@ -133,9 +133,14 @@ final class WorkspaceModel: ObservableObject {
         return id
     }
 
-    /// Changes is a fixed tab that is always present — activating is all there is.
-    func activateChanges() {
-        activeTab = .changes
+    /// Shows one of the singleton tabs (Changes, Environment), reopening it at
+    /// the end of the strip if the user closed it. Instanced kinds have no
+    /// business here — there can be many of each, so "the" tab is meaningless.
+    func activateSingleton(_ tab: WorkspaceTab) {
+        if !tabs.contains(tab) {
+            tabs.append(tab)
+        }
+        activeTab = tab
     }
 
     private func appendAndActivate(_ tab: WorkspaceTab) {
@@ -149,9 +154,12 @@ final class WorkspaceModel: ObservableObject {
     /// if the removed tab was active. Returns false when the tab is not open,
     /// so callers can skip their own teardown.
     ///
-    /// Callers must pass closeable tabs only — fixed tabs (Info, Agent,
-    /// Changes, Environment) are permanent, and like the original closeTab
-    /// contract this method does not guard against them.
+    /// Callers must pass closeable tabs only — Info and Agent are permanent,
+    /// and like the original closeTab contract this method does not guard
+    /// against them. Changes and Environment are ordinary closeable tabs: they
+    /// carry no per-tab state to clear, and everything durable behind them (the
+    /// diff bridge, the annotation store, the dev server) belongs to the
+    /// workstream rather than the tab, so closing one frees nothing.
     @discardableResult
     func removeTab(_ tab: WorkspaceTab) -> Bool {
         guard let index = tabs.firstIndex(of: tab) else { return false }

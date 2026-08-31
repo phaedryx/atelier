@@ -5,9 +5,16 @@
 import XCTest
 
 final class WorkspaceTabKindTests: XCTestCase {
-    func testPinnedKindsAreNotCloseable() {
+    func testOnlyInfoAndAgentArePermanent() {
+        for kind in [WorkspaceTabKind.info, .agent] {
+            XCTAssertFalse(kind.isCloseable, "\(kind.id) must be permanent")
+        }
+        // Singletons: one of each, fixed label, but they close like any tab.
+        for kind in [WorkspaceTabKind.changes, .environment] {
+            XCTAssertTrue(kind.isCloseable, "\(kind.id) must be closeable")
+            XCTAssertNil(kind.shortcutBadge, "\(kind.id) badges are positional")
+        }
         for kind in [WorkspaceTabKind.info, .agent, .changes, .environment] {
-            XCTAssertFalse(kind.isCloseable, "\(kind.id) must be pinned")
             XCTAssertNotNil(kind.staticLabel, "\(kind.id) has a fixed label")
         }
     }
@@ -39,18 +46,16 @@ final class WorkspaceTabKindTests: XCTestCase {
         // ⌘I is the dedicated binding; ⌘1 still works positionally.
         XCTAssertEqual(WorkspaceTabKind.info.shortcutBadge, "I")
         XCTAssertEqual(WorkspaceTabKind.agent.shortcutBadge, "\u{21A9}")
-        // ⌘D was retired in favour of the palette; ⌘3 is the positional
-        // binding from the switchByNumber monitor, which still exists.
-        XCTAssertEqual(WorkspaceTabKind.changes.shortcutBadge, "3")
+        // No static badge: Changes and Environment move and close, so the tab
+        // bar derives their ⌘N from the live tab order instead.
+        XCTAssertNil(WorkspaceTabKind.changes.shortcutBadge)
 
         XCTAssertEqual(WorkspaceTab.environment.kind, .environment)
         XCTAssertEqual(WorkspaceTabKind.environment.icon, "play.circle")
-        // Positional: Environment is the fourth pinned tab, reachable at ⌘4
-        // through the switchByNumber monitor. No dedicated binding exists.
-        XCTAssertEqual(WorkspaceTabKind.environment.shortcutBadge, "4")
+        XCTAssertNil(WorkspaceTabKind.environment.shortcutBadge)
     }
 
-    func testDragIdentifierIsUUIDForInstancedAndKindIDForPinned() {
+    func testDragIdentifierIsUUIDForInstancedAndKindIDForSingletons() {
         let id = UUID()
         XCTAssertEqual(WorkspaceTab.terminal(id).dragIdentifier, id.uuidString)
         XCTAssertEqual(WorkspaceTab.browser(id).dragIdentifier, id.uuidString)
@@ -63,6 +68,7 @@ final class WorkspaceTabKindTests: XCTestCase {
 
     func testIsCloseableDelegatesToKind() {
         XCTAssertFalse(WorkspaceTab.info.isCloseable)
+        XCTAssertTrue(WorkspaceTab.changes.isCloseable)
         XCTAssertTrue(WorkspaceTab.terminal(UUID()).isCloseable)
     }
 }
