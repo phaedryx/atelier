@@ -563,14 +563,19 @@ private struct IntegrationsSettingsPane: View {
                     )
                     .textFieldStyle(.roundedBorder)
 
-                    Text("Example: \(ShortcutBranchName.examplePattern)")
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
+                    // Rendered against a sample story, so the pattern's effect is visible
+                    // without having to create a workstream to find out.
+                    LabeledContent("Preview") {
+                        Text(ShortcutBranchName.preview(branchTemplate))
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundStyle(branchPreviewIsValid ? Color.secondary : Color.red)
+                            .textSelection(.enabled)
+                    }
 
-                    Text("Leave blank to use the branch name Shortcut suggests. Variables: \(ShortcutBranchName.variables.map { "${\($0)}" }.joined(separator: ", ")). SLUG is the first six words of the title; SLUG_FULL is all of them.")
+                    Text("Leave blank to use the branch name Shortcut suggests. Variables: \(ShortcutBranchName.variables.map { "${\($0)}" }.joined(separator: ", ")) — for example \(ShortcutBranchName.examplePattern). SLUG is the first six words of the title; SLUG_FULL is all of them.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
 
                     // An unknown variable renders literally and is still a legal branch
                     // name, so validation alone would let the typo through silently.
