@@ -17,9 +17,6 @@ struct HelpView: View {
                     Text("Version \(AppConstants.displayVersion)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    (Text("Made with ") + Text("\u{2764}\u{FE0F}") + Text(" in Poblenou, Barcelona"))
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
                 }
                 .padding(.top, 24)
                 .padding(.bottom, -4)
@@ -59,9 +56,6 @@ struct HelpView: View {
                 HStack(spacing: 16) {
                     Link(destination: AppConstants.documentationURL) {
                         Label("Documentation", systemImage: "book")
-                    }
-                    Link(destination: AppConstants.sponsorURL) {
-                        Label("Sponsor", systemImage: "heart")
                     }
                     Link(destination: URL(string: "https://github.com/phaedryx/atelier/issues/new?template=bug_report.yml")!) {
                         Label("Report a Bug", systemImage: "ladybug")

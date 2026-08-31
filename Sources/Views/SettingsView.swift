@@ -318,7 +318,10 @@ private struct CodingAgentSettingsPane: View {
                 SettingToggle(
                     "Agent messaging",
                     isOn: $agentIPC,
-                    description: NSLocalizedString("Lets coding agents in this project see and message each other. Messages are delivered when the recipient checks its inbox. Takes effect the next time a Coding Agent starts. Only applies to Claude Code.", comment: "Agent IPC setting description")
+                    description: NSLocalizedString(
+                        "The master switch for agent-to-agent messaging in this project: agents can find each other and send messages, which the recipient sees only when it checks its inbox. Nothing is typed into any terminal unless you also turn on Nudge idle agents below. Takes effect the next time a Coding Agent starts. Only applies to Claude Code.",
+                        comment: "Agent IPC setting description"
+                    )
                 )
                 .onChange(of: agentIPC) { _, _ in
                     AgentIPCSettings.apply()
@@ -327,7 +330,10 @@ private struct CodingAgentSettingsPane: View {
                 SettingToggle(
                     "Nudge idle agents",
                     isOn: $agentIPCNudge,
-                    description: "When a message arrives for an agent that has finished its turn, Atelier types a notice into its terminal. That is typed input: an agent running without permission prompts will act on it.",
+                    description: NSLocalizedString(
+                        "Requires Agent messaging. When a message arrives for an agent that has finished its turn, Atelier types a notice into its terminal. That is typed input: an agent running without permission prompts will act on it.",
+                        comment: "Agent IPC nudge setting description"
+                    ),
                     descriptionStyle: agentIPCNudge ? .warning : .secondary
                 )
                 .disabled(!agentIPC)
@@ -338,14 +344,6 @@ private struct CodingAgentSettingsPane: View {
                     description: "Coding Agent sessions persist across app restarts. The Terminal tab is not affected. Sessions are lost on system restart."
                 )
                 .disabled(!appEnv.toolStatus.tmux.isInstalled)
-                .onChange(of: tmuxMode) { _, newValue in
-                    Telemetry.shared.track(
-                        "setting_changed",
-                        url: "/settings/tmux-mode",
-                        title: "Tmux Mode Toggled",
-                        data: ["setting": "tmux_mode", "value": newValue ? "on" : "off"]
-                    )
-                }
 
                 if !appEnv.toolStatus.tmux.isInstalled {
                     Text("Requires tmux to be installed.")
@@ -487,8 +485,6 @@ private struct PromptEditorSheet: View {
 // MARK: - Advanced
 
 private struct AdvancedSettingsPane: View {
-    @AppStorage("atelier.telemetryEnabled") private var telemetryEnabled: Bool = true
-    @AppStorage("atelier.crashReportingEnabled") private var crashReportingEnabled: Bool = true
     @AppStorage("atelier.detailedLogging") private var detailedLogging: Bool = false
     @AppStorage("atelier.quickActionDebug") private var quickActionDebug: Bool = false
 
@@ -497,18 +493,6 @@ private struct AdvancedSettingsPane: View {
     var body: some View {
         Form {
             Section {
-                SettingToggle(
-                    "Usage analytics",
-                    isOn: $telemetryEnabled,
-                    description: "Send anonymous usage data to help improve Atelier. We collect: app version, build type, macOS version, locale, and screen resolution. No project names, file contents, or personal data."
-                )
-
-                SettingToggle(
-                    "Crash reports",
-                    isOn: $crashReportingEnabled,
-                    description: "Send crash reports and performance data. Requires restart to take effect."
-                )
-
                 Toggle(isOn: $detailedLogging) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Detailed logging")

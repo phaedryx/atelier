@@ -54,23 +54,6 @@ rm -rf "$APP_PATH"
 mkdir -p "$BUILD_DIR"
 cp -R "$APP_BUILT" "$APP_PATH"
 
-# Symbol upload is opt-in: without a Sentry org and project there is nowhere
-# to send them, and the release is perfectly valid without it.
-if [ -n "${ATELIER_SENTRY_ORG:-}" ] && [ -n "${ATELIER_SENTRY_PROJECT:-}" ]; then
-  echo "==> Uploading debug symbols to Sentry..."
-  if command -v sentry-cli &>/dev/null; then
-    sentry-cli debug-files upload \
-      --org "$ATELIER_SENTRY_ORG" \
-      --project "$ATELIER_SENTRY_PROJECT" \
-      "$BUILD_DIR/derived/Build/Products/Release/"
-  else
-    echo "Warning: sentry-cli not found, skipping dSYM upload"
-    echo "Install with: brew install getsentry/tools/sentry-cli"
-  fi
-else
-  echo "==> ATELIER_SENTRY_ORG/PROJECT unset, skipping dSYM upload"
-fi
-
 echo "==> Re-signing embedded frameworks and helpers..."
 
 # Re-sign all embedded frameworks with secure timestamp and hardened runtime

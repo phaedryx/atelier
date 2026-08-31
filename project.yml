@@ -17,11 +17,6 @@ settings:
       - "-Xcc"
       - "-Wno-incomplete-umbrella"
     MACOSX_DEPLOYMENT_TARGET: "14.0"
-    # Empty by default: crash reporting stays off until a DSN is supplied.
-    ATELIER_SENTRY_DSN: ""
-    # Empty by default: usage telemetry stays off until a collector is supplied.
-    ATELIER_TELEMETRY_ENDPOINT: ""
-    ATELIER_TELEMETRY_WEBSITE_ID: ""
     CODE_SIGN_IDENTITY: "-"
     CODE_SIGN_STYLE: Manual
     CODE_SIGNING_REQUIRED: "NO"
@@ -31,9 +26,6 @@ packages:
   swift-cmark:
     url: https://github.com/swiftlang/swift-cmark
     from: "0.8.0"
-  Sentry:
-    url: https://github.com/getsentry/sentry-cocoa
-    from: "9.15.0"
 
 targets:
   Atelier:
@@ -48,9 +40,6 @@ targets:
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
         NSMainStoryboardFile: ""
         NSPrincipalClass: NSApplication
-        SentryDSN: $(ATELIER_SENTRY_DSN)
-        TelemetryEndpoint: $(ATELIER_TELEMETRY_ENDPOINT)
-        TelemetryWebsiteID: $(ATELIER_TELEMETRY_WEBSITE_ID)
         LSUIElement: false
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
@@ -141,8 +130,6 @@ targets:
         product: cmark-gfm
       - package: swift-cmark
         product: cmark-gfm-extensions
-      - package: Sentry
-        product: Sentry
     preBuildScripts:
       - script: |
           set -e
