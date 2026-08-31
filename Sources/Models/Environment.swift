@@ -176,25 +176,25 @@ final class AppEnvironment: ObservableObject {
     ///
     /// The cache write — and the `objectWillChange` it carries — happens only
     /// when the branch actually moved, so an incidental event redraws nothing.
-    /// `completion` runs regardless, because the 15s poll writes this same
-    /// cache: it can land the new branch first, leaving this call with nothing
-    /// to publish, and a caller that only reacts to a cache change would then
-    /// skip work that still needs doing.
-    func refreshBranchName(for worktreePath: String, completion: (@MainActor () -> Void)? = nil) {
-        Task.detached { [weak self] in
-            let branch = GitOperations.currentBranch(at: worktreePath)
-            await MainActor.run {
-                guard let self else { return }
-                if self.branchNameCache[worktreePath] != branch {
-                    self.commitChanges {
-                        if let branch {
-                            self.branchNameCache[worktreePath] = branch
-                        } else {
-                            self.branchNameCache.removeValue(forKey: worktreePath)
-                        }
-                    }
-                }
-                completion?()
+    ///
+    /// Async and `@MainActor` on purpose. A completion closure would have to
+    /// cross into a detached task, and so would a weakly captured `self`; both
+    /// are exactly what strict concurrency objects to. Isolating the whole
+    /// method to the main actor means the only value crossing an isolation
+    /// boundary is the `String?` coming back out of the subprocess, and the
+    /// caller sequences its follow-up work with `await`.
+    ///
+    /// The caller must still act even when this publishes nothing — the 15s
+    /// poll writes the same cache and can land the new branch first.
+    @MainActor
+    func refreshBranchName(for worktreePath: String) async {
+        let branch = await Task.detached { GitOperations.currentBranch(at: worktreePath) }.value
+        guard branchNameCache[worktreePath] != branch else { return }
+        commitChanges {
+            if let branch {
+                branchNameCache[worktreePath] = branch
+            } else {
+                branchNameCache.removeValue(forKey: worktreePath)
             }
         }
     }

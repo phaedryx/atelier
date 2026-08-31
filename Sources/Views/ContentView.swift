@@ -608,14 +608,13 @@ struct ContentView: View {
         guard headWatcher == nil else { return }
         let watcher = WorktreeHeadWatcher { worktreePath in
             Task { @MainActor in
-                // The name sync runs whether or not the cache moved: the 15s
-                // poll writes the same cache, so it can land the new branch
-                // first and leave this refresh with nothing to publish — and
-                // the sidebar name would then stay stale until the next tick.
-                // It is an in-memory walk that saves only on a real change.
-                appEnvironment.refreshBranchName(for: worktreePath) {
-                    syncWorkstreamNamesFromBranches()
-                }
+                await appEnvironment.refreshBranchName(for: worktreePath)
+                // Runs whether or not that published anything: the 15s poll
+                // writes the same cache, so it can land the new branch first
+                // and leave the refresh above with nothing to do — and the
+                // sidebar name would then stay stale until the next tick. This
+                // is an in-memory walk that saves only on a real change.
+                syncWorkstreamNamesFromBranches()
             }
         }
         headWatcher = watcher
