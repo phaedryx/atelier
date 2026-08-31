@@ -645,7 +645,9 @@ final class GitOperationsTests: XCTestCase {
 
         // A committed binary file (contains NUL bytes) — numstat reports "-"/"-".
         var bytes = Data()
-        for i in 0..<2048 { bytes.append(UInt8(i % 256)) }
+        for i in 0 ..< 2048 {
+            bytes.append(UInt8(i % 256))
+        }
         try bytes.write(to: wt.appendingPathComponent("image.png"))
         git(["add", "image.png"], in: wt)
         git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
@@ -666,7 +668,9 @@ final class GitOperationsTests: XCTestCase {
 
         // Untracked binary file — numstat won't cover it; null-byte sniff must catch it.
         var bytes = Data([0x89, 0x50, 0x4E, 0x47, 0x00, 0x01, 0x02, 0x00])
-        for i in 0..<512 { bytes.append(UInt8(i % 256)) }
+        for i in 0 ..< 512 {
+            bytes.append(UInt8(i % 256))
+        }
         try bytes.write(to: repoDir.appendingPathComponent("untracked.bin"))
 
         let files = GitOperations.uncommittedDiffFiles(at: repoDir.path)
@@ -865,7 +869,246 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertNotEqual(fpEdited, fpUntracked, "branch-mode fingerprint must change when an untracked file is added")
     }
 
+    // MARK: - projectLocation
+
+    func testProjectLocationOfAPlainRepoIsTheRepoItself() throws {
+        let repoDir = tempDir.appendingPathComponent("plain-repo")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-q", "-b", "main"], in: repoDir)
+        git(["-c", "user.email=t@t", "-c", "user.name=T", "commit", "-q", "--allow-empty", "-m", "init"], in: repoDir)
+
+        let location = GitOperations.projectLocation(for: repoDir.path)
+        XCTAssertEqual(standardized(location.directory), repoDir.standardizedFileURL.path)
+        XCTAssertEqual(location.name, "plain-repo")
+    }
+
+    func testProjectLocationOfANonRepoDirectoryIsTheDirectoryItself() throws {
+        let plainDir = tempDir.appendingPathComponent("just-files")
+        try FileManager.default.createDirectory(at: plainDir, withIntermediateDirectories: true)
+
+        let location = GitOperations.projectLocation(for: plainDir.path)
+        XCTAssertEqual(standardized(location.directory), plainDir.standardizedFileURL.path)
+        XCTAssertEqual(location.name, "just-files")
+    }
+
+    func testProjectLocationOfAWorktreeResolvesToTheMainRepo() throws {
+        let repoDir = tempDir.appendingPathComponent("main-repo")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-q", "-b", "main"], in: repoDir)
+        git(["-c", "user.email=t@t", "-c", "user.name=T", "commit", "-q", "--allow-empty", "-m", "init"], in: repoDir)
+        let worktreeDir = tempDir.appendingPathComponent("wt")
+        git(["worktree", "add", "-q", "-b", "feature", worktreeDir.path], in: repoDir)
+
+        let location = GitOperations.projectLocation(for: worktreeDir.path)
+        XCTAssertEqual(standardized(location.directory), repoDir.standardizedFileURL.path)
+        XCTAssertEqual(location.name, "main-repo")
+    }
+
+    func testProjectLocationOfABareContainerResolvesToItsDefaultWorktree() throws {
+        let container = try makeBareContainer(named: "bare-project")
+
+        let location = GitOperations.projectLocation(for: container.path)
+        XCTAssertEqual(
+            standardized(location.directory),
+            container.appendingPathComponent("main").standardizedFileURL.path,
+            "a bare container has no work tree; the project must be its default checkout"
+        )
+        XCTAssertEqual(location.name, "bare-project", "the project keeps the container's name, not the branch's")
+    }
+
+    func testProjectLocationOfACheckoutInsideABareContainerStaysOnTheCheckout() throws {
+        let container = try makeBareContainer(named: "bare-project")
+        let checkout = container.appendingPathComponent("main")
+
+        let location = GitOperations.projectLocation(for: checkout.path)
+        XCTAssertEqual(standardized(location.directory), checkout.standardizedFileURL.path)
+        XCTAssertEqual(location.name, "bare-project")
+    }
+
+    func testProjectLocationOfAnOutsideWorktreeOfABareContainerResolvesToTheDefaultCheckout() throws {
+        let container = try makeBareContainer(named: "bare-project")
+        let stray = tempDir.appendingPathComponent("stray-worktree")
+        git(["worktree", "add", "-q", "-b", "stray", stray.path, "main"], in: container)
+
+        let location = GitOperations.projectLocation(for: stray.path)
+        XCTAssertEqual(
+            standardized(location.directory),
+            container.appendingPathComponent("main").standardizedFileURL.path
+        )
+        XCTAssertEqual(location.name, "bare-project")
+    }
+
+    func testProjectLocationFindsTheCheckoutWhenWtDefaultIsUnset() throws {
+        // A container built by hand, without the wt.default marker.
+        let container = try makeBareContainer(named: "bare-project")
+        git(["config", "--unset", "wt.default"], in: container)
+
+        let location = GitOperations.projectLocation(for: container.path)
+        XCTAssertEqual(
+            standardized(location.directory),
+            container.appendingPathComponent("main").standardizedFileURL.path
+        )
+    }
+
+    func testProjectLocationPrefersTheDefaultBranchCheckoutOverASiblingWorkstream() throws {
+        // Workstream worktrees are created beside the repository, so a container
+        // holds the default checkout *and* workstreams as peers. Picking the
+        // first one would register a workstream as the project.
+        let container = try makeBareContainer(named: "bare-project")
+        git(["config", "--unset", "wt.default"], in: container)
+        // Sorts ahead of "main", so this is the entry a naive scan would take.
+        git(["worktree", "add", "-q", "-b", "aaa-feature", container.appendingPathComponent("aaa-feature").path, "main"], in: container)
+
+        let location = GitOperations.projectLocation(for: container.path)
+        XCTAssertEqual(
+            standardized(location.directory),
+            container.appendingPathComponent("main").standardizedFileURL.path,
+            "the project is the default branch's checkout, not whichever worktree git lists first"
+        )
+    }
+
+    func testProjectLocationCarriesTheContainerSoStaleProjectsCanBeMatched() throws {
+        let container = try makeBareContainer(named: "bare-project")
+
+        let location = GitOperations.projectLocation(for: container.path)
+        XCTAssertEqual(standardized(location.containerDirectory ?? ""), container.standardizedFileURL.path)
+
+        // A plain repo resolved to itself has no container to report.
+        let repoDir = tempDir.appendingPathComponent("plain-repo")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-q", "-b", "main"], in: repoDir)
+        XCTAssertNil(GitOperations.projectLocation(for: repoDir.path).containerDirectory)
+    }
+
+    func testProjectLocationPrefersTheCheckedOutDefaultOverADevelopmentBranch() throws {
+        // defaultBranch prefers `development` for branching new work, which is a
+        // different question from which checkout represents the project. A repo
+        // that has a development branch but is checked out on main must still
+        // resolve to main rather than falling through to an arbitrary worktree.
+        let container = try makeBareContainer(named: "bare-project")
+        git(["config", "--unset", "wt.default"], in: container)
+        git(["branch", "development", "main"], in: container)
+        git(["worktree", "add", "-q", "-b", "aaa-feature", container.appendingPathComponent("aaa-feature").path, "main"], in: container)
+
+        let location = GitOperations.projectLocation(for: container.path)
+        XCTAssertEqual(
+            standardized(location.directory),
+            container.appendingPathComponent("main").standardizedFileURL.path
+        )
+    }
+
+    func testProjectLocationIgnoresWorktreesOutsideTheContainer() throws {
+        // Atelier's own workstream worktrees live under ~/.atelier/worktrees and
+        // must never be mistaken for the project's checkout.
+        let container = try makeBareContainer(named: "bare-project")
+        git(["config", "--unset", "wt.default"], in: container)
+        let outside = tempDir.appendingPathComponent("elsewhere")
+        git(["worktree", "add", "-q", "-b", "feature", outside.path, "main"], in: container)
+
+        let location = GitOperations.projectLocation(for: container.path)
+        XCTAssertEqual(
+            standardized(location.directory),
+            container.appendingPathComponent("main").standardizedFileURL.path
+        )
+    }
+
+    func testProjectLocationFallsBackToTheContainerWhenNoCheckoutExists() throws {
+        // A bare container whose default checkout was deleted has nothing better
+        // to offer than itself.
+        let container = try makeBareContainer(named: "bare-project")
+        git(["worktree", "remove", "--force", "main"], in: container)
+
+        let location = GitOperations.projectLocation(for: container.path)
+        XCTAssertEqual(standardized(location.directory), container.standardizedFileURL.path)
+        XCTAssertEqual(location.name, "bare-project")
+    }
+
+    // MARK: - addExcludeEntry
+
+    func testAddExcludeEntryWritesToAPlainRepo() throws {
+        let repoDir = tempDir.appendingPathComponent("exclude-plain")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-q", "-b", "main"], in: repoDir)
+
+        GitOperations.addExcludeEntry(at: repoDir.path, pattern: ".atelier-state/")
+
+        XCTAssertTrue(excludeLines(of: repoDir).contains(".atelier-state/"))
+    }
+
+    func testAddExcludeEntryReachesTheRealFileFromACheckoutInABareContainer() throws {
+        // `.git` is a file here, so the old hardcoded .git/info/exclude path
+        // pointed at nothing and the write was silently dropped.
+        let container = try makeBareContainer(named: "bare-project")
+        let checkout = container.appendingPathComponent("main")
+
+        GitOperations.addExcludeEntry(at: checkout.path, pattern: ".atelier-state/")
+
+        XCTAssertTrue(
+            excludeLines(of: checkout).contains(".atelier-state/"),
+            "the exclude entry must reach the file git actually reads"
+        )
+    }
+
+    func testAddExcludeEntryDoesNotDuplicateAnExistingPattern() throws {
+        let container = try makeBareContainer(named: "bare-project")
+        let checkout = container.appendingPathComponent("main")
+
+        GitOperations.addExcludeEntry(at: checkout.path, pattern: ".atelier-state/")
+        GitOperations.addExcludeEntry(at: checkout.path, pattern: ".atelier-state/")
+
+        XCTAssertEqual(excludeLines(of: checkout).filter { $0 == ".atelier-state/" }.count, 1)
+    }
+
+    /// The contents of whichever info/exclude git resolves for `dir`.
+    private func excludeLines(of dir: URL) -> [String] {
+        let path = gitOutput(["rev-parse", "--path-format=absolute", "--git-path", "info/exclude"], in: dir)
+        let contents = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+        return contents.components(separatedBy: .newlines)
+    }
+
+    // MARK: - listWorktreesWithInfo
+
+    func testListWorktreesSkipsTheBareRepositoryEntry() throws {
+        let container = try makeBareContainer(named: "bare-project")
+        let checkout = container.appendingPathComponent("main")
+
+        let worktrees = GitOperations.listWorktreesWithInfo(at: checkout.path)
+
+        XCTAssertFalse(
+            worktrees.contains { $0.standardizedPath == container.appendingPathComponent(".bare").standardizedFileURL.path },
+            "the bare repository is not a worktree and must not be listed as one"
+        )
+        XCTAssertEqual(worktrees.count, 1)
+        XCTAssertEqual(worktrees.first?.branch, "main")
+        XCTAssertEqual(worktrees.first?.isMain, true)
+    }
+
     // MARK: - Helpers
+
+    private func standardized(_ path: String) -> String {
+        URL(fileURLWithPath: path).standardizedFileURL.path
+    }
+
+    /// Builds the README's layout: `<container>/{.bare, .git, main}` with HEAD
+    /// parked on `root` and `wt.default` set.
+    private func makeBareContainer(named name: String) throws -> URL {
+        let origin = tempDir.appendingPathComponent("\(name)-origin")
+        try FileManager.default.createDirectory(at: origin, withIntermediateDirectories: true)
+        git(["init", "-q", "-b", "main"], in: origin)
+        git(["-c", "user.email=t@t", "-c", "user.name=T", "commit", "-q", "--allow-empty", "-m", "init"], in: origin)
+
+        let container = tempDir.appendingPathComponent(name)
+        try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
+        git(["clone", "--bare", "-q", origin.path, ".bare"], in: container)
+        try "gitdir: ./.bare\n".write(to: container.appendingPathComponent(".git"), atomically: true, encoding: .utf8)
+        git(["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"], in: container)
+        git(["fetch", "--all", "--prune", "-q"], in: container)
+        git(["config", "wt.default", "main"], in: container)
+        git(["branch", "root", "main"], in: container)
+        git(["symbolic-ref", "HEAD", "refs/heads/root"], in: container)
+        git(["worktree", "add", "-q", "main"], in: container)
+        return container
+    }
 
     @discardableResult
     private func git(_ args: [String], in dir: URL) -> Bool {

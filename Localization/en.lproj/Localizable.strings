@@ -480,3 +480,19 @@
 "Command Palette" = "Command Palette";
 "Type a command…" = "Type a command…";
 "No matching commands" = "No matching commands";
+
+/* Clone from GitHub repo */
+"Clone from GitHub repo" = "Clone from GitHub repo";
+"Clone a repository into the base directory" = "Clone a repository into the base directory";
+"Repository URL or owner/repo" = "Repository URL or owner/repo";
+"Folder name" = "Folder name";
+"Clone" = "Clone";
+"Cloning…" = "Cloning…";
+"Cloned as a .bare repository with the default branch checked out beside it." = "Cloned as a .bare repository with the default branch checked out beside it.";
+"Enter a repository URL or an owner/repo name." = "Enter a repository URL or an owner/repo name.";
+"Enter a folder name." = "Enter a folder name.";
+"The folder name must be a single directory name." = "The folder name must be a single directory name.";
+"A file or directory named “%@” already exists." = "A file or directory named “%@” already exists.";
+"Could not determine the repository's default branch." = "Could not determine the repository's default branch.";
+"git was not found on your PATH." = "git was not found on your PATH.";
+"git %@ failed (exit %d)" = "git %@ failed (exit %d)";
