@@ -641,10 +641,21 @@ private struct IntegrationsSettingsPane: View {
         Task {
             do {
                 let member = try await ShortcutClient(token: { candidate }).currentMember()
-                // Only commit a token that actually authenticated.
-                store.write(candidate)
+                // Only commit a token that actually authenticated — and only report success
+                // if committing it worked. Reporting "Connected as …" after a failed write
+                // is the worst of both: the token authenticated, nothing was stored, and the
+                // sidebar button never appears.
+                let status = store.write(candidate)
                 savedToken = store.read() ?? ""
                 NotificationCenter.default.post(name: ShortcutSettings.tokenChanged, object: nil)
+                guard status == errSecSuccess else {
+                    testResult = .failure(String(
+                        format: NSLocalizedString("Could not save to the Keychain (error %d).", comment: "Keychain write failure"),
+                        Int(status)
+                    ))
+                    isTesting = false
+                    return
+                }
                 testResult = .success(String(
                     format: NSLocalizedString("Connected as %@ (%@)", comment: "Shortcut token test success"),
                     member.name,
