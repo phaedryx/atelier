@@ -182,9 +182,8 @@
 "Create a token at Shortcut > Settings > API Tokens. Stored in your Keychain, not in preferences." = "Create a token at Shortcut > Settings > API Tokens. Stored in your Keychain, not in preferences.";
 "Test" = "Test";
 "Connected as %@ (%@)" = "Connected as %@ (%@)";
-"Branch name" = "Branch name";
-"Example" = "Example";
-"git will not accept that branch name." = "git will not accept that branch name.";
+"Branch Name Pattern" = "Branch Name Pattern";
+"git will not accept the branch name this produces." = "git will not accept the branch name this produces.";
 "Show Shortcut button in sidebar" = "Show Shortcut button in sidebar";
 "Adds a button to each project row that creates a workstream from a Shortcut story, using the story's suggested branch name. The button is hidden until an API token is saved." = "Adds a button to each project row that creates a workstream from a Shortcut story, using the story's suggested branch name. The button is hidden until an API token is saved.";
 

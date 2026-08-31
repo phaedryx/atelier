@@ -120,6 +120,32 @@ final class ShortcutBranchNameTests: XCTestCase {
         }
     }
 
+    // MARK: - Unknown variable detection
+
+    func testKnownVariablesReportNothingUnknown() {
+        XCTAssertEqual(ShortcutBranchName.unknownVariables(in: "tad@sc-${STORY_ID}-${SLUG}"), [])
+        XCTAssertEqual(ShortcutBranchName.unknownVariables(in: "${MENTION}/${TYPE}/${SLUG_FULL}"), [])
+    }
+
+    func testUnknownVariableIsReported() {
+        // Settings warns on this. A typo renders literally and is a *valid* git branch name,
+        // so validation alone would never catch it.
+        XCTAssertEqual(ShortcutBranchName.unknownVariables(in: "x-${NOPE}"), ["NOPE"])
+    }
+
+    func testEveryUnknownVariableIsReportedInOrder() {
+        XCTAssertEqual(ShortcutBranchName.unknownVariables(in: "${AAA}-${SLUG}-${BBB}"), ["AAA", "BBB"])
+    }
+
+    func testTemplateWithoutVariablesReportsNothing() {
+        XCTAssertEqual(ShortcutBranchName.unknownVariables(in: "fixed-branch"), [])
+        XCTAssertEqual(ShortcutBranchName.unknownVariables(in: ""), [])
+    }
+
+    func testLoneDollarOrBraceIsNotTreatedAsAVariable() {
+        XCTAssertEqual(ShortcutBranchName.unknownVariables(in: "cost-$5-{x}"), [])
+    }
+
     func testStorageKeyIsStable() {
         XCTAssertEqual(ShortcutSettings.branchTemplateKey, "atelier.shortcutBranchTemplate")
     }

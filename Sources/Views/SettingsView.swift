@@ -495,6 +495,13 @@ private struct IntegrationsSettingsPane: View {
         GitOperations.isValidBranchName(ShortcutBranchName.preview(branchTemplate))
     }
 
+    /// Unknown variables joined for display, or nil when the pattern is clean.
+    private var branchTemplateUnknownVariables: String? {
+        let unknown = ShortcutBranchName.unknownVariables(in: branchTemplate)
+        guard !unknown.isEmpty else { return nil }
+        return unknown.map { "${\($0)}" }.joined(separator: ", ")
+    }
+
     @State private var token: String = ""
     /// What is actually in the Keychain, read once on appear. Compared against `token`
     /// to enable Save — reading the Keychain in `body` would be a syscall per render.
@@ -546,36 +553,35 @@ private struct IntegrationsSettingsPane: View {
                 }
                 .padding(.vertical, 2)
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Branch name")
-                        .font(.caption)
-                        .fontWeight(.medium)
-                        .foregroundStyle(.secondary)
-
+                VStack(alignment: .leading, spacing: 8) {
+                    // A real label, not "", so the field sits beside it the way the API
+                    // token field does — an empty label leaves the row unfocusable.
                     TextField(
-                        "",
+                        "Branch Name Pattern",
                         text: $branchTemplate,
-                        prompt: Text(verbatim: "tad@sc-${STORY_ID}-${SLUG}")
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundStyle(.tertiary)
+                        prompt: Text(verbatim: ShortcutBranchName.examplePattern)
                     )
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(.body, design: .monospaced))
+
+                    Text("Example: \(ShortcutBranchName.examplePattern)")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
 
                     Text("Leave blank to use the branch name Shortcut suggests. Variables: \(ShortcutBranchName.variables.map { "${\($0)}" }.joined(separator: ", ")). SLUG is the first six words of the title; SLUG_FULL is all of them.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
-                    // Rendered rather than described, so a typo shows up before it becomes a branch.
-                    LabeledContent("Example") {
-                        Text(ShortcutBranchName.preview(branchTemplate))
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundStyle(branchPreviewIsValid ? Color.secondary : Color.red)
-                            .textSelection(.enabled)
+                    // An unknown variable renders literally and is still a legal branch
+                    // name, so validation alone would let the typo through silently.
+                    if let unknown = branchTemplateUnknownVariables {
+                        Label("Unknown variable \(unknown). It will be used literally.", systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
                     }
 
                     if !branchPreviewIsValid {
-                        Label("git will not accept that branch name.", systemImage: "exclamationmark.triangle")
+                        Label("git will not accept the branch name this produces.", systemImage: "exclamationmark.triangle")
                             .font(.caption)
                             .foregroundStyle(.orange)
                     }
