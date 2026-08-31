@@ -123,7 +123,7 @@ carries the `-dev` marker.
 
 ### Workstream lifecycle
 1. Creating a workstream: generates name, runs `git worktree add`, symlinks .env (if enabled)
-2. Workspace view: Info (Cmd+1) and Agent (Cmd+2) tabs always present; terminals/browsers added on demand
+2. Workspace view: Info (Cmd+I) and Agent (Cmd+Return) tabs always present; terminals/browsers added on demand
 3. Tmux mode: wraps Coding Agent only in `tmux new-session -A` on socket `-L atelier`
 4. Terminal tabs: close on shell exit (Ctrl+D). Agent respawns.
 5. Archiving: runs teardown script, then `git worktree remove` + `tmux kill-session`
@@ -191,11 +191,10 @@ When adding, removing, or changing keyboard shortcuts:
 4. Update `README.md` (shortcut table)
 
 Current shortcuts:
-- **Cmd+1**: Info
-- **Cmd+2**: Coding Agent
+- **Cmd+I**: Info
 - **Cmd+3**: Changes
 - **Cmd+4**: Environment
-- **Cmd+3-9**: Switch tab (all tabs in display order)
+- **Cmd+1-9**: Switch tab (all tabs in display order)
 - **Cmd+Shift+[/]**: Cycle tabs
 - **Cmd+Return**: Focus Coding Agent
 - **Cmd+P**: Find File (Editor)

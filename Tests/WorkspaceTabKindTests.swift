@@ -36,7 +36,8 @@ final class WorkspaceTabKindTests: XCTestCase {
         XCTAssertEqual(WorkspaceTabKind.terminal.icon, "terminal")
         XCTAssertEqual(WorkspaceTabKind.browser.icon, "globe")
         XCTAssertEqual(WorkspaceTabKind.editor.icon, "doc.text")
-        XCTAssertEqual(WorkspaceTabKind.info.shortcutBadge, "1")
+        // ⌘I is the dedicated binding; ⌘1 still works positionally.
+        XCTAssertEqual(WorkspaceTabKind.info.shortcutBadge, "I")
         XCTAssertEqual(WorkspaceTabKind.agent.shortcutBadge, "\u{21A9}")
         // ⌘D was retired in favour of the palette; ⌘3 is the positional
         // binding from the switchByNumber monitor, which still exists.

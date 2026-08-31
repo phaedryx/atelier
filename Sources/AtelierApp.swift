@@ -327,6 +327,11 @@ struct AtelierApp: App {
             }
             // Tabs
             CommandGroup(after: .toolbar) {
+                Button("Info") {
+                    NotificationCenter.default.post(name: .toggleInfo, object: nil)
+                }
+                .keyboardShortcut("i", modifiers: .command)
+
                 Button("Coding Agent") {
                     NotificationCenter.default.post(name: .focusAgent, object: nil)
                 }
