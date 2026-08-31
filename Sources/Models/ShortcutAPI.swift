@@ -6,7 +6,7 @@ import Foundation
 /// A story, as returned by `GET /api/v3/stories/{public-id}`.
 ///
 /// Only the fields the app renders are decoded; the real payload is far larger.
-struct ShortcutStory: Codable, Equatable, Sendable {
+struct ShortcutStory: Codable, Equatable {
     let id: Int
     let name: String
     let description: String?
@@ -15,6 +15,8 @@ struct ShortcutStory: Codable, Equatable, Sendable {
     /// The app uses this verbatim — it never builds or slugifies a branch name itself.
     let branchName: String
     let workflowStateID: Int
+    /// "feature", "bug", or "chore". Optional so a payload without it still decodes.
+    let storyType: String?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -23,17 +25,18 @@ struct ShortcutStory: Codable, Equatable, Sendable {
         case appURL = "app_url"
         case branchName = "formatted_vcs_branch_name"
         case workflowStateID = "workflow_state_id"
+        case storyType = "story_type"
     }
 }
 
 /// A workflow and its states. Stories carry only `workflow_state_id`, so resolving a
 /// human-readable state name needs this separate lookup.
-struct ShortcutWorkflow: Codable, Equatable, Sendable {
+struct ShortcutWorkflow: Codable, Equatable {
     let id: Int
     let name: String
     let states: [State]
 
-    struct State: Codable, Equatable, Sendable {
+    struct State: Codable, Equatable {
         let id: Int
         let name: String
         let type: String
@@ -54,7 +57,7 @@ extension Collection where Element == ShortcutWorkflow {
 
 /// The member the API token belongs to. Used only by the Settings "Test" button, so a
 /// successful check can name who the key authenticates as.
-struct ShortcutMember: Codable, Equatable, Sendable {
+struct ShortcutMember: Codable, Equatable {
     let name: String
     let mentionName: String
     let workspaceName: String

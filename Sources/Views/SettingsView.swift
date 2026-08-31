@@ -489,6 +489,11 @@ private struct PromptEditorSheet: View {
 /// `Section` here rather than a seventh pane.
 private struct IntegrationsSettingsPane: View {
     @AppStorage(ShortcutSettings.buttonEnabledKey) private var shortcutButtonEnabled: Bool = true
+    @AppStorage(ShortcutSettings.branchTemplateKey) private var branchTemplate: String = ""
+
+    private var branchPreviewIsValid: Bool {
+        GitOperations.isValidBranchName(ShortcutBranchName.preview(branchTemplate))
+    }
 
     @State private var token: String = ""
     /// What is actually in the Keychain, read once on appear. Compared against `token`
@@ -537,6 +542,42 @@ private struct IntegrationsSettingsPane: View {
                                 .font(.caption)
                                 .foregroundStyle(.orange)
                         }
+                    }
+                }
+                .padding(.vertical, 2)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Branch name")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundStyle(.secondary)
+
+                    TextField(
+                        "",
+                        text: $branchTemplate,
+                        prompt: Text(verbatim: "tad@sc-${STORY_ID}-${SLUG}")
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+
+                    Text("Leave blank to use the branch name Shortcut suggests. Variables: \(ShortcutBranchName.variables.map { "${\($0)}" }.joined(separator: ", ")). SLUG is the first six words of the title; SLUG_FULL is all of them.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    // Rendered rather than described, so a typo shows up before it becomes a branch.
+                    LabeledContent("Example") {
+                        Text(ShortcutBranchName.preview(branchTemplate))
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(branchPreviewIsValid ? Color.secondary : Color.red)
+                            .textSelection(.enabled)
+                    }
+
+                    if !branchPreviewIsValid {
+                        Label("git will not accept that branch name.", systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
                     }
                 }
                 .padding(.vertical, 2)

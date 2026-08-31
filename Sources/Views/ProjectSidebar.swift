@@ -58,6 +58,7 @@ struct ProjectSidebar: View {
     @State private var pendingWorkstreamBypass: Bool?
 
     @AppStorage(ShortcutSettings.buttonEnabledKey) private var shortcutButtonEnabled: Bool = true
+    @AppStorage(ShortcutSettings.branchTemplateKey) private var branchTemplate: String = ""
     /// Keychain presence is not observable, so this is refreshed on appear and whenever
     /// Settings posts `ShortcutSettings.tokenChanged`.
     @State private var hasShortcutToken = KeychainTokenStore().hasToken
@@ -536,7 +537,7 @@ struct ProjectSidebar: View {
                 let story = try await ShortcutClient().story(id: storyID)
                 shortcutFetching = false
 
-                let name = story.branchName
+                let name = ShortcutBranchName.render(branchTemplate, story: story)
                 guard GitOperations.isValidBranchName(name) else {
                     shortcutError = NSLocalizedString(
                         "Shortcut suggested a branch name git will not accept.",

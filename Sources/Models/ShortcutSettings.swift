@@ -8,6 +8,10 @@ enum ShortcutSettings {
     /// stored API token, so this is the user's way to keep a working key but hide the button.
     static let buttonEnabledKey = "atelier.shortcutButtonEnabled"
 
+    /// Branch-name template, e.g. `tad@sc-${STORY_ID}-${SLUG}`. Empty means use the branch
+    /// name Shortcut itself suggests. See `ShortcutBranchName` for the variables.
+    static let branchTemplateKey = "atelier.shortcutBranchTemplate"
+
     /// Posted after the token is written or cleared, so the sidebar can re-evaluate whether
     /// to show its button. Keychain presence is not observable, so this is the only signal.
     static let tokenChanged = Notification.Name("atelier.shortcutTokenChanged")
