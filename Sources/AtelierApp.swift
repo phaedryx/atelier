@@ -2,7 +2,6 @@
 // ABOUTME: Initializes the ghostty terminal engine and presents the main window.
 
 import os
-import Sentry
 import SwiftUI
 import UserNotifications
 
@@ -193,23 +192,6 @@ struct AtelierApp: App {
         // plugin directory; it outlives Atelier unless we take it back out.
         OpencodePluginRemover.uninstall()
 
-        let crashReportingEnabled = UserDefaults.standard.object(forKey: "atelier.crashReportingEnabled") as? Bool ?? true
-        if crashReportingEnabled, let sentryDSN = AppConstants.sentryDSN {
-            SentrySDK.start { options in
-                options.dsn = sentryDSN
-                options.enableCrashHandler = true
-                options.enableAppHangTracking = true
-                options.appHangTimeoutInterval = 5
-                options.sendDefaultPii = false
-                options.releaseName = "\(AppConstants.appID)@\(AppConstants.version)"
-                #if DEBUG
-                    options.environment = "development"
-                #else
-                    options.environment = "production"
-                #endif
-            }
-        }
-
         guard ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) == GHOSTTY_SUCCESS else {
             let alert = NSAlert()
             alert.messageText = NSLocalizedString("Atelier cannot start", comment: "")
@@ -245,7 +227,6 @@ struct AtelierApp: App {
             } else {
                 ContentView()
                     .onAppear {
-                        Telemetry.shared.trackLaunch()
                         if let dir = Self.launchDirectory {
                             DispatchQueue.main.async {
                                 NotificationCenter.default.post(name: .openDirectory, object: dir)

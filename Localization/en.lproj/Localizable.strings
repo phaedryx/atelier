@@ -177,10 +177,6 @@
 
 /* Settings - Advanced */
 "Advanced" = "Advanced";
-"Usage analytics" = "Usage analytics";
-"Send anonymous usage data to help improve Atelier. We collect: app version, build type, macOS version, locale, and screen resolution. No project names, file contents, or personal data." = "Send anonymous usage data to help improve Atelier. We collect: app version, build type, macOS version, locale, and screen resolution. No project names, file contents, or personal data.";
-"Crash reports" = "Crash reports";
-"Send crash reports and performance data. Requires restart to take effect." = "Send crash reports and performance data. Requires restart to take effect.";
 "Clear project list" = "Clear project list";
 "Clear All..." = "Clear All...";
 "Clear All" = "Clear All";
@@ -319,8 +315,6 @@
 
 /* HelpView - credits */
 "Version %@" = "Version %@";
-"Made with " = "Made with ";
-" in Poblenou, Barcelona" = " in Poblenou, Barcelona";
 "Forked by " = "Forked by ";
 "based on " = "based on ";
 " by " = " by ";
@@ -329,7 +323,6 @@
 
 
 /* Help */
-"Sponsor" = "Sponsor";
 "Report a Bug" = "Report a Bug";
 "Documentation" = "Documentation";
 "Request a Feature" = "Request a Feature";
@@ -429,9 +422,9 @@
 
 /* Agent IPC */
 "Agent messaging" = "Agent messaging";
-"Lets coding agents in this project see and message each other. Messages are delivered when the recipient checks its inbox. Takes effect the next time a Coding Agent starts. Only applies to Claude Code." = "Lets coding agents in this project see and message each other. Messages are delivered when the recipient checks its inbox. Takes effect the next time a Coding Agent starts. Only applies to Claude Code.";
+"The master switch for agent-to-agent messaging in this project: agents can find each other and send messages, which the recipient sees only when it checks its inbox. Nothing is typed into any terminal unless you also turn on Nudge idle agents below. Takes effect the next time a Coding Agent starts. Only applies to Claude Code." = "The master switch for agent-to-agent messaging in this project: agents can find each other and send messages, which the recipient sees only when it checks its inbox. Nothing is typed into any terminal unless you also turn on Nudge idle agents below. Takes effect the next time a Coding Agent starts. Only applies to Claude Code.";
 "Nudge idle agents" = "Nudge idle agents";
-"When a message arrives for an agent that has finished its turn, Atelier types a notice into its terminal. That is typed input: an agent running without permission prompts will act on it." = "When a message arrives for an agent that has finished its turn, Atelier types a notice into its terminal. That is typed input: an agent running without permission prompts will act on it.";
+"Requires Agent messaging. When a message arrives for an agent that has finished its turn, Atelier types a notice into its terminal. That is typed input: an agent running without permission prompts will act on it." = "Requires Agent messaging. When a message arrives for an agent that has finished its turn, Atelier types a notice into its terminal. That is typed input: an agent running without permission prompts will act on it.";
 
 /* Command Palette */
 "Tabs" = "Tabs";

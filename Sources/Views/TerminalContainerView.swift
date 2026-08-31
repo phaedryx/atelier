@@ -1067,13 +1067,11 @@ struct TerminalContainerView: View {
 
     private func addTerminal() {
         _ = model.addTerminal()
-        Telemetry.shared.track("tab_opened", url: "/tab/terminal", title: "Terminal Tab", data: ["kind": "terminal"])
     }
 
     private func addBrowser() {
         startRunIfNeeded()
         _ = model.addBrowser()
-        Telemetry.shared.track("tab_opened", url: "/tab/browser", title: "Browser Tab", data: ["kind": "browser"])
     }
 
     /// Starts the dev server when the browser asks for it. The browser tab
@@ -1102,12 +1100,6 @@ struct TerminalContainerView: View {
         model.runStarted = true
         markBrowserStartPending()
         preloadRunSurface()
-        Telemetry.shared.track(
-            "dev_server_start",
-            url: "/tab/browser",
-            title: "Dev Server",
-            data: ["source": (resolvedDevCommand?.source ?? .configScript).rawValue]
-        )
     }
 
     private func stopRun() {
@@ -1252,7 +1244,6 @@ struct TerminalContainerView: View {
         createEditorBridgeIfNeeded()
         _ = model.addEditor(filePath: filePath)
         startFileTreeWatcherIfNeeded()
-        Telemetry.shared.track("tab_opened", url: "/tab/editor", title: "Editor Tab", data: ["kind": "editor"])
     }
 
     private func startFileTreeWatcherIfNeeded() {

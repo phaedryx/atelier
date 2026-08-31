@@ -43,26 +43,15 @@ enum AppConstants {
     /// GitHub `owner/repo` backing the repository and documentation URLs below.
     static let repositorySlug: String = "phaedryx/atelier"
 
-    /// Home of the project. The fork has no marketing site, so docs and
-    /// sponsorship links both point at GitHub.
+    /// Home of the project. The fork has no marketing site, so the
+    /// documentation link points at GitHub.
     static let repositoryURL = URL(string: "https://github.com/\(repositorySlug)")!
     static let documentationURL = URL(string: "https://github.com/\(repositorySlug)#readme")!
-    static let sponsorURL = URL(string: "https://github.com/sponsors/phaedryx")!
 
     /// Upstream projects this fork descends from, credited in Help and the About panel.
     static let upstreamURL = URL(string: "https://github.com/alltuner/factoryfloor")!
     static let upstreamAuthorURL = URL(string: "https://davidpoblador.com/")!
     static let upstreamEnhancerURL = URL(string: "https://github.com/AndresGonzalez5")!
-
-    /// Sentry DSN, injected at build time via the `ATELIER_SENTRY_DSN` build setting.
-    ///
-    /// Empty by default so a plain checkout never ships crash reports to someone
-    /// else's project; crash reporting simply stays off until a DSN is supplied.
-    static var sentryDSN: String? {
-        guard let dsn = Bundle.main.infoDictionary?["SentryDSN"] as? String else { return nil }
-        let trimmed = dsn.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
 
     static let urlScheme: String = {
         #if DEBUG

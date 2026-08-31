@@ -107,27 +107,6 @@ jobs:
             OTHER_CODE_SIGN_FLAGS="--options=runtime" \
             build
 
-      - name: Upload debug symbols to Sentry
-        continue-on-error: true
-        env:
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
-          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
-        run: |
-          if [ -z "$SENTRY_AUTH_TOKEN" ]; then
-            echo "::warning::SENTRY_AUTH_TOKEN not set, skipping dSYM upload"
-            exit 0
-          fi
-          if [ -z "$SENTRY_ORG" ] || [ -z "$SENTRY_PROJECT" ]; then
-            echo "::warning::SENTRY_ORG/SENTRY_PROJECT not set, skipping dSYM upload"
-            exit 0
-          fi
-          brew install getsentry/tools/sentry-cli
-          sentry-cli debug-files upload \
-            --org "$SENTRY_ORG" \
-            --project "$SENTRY_PROJECT" \
-            build/derived/Build/Products/Release/*.dSYM
-
       - name: Package DMG
         run: |
           APP_BUILT=$(find build/derived -name "${APP_NAME}.app" -type d | head -1)

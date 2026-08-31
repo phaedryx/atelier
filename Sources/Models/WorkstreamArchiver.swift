@@ -77,7 +77,6 @@ enum WorkstreamArchiver {
             let branchName = GitOperations.currentBranch(at: worktreePath)
             archivingPaths.insert(standardizedPath)
             NotificationCenter.default.post(name: archivingDidStart, object: nil)
-            Telemetry.shared.track("workstream_archived", url: "/workstream/archive", title: "Workstream Archived")
             Task.detached {
                 defer {
                     Task { @MainActor in
@@ -132,7 +131,6 @@ enum WorkstreamArchiver {
         let branchName = GitOperations.currentBranch(at: worktreePath)
         archivingPaths.insert(standardizedPath)
         NotificationCenter.default.post(name: archivingDidStart, object: nil)
-        Telemetry.shared.track("worktree_purged", url: "/worktree/purge", title: "Orphan Worktree Purged")
         Task.detached {
             defer {
                 Task { @MainActor in
