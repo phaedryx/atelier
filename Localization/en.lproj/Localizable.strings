@@ -194,15 +194,15 @@
 "No such Shortcut story." = "No such Shortcut story.";
 "Shortcut returned HTTP %d." = "Shortcut returned HTTP %d.";
 "Could not read Shortcut's response." = "Could not read Shortcut's response.";
-"Enter a story id (17411), an sc- id (sc-17411), or a story URL." = "Enter a story id (17411), an sc- id (sc-17411), or a story URL.";
+"Enter a story id." = "Enter a story id.";
 "Shortcut suggested a branch name git will not accept." = "Shortcut suggested a branch name git will not accept.";
 "A workstream for this story already exists." = "A workstream for this story already exists.";
 
 /* Shortcut - new workstream sheet */
 "New Workstream from Shortcut" = "New Workstream from Shortcut";
 "Story" = "Story";
-"The branch and worktree are named from the story's suggested branch name." = "The branch and worktree are named from the story's suggested branch name.";
-"17411, sc-17411, or a story URL" = "17411, sc-17411, or a story URL";
+"The branch and worktree are named using the Branch Name Pattern in Settings." = "The branch and worktree are named using the Branch Name Pattern in Settings.";
+
 "Open Settings" = "Open Settings";
 
 /* Shortcut - info tab */
@@ -354,7 +354,6 @@
 " by " = " by ";
 "and additional work by " = "and additional work by ";
 "About %@" = "About %@";
-
 
 /* Help */
 "Report a Bug" = "Report a Bug";

@@ -520,7 +520,7 @@ struct ProjectSidebar: View {
 
         guard let storyID = ShortcutStoryID.parse(shortcutStoryInput) else {
             shortcutError = NSLocalizedString(
-                "Enter a story id (17411), an sc- id (sc-17411), or a story URL.",
+                "Enter a story id.",
                 comment: "Shortcut story input validation error"
             )
             return
@@ -1502,20 +1502,23 @@ private struct ShortcutStorySheet: View {
                     Image(systemName: "info.circle")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
-                        .help(Text("The branch and worktree are named from the story's suggested branch name."))
+                        .help(Text("The branch and worktree are named using the Branch Name Pattern in Settings."))
                         .accessibilityLabel(Text("More info"))
                 }
-                TextField(
-                    "",
-                    text: $storyInput,
-                    prompt: Text("17411, sc-17411, or a story URL")
+                // The `sc-` sits outside the field, so the field is plainly asking for an
+                // id and nothing else.
+                HStack(spacing: 2) {
+                    Text(verbatim: "sc-")
                         .font(.system(.body, design: .monospaced))
-                        .foregroundStyle(.tertiary)
-                )
-                .textFieldStyle(.roundedBorder)
-                .focused($isFocused)
-                .disabled(isFetching)
-                .onSubmit { onCreate() }
+                        .foregroundStyle(.secondary)
+                    TextField("", text: $storyInput)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.body, design: .monospaced))
+                        .frame(width: 120)
+                        .focused($isFocused)
+                        .disabled(isFetching)
+                        .onSubmit { onCreate() }
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
