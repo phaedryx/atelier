@@ -11,7 +11,7 @@
 ./scripts/dev.sh release            # release build matching CI (hardened runtime)
 ./scripts/dev.sh release --run      # release build and run
 ./scripts/dev.sh clean              # clean build artifacts
-./scripts/release.sh <version>      # release build: sign, notarize, create DMG
+./scripts/release.sh <version>      # signed+notarized DMG — needs a Developer ID, unusable here
 ./scripts/set-version.sh 0.2.0      # stamp a version into project.yml (build-time only)
 ./scripts/build-editor.sh           # rebuild Monaco editor bundle (auto-run by dev.sh)
 ```
@@ -38,8 +38,12 @@ uvx prek run --all-files            # run hooks on all files (optional)
 
 ### Release build
 ```bash
-./scripts/release.sh <version>   # builds, signs, notarizes, creates DMG
+./scripts/dev.sh release         # ad-hoc signed Release build — this is the one that works
 ```
+
+`./scripts/release.sh <version>` builds a signed, notarized DMG, but requires
+`ATELIER_SIGNING_IDENTITY` and `ATELIER_TEAM_ID` and refuses to run without
+them. This project has no Developer ID, so it is kept only for if that changes.
 
 ## Git Workflow
 
@@ -54,8 +58,17 @@ Releases are tag-driven. There is no automatic version bump:
 1. Add the new version's entries to `CHANGELOG.md` by hand and merge them
 2. Tag `main`: `git tag v0.2.0 && git push origin v0.2.0`
 3. `.github/workflows/release.yml` derives the version from the tag, stamps it
-   into `project.yml` via `scripts/set-version.sh`, builds, signs, notarizes,
-   uploads the DMG, publishes the release, and updates the Homebrew cask
+   into `project.yml` via `scripts/set-version.sh`, builds, packages the DMG,
+   uploads it, and publishes the release
+
+Builds are **ad-hoc signed and not notarized** — this project has no Apple
+Developer account, and a free Apple ID cannot notarize. Ad-hoc signing is still
+mandatory (arm64 binaries will not run without it); what is missing is an
+identity, so a *downloaded* DMG is refused on first launch until quarantine is
+cleared. A locally built app is unaffected, because Gatekeeper acts on the
+quarantine attribute that only downloads carry. The workflow needs no secrets;
+`SENTRY_AUTH_TOKEN` is optional and its step warns rather than fails.
+See `docs/distribution.md`.
 
 The tag is the single source of truth for the version; `project.yml` is only
 rewritten at build time and the bump is never committed.
@@ -79,7 +92,7 @@ carries the `-dev` marker.
 - **Single-window** app via `Window` (not `WindowGroup`)
 - **`atelier://`** URL scheme for single-instance behavior
 - **AppConstants** (`appID`, `appName`, `configDirectory`, `cacheDirectory`)
-- **No update checking** — no in-app updater and no release polling; users upgrade via Homebrew or GitHub Releases
+- **No update checking** — no in-app updater and no release polling; upgrade by downloading a new DMG from GitHub Releases, or by building locally
 - **prek** pre-commit hooks (`prek.toml`)
 
 ### Key directories

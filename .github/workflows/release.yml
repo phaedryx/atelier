@@ -1,7 +1,15 @@
 name: Release
 
-# Releases are tag-driven: push a `vX.Y.Z` tag and this builds, signs,
-# notarizes, and publishes the DMG for it.
+# Releases are tag-driven: push a `vX.Y.Z` tag and this builds a DMG for it and
+# publishes it on the GitHub release.
+#
+# Builds are ad-hoc signed only — there is no Developer ID certificate and no
+# notarization, because this is a personal project and notarization requires a
+# paid Apple Developer account. Ad-hoc signing is not optional: arm64 binaries
+# will not execute without at least that. What it costs is Gatekeeper: a
+# downloaded DMG is quarantined, so the app has to be opened once through the
+# right-click > Open path (or have the quarantine attribute removed). The
+# release notes say so; docs/distribution.md has the detail.
 on:
   push:
     tags: ["v*"]
@@ -14,8 +22,6 @@ jobs:
       contents: write
       actions: write
     env:
-      SIGNING_IDENTITY: ${{ secrets.SIGNING_IDENTITY }}
-      DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
       APP_NAME: "Atelier"
       SCHEME: "Atelier"
       PROJECT: "Atelier.xcodeproj"
@@ -27,8 +33,6 @@ jobs:
             echo "::error::Run this workflow from a vX.Y.Z tag, not $GITHUB_REF_NAME"
             exit 1
           fi
-          # Strict: the Homebrew cask builds its URL as v<version>, so the tag
-          # and the version have to agree exactly. No suffixes, no RCs.
           if ! echo "$GITHUB_REF_NAME" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "::error::Tag $GITHUB_REF_NAME is not vX.Y.Z"
             exit 1
@@ -77,7 +81,6 @@ jobs:
           cd ghostty
           zig build -Demit-xcframework=true -Demit-macos-app=false -Dxcframework-target=universal -Doptimize=ReleaseFast
 
-
       - name: Build Monaco editor
         run: ./scripts/build-editor.sh
 
@@ -87,36 +90,21 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Import signing certificate
-        env:
-          CERTIFICATE_P12_BASE64: ${{ secrets.CERTIFICATE_P12_BASE64 }}
-          CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
-        run: |
-          CERT_PATH=$RUNNER_TEMP/certificate.p12
-          KEYCHAIN_PATH=$RUNNER_TEMP/signing.keychain-db
-          KEYCHAIN_PASSWORD=$(uuidgen)
-
-          echo -n "$CERTIFICATE_P12_BASE64" | base64 --decode -o "$CERT_PATH"
-
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security import "$CERT_PATH" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security list-keychain -d user -s "$KEYCHAIN_PATH" login.keychain-db
-
       - name: Build release
+        # Same flags as `./scripts/dev.sh release`: ad-hoc identity ("-"), the
+        # local entitlements file, and no --timestamp (a secure timestamp needs
+        # a real certificate).
         run: |
           xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
             -destination 'generic/platform=macOS' \
             -derivedDataPath build/derived \
             -clonedSourcePackagesDirPath build/derived/SourcePackages \
-            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
-            CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" \
+            CODE_SIGN_IDENTITY="-" \
             CODE_SIGN_STYLE=Manual \
             ENABLE_HARDENED_RUNTIME=YES \
             CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
-            OTHER_CODE_SIGN_FLAGS="--timestamp --options=runtime" \
+            CODE_SIGN_ENTITLEMENTS=Resources/atelier-local.entitlements \
+            OTHER_CODE_SIGN_FLAGS="--options=runtime" \
             build
 
       - name: Upload debug symbols to Sentry
@@ -140,9 +128,7 @@ jobs:
             --project "$SENTRY_PROJECT" \
             build/derived/Build/Products/Release/*.dSYM
 
-      - name: Package and sign
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
+      - name: Package DMG
         run: |
           APP_BUILT=$(find build/derived -name "${APP_NAME}.app" -type d | head -1)
           if [ -z "$APP_BUILT" ]; then
@@ -151,25 +137,13 @@ jobs:
           fi
 
           mkdir -p build/release
+          # -R preserves the ad-hoc signatures xcodebuild already applied to the
+          # app, its frameworks, and the helpers. Nothing is re-signed here:
+          # without a Developer ID there is nothing better to re-sign with.
           cp -R "$APP_BUILT" "build/release/${APP_NAME}.app"
           APP="build/release/${APP_NAME}.app"
 
-
-          # Re-sign embedded frameworks with secure timestamp and hardened runtime
-          find "$APP/Contents/Frameworks" -type f -perm +111 -o -name "*.dylib" | while read -r bin; do
-            codesign --force --sign "$SIGNING_IDENTITY" --timestamp --options=runtime "$bin"
-          done
-
-          # Re-sign helpers with hardened runtime and secure timestamp
-          find "$APP/Contents/Helpers" -type f -perm +111 | while read -r bin; do
-            codesign --force --sign "$SIGNING_IDENTITY" --timestamp --options=runtime "$bin"
-          done
-
-          # Sign the main app binary (not --deep, nested code is already signed above)
-          codesign --force --sign "$SIGNING_IDENTITY" --timestamp --options=runtime \
-            --entitlements Resources/atelier.entitlements "$APP"
-
-          codesign --verify --verbose=2 --deep --strict "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
 
           DMG_NAME="${SCHEME}.dmg"
           brew install create-dmg
@@ -195,41 +169,7 @@ jobs:
             exit 1
           fi
 
-          codesign --sign "$SIGNING_IDENTITY" --timestamp "build/release/$DMG_NAME"
-
           echo "DMG_NAME=$DMG_NAME" >> "$GITHUB_ENV"
-
-      - name: Store notarization credentials
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-        run: |
-          xcrun notarytool store-credentials "notarize-profile" \
-            --apple-id "$APPLE_ID" \
-            --team-id "$APPLE_TEAM_ID" \
-            --password "$APPLE_APP_PASSWORD" \
-            --keychain "$RUNNER_TEMP/signing.keychain-db"
-
-      - name: Notarize
-        run: |
-          SUBMIT_OUT=$(xcrun notarytool submit "build/release/$DMG_NAME" \
-            --keychain-profile "notarize-profile" \
-            --keychain "$RUNNER_TEMP/signing.keychain-db" \
-            --wait 2>&1) || true
-          echo "$SUBMIT_OUT"
-
-          SUBMISSION_ID=$(echo "$SUBMIT_OUT" | grep 'id:' | head -1 | awk '{print $2}')
-
-          if echo "$SUBMIT_OUT" | grep -q "status: Invalid"; then
-            echo "::error::Notarization failed. Fetching detailed log..."
-            xcrun notarytool log "$SUBMISSION_ID" \
-              --keychain-profile "notarize-profile" \
-              --keychain "$RUNNER_TEMP/signing.keychain-db"
-            exit 1
-          fi
-
-          xcrun stapler staple "build/release/$DMG_NAME"
 
       - name: Create draft release
         env:
@@ -243,7 +183,6 @@ jobs:
       - name: Upload to release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
           TAG_NAME: ${{ github.ref_name }}
         run: |
           for attempt in 1 2 3 4 5; do
@@ -259,53 +198,33 @@ jobs:
             sleep 10
           done
 
+      - name: Note the unsigned build in the release body
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          # Prepended rather than appended: someone who downloads the DMG and
+          # gets "Atelier is damaged" needs this before the commit list, not
+          # under it.
+          BODY=$(gh release view "$TAG_NAME" --json body -q .body)
+          NOTE=$(cat <<'MARKDOWN'
+          > **This build is not notarized.** It is ad-hoc signed, so macOS will
+          > refuse to open it on the first try. Right-click the app in
+          > `/Applications` and choose **Open**, then confirm — or run:
+          >
+          > ```console
+          > xattr -dr com.apple.quarantine /Applications/Atelier.app
+          > ```
+          >
+          > You only have to do this once per install. See
+          > [docs/distribution.md](https://github.com/phaedryx/atelier/blob/main/docs/distribution.md).
+
+          MARKDOWN
+          )
+          printf '%s\n%s' "$NOTE" "$BODY" | gh release edit "$TAG_NAME" --notes-file -
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ github.ref_name }}
         run: gh release edit "$TAG_NAME" --draft=false
-
-      - name: Update Homebrew cask
-        env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          DMG_URL="https://github.com/phaedryx/atelier/releases/download/v${VERSION}/${DMG_NAME}"
-          SHA256=$(shasum -a 256 "build/release/$DMG_NAME" | awk '{print $1}')
-
-          CASK_SHA=$(gh api repos/phaedryx/homebrew-tap/contents/Casks/atelier.rb \
-            --method GET -q '.sha')
-
-          CASK_CONTENT=$(cat <<RUBY
-          cask "atelier" do
-            version "${VERSION}"
-            sha256 "${SHA256}"
-
-            url "${DMG_URL}"
-            name "Atelier"
-            desc "AI-powered development workspace for macOS"
-            homepage "https://github.com/phaedryx/atelier"
-
-            depends_on macos: ">= :sonoma"
-
-            app "Atelier.app"
-            binary "#{appdir}/Atelier.app/Contents/Resources/atl", target: "atl"
-
-            zap trash: [
-              "~/.config/atelier",
-              "~/.atelier",
-              "~/Library/Preferences/com.github.phaedryx.atelier.plist",
-            ]
-          end
-          RUBY
-          )
-
-          gh api repos/phaedryx/homebrew-tap/contents/Casks/atelier.rb \
-            --method PUT \
-            -f message="chore: update atelier to v${VERSION}" \
-            -f content="$(echo "$CASK_CONTENT" | base64)" \
-            -f sha="$CASK_SHA"
-
-      - name: Clean up keychain
-        if: always()
-        run: security delete-keychain $RUNNER_TEMP/signing.keychain-db 2>/dev/null || true
