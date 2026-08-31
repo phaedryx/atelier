@@ -193,7 +193,7 @@ private struct EnvironmentSettingsPane: View {
 
 private struct GeneralSettingsPane: View {
     @AppStorage("atelier.appearance") private var appearance: String = "system"
-    @AppStorage("atelier.symlinkEnv") private var symlinkEnv: Bool = true
+    @AppStorage(EnvSeedSync.defaultsKey) private var copyEnvFiles: Bool = true
     @AppStorage("atelier.confirmQuit") private var confirmQuit: Bool = true
     @AppStorage("atelier.baseDirectory") private var baseDirectory: String = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first ?? ""
 
@@ -233,9 +233,9 @@ private struct GeneralSettingsPane: View {
                 }
 
                 SettingToggle(
-                    "Symlink .env files",
-                    isOn: $symlinkEnv,
-                    description: "Symlink .env and .env.local from the main repository into new worktrees."
+                    "Copy .env files (rsync)",
+                    isOn: $copyEnvFiles,
+                    description: "rsync the project's .atelier-seed directory into new worktrees. Override the location with \"seed\" in .atelier.json."
                 )
 
                 Picker("Theme", selection: $appearance) {

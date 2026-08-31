@@ -36,15 +36,16 @@ enum WorktreeSetupCreator {
         guard let worktreePath = GitOperations.createWorktree(
             projectPath: projectPath,
             projectName: projectName,
-            workstreamName: workstreamName,
-            symlinkEnv: false // We handle env files ourselves
+            workstreamName: workstreamName
         ) else {
             logger.warning("Failed to create git worktree")
             return nil
         }
 
-        // 2. Copy env files
-        let envFilesCopied = EnvFileCopier.copyEnvFiles(from: projectPath, to: worktreePath)
+        // 2. Copy the seed directory (env files and friends)
+        let envFilesCopied = EnvSeedSync.isEnabled()
+            ? EnvSeedSync.sync(seedDirectory: config.seedDirectory(in: projectPath), to: worktreePath)
+            : 0
 
         // 3. Create symlinks for heavy directories
         let symlinksCreated = SymlinkCreator.createSymlinks(

@@ -453,7 +453,7 @@ enum GitOperations {
 
     /// Create a git worktree for a workstream, branching off the default branch.
     /// Returns the worktree path on success, nil on failure.
-    static func createWorktree(projectPath: String, projectName: String, workstreamName: String, symlinkEnv: Bool = true) -> String? {
+    static func createWorktree(projectPath: String, projectName: String, workstreamName: String) -> String? {
         let worktreeDir = worktreeDestination(
             projectPath: projectPath,
             projectName: projectName,
@@ -482,33 +482,9 @@ enum GitOperations {
             guard fallback != nil else { return nil }
         }
 
-        if symlinkEnv {
-            symlinkEnvFiles(from: projectPath, to: worktreeDir.path)
-        }
-
         addExcludeEntry(at: projectPath, pattern: ".atelier-state/")
 
         return worktreeDir.path
-    }
-
-    /// Symlink .env and .env.local from main repo to worktree if they exist.
-    private static func symlinkEnvFiles(from projectPath: String, to worktreePath: String) {
-        let envFiles = [".env", ".env.local"]
-        let fm = FileManager.default
-        for file in envFiles {
-            let source = URL(fileURLWithPath: projectPath).appendingPathComponent(file)
-            let destination = URL(fileURLWithPath: worktreePath).appendingPathComponent(file)
-            guard fm.fileExists(atPath: source.path) else { continue }
-            // Skip sources that are themselves symlinks to prevent exposing arbitrary files
-            if let attrs = try? fm.attributesOfItem(atPath: source.path),
-               let fileType = attrs[.type] as? FileAttributeType,
-               fileType != .typeRegular
-            {
-                continue
-            }
-            guard !fm.fileExists(atPath: destination.path) else { continue }
-            try? fm.createSymbolicLink(at: destination, withDestinationURL: source)
-        }
     }
 
     /// Append a pattern to .git/info/exclude if not already present.

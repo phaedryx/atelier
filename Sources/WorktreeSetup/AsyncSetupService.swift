@@ -73,8 +73,7 @@ actor AsyncSetupService {
                 let path = GitOperations.createWorktree(
                     projectPath: projectPath,
                     projectName: projectName,
-                    workstreamName: workstreamName,
-                    symlinkEnv: false // We handle env files ourselves
+                    workstreamName: workstreamName
                 )
                 continuation.resume(returning: path)
             }
@@ -114,15 +113,20 @@ actor AsyncSetupService {
         let config = WorktreeSetupConfig.load(from: projectPath)
         var errors: [String] = []
 
-        // Step 3: Copy env files
+        // Step 3: Copy the seed directory (env files and friends)
         await updateState(for: workstreamID, to: .inProgress(step: "Copying env files", progress: 0.3))
+        let seedDirectory = config.seedDirectory(in: projectPath)
         let envCount: Int = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
-                let count = EnvFileCopier.copyEnvFiles(from: projectPath, to: worktreePath)
+                guard EnvSeedSync.isEnabled() else {
+                    continuation.resume(returning: 0)
+                    return
+                }
+                let count = EnvSeedSync.sync(seedDirectory: seedDirectory, to: worktreePath)
                 continuation.resume(returning: count)
             }
         }
-        logger.info("Copied \(envCount) env file(s)")
+        logger.info("Copied \(envCount) seed file(s)")
 
         // Step 4: Create symlinks
         await updateState(for: workstreamID, to: .inProgress(step: "Creating symlinks", progress: 0.5))

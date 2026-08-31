@@ -475,7 +475,6 @@ struct ProjectSidebar: View {
     // MARK: - Workstream management
 
     @AppStorage("atelier.bypassPermissions") private var defaultBypass: Bool = false
-    @AppStorage("atelier.symlinkEnv") private var symlinkEnv: Bool = true
 
     private func addWorkstream(for projectID: UUID, bypassPermissions: Bool? = nil) {
         logger.warning("[Atelier] addWorkstream called for projectID=\(projectID, privacy: .public)")
@@ -666,15 +665,13 @@ struct ProjectSidebar: View {
 
         let projectPath = project.directory
         let projectName = project.name
-        let symlink = symlinkEnv
         let workstreamID = workstream.id
 
         DispatchQueue.global(qos: .userInitiated).async {
             let worktreePath = GitOperations.createWorktree(
                 projectPath: projectPath,
                 projectName: projectName,
-                workstreamName: name,
-                symlinkEnv: symlink
+                workstreamName: name
             )
             DispatchQueue.main.async {
                 if let worktreePath {

@@ -122,11 +122,25 @@ carries the `-dev` marker.
 - **Sidebar state** (selection, expanded sections) stored in UserDefaults (`atelier.selection`, `atelier.expandedProjects`)
 
 ### Workstream lifecycle
-1. Creating a workstream: generates name, runs `git worktree add`, symlinks .env (if enabled)
+1. Creating a workstream: generates name, runs `git worktree add`; background setup then rsyncs the seed directory (if enabled)
 2. Workspace view: only Info (Cmd+I) and Agent (Cmd+Return) are permanent; Changes and Environment open by default but close, reopen, and reorder like terminals/browsers, which are added on demand
 3. Tmux mode: wraps Coding Agent only in `tmux new-session -A` on socket `-L atelier`
 4. Terminal tabs: close on shell exit (Ctrl+D). Agent respawns.
 5. Archiving: runs teardown script, then `git worktree remove` + `tmux kill-session`
+
+### Worktree seeding
+A new worktree gets its uncommitted files from a **seed directory** — `.atelier-seed` in the
+project directory by default, overridden with `"seed"` in `.atelier.json`:
+```json
+{ "seed": "config/secrets" }
+```
+`AsyncSetupService` runs this in background setup, after the worktree exists and the terminal
+is already up. `EnvSeedSync.sync` rsyncs the seed's *contents* into the worktree (`-a --copy-links
+--ignore-existing`), so nested layouts like `apps/api/.env` land in the right place, symlinks
+arrive as real files, and anything already in the worktree wins. A relative `seed` resolves
+against the project directory; an absolute or `~`-rooted one is taken as written. No seed
+directory means nothing is copied. The `atelier.copyEnvFiles` toggle gates the whole step;
+it supersedes the older `atelier.symlinkEnv`, whose value is migrated once at launch.
 
 ### Script configuration
 Scripts are loaded from `.atelier.json` in the project directory:
