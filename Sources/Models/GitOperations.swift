@@ -31,6 +31,26 @@ struct WorktreeInfo: Identifiable {
     }
 }
 
+/// Where a project should be registered, and what to call it.
+///
+/// These differ in the `.bare` container layout, where the directory the user
+/// points at (`<container>`) is a bare repository with no work tree: the project
+/// lives in the default branch's checkout, but keeps the container's name.
+struct ProjectLocation: Equatable {
+    let directory: String
+    let name: String
+    /// The `.bare` container this checkout sits in, when the path resolved
+    /// forward out of one. Projects saved before that resolution existed point
+    /// at the container, so callers can match them without re-running git.
+    let containerDirectory: String?
+
+    init(directory: String, name: String, containerDirectory: String? = nil) {
+        self.directory = directory
+        self.name = name
+        self.containerDirectory = containerDirectory
+    }
+}
+
 struct WorktreeDetail {
     struct FileChange: Identifiable {
         enum Status: String {
@@ -502,9 +522,21 @@ enum GitOperations {
         addExcludeEntry(at: projectPath, pattern: relative + "/")
     }
 
-    /// Append a pattern to .git/info/exclude if not already present.
+    /// Append a pattern to the repo's info/exclude if not already present.
     static func addExcludeEntry(at repoPath: String, pattern: String) {
-        let excludeURL = URL(fileURLWithPath: repoPath).appendingPathComponent(".git/info/exclude")
+        // Ask git where the file lives rather than assuming `.git` is a
+        // directory — in a worktree, and in the .bare container layout, it is a
+        // file pointing elsewhere, and the hardcoded path silently goes nowhere.
+        let excludeURL: URL
+        if let gitPath = run(args: ["rev-parse", "--git-path", "info/exclude"], in: repoPath)?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !gitPath.isEmpty
+        {
+            excludeURL = gitPath.hasPrefix("/")
+                ? URL(fileURLWithPath: gitPath)
+                : URL(fileURLWithPath: repoPath).appendingPathComponent(gitPath).standardized
+        } else {
+            excludeURL = URL(fileURLWithPath: repoPath).appendingPathComponent(".git/info/exclude")
+        }
         let fm = FileManager.default
 
         // Ensure the info directory exists
@@ -668,31 +700,33 @@ enum GitOperations {
         var results: [WorktreeInfo] = []
         var currentPath: String?
         var currentBranch: String?
+        var currentIsBare = false
 
-        for line in output.components(separatedBy: "\n") {
-            if line.hasPrefix("worktree ") {
-                // Flush previous entry
-                if let path = currentPath {
-                    let isMain = URL(fileURLWithPath: path).standardizedFileURL.path == mainPath
-                    let dirty = !isMain && hasUncommittedChanges(at: path)
-                    let unpushed = !isMain && hasUnpushedCommits(at: path)
-                    let branchCommits = !isMain && hasBranchCommits(at: path, projectPath: projectPath)
-                    results.append(WorktreeInfo(path: path, branch: currentBranch, isDirty: dirty, isMain: isMain, hasUnpushedCommits: unpushed, hasBranchCommits: branchCommits))
-                }
-                currentPath = String(line.dropFirst("worktree ".count))
-                currentBranch = nil
-            } else if line.hasPrefix("branch refs/heads/") {
-                currentBranch = String(line.dropFirst("branch refs/heads/".count))
-            }
-        }
-        // Flush last entry
-        if let path = currentPath {
+        /// In the .bare container layout the bare repository is itself an entry
+        /// in `worktree list`. It has no work tree and no branch, so it must not
+        /// be surfaced as a workstream.
+        func flush() {
+            guard let path = currentPath, !currentIsBare else { return }
             let isMain = URL(fileURLWithPath: path).standardizedFileURL.path == mainPath
             let dirty = !isMain && hasUncommittedChanges(at: path)
             let unpushed = !isMain && hasUnpushedCommits(at: path)
             let branchCommits = !isMain && hasBranchCommits(at: path, projectPath: projectPath)
             results.append(WorktreeInfo(path: path, branch: currentBranch, isDirty: dirty, isMain: isMain, hasUnpushedCommits: unpushed, hasBranchCommits: branchCommits))
         }
+
+        for line in output.components(separatedBy: "\n") {
+            if line.hasPrefix("worktree ") {
+                flush()
+                currentPath = String(line.dropFirst("worktree ".count))
+                currentBranch = nil
+                currentIsBare = false
+            } else if line.hasPrefix("branch refs/heads/") {
+                currentBranch = String(line.dropFirst("branch refs/heads/".count))
+            } else if line == "bare" {
+                currentIsBare = true
+            }
+        }
+        flush()
 
         return results
     }
@@ -750,6 +784,110 @@ enum GitOperations {
         }
 
         return commonURL.deletingLastPathComponent().standardizedFileURL.path
+    }
+
+    /// Resolve any path the user points at — a repo, a worktree, or a `.bare`
+    /// container — to the directory the project should be registered under.
+    ///
+    /// Worktrees resolve to their main repository, as before. A `.bare`
+    /// container has no work tree of its own (`git status` there fails outright
+    /// and HEAD reads as the parked `root` branch), so it resolves *forward* to
+    /// its default checkout instead, while keeping the container's name.
+    static func projectLocation(for path: String) -> ProjectLocation {
+        let container = mainRepositoryPath(for: path) ?? path
+
+        guard isBareRepository(at: container) else {
+            return ProjectLocation(directory: container, name: URL(fileURLWithPath: container).lastPathComponent)
+        }
+
+        let name = URL(fileURLWithPath: container).lastPathComponent
+        guard let checkout = defaultCheckoutPath(in: container) else {
+            return ProjectLocation(directory: container, name: name)
+        }
+        return ProjectLocation(directory: checkout, name: name, containerDirectory: container)
+    }
+
+    /// True when `path` resolves to a bare repository — the `.bare` container
+    /// layout, where the git database has no work tree attached.
+    static func isBareRepository(at path: String) -> Bool {
+        run(args: ["rev-parse", "--is-bare-repository"], in: path)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) == "true"
+    }
+
+    /// The checkout a bare container should be represented by: the worktree for
+    /// `wt.default` when it is present, otherwise the child worktree on the
+    /// default branch. Nil when the container has no checkout at all.
+    private static func defaultCheckoutPath(in container: String) -> String? {
+        let containerURL = URL(fileURLWithPath: container).standardizedFileURL
+
+        if let configured = run(args: ["config", "wt.default"], in: container)?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !configured.isEmpty
+        {
+            let candidate = containerURL.appendingPathComponent(configured)
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: candidate.path, isDirectory: &isDir), isDir.boolValue {
+                return candidate.path
+            }
+        }
+
+        // wt.default may be unset (a container made outside Atelier) or stale.
+        let candidates = worktreePaths(at: container).filter { path in
+            URL(fileURLWithPath: path).standardizedFileURL
+                .deletingLastPathComponent().path == containerURL.path
+        }
+        guard candidates.count > 1 else { return candidates.first }
+
+        // Workstream worktrees are created beside the repository too, so the
+        // container's children are the default checkout *and* every workstream.
+        // Pick the checkout of the repository's own default branch rather than
+        // whichever git lists first, which would register a workstream instead.
+        let branches = candidates.map { (path: $0, branch: currentBranch(at: $0)) }
+        for candidate in defaultBranchNames(at: container) {
+            if let match = branches.first(where: { $0.branch == candidate }) {
+                return match.path
+            }
+        }
+        return candidates.first
+    }
+
+    /// Branch names that could be the repository's default, best guess first.
+    ///
+    /// Deliberately not `defaultBranch`: that one prefers `development` for
+    /// worktree *branching*, which is a different question from which checkout
+    /// represents the project. A repo with a `development` branch whose checkout
+    /// is on `main` would match nothing and fall through to an arbitrary
+    /// worktree.
+    private static func defaultBranchNames(at path: String) -> [String] {
+        var names: [String] = []
+        if let head = run(args: ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], in: path)?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !head.isEmpty
+        {
+            names.append(head.hasPrefix("origin/") ? String(head.dropFirst("origin/".count)) : head)
+        }
+        names.append(contentsOf: ["main", "master", "development"])
+        return names
+    }
+
+    /// Worktree paths only, skipping the bare repository entry. Unlike
+    /// `listWorktreesWithInfo` this runs a single git command — no per-worktree
+    /// status probes — so it is cheap enough to call while resolving a project.
+    private static func worktreePaths(at path: String) -> [String] {
+        guard let output = run(args: ["worktree", "list", "--porcelain"], in: path) else { return [] }
+
+        var paths: [String] = []
+        var current: String?
+        for line in output.components(separatedBy: "\n") {
+            if line.hasPrefix("worktree ") {
+                current = String(line.dropFirst("worktree ".count))
+            } else if line == "bare" {
+                current = nil
+            } else if line.isEmpty, let found = current {
+                paths.append(found)
+                current = nil
+            }
+        }
+        if let current { paths.append(current) }
+        return paths
     }
 
     /// Return the current branch name, or nil if detached or not a repo.

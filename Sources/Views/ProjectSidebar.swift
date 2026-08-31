@@ -38,6 +38,13 @@ struct ProjectSidebar: View {
     @State private var showingNewProjectName = false
     @State private var newProjectName = ""
     @State private var newProjectError = ""
+    @State private var showingCloneRepo = false
+    @State private var cloneRemote = ""
+    @State private var cloneDirectoryName = ""
+    @State private var cloneDirectoryNameEdited = false
+    @State private var cloneError = ""
+    @State private var isCloning = false
+    @State private var cloneCancellation: BareRepoClone.Cancellation?
     @State private var isDropTargeted = false
     @State private var projectToDelete: UUID?
     @State private var workstreamToRemove: UUID?
@@ -330,6 +337,15 @@ struct ProjectSidebar: View {
         sidebarList
             .sheet(isPresented: $showingAddProjectChoice) {
                 AddProjectChoiceSheet(
+                    onCloneRepo: {
+                        showingAddProjectChoice = false
+                        cloneRemote = ""
+                        cloneDirectoryName = ""
+                        cloneDirectoryNameEdited = false
+                        cloneError = ""
+                        isCloning = false
+                        showingCloneRepo = true
+                    },
                     onNewProject: {
                         showingAddProjectChoice = false
                         newProjectName = ""
@@ -341,6 +357,19 @@ struct ProjectSidebar: View {
                         openDirectoryPicker()
                     },
                     onCancel: { showingAddProjectChoice = false }
+                )
+            }
+            .sheet(isPresented: $showingCloneRepo) {
+                CloneRepoSheet(
+                    remote: $cloneRemote,
+                    directoryName: $cloneDirectoryName,
+                    error: $cloneError,
+                    isCloning: isCloning,
+                    baseDirectory: baseDirectory,
+                    onRemoteChanged: { updateSuggestedCloneDirectoryName(from: $0) },
+                    onDirectoryNameEdited: { cloneDirectoryNameEdited = true },
+                    onClone: { cloneRepository() },
+                    onCancel: { cancelClone() }
                 )
             }
             .sheet(isPresented: $showingNewProjectName) {
@@ -843,19 +872,86 @@ struct ProjectSidebar: View {
         addProject(name: name, directory: dirURL.path)
     }
 
-    private func addProject(name: String, directory: String) {
-        // Resolve worktree branches to their main repository
-        let resolvedDirectory: String
-        let resolvedName: String
-        if let mainRepoPath = GitOperations.mainRepositoryPath(for: directory) {
-            resolvedDirectory = mainRepoPath
-            resolvedName = URL(fileURLWithPath: mainRepoPath).lastPathComponent
-        } else {
-            resolvedDirectory = directory
-            resolvedName = name
+    /// Keep the folder name in step with the URL until the user types their own.
+    private func updateSuggestedCloneDirectoryName(from remote: String) {
+        guard !cloneDirectoryNameEdited else { return }
+        cloneDirectoryName = BareRepoClone.suggestedDirectoryName(for: remote) ?? ""
+    }
+
+    private func cloneRepository() {
+        guard let remote = BareRepoClone.normalizeRemote(cloneRemote) else {
+            cloneError = NSLocalizedString(
+                "Enter a repository URL or an owner/repo name.", comment: ""
+            )
+            return
         }
 
-        if let existing = projects.first(where: { $0.directory == resolvedDirectory }) {
+        let directoryName = cloneDirectoryName.trimmingCharacters(in: .whitespaces)
+        guard !directoryName.isEmpty else {
+            cloneError = NSLocalizedString("Enter a folder name.", comment: "")
+            return
+        }
+        guard !directoryName.contains("/"), directoryName != ".", directoryName != ".." else {
+            cloneError = NSLocalizedString(
+                "The folder name must be a single directory name.", comment: ""
+            )
+            return
+        }
+
+        let container = URL(fileURLWithPath: baseDirectory).appendingPathComponent(directoryName)
+        let cancellation = BareRepoClone.Cancellation()
+        cloneCancellation = cancellation
+        cloneError = ""
+        isCloning = true
+
+        Task.detached {
+            let result = BareRepoClone.clone(remote: remote, into: container, cancellation: cancellation)
+            await MainActor.run {
+                isCloning = false
+                cloneCancellation = nil
+                switch result {
+                case let .success(containerPath):
+                    showingCloneRepo = false
+                    addProject(
+                        name: URL(fileURLWithPath: containerPath).lastPathComponent,
+                        directory: containerPath
+                    )
+                case let .failure(message):
+                    cloneError = message
+                case .cancelled:
+                    // The sheet is already dismissed and the container removed.
+                    break
+                }
+            }
+        }
+    }
+
+    /// Stops a clone in flight and closes the sheet. The clone unwinds on its
+    /// own thread and cleans up the half-built container.
+    private func cancelClone() {
+        cloneCancellation?.cancel()
+        cloneCancellation = nil
+        showingCloneRepo = false
+    }
+
+    private func addProject(name: String, directory: String) {
+        // Resolve worktree branches to their main repository, and .bare
+        // containers forward to their default checkout.
+        let location = GitOperations.projectLocation(for: directory)
+        let resolvedDirectory = location.directory
+        let resolvedName = location.name.isEmpty ? name : location.name
+
+        // Also match the container, so a project saved under an older
+        // resolution — before .bare containers resolved forward to their
+        // checkout — is recognised instead of being added a second time. Two
+        // rows for one repo would collide in ~/.atelier/worktrees, since
+        // worktree paths are built from the project name. Compared against the
+        // container we already resolved rather than by re-resolving every
+        // existing project, which would fan out to git subprocesses on the main
+        // thread for each one.
+        if let existing = projects.first(where: {
+            $0.directory == resolvedDirectory || $0.directory == location.containerDirectory
+        }) {
             selection = .project(existing.id)
             return
         }
@@ -1341,6 +1437,7 @@ private struct SidebarBottomButton: View {
 }
 
 private struct AddProjectChoiceSheet: View {
+    let onCloneRepo: () -> Void
     let onNewProject: () -> Void
     let onExistingDirectory: () -> Void
     let onCancel: () -> Void
@@ -1351,50 +1448,27 @@ private struct AddProjectChoiceSheet: View {
                 .font(.headline)
 
             VStack(spacing: 12) {
-                Button(action: onNewProject) {
-                    HStack {
-                        Image(systemName: "plus.rectangle.on.folder")
-                            .font(.system(size: 20))
-                            .frame(width: 32)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("New Project")
-                                .font(.system(.body, weight: .medium))
-                            Text("Create a new directory in the base directory")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .foregroundStyle(.tertiary)
-                    }
-                    .padding(12)
-                    .background(Color.primary.opacity(0.04))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                }
-                .buttonStyle(.borderless)
-                .keyboardShortcut(.defaultAction)
+                AddProjectChoiceRow(
+                    icon: "arrow.down.circle",
+                    title: "Clone from GitHub repo",
+                    detail: "Clone a repository into the base directory",
+                    action: onCloneRepo
+                )
 
-                Button(action: onExistingDirectory) {
-                    HStack {
-                        Image(systemName: "folder")
-                            .font(.system(size: 20))
-                            .frame(width: 32)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Existing Directory")
-                                .font(.system(.body, weight: .medium))
-                            Text("Select an existing directory from disk")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .foregroundStyle(.tertiary)
-                    }
-                    .padding(12)
-                    .background(Color.primary.opacity(0.04))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                }
-                .buttonStyle(.borderless)
+                AddProjectChoiceRow(
+                    icon: "plus.rectangle.on.folder",
+                    title: "New Project",
+                    detail: "Create a new directory in the base directory",
+                    isDefault: true,
+                    action: onNewProject
+                )
+
+                AddProjectChoiceRow(
+                    icon: "folder",
+                    title: "Existing Directory",
+                    detail: "Select an existing directory from disk",
+                    action: onExistingDirectory
+                )
             }
 
             Button("Cancel", action: onCancel)
@@ -1402,6 +1476,139 @@ private struct AddProjectChoiceSheet: View {
         }
         .padding(20)
         .frame(width: 380)
+    }
+}
+
+private struct AddProjectChoiceRow: View {
+    let icon: String
+    let title: LocalizedStringKey
+    let detail: LocalizedStringKey
+    /// Applied to the Button itself rather than to this wrapper, so Return
+    /// reaches it regardless of how SwiftUI treats shortcuts on custom views.
+    var isDefault: Bool = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                Image(systemName: icon)
+                    .font(.system(size: 20))
+                    .frame(width: 32)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(.body, weight: .medium))
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(12)
+            .background(Color.primary.opacity(0.04))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.borderless)
+        .keyboardShortcut(isDefault ? KeyboardShortcut.defaultAction : nil)
+    }
+}
+
+private struct CloneRepoSheet: View {
+    @Binding var remote: String
+    @Binding var directoryName: String
+    @Binding var error: String
+    let isCloning: Bool
+    let baseDirectory: String
+    let onRemoteChanged: (String) -> Void
+    let onDirectoryNameEdited: () -> Void
+    let onClone: () -> Void
+    let onCancel: () -> Void
+
+    private enum Field: Hashable {
+        case remote
+        case directoryName
+    }
+
+    @FocusState private var focusedField: Field?
+
+    private var canClone: Bool {
+        !remote.trimmingCharacters(in: .whitespaces).isEmpty
+            && !directoryName.trimmingCharacters(in: .whitespaces).isEmpty
+            && !isCloning
+    }
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("Clone from GitHub repo")
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Base directory")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Text(baseDirectory.abbreviatedPath)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                    Text("(change in Settings)")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.quaternary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 6) {
+                TextField("Repository URL or owner/repo", text: $remote)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($focusedField, equals: .remote)
+                    .disabled(isCloning)
+                    .onChange(of: remote) { _, value in onRemoteChanged(value) }
+                    .onSubmit { if canClone { onClone() } }
+
+                TextField("Folder name", text: $directoryName)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($focusedField, equals: .directoryName)
+                    .disabled(isCloning)
+                    .onChange(of: directoryName) { _, _ in
+                        // Only a change the user typed themselves stops the
+                        // field tracking the URL.
+                        if focusedField == .directoryName { onDirectoryNameEdited() }
+                    }
+                    .onSubmit { if canClone { onClone() } }
+
+                Text("Cloned as a .bare repository with the default branch checked out beside it.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.quaternary)
+            }
+
+            if !error.isEmpty {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            HStack {
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+                if isCloning {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Cloning…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Button("Clone", action: onClone)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!canClone)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
+        .onAppear { focusedField = .remote }
     }
 }
 
