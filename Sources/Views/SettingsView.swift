@@ -556,12 +556,10 @@ private struct IntegrationsSettingsPane: View {
                 VStack(alignment: .leading, spacing: 8) {
                     // A real label, not "", so the field sits beside it the way the API
                     // token field does — an empty label leaves the row unfocusable.
-                    TextField(
-                        "Branch Name Pattern",
-                        text: $branchTemplate,
-                        prompt: Text(verbatim: ShortcutBranchName.examplePattern)
-                    )
-                    .textFieldStyle(.roundedBorder)
+                    // No prompt: greyed pattern text inside an empty field reads as a
+                    // value that is already set. The example lives in the caption below.
+                    TextField("Branch Name Pattern", text: $branchTemplate)
+                        .textFieldStyle(.roundedBorder)
 
                     // Rendered against a sample story, so the pattern's effect is visible
                     // without having to create a workstream to find out.
