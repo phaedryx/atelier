@@ -167,9 +167,6 @@ struct AtelierApp: App {
 
         UserDefaults.standard.set(200, forKey: "NSInitialToolTipDelay") // 200ms vs system ~700-1000ms
 
-        // Carry a pre-rsync opt-out of env seeding across the toggle's rename.
-        EnvSeedSync.migrateDefaults()
-
         // Start the hook event receiver and wire it to the router and the
         // sidebar agent-state tracker. `onEvent` is invoked on the main queue.
         HookEventReceiver.shared.onEvent = { projectDir, event in

@@ -63,12 +63,35 @@ struct WorktreeSetupConfig: Codable, Sendable {
     /// Absolute path of the seed directory for a project. A relative `seed`
     /// resolves against the project directory; an absolute or `~`-rooted one is
     /// taken as written, so a seed can live outside the repo entirely.
+    ///
+    /// A `seed` that resolves to the project directory itself, or that escapes it
+    /// via `..`, falls back to the default — the sync copies a whole directory
+    /// tree, and pointing it at the repo root would pour the repo (and `.git`)
+    /// into every new worktree.
     func seedDirectory(in projectDirectory: String) -> String {
-        let expanded = (seed as NSString).expandingTildeInPath
-        guard !expanded.hasPrefix("/") else { return expanded }
-        return URL(fileURLWithPath: projectDirectory)
+        Self.resolveSeed(seed, in: projectDirectory)
+            ?? Self.resolveSeed(Self.defaultSeedDirectory, in: projectDirectory)
+            ?? (projectDirectory as NSString).appendingPathComponent(Self.defaultSeedDirectory)
+    }
+
+    static func resolveSeed(_ seed: String, in projectDirectory: String) -> String? {
+        let trimmed = seed.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let expanded = (trimmed as NSString).expandingTildeInPath
+        let project = URL(fileURLWithPath: projectDirectory).standardizedFileURL.path
+
+        if expanded.hasPrefix("/") {
+            let absolute = URL(fileURLWithPath: expanded).standardizedFileURL.path
+            return absolute == project ? nil : absolute
+        }
+
+        let resolved = URL(fileURLWithPath: projectDirectory)
             .appendingPathComponent(expanded)
+            .standardizedFileURL
             .path
+        guard resolved != project, resolved.hasPrefix(project + "/") else { return nil }
+        return resolved
     }
 }
 

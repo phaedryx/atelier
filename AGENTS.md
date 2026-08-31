@@ -135,12 +135,28 @@ project directory by default, overridden with `"seed"` in `.atelier.json`:
 { "seed": "config/secrets" }
 ```
 `AsyncSetupService` runs this in background setup, after the worktree exists and the terminal
-is already up. `EnvSeedSync.sync` rsyncs the seed's *contents* into the worktree (`-a --copy-links
---ignore-existing`), so nested layouts like `apps/api/.env` land in the right place, symlinks
-arrive as real files, and anything already in the worktree wins. A relative `seed` resolves
-against the project directory; an absolute or `~`-rooted one is taken as written. No seed
-directory means nothing is copied. The `atelier.copyEnvFiles` toggle gates the whole step;
-it supersedes the older `atelier.symlinkEnv`, whose value is migrated once at launch.
+is already up. `EnvSeedSync.sync` rsyncs the seed's *contents* into the worktree, so nested
+layouts like `apps/api/.env` land in the right place, symlinks arrive as real files, and
+anything already in the worktree wins.
+
+A relative `seed` resolves against the project directory; an absolute or `~`-rooted one is
+taken as written. A `seed` that is empty, resolves to the project directory itself, or escapes
+it via `..` falls back to the default — the sync copies a whole tree, so pointing it at the repo
+root would pour the repo into every worktree. The resolved seed is added to `.git/info/exclude`,
+since it holds secrets that must never be committed. No seed directory means nothing is copied.
+
+`atelier.copyEnvFiles` gates the whole step. It does **not** inherit the older
+`atelier.symlinkEnv`: that key gated only the symlinks, while env files were copied
+unconditionally alongside them, so carrying a `false` across would have disabled copying for
+people who never asked for it.
+
+**rsync flag compatibility is load-bearing.** The invocation is
+`-rlpt --omit-dir-times --copy-links --ignore-existing`, and every flag must be accepted by
+*both* the rsync 2.6.9 that ships with the minimum supported macOS (14) and the openrsync that
+replaced it in macOS 15. `--out-format` (rsync 3.0+) and `--chmod` (missing from openrsync) each
+fail on one side, so the copied count is derived from the filesystem rather than rsync's output,
+and directory modes are restored in Swift rather than via `--chmod`. Do not add flags here
+without checking both.
 
 ### Script configuration
 Scripts are loaded from `.atelier.json` in the project directory:

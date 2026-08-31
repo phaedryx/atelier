@@ -83,9 +83,10 @@ final class EnvSeedSyncTests: XCTestCase {
         try write("seed/apps/api/.env", "API")
         try makeDirectory("worktree")
 
-        let copied = EnvSeedSync.sync(seedDirectory: path("seed"), to: path("worktree"))
+        let outcome = EnvSeedSync.sync(seedDirectory: path("seed"), to: path("worktree"))
 
-        XCTAssertEqual(copied, 2)
+        XCTAssertEqual(outcome, .copied(2))
+        XCTAssertNil(outcome.problemDescription)
         XCTAssertEqual(try read("worktree/.env"), "ROOT")
         XCTAssertEqual(try read("worktree/apps/api/.env"), "API")
         XCTAssertFalse(
@@ -98,9 +99,9 @@ final class EnvSeedSyncTests: XCTestCase {
         try write("seed/.env", "FROM SEED")
         try write("worktree/.env", "ALREADY THERE")
 
-        let copied = EnvSeedSync.sync(seedDirectory: path("seed"), to: path("worktree"))
+        let outcome = EnvSeedSync.sync(seedDirectory: path("seed"), to: path("worktree"))
 
-        XCTAssertEqual(copied, 0)
+        XCTAssertEqual(outcome, .copied(0))
         XCTAssertEqual(try read("worktree/.env"), "ALREADY THERE")
     }
 
@@ -113,9 +114,9 @@ final class EnvSeedSyncTests: XCTestCase {
             withDestinationPath: path("main/.env")
         )
 
-        let copied = EnvSeedSync.sync(seedDirectory: path("seed"), to: path("worktree"))
+        let outcome = EnvSeedSync.sync(seedDirectory: path("seed"), to: path("worktree"))
 
-        XCTAssertEqual(copied, 1)
+        XCTAssertEqual(outcome, .copied(1))
         XCTAssertEqual(try read("worktree/.env"), "FROM SEED")
         XCTAssertFalse(isSymlink("worktree/.env"))
     }
@@ -129,9 +130,9 @@ final class EnvSeedSyncTests: XCTestCase {
             withDestinationPath: path("elsewhere/.env")
         )
 
-        let copied = EnvSeedSync.sync(seedDirectory: path("seed"), to: path("worktree"))
+        let outcome = EnvSeedSync.sync(seedDirectory: path("seed"), to: path("worktree"))
 
-        XCTAssertEqual(copied, 1)
+        XCTAssertEqual(outcome, .copied(1))
         XCTAssertEqual(try read("worktree/.env"), "ELSEWHERE")
         XCTAssertFalse(isSymlink("worktree/.env"))
     }
@@ -139,45 +140,116 @@ final class EnvSeedSyncTests: XCTestCase {
     func testMissingSeedDirectoryCopiesNothing() throws {
         try makeDirectory("worktree")
 
-        let copied = EnvSeedSync.sync(seedDirectory: path("nope"), to: path("worktree"))
+        let outcome = EnvSeedSync.sync(seedDirectory: path("nope"), to: path("worktree"))
 
-        XCTAssertEqual(copied, 0)
+        XCTAssertEqual(outcome, .noSeedDirectory)
+        XCTAssertNil(outcome.problemDescription, "a missing seed is not a failure")
         let contents = try FileManager.default.contentsOfDirectory(atPath: path("worktree"))
         XCTAssertTrue(contents.isEmpty)
     }
 
-    func testDirectoriesAreNotCountedAsCopiedFiles() {
-        let output = "./\napps/\napps/api/\napps/api/.env\n.env\n"
-        XCTAssertEqual(EnvSeedSync.copiedFileCount(rsyncOutput: output), 2)
+    // MARK: - Toggle
+
+    func testSeedingIsOnByDefault() throws {
+        let defaults = try makeDefaults()
+        XCTAssertTrue(EnvSeedSync.isEnabled(defaults))
     }
 
-    // MARK: - Toggle migration
-
-    func testMigrationAdoptsTheOldSymlinkToggle() throws {
+    func testSeedingRespectsAnExplicitOptOut() throws {
         let defaults = try makeDefaults()
-        defaults.set(false, forKey: "atelier.symlinkEnv")
-
-        EnvSeedSync.migrateDefaults(defaults)
-
+        defaults.set(false, forKey: EnvSeedSync.defaultsKey)
         XCTAssertFalse(EnvSeedSync.isEnabled(defaults))
     }
 
-    func testMigrationLeavesAnExplicitNewValueAlone() throws {
+    /// The old `atelier.symlinkEnv` gated only the symlinks; env files were
+    /// copied unconditionally alongside them. Carrying a `false` across would
+    /// turn copying off for people who never asked for that, so it is not read.
+    func testTheOldSymlinkToggleDoesNotDisableSeeding() throws {
         let defaults = try makeDefaults()
         defaults.set(false, forKey: "atelier.symlinkEnv")
-        defaults.set(true, forKey: EnvSeedSync.defaultsKey)
-
-        EnvSeedSync.migrateDefaults(defaults)
-
         XCTAssertTrue(EnvSeedSync.isEnabled(defaults))
     }
 
-    func testSeedingIsOnWhenNeitherToggleWasEverSet() throws {
-        let defaults = try makeDefaults()
+    // MARK: - Failure reporting
 
-        EnvSeedSync.migrateDefaults(defaults)
+    func testAFailedRsyncIsReportedAsAProblem() throws {
+        try write("seed/.env", "SECRET")
+        // A destination that cannot be created makes rsync exit non-zero.
+        let blocked = path("worktree")
+        try "not a directory".write(toFile: blocked, atomically: true, encoding: .utf8)
 
-        XCTAssertTrue(EnvSeedSync.isEnabled(defaults))
+        let outcome = EnvSeedSync.sync(seedDirectory: path("seed"), to: blocked)
+
+        guard case .failed = outcome else {
+            return XCTFail("expected .failed, got \(outcome)")
+        }
+        XCTAssertNotNil(outcome.problemDescription)
+        XCTAssertEqual(outcome.copiedCount, 0)
+    }
+
+    func testAFailedRsyncLeavesAnExistingSymlinkIntact() throws {
+        try write("seed/.env", "FROM SEED")
+        try write("main/.env", "FROM MAIN")
+        try makeDirectory("worktree")
+        try FileManager.default.createSymbolicLink(
+            atPath: path("worktree/.env"),
+            withDestinationPath: path("main/.env")
+        )
+        // Point rsync at a source that disappears mid-call by making the seed
+        // unreadable, so the transfer fails after the symlink survey.
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: path("seed"))
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path("seed"))
+        }
+
+        _ = EnvSeedSync.sync(seedDirectory: path("seed"), to: path("worktree"))
+
+        XCTAssertTrue(
+            isSymlink("worktree/.env") || (try? read("worktree/.env")) != nil,
+            "the worktree must never end up with neither the symlink nor a real file"
+        )
+    }
+
+    // MARK: - Directory metadata
+
+    func testExistingWorktreeDirectoriesKeepTheirMode() throws {
+        try write("seed/apps/api/.env", "API")
+        try makeDirectory("worktree/apps/api")
+        let fm = FileManager.default
+        try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path("seed"))
+        let before = (try fm.attributesOfItem(atPath: path("worktree")))[.posixPermissions] as? NSNumber
+
+        _ = EnvSeedSync.sync(seedDirectory: path("seed"), to: path("worktree"))
+
+        let after = (try fm.attributesOfItem(atPath: path("worktree")))[.posixPermissions] as? NSNumber
+        XCTAssertEqual(after, before, "the seed's mode must not clamp the worktree root")
+        XCTAssertEqual(try read("worktree/apps/api/.env"), "API")
+    }
+
+    // MARK: - Seed validation
+
+    func testEmptySeedFallsBackToTheDefault() throws {
+        try writeConfig(["seed": "   "])
+        let config = WorktreeSetupConfig.load(from: tmpDir.path)
+        XCTAssertEqual(config.seedDirectory(in: "/repo"), "/repo/.atelier-seed")
+    }
+
+    func testSeedPointingAtTheProjectItselfFallsBackToTheDefault() throws {
+        try writeConfig(["seed": "."])
+        let config = WorktreeSetupConfig.load(from: tmpDir.path)
+        XCTAssertEqual(config.seedDirectory(in: "/repo"), "/repo/.atelier-seed")
+    }
+
+    func testSeedEscapingTheProjectFallsBackToTheDefault() throws {
+        try writeConfig(["seed": "../.."])
+        let config = WorktreeSetupConfig.load(from: tmpDir.path)
+        XCTAssertEqual(config.seedDirectory(in: "/repo/nested"), "/repo/nested/.atelier-seed")
+    }
+
+    func testNestedRelativeSeedIsStillAllowed() throws {
+        try writeConfig(["seed": "config/../config/secrets"])
+        let config = WorktreeSetupConfig.load(from: tmpDir.path)
+        XCTAssertEqual(config.seedDirectory(in: "/repo"), "/repo/config/secrets")
     }
 
     // MARK: - Helpers

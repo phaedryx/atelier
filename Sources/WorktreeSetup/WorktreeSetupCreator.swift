@@ -43,9 +43,16 @@ enum WorktreeSetupCreator {
         }
 
         // 2. Copy the seed directory (env files and friends)
-        let envFilesCopied = EnvSeedSync.isEnabled()
-            ? EnvSeedSync.sync(seedDirectory: config.seedDirectory(in: projectPath), to: worktreePath)
-            : 0
+        var seedOutcome = EnvSeedSync.Outcome.noSeedDirectory
+        if EnvSeedSync.isEnabled() {
+            let seedDirectory = config.seedDirectory(in: projectPath)
+            GitOperations.excludeSeedDirectory(seedDirectory, inProject: projectPath)
+            seedOutcome = EnvSeedSync.sync(seedDirectory: seedDirectory, to: worktreePath)
+        }
+        if let problem = seedOutcome.problemDescription {
+            errors.append(problem)
+        }
+        let envFilesCopied = seedOutcome.copiedCount
 
         // 3. Create symlinks for heavy directories
         let symlinksCreated = SymlinkCreator.createSymlinks(
