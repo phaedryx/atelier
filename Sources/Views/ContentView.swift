@@ -276,6 +276,7 @@ struct ContentView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
                 refreshAgentStateLookup(projects: newValue)
                 syncHeadWatcher(projects: newValue)
+                syncShortcutStoryIDs(projects: newValue)
             }
             .alert(
                 "Remove Workstream",
@@ -618,6 +619,7 @@ struct ContentView: View {
         }
         headWatcher = watcher
         syncHeadWatcher(projects: projects)
+        syncShortcutStoryIDs(projects: projects)
     }
 
     /// Reconcile the watched worktrees.
@@ -631,6 +633,20 @@ struct ContentView: View {
     private func syncHeadWatcher(projects: [Project]) {
         let paths = Set(projects.flatMap { $0.workstreams.compactMap(\.worktreePath) })
         headWatcher?.sync(paths: paths)
+    }
+
+    /// Teach `AppEnvironment` which worktree belongs to which Shortcut story.
+    ///
+    /// The story id lives on `Workstream`, but the info tab is a props view that never
+    /// receives one, so the mapping has to be pushed here — this is the only place that
+    /// holds both the project list and a reference to the environment.
+    private func syncShortcutStoryIDs(projects: [Project]) {
+        for project in projects {
+            for ws in project.workstreams {
+                guard let path = ws.worktreePath, let storyID = ws.shortcutStoryID else { continue }
+                appEnvironment.registerShortcutStory(id: storyID, for: path)
+            }
+        }
     }
 
     /// Update workstream names to match their branch name.

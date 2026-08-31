@@ -56,6 +56,17 @@ struct ProjectSidebar: View {
     @State private var newWorkstreamPlaceholder = ""
     @State private var pendingWorkstreamProjectID: UUID?
     @State private var pendingWorkstreamBypass: Bool?
+
+    @AppStorage(ShortcutSettings.buttonEnabledKey) private var shortcutButtonEnabled: Bool = true
+    /// Keychain presence is not observable, so this is refreshed on appear and whenever
+    /// Settings posts `ShortcutSettings.tokenChanged`.
+    @State private var hasShortcutToken = KeychainTokenStore().hasToken
+    @State private var showingShortcutStory = false
+    @State private var shortcutStoryInput = ""
+    @State private var shortcutError = ""
+    /// Set from the `ShortcutError` case, so the Settings link never depends on message wording.
+    @State private var shortcutErrorNeedsToken = false
+    @State private var shortcutFetching = false
     /// Workstream whose row is showing the inline rename field; at most one
     /// at a time. Held here (not per-row) so periodic project mutations
     /// don't drop the edit state when rows rebuild.
@@ -147,6 +158,12 @@ struct ProjectSidebar: View {
                 onAdd: { logger.warning("[Atelier] onAdd button tapped for project \(project.name, privacy: .public)"); addWorkstream(for: project.id) },
                 onAddWithPermissions: { addWorkstream(for: project.id, bypassPermissions: true) },
                 onAddWithoutPermissions: { addWorkstream(for: project.id, bypassPermissions: false) },
+                showShortcutButton: ShortcutSettings.shouldShowButton(
+                    isGitRepo: appEnv.isGitRepo(project.directory),
+                    toggleEnabled: shortcutButtonEnabled,
+                    hasToken: hasShortcutToken
+                ),
+                onAddFromShortcut: { addWorkstreamFromShortcut(for: project.id) },
                 onDelete: { projectToDelete = project.id }
             )
             .tag(SidebarSelection.project(project.id))
@@ -343,6 +360,30 @@ struct ProjectSidebar: View {
                     }
                 )
             }
+            .sheet(isPresented: $showingShortcutStory) {
+                ShortcutStorySheet(
+                    storyInput: $shortcutStoryInput,
+                    error: $shortcutError,
+                    showsSettingsLink: shortcutErrorNeedsToken,
+                    isFetching: shortcutFetching,
+                    projectName: pendingWorkstreamProjectID.flatMap { id in projects.first(where: { $0.id == id })?.name } ?? "",
+                    onCreate: { createWorkstreamFromShortcut() },
+                    onOpenSettings: {
+                        showingShortcutStory = false
+                        NotificationCenter.default.post(
+                            name: .openSettings,
+                            object: SettingsPane.integrations.rawValue
+                        )
+                    },
+                    onCancel: {
+                        showingShortcutStory = false
+                        pendingWorkstreamProjectID = nil
+                    }
+                )
+            }
+            .onReceive(NotificationCenter.default.publisher(for: ShortcutSettings.tokenChanged)) { _ in
+                hasShortcutToken = KeychainTokenStore().hasToken
+            }
             .onReceive(NotificationCenter.default.publisher(for: .addProject)) { _ in
                 showingAddProjectChoice = true
             }
@@ -452,6 +493,89 @@ struct ProjectSidebar: View {
         showingNewWorkstreamName = true
     }
 
+    private func addWorkstreamFromShortcut(for projectID: UUID) {
+        guard let index = projects.firstIndex(where: { $0.id == projectID }) else { return }
+        guard GitOperations.isGitRepo(at: projects[index].directory) else {
+            showNotGitRepoError = true
+            return
+        }
+        shortcutStoryInput = ""
+        shortcutError = ""
+        shortcutFetching = false
+        pendingWorkstreamProjectID = projectID
+        showingShortcutStory = true
+    }
+
+    /// Fetches the story, then creates a workstream named by Shortcut's own suggested
+    /// branch name. Nothing is created if the fetch fails.
+    private func createWorkstreamFromShortcut() {
+        guard let projectID = pendingWorkstreamProjectID,
+              let index = projects.firstIndex(where: { $0.id == projectID })
+        else { return }
+
+        // Cleared up front so a stale auth failure from a previous attempt does not
+        // leave the Settings link showing next to an unrelated validation message.
+        shortcutErrorNeedsToken = false
+
+        guard let storyID = ShortcutStoryID.parse(shortcutStoryInput) else {
+            shortcutError = NSLocalizedString(
+                "Enter a story id (17411), an sc- id (sc-17411), or a story URL.",
+                comment: "Shortcut story input validation error"
+            )
+            return
+        }
+
+        let project = projects[index]
+        let existingNames = Set(project.workstreams.map(\.name))
+        let bypass = defaultBypass
+        shortcutError = ""
+        shortcutFetching = true
+
+        Task {
+            do {
+                let story = try await ShortcutClient().story(id: storyID)
+                shortcutFetching = false
+
+                let name = story.branchName
+                guard GitOperations.isValidBranchName(name) else {
+                    shortcutError = NSLocalizedString(
+                        "Shortcut suggested a branch name git will not accept.",
+                        comment: "Shortcut branch name validation error"
+                    )
+                    return
+                }
+                guard !existingNames.contains(name) else {
+                    shortcutError = NSLocalizedString(
+                        "A workstream for this story already exists.",
+                        comment: "Error when a Shortcut story already has a workstream"
+                    )
+                    return
+                }
+
+                showingShortcutStory = false
+                pendingWorkstreamProjectID = nil
+                // Keep the story we just fetched: it carries the description, and the
+                // worktree path it will be cached under does not exist yet.
+                appEnv.stageShortcutStory(story)
+                launchWorkstream(
+                    project: project,
+                    projectID: projectID,
+                    name: name,
+                    bypass: bypass,
+                    shortcutStoryID: story.id
+                )
+            } catch let error as ShortcutError {
+                shortcutFetching = false
+                shortcutError = error.message
+                shortcutErrorNeedsToken = error == .noToken || error == .unauthorized
+            } catch {
+                shortcutFetching = false
+                shortcutError = error.localizedDescription
+                shortcutErrorNeedsToken = false
+            }
+        }
+    }
+
     private func createWorkstream() {
         guard let projectID = pendingWorkstreamProjectID else { return }
         guard let index = projects.firstIndex(where: { $0.id == projectID }) else {
@@ -486,7 +610,26 @@ struct ProjectSidebar: View {
         showingNewWorkstreamName = false
         pendingWorkstreamProjectID = nil
         pendingWorkstreamBypass = nil
-        let workstream = Workstream(name: name, worktreePath: nil, bypassPermissions: bypass)
+        launchWorkstream(project: project, projectID: projectID, name: name, bypass: bypass)
+    }
+
+    /// Posts the optimistic creation, then builds the worktree in the background.
+    ///
+    /// Shared by the plain `+` flow and the Shortcut flow so both get identical
+    /// notification behaviour; only the name and the story id differ.
+    private func launchWorkstream(
+        project: Project,
+        projectID: UUID,
+        name: String,
+        bypass: Bool,
+        shortcutStoryID: Int? = nil
+    ) {
+        let workstream = Workstream(
+            name: name,
+            worktreePath: nil,
+            bypassPermissions: bypass,
+            shortcutStoryID: shortcutStoryID
+        )
         expandedProjects.insert(projectID)
         NotificationCenter.default.post(
             name: .workstreamCreated,
@@ -740,6 +883,8 @@ private struct ProjectHeaderRow: View {
     let onAdd: () -> Void
     let onAddWithPermissions: () -> Void
     let onAddWithoutPermissions: () -> Void
+    let showShortcutButton: Bool
+    let onAddFromShortcut: () -> Void
     let onDelete: () -> Void
 
     @State private var isHovering = false
@@ -792,7 +937,13 @@ private struct ProjectHeaderRow: View {
 
             Spacer()
 
-            HStack(spacing: 8) {
+            // 4pt, not 8, so the third button fits without crowding the project
+            // name and path. Below 4 the buttons' hover backgrounds touch.
+            HStack(spacing: 4) {
+                if showShortcutButton {
+                    SidebarIconButton(image: "shortcut", action: onAddFromShortcut)
+                        .accessibilityLabel("New workstream from Shortcut story in \(project.name)")
+                }
                 if isGitRepo {
                     SidebarIconButton(icon: "plus", action: onAdd)
                         .accessibilityLabel("Add workstream to \(project.name)")
@@ -1087,14 +1238,32 @@ private struct WorkstreamRow: View {
 }
 
 private struct SidebarIconButton: View {
-    let icon: String
+    /// An SF Symbol name, or an asset-catalog image name. Asset images are declared with
+    /// `template-rendering-intent`, so both kinds tint from `foregroundStyle` and pick up
+    /// the hover transition identically.
+    private enum Source {
+        case symbol(String)
+        case asset(String)
+    }
+
+    private let source: Source
     let action: () -> Void
+
+    init(icon: String, action: @escaping () -> Void) {
+        source = .symbol(icon)
+        self.action = action
+    }
+
+    init(image: String, action: @escaping () -> Void) {
+        source = .asset(image)
+        self.action = action
+    }
 
     @State private var isHovering = false
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: icon)
+            image
                 .font(.system(size: 11))
                 .foregroundStyle(isHovering ? .primary : .secondary)
                 .frame(width: 22, height: 22)
@@ -1103,6 +1272,22 @@ private struct SidebarIconButton: View {
         }
         .buttonStyle(.borderless)
         .onHover { isHovering = $0 }
+    }
+
+    @ViewBuilder
+    private var image: some View {
+        switch source {
+        case let .symbol(name):
+            Image(systemName: name)
+        case let .asset(name):
+            // Asset images carry their own intrinsic size, so unlike an SF Symbol they
+            // need explicit resizing to match the 11pt symbol metric.
+            Image(name)
+                .resizable()
+                .renderingMode(.template)
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 11, height: 11)
+        }
     }
 }
 
@@ -1260,6 +1445,106 @@ private struct NewWorkstreamSheet: View {
                 Button("Create", action: onAdd)
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(20)
+        .frame(width: 400)
+        .onAppear { isFocused = true }
+    }
+}
+
+private struct ShortcutStorySheet: View {
+    @Binding var storyInput: String
+    @Binding var error: String
+    /// Whether the failure is one Settings can fix (a missing or rejected token).
+    let showsSettingsLink: Bool
+    let isFetching: Bool
+    let projectName: String
+    let onCreate: () -> Void
+    let onOpenSettings: () -> Void
+    let onCancel: () -> Void
+
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        VStack(spacing: 18) {
+            HStack(spacing: 6) {
+                Image("shortcut")
+                    .resizable()
+                    .renderingMode(.template)
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 14, height: 14)
+                Text("New Workstream from Shortcut")
+                    .font(.headline)
+            }
+
+            Divider()
+                .opacity(0.35)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Project")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.secondary)
+                Text(projectName)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 4) {
+                    Text("Story")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundStyle(.secondary)
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .help(Text("The branch and worktree are named from the story's suggested branch name."))
+                        .accessibilityLabel(Text("More info"))
+                }
+                TextField(
+                    "",
+                    text: $storyInput,
+                    prompt: Text("17411, sc-17411, or a story URL")
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                )
+                .textFieldStyle(.roundedBorder)
+                .focused($isFocused)
+                .disabled(isFetching)
+                .onSubmit { onCreate() }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if !error.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                    // Driven by the error case, never by the message text: the message is
+                    // localized, so matching on its wording would break on translation.
+                    if showsSettingsLink {
+                        Button("Open Settings", action: onOpenSettings)
+                            .buttonStyle(.link)
+                            .font(.caption)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            HStack {
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+                if isFetching {
+                    ProgressView().controlSize(.small)
+                }
+                Button("Create", action: onCreate)
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isFetching || storyInput.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
         .padding(20)

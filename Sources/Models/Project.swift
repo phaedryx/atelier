@@ -10,14 +10,22 @@ struct Workstream: Identifiable, Hashable, Codable, Sendable {
     var worktreePath: String?
     var bypassPermissions: Bool
     var lastAccessedAt: Date
+    /// The Shortcut story this workstream was created from, when it came from one.
+    ///
+    /// Must stay Optional. The synthesized `init(from:)` calls `decode` — not
+    /// `decodeIfPresent` — for a non-Optional property and throws when the key is
+    /// absent, and `ProjectStore` decodes the whole `[Project]` array with `try?`,
+    /// so one missing key would silently wipe every project on upgrade.
+    var shortcutStoryID: Int?
 
-    init(name: String, displayName: String? = nil, worktreePath: String? = nil, bypassPermissions: Bool = false, id: UUID = UUID(), lastAccessedAt: Date = Date()) {
+    init(name: String, displayName: String? = nil, worktreePath: String? = nil, bypassPermissions: Bool = false, id: UUID = UUID(), lastAccessedAt: Date = Date(), shortcutStoryID: Int? = nil) {
         self.id = id
         self.name = name
         self.displayName = displayName
         self.worktreePath = worktreePath
         self.bypassPermissions = bypassPermissions
         self.lastAccessedAt = lastAccessedAt
+        self.shortcutStoryID = shortcutStoryID
     }
 
     /// The user-facing label. Falls back to the branch-tracked `name` when no override is set.

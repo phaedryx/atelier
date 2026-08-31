@@ -28,6 +28,7 @@ struct SettingsView: View {
             case .general: GeneralSettingsPane()
             case .codingAgent: CodingAgentSettingsPane()
             case .prompts: PromptsSettingsPane()
+            case .integrations: IntegrationsSettingsPane()
             case .advanced: AdvancedSettingsPane()
             }
         }
@@ -479,6 +480,113 @@ private struct PromptEditorSheet: View {
         }
         .padding(20)
         .frame(width: 460)
+    }
+}
+
+// MARK: - Integrations
+
+/// Named for the category, not the vendor: a second integration becomes another
+/// `Section` here rather than a seventh pane.
+private struct IntegrationsSettingsPane: View {
+    @AppStorage(ShortcutSettings.buttonEnabledKey) private var shortcutButtonEnabled: Bool = true
+
+    @State private var token: String = ""
+    /// What is actually in the Keychain, read once on appear. Compared against `token`
+    /// to enable Save — reading the Keychain in `body` would be a syscall per render.
+    @State private var savedToken: String = ""
+    @State private var testResult: TestResult?
+    @State private var isTesting = false
+
+    private enum TestResult {
+        case success(String)
+        case failure(String)
+    }
+
+    private let store = KeychainTokenStore()
+
+    var body: some View {
+        Form {
+            Section("Shortcut") {
+                VStack(alignment: .leading, spacing: 8) {
+                    SecureField("API token", text: $token)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit(save)
+
+                    Text("Create a token at Shortcut > Settings > API Tokens. Stored in your Keychain, not in preferences.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    HStack(spacing: 8) {
+                        Button("Save", action: save)
+                            .disabled(token == savedToken)
+                        Button("Test", action: test)
+                            .disabled(token.isEmpty || isTesting)
+                        if isTesting {
+                            ProgressView().controlSize(.small)
+                        }
+                    }
+
+                    if let testResult {
+                        switch testResult {
+                        case let .success(message):
+                            Label(message, systemImage: "checkmark.circle")
+                                .font(.caption)
+                                .foregroundStyle(.green)
+                        case let .failure(message):
+                            Label(message, systemImage: "exclamationmark.triangle")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                }
+                .padding(.vertical, 2)
+
+                SettingToggle(
+                    "Show Shortcut button in sidebar",
+                    isOn: $shortcutButtonEnabled,
+                    description: NSLocalizedString(
+                        "Adds a button to each project row that creates a workstream from a Shortcut story, using the story's suggested branch name. The button is hidden until an API token is saved.",
+                        comment: "Shortcut button setting description"
+                    )
+                )
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear {
+            savedToken = store.read() ?? ""
+            token = savedToken
+        }
+    }
+
+    private func save() {
+        store.write(token)
+        // write() clears the item for an empty/whitespace value, so re-read rather than
+        // assuming what landed.
+        savedToken = store.read() ?? ""
+        // Keychain presence is not observable, so the sidebar is told explicitly.
+        NotificationCenter.default.post(name: ShortcutSettings.tokenChanged, object: nil)
+        testResult = nil
+    }
+
+    private func test() {
+        save()
+        isTesting = true
+        testResult = nil
+        Task {
+            do {
+                let member = try await ShortcutClient().currentMember()
+                testResult = .success(String(
+                    format: NSLocalizedString("Connected as %@ (%@)", comment: "Shortcut token test success"),
+                    member.name,
+                    member.workspaceName
+                ))
+            } catch let error as ShortcutError {
+                testResult = .failure(error.message)
+            } catch {
+                testResult = .failure(error.localizedDescription)
+            }
+            isTesting = false
+        }
     }
 }
 
