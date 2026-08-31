@@ -29,6 +29,21 @@ final class ProcessRunnerTests: XCTestCase {
         XCTAssertLessThan(elapsed, 10, "run() should return near the deadline, not wait for the child")
     }
 
+    /// EOF on stdout is not the same as exit: a child can write its output,
+    /// close the descriptor, and then hang. The deadline must cover that too.
+    func testKillsAndReturnsNilWhenTheChildClosesStdoutThenHangs() {
+        let started = Date()
+        let data = ProcessRunner.run(
+            executable: "/bin/sh",
+            arguments: ["-c", "echo hi; exec 1>&-; sleep 30"],
+            timeout: 0.5
+        )
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertNil(data)
+        XCTAssertLessThan(elapsed, 10, "run() should not wait on exit without a deadline")
+    }
+
     func testPassesEnvironmentToTheChild() {
         let data = ProcessRunner.run(
             executable: "/bin/sh",

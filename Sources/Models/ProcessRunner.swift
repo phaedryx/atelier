@@ -35,6 +35,11 @@ enum ProcessRunner {
         process.standardOutput = outPipe
         process.standardError = FileHandle.nullDevice
 
+        // Set before `run()`: this is the only way to wait on exit with a
+        // deadline, since `waitUntilExit()` takes none.
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
+
         do {
             try process.run()
         } catch {
@@ -51,15 +56,22 @@ enum ProcessRunner {
             readFinished.signal()
         }
 
-        guard readFinished.wait(timeout: .now() + timeout) == .success else {
+        // One deadline covers both waits. The drain thread may still be parked
+        // on a pipe a grandchild holds open; it is abandoned rather than waited
+        // on — leaking one thread beats wedging the caller. `box` is never read
+        // on a failure path.
+        let deadline = DispatchTime.now() + timeout
+        guard readFinished.wait(timeout: deadline) == .success else {
             kill(process)
-            // The drain thread may still be parked on a pipe a grandchild holds
-            // open. It is abandoned rather than waited on — leaking one thread
-            // beats wedging the caller. `box` is never read on this path.
+            return nil
+        }
+        // EOF on stdout is not exit: a child can write its output, close the
+        // descriptor, and then hang in cleanup. Bound this wait too.
+        guard exited.wait(timeout: deadline) == .success else {
+            kill(process)
             return nil
         }
 
-        process.waitUntilExit()
         guard process.terminationStatus == 0 else { return nil }
         return box.take()
     }
