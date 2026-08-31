@@ -73,8 +73,7 @@ actor AsyncSetupService {
                 let path = GitOperations.createWorktree(
                     projectPath: projectPath,
                     projectName: projectName,
-                    workstreamName: workstreamName,
-                    symlinkEnv: false // We handle env files ourselves
+                    workstreamName: workstreamName
                 )
                 continuation.resume(returning: path)
             }
@@ -114,15 +113,28 @@ actor AsyncSetupService {
         let config = WorktreeSetupConfig.load(from: projectPath)
         var errors: [String] = []
 
-        // Step 3: Copy env files
+        // Step 3: Copy the seed directory (env files and friends)
         await updateState(for: workstreamID, to: .inProgress(step: "Copying env files", progress: 0.3))
-        let envCount: Int = await withCheckedContinuation { continuation in
+        let seedDirectory = config.seedDirectory(in: projectPath)
+        let seedOutcome: EnvSeedSync.Outcome = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
-                let count = EnvFileCopier.copyEnvFiles(from: projectPath, to: worktreePath)
-                continuation.resume(returning: count)
+                guard EnvSeedSync.isEnabled() else {
+                    continuation.resume(returning: .noSeedDirectory)
+                    return
+                }
+                GitOperations.excludeSeedDirectory(seedDirectory, inProject: projectPath)
+                continuation.resume(returning: EnvSeedSync.sync(seedDirectory: seedDirectory, to: worktreePath))
             }
         }
-        logger.info("Copied \(envCount) env file(s)")
+        // A failed copy leaves a worktree with no .env and every other step
+        // succeeding, so it has to reach the user rather than only the log.
+        if let problem = seedOutcome.problemDescription {
+            errors.append(problem)
+        }
+        if case .noSeedDirectory = seedOutcome {
+            warnIfProjectHasUnseededEnvFiles(projectPath: projectPath, seedDirectory: seedDirectory)
+        }
+        logger.info("Copied \(seedOutcome.copiedCount) seed file(s)")
 
         // Step 4: Create symlinks
         await updateState(for: workstreamID, to: .inProgress(step: "Creating symlinks", progress: 0.5))
@@ -219,6 +231,22 @@ actor AsyncSetupService {
             projectPath: projectPath,
             worktreePath: worktreePath
         )
+    }
+
+    /// Log a pointed warning when a project still keeps `.env` files at its root
+    /// but has no seed directory. Before the seed model those files were found by
+    /// a recursive scan and copied automatically; now they are simply not copied,
+    /// and without this the only symptom is a worktree that quietly has no env.
+    private func warnIfProjectHasUnseededEnvFiles(projectPath: String, seedDirectory: String) {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: projectPath)) ?? []
+        let envFiles = names.filter { $0.hasPrefix(".env") }
+        guard !envFiles.isEmpty else { return }
+        logger.warning("""
+        Project \(projectPath, privacy: .public) has env file(s) \
+        \(envFiles.joined(separator: ", "), privacy: .public) but no seed directory at \
+        \(seedDirectory, privacy: .public). New worktrees will not receive them — move them into \
+        the seed directory, or set "seed" in .atelier.json.
+        """)
     }
 
     /// Remove tracked state for a workstream (cleanup after archiving).

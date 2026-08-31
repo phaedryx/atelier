@@ -128,8 +128,8 @@
 "Remove \"%@\" from the list? Files in %@ will not be deleted." = "Remove \"%@\" from the list? Files in %@ will not be deleted.";
 
 /* Projects */
-"Symlink .env files" = "Symlink .env files";
-"Symlink .env and .env.local from the main repository into new worktrees." = "Symlink .env and .env.local from the main repository into new worktrees.";
+"Copy .env files (rsync)" = "Copy .env files (rsync)";
+"rsync the project's .atelier-seed directory into new worktrees. Override the location with \"seed\" in .atelier.json." = "rsync the project's .atelier-seed directory into new worktrees. Override the location with \"seed\" in .atelier.json.";
 
 /* Quit confirmation */
 "Quit Atelier?" = "Quit Atelier?";

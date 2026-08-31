@@ -93,7 +93,7 @@ Run scripts (.atelier.json)
 |------|-------|---------|
 | `Project.swift` | 64 | Codable data structures for projects and workstreams |
 | `WorkstreamEnvironment.swift` | 28 | Builds env var maps for terminal sessions (ATELIER_PROJECT, ATELIER_WORKSTREAM, etc.) |
-| `GitOperations.swift` | 263 | Git repo detection, worktree create/remove, branch info, .env symlink injection |
+| `GitOperations.swift` | 263 | Git repo detection, worktree create/remove, branch info |
 | `GitHubOperations.swift` | 100 | Integrates with `gh` CLI for repo info, PR lists |
 | `RunLauncher.swift` | 29 | Locates atelier-run helper, builds wrapped run-script commands |
 | `RunState.swift` | 147 | RunStateSnapshot encoding/decoding, port selection logic (PortSelectionTracker) |
@@ -482,7 +482,7 @@ All 4 locales (en, ca, es, sv) are complete with ~236 strings each. SwiftUI uses
 
 ### Coverage Gaps
 
-- [x] ~~**MEDIUM - No tests for GitOperations**~~: **Resolved (v0.1.65).** `GitOperationsTests.swift` added with 10 tests covering worktree detection, branch detection, and remote handling. `.env` symlinking remains untested.
+- [x] ~~**MEDIUM - No tests for GitOperations**~~: **Resolved (v0.1.65).** `GitOperationsTests.swift` added with 10 tests covering worktree detection, branch detection, and remote handling. `.env` symlinking has since been removed in favour of the seed-directory rsync, covered by `EnvSeedSyncTests.swift`.
 - [ ] **MEDIUM - No tests for Environment.swift**: Async caching, throttling, and refresh logic are still untested. Environment.swift contains complex async state with multiple caches (`repoInfoCache`, `pathValidityCache`, `branchNameCache`, etc.) and adaptive throttling (10s/60s).
 - [ ] **LOW - No integration tests**: No end-to-end tests for project creation -> workstream -> terminal flow.
 - [ ] **LOW - No tests for surface lifecycle**: Partially addressed via `BrowserViewTests.swift` (covers `TerminalSurfaceCache`), but TerminalView event handling and Ghostty surface lifecycle remain untested.
@@ -517,7 +517,7 @@ All 4 locales (en, ca, es, sv) are complete with ~236 strings each. SwiftUI uses
 - [ ] Consider extracting sub-components from `ProjectSidebar.swift` and `TerminalContainerView.swift` if they continue to grow
 
 #### Testing
-- [x] ~~Add unit tests for `GitOperations`~~: **Resolved.** `GitOperationsTests.swift` covers worktree detection, branch detection, remote handling (10 tests). `.env` symlinking still untested.
+- [x] ~~Add unit tests for `GitOperations`~~: **Resolved.** `GitOperationsTests.swift` covers worktree detection, branch detection, remote handling (10 tests). `.env` symlinking has since been removed in favour of the seed-directory rsync, covered by `EnvSeedSyncTests.swift`.
 - [ ] Add unit tests for `Environment.swift` (async caching, throttling, refresh)
 - [ ] Add integration tests for workstream lifecycle (create -> terminal -> archive)
 - [ ] Add tests for surface lifecycle management (partially covered by BrowserViewTests)
