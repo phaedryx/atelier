@@ -402,12 +402,43 @@ enum GitOperations {
             - (content.hasSuffix("\n") ? 1 : 0)
     }
 
+    /// Where a new worktree for this project should live.
+    ///
+    /// The setup in the README is a bare clone in `.bare` with a `.git` file beside it and
+    /// every worktree added as a sibling, so worktrees belong next to the repository they
+    /// came from — not collected under `~/.atelier/worktrees`, on a different volume from
+    /// the repo. Resolving through the git common directory means this holds whether the
+    /// project was registered as the container or as one of the worktrees inside it.
+    ///
+    /// Anything that is not that layout keeps the central location: for an ordinary clone
+    /// the equivalent directory *is* the working tree, and putting a worktree inside it
+    /// would leave it sitting in the checkout as untracked clutter.
+    static func worktreeDestination(projectPath: String, projectName: String, workstreamName: String) -> URL {
+        let central = AppConstants.worktreesDirectory
+            .appendingPathComponent(sanitize(projectName))
+            .appendingPathComponent(sanitize(workstreamName))
+
+        guard let commonDir = run(args: ["rev-parse", "--path-format=absolute", "--git-common-dir"], in: projectPath)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !commonDir.isEmpty
+        else { return central }
+
+        let container = URL(fileURLWithPath: commonDir).deletingLastPathComponent()
+        let containerIsCheckout = run(args: ["rev-parse", "--is-inside-work-tree"], in: container.path)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) == "true"
+        guard !containerIsCheckout else { return central }
+
+        return container.appendingPathComponent(sanitize(workstreamName))
+    }
+
     /// Create a git worktree for a workstream, branching off the default branch.
     /// Returns the worktree path on success, nil on failure.
     static func createWorktree(projectPath: String, projectName: String, workstreamName: String, symlinkEnv: Bool = true) -> String? {
-        let worktreeDir = AppConstants.worktreesDirectory
-            .appendingPathComponent(sanitize(projectName))
-            .appendingPathComponent(sanitize(workstreamName))
+        let worktreeDir = worktreeDestination(
+            projectPath: projectPath,
+            projectName: projectName,
+            workstreamName: workstreamName
+        )
 
         let branchName = workstreamName
 
