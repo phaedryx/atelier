@@ -1,5 +1,10 @@
 # Terminal Resilience Design
 
+> **Status: partly implemented.** §1 landed — a failed surface shows
+> `SurfaceErrorView` with the failed command and a retry that calls
+> `TerminalSurfaceCache.retrySurface(for:)` — and so did §7, which is why the
+> cache guards concurrent respawns per surface ID. §§2-6 are still a proposal.
+
 Design doc for improving error handling, recovery, and diagnostics across
 the terminal spawning stack.
 

@@ -1,5 +1,9 @@
 # Atelier Mobile App — Design Notes
 
+> **Status: not started.** A design for something that does not exist, and which
+> depends on [Corner Office](remote-coordinator-design.md) — also not started.
+> Read this as a proposal, not as a description of the app.
+
 > **Living document.** This design depends on [Corner Office](remote-coordinator-design.md)
 > being finalized first. The mobile app is a client of the Corner Office API, so its shape
 > is determined by that protocol.

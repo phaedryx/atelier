@@ -1,8 +1,14 @@
 # Atelier - Architecture, Code & Security Review
 
-> **Historical.** This review covers the upstream Factory Floor codebase before the
-> Atelier fork. Findings about update checking, analytics, crash reporting and code
-> signing were changed by the fork; see `docs/distribution.md` for current behaviour.
+> **Historical — do not read this as a description of the current codebase.**
+> It reviews the upstream Factory Floor tree before the Atelier fork, at ~10,630
+> lines across 45 source files and 17 test files. Atelier is several times that,
+> so §2 Source File Inventory, §3 Build System, and the line counts throughout
+> describe a tree that no longer exists. Findings about update checking,
+> analytics, crash reporting and code signing were all changed by the fork; see
+> `docs/distribution.md` for current behaviour, and `AGENTS.md` for the current
+> architecture. Kept for the security reasoning in §7, which is still the best
+> written record of why the app is unsandboxed and how it handles credentials.
 
 **Date:** 2026-03-18 (initial), 2026-04-03 (updated)
 **Scope:** Full codebase review covering architecture, code quality, and security
