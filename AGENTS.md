@@ -91,21 +91,37 @@ carries the `-dev` marker.
 - **Bridging header** at `Resources/Atelier-Bridging-Header.h`
 - **Single-window** app via `Window` (not `WindowGroup`)
 - **`atelier://`** URL scheme for single-instance behavior
-- **AppConstants** (`appID`, `appName`, `configDirectory`, `cacheDirectory`)
+- **AppConstants** (`appID`, `appName`, `cacheDirectory`) — there is no config
+  directory; persistent state is UserDefaults and transient state is Caches
+- **ProcessRunner** — every child process goes through it, with a deadline. The
+  two exemptions are marked at their spawn sites (see Child processes below)
 - **No update checking** — no in-app updater and no release polling; upgrade by downloading a new DMG from GitHub Releases, or by building locally
 - **prek** pre-commit hooks (`prek.toml`)
 
 ### Key directories
 - `Sources/Models/` - Data models, git operations, tmux, name generator, app constants
+- `Sources/Models/IPC/` - Agent-to-agent messaging (server, store, protocol, nudges)
 - `Sources/Terminal/` - Ghostty integration (TerminalApp singleton, TerminalView NSView)
 - `Sources/Views/` - SwiftUI views (sidebar, settings, project overview, workspace, browser, editor)
+- `Sources/Palette/` - Command palette (registry, default commands, fuzzy matcher)
+- `Sources/PixelAgents/` - Claude Code hook receiver, router, and installer; transcript context
+- `Sources/WorktreeSetup/` - Background worktree setup (seed rsync, symlinks, dependency install)
+- `Sources/Launcher/` - `atelier-run` helper binary (port detection)
+- `Sources/MCPHelper/` - `atelier-mcp` helper binary (IPC bridge for agents)
 - `Localization/en.lproj/` - Localizable.strings and InfoPlist.strings (English only)
 - `Resources/` - Entitlements, bridging header, Assets.xcassets, CLI script
 - `Resources/MonacoEditor/` - Built Monaco editor bundle (gitignored, built by `scripts/build-editor.sh`)
 - `editor/` - Monaco editor Vite project (source for `Resources/MonacoEditor/`). Built with bun.
 - `ghostty/` - Git submodule (do not modify, pinned to stable release tag)
 - `scripts/` - Release and build automation
-- `docs/` - Distribution guide and reference docs
+- `.hooks/` - Claude Code hooks for this repository. `worktree-create.sh` runs on
+  worktree creation: it inits the ghostty submodule against the main checkout,
+  symlinks the build artifacts that are not in git (`zig-out`,
+  `GhosttyKit.xcframework`), and kicks off a background build so SourceKit can
+  resolve symbols. A worktree made without it will not build until you repeat
+  those steps by hand.
+- `docs/` - Distribution guide and reference docs. Anything not describing the
+  app as it is carries a status line saying so.
 
 ### Data flow
 - **Projects/workstreams** stored in UserDefaults (`atelier.projects`), accessed via `ProjectStore`. Wrapped in `ProjectList: ObservableObject` for reference-type semantics.
@@ -179,6 +195,26 @@ The launcher monitors the child process tree for listening TCP ports using `libp
 state to `~/Library/Caches/atelier/run-state/<workstream-id>.json`. The app watches these files
 via FSEvents and retargets the embedded browser when a port is detected.
 
+### Child processes
+Everything that spawns a child goes through `ProcessRunner`, which enforces a
+deadline and drains stdout and stderr on separate threads. Both halves matter:
+`readDataToEndOfFile()` followed by `waitUntilExit()` never returns if the child
+hangs, and draining one stream while the other fills deadlocks any child whose
+output passes the ~64 KB pipe buffer — reachable for `git fetch` on a
+many-branch repository, or any package-manager install.
+
+Pick a deadline from `ProcessRunner.Timeout` rather than inlining a number:
+`local` for filesystem-only work, `network` for anything reaching a remote,
+`userCommand` for commands out of the user's repository, `install` for package
+managers. Git spawns also set `GIT_TERMINAL_PROMPT=0` and `GIT_ASKPASS`, because
+a GUI app has no terminal on which to answer a credential prompt, so the prompt
+is itself a hang.
+
+Two sites are exempt and say so where they spawn: `BareRepoClone.run` and
+`QuickActionRunner.runShellCommand`. Both run work with no honest deadline and
+both give the user a cancel instead. If you add a third, it needs the same two
+properties and the same comment.
+
 ### Paths
 - Persistent data: UserDefaults (projects, sidebar state, workspace tabs)
 - Cache: `~/Library/Caches/atelier/` (run-state, tmux.conf)
@@ -223,7 +259,8 @@ When adding, removing, or changing keyboard shortcuts:
 1. Update `AtelierApp.swift` (menu commands)
 2. Update `TerminalContainerView.swift` (workspace tab handling)
 3. Update `HelpView.swift` (shortcut reference)
-4. Update `README.md` (shortcut table)
+4. Update the shortcut table in `README.md`
+5. Update the list below
 
 Current shortcuts:
 - **Cmd+I**: Info
@@ -258,4 +295,7 @@ Current shortcuts:
 - Use "workstream" for the sub-units of a project.
 
 ## Task Tracking
-- **TODO.md**: Track bugs, features, and future work. Add items when you discover issues or defer work.
+Bugs, features, and deferred work go in GitHub issues at
+https://github.com/phaedryx/atelier/issues — there are templates for bug
+reports, feature requests, and fix prompts under `.github/ISSUE_TEMPLATE/`.
+There is no `TODO.md`; do not create one.
