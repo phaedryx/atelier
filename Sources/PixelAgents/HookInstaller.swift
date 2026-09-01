@@ -7,7 +7,6 @@ import os
 private let logger = Logger(subsystem: "atelier", category: "hook-installer")
 
 enum HookInstaller {
-
     /// Hook event types that atelier-hook should be registered for.
     private static let hookEvents = [
         "PreToolUse",
@@ -20,7 +19,11 @@ enum HookInstaller {
     ]
 
     /// Path to the Claude Code user settings file.
-    private static var settingsPath: String {
+    ///
+    /// Injectable so the merge logic can be tested against a scratch file
+    /// rather than the developer's real settings, the way
+    /// `OpencodePluginRemover.uninstall(at:)` already is.
+    static var settingsPath: String {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".claude/settings.json").path
     }
@@ -29,9 +32,8 @@ enum HookInstaller {
 
     /// Reads `~/.claude/settings.json`, merges atelier-hook entries for all event types, and writes back atomically.
     /// - Parameter hookScriptPath: Absolute path to the `atelier-hook` script bundled in the app.
-    static func install(hookScriptPath: String) {
+    static func install(hookScriptPath: String, at path: String = settingsPath) {
         let fm = FileManager.default
-        let path = settingsPath
 
         // Read existing settings (or start fresh)
         var settings: [String: Any] = [:]
@@ -103,9 +105,8 @@ enum HookInstaller {
     // MARK: - Uninstall
 
     /// Removes all atelier-hook entries from `~/.claude/settings.json`, preserving everything else.
-    static func uninstall() {
+    static func uninstall(at path: String = settingsPath) {
         let fm = FileManager.default
-        let path = settingsPath
 
         guard fm.fileExists(atPath: path),
               let data = fm.contents(atPath: path),
@@ -116,7 +117,7 @@ enum HookInstaller {
 
         var modified = false
         for eventName in hookEvents {
-            guard var eventEntries = hooks[eventName] as? [[String: Any]] else { continue }
+            guard let eventEntries = hooks[eventName] as? [[String: Any]] else { continue }
 
             let filtered = eventEntries.filter { entry in
                 guard let entryHooks = entry["hooks"] as? [[String: Any]] else { return true }
