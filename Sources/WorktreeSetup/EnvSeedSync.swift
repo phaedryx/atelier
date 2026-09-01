@@ -172,7 +172,7 @@ enum EnvSeedSync {
 
             let resolved = URL(fileURLWithPath: source).resolvingSymlinksInPath().path
             let mode = (try? fm.attributesOfItem(atPath: resolved))?[.posixPermissions]
-            let staging = URL(fileURLWithPath: destination + ".atelier-seed-tmp")
+            let staging = URL(fileURLWithPath: destination + ".atelier-seed-staging")
             try? fm.removeItem(at: staging)
 
             guard fm.createFile(

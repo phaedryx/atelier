@@ -30,6 +30,15 @@ struct EnvironmentTabView: View {
     let runCommandIsGated: Bool
     /// The resolved dev command when no run script is configured.
     let devCommand: DevCommand?
+    /// Every runner detected in the worktree. A picker appears past one.
+    let runnerCandidates: [DevCommand]
+    let onSelectRunner: (DevCommand.Source) -> Void
+    /// The runner config awaiting approval, if the resolved command reads one.
+    let pendingRunnerApproval: DevCommand?
+    let onApproveRunner: () -> Void
+    @Binding var envVarDefinitions: [EnvVarDefinition]
+    /// What the definitions above evaluate to in this worktree.
+    let resolvedEnvVars: [String: String]
     @Binding var devCommandOverride: String?
     @Binding var runStarted: Bool
     @Binding var scriptsApproved: Bool
@@ -41,6 +50,7 @@ struct EnvironmentTabView: View {
     @EnvironmentObject var surfaceCache: TerminalSurfaceCache
     @State private var isCustomizingDevCommand = false
     @State private var devCommandEditText = ""
+    @State private var isShowingEnvVars = false
 
     private var runID: UUID {
         derivedUUID(from: workstreamID, salt: "env-run-\(runGeneration)")
@@ -128,7 +138,12 @@ struct EnvironmentTabView: View {
                 Divider()
             }
 
-            if runCommandIsGated, !scriptsApproved {
+            envVarSection
+            Divider()
+
+            if let pending = pendingRunnerApproval, let path = pending.trustFilePath {
+                RunnerApprovalView(filePath: path, command: pending.command, onApprove: onApproveRunner)
+            } else if runCommandIsGated, !scriptsApproved {
                 ScriptApprovalView(
                     scriptConfig: scriptConfig,
                     approveLabel: NSLocalizedString("Approve and Start", comment: ""),
@@ -179,14 +194,80 @@ struct EnvironmentTabView: View {
         }
     }
 
-    /// Shows the effective dev command (package.json auto-detection or the
-    /// user's per-workstream override) and lets the user customize it.
+    /// The environment variables this project injects, collapsed by default so
+    /// the run pane keeps its space when nobody is editing them.
+    private var envVarSection: some View {
+        DisclosureGroup(isExpanded: $isShowingEnvVars) {
+            EnvVarsEditor(definitions: $envVarDefinitions, resolved: resolvedEnvVars)
+                .padding(.leading, -12)
+        } label: {
+            HStack(spacing: 6) {
+                Text("Environment")
+                    .font(.system(size: 12, weight: .semibold))
+                if !envVarDefinitions.isEmpty {
+                    Text("\(envVarDefinitions.count)")
+                        .font(.system(size: 9, design: .monospaced))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Color.primary.opacity(0.06))
+                        .clipShape(Capsule())
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+
+    /// Lets the user pick which detected runner starts the stack. Only shown
+    /// when the worktree offers a real choice — a lone candidate is not a
+    /// decision, and a config `run` script or a custom command has already
+    /// settled the question.
+    /// The candidate the picker should read as selected, or nil when the picker
+    /// has nothing coherent to show: a custom command outranks both runners, so
+    /// the picker would be inert *and* have no matching tag to highlight.
+    private var pickedRunner: DevCommand.Source? {
+        guard runnerCandidates.count > 1, let source = devCommand?.source,
+              runnerCandidates.contains(where: { $0.source == source })
+        else { return nil }
+        return source
+    }
+
+    @ViewBuilder
+    private var runnerPicker: some View {
+        if let picked = pickedRunner {
+            Picker("", selection: Binding(
+                get: { picked },
+                set: { onSelectRunner($0) }
+            )) {
+                ForEach(runnerCandidates, id: \.source) { candidate in
+                    Text(runnerLabel(for: candidate)).tag(candidate.source)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .controlSize(.small)
+            .fixedSize()
+        }
+    }
+
+    private func runnerLabel(for candidate: DevCommand) -> String {
+        switch candidate.source {
+        case .processCompose: return NSLocalizedString("process-compose", comment: "")
+        case .packageJSON: return candidate.command
+        case .configScript, .override: return candidate.command
+        }
+    }
+
+    /// Shows the effective dev command (detected runner or the user's
+    /// per-workstream override) and lets the user customize it.
     private var devCommandSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("Dev command")
                     .font(.system(size: 12, weight: .semibold))
                 Spacer()
+                runnerPicker
                 Button(isCustomizingDevCommand ? "Cancel" : "Customize") {
                     if isCustomizingDevCommand {
                         isCustomizingDevCommand = false
@@ -246,6 +327,9 @@ struct EnvironmentTabView: View {
             text = ".atelier.json"
         case .override:
             text = NSLocalizedString("Custom", comment: "")
+        case .processCompose:
+            // The file name, since a repository can carry either spelling.
+            text = devCommand?.sourceDescription ?? "process-compose.yaml"
         case .packageJSON:
             text = NSLocalizedString("From package.json", comment: "")
         }
@@ -311,7 +395,8 @@ struct EnvironmentTabView: View {
     }
 
     private var runControlsEnabled: Bool {
-        runCommandPreference != nil && (runCommandIsGated ? scriptsApproved : true)
+        guard runCommandPreference != nil, pendingRunnerApproval == nil else { return false }
+        return runCommandIsGated ? scriptsApproved : true
     }
 }
 

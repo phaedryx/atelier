@@ -24,10 +24,10 @@ final class EnvSeedSyncTests: XCTestCase {
 
     // MARK: - Seed configuration
 
-    func testSeedDefaultsToAtelierSeedWhenThereIsNoConfig() {
+    func testSeedDefaultsToSeedFilesWhenThereIsNoConfig() {
         let config = WorktreeSetupConfig.load(from: tmpDir.path)
-        XCTAssertEqual(config.seed, ".atelier-seed")
-        XCTAssertEqual(config.seedDirectory(in: "/repo"), "/repo/.atelier-seed")
+        XCTAssertEqual(config.seed, "seed-files")
+        XCTAssertEqual(config.seedDirectory(in: "/repo"), "/repo/seed-files")
     }
 
     func testConfigWithOnlyASeedKeyStillDecodes() throws {
@@ -73,7 +73,7 @@ final class EnvSeedSyncTests: XCTestCase {
         XCTAssertEqual(config.packageManager, .pnpm)
         XCTAssertEqual(config.symlinks, ["vendor"])
         XCTAssertEqual(config.postSetupCommands, ["echo hi"])
-        XCTAssertEqual(config.seed, ".atelier-seed")
+        XCTAssertEqual(config.seed, "seed-files")
     }
 
     // MARK: - Syncing
@@ -90,7 +90,7 @@ final class EnvSeedSyncTests: XCTestCase {
         XCTAssertEqual(try read("worktree/.env"), "ROOT")
         XCTAssertEqual(try read("worktree/apps/api/.env"), "API")
         XCTAssertFalse(
-            FileManager.default.fileExists(atPath: path("worktree/.atelier-seed")),
+            FileManager.default.fileExists(atPath: path("worktree/seed")),
             "the seed directory's contents are copied, not the directory itself"
         )
     }
@@ -217,11 +217,11 @@ final class EnvSeedSyncTests: XCTestCase {
         try makeDirectory("worktree/apps/api")
         let fm = FileManager.default
         try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path("seed"))
-        let before = (try fm.attributesOfItem(atPath: path("worktree")))[.posixPermissions] as? NSNumber
+        let before = try (fm.attributesOfItem(atPath: path("worktree")))[.posixPermissions] as? NSNumber
 
         _ = EnvSeedSync.sync(seedDirectory: path("seed"), to: path("worktree"))
 
-        let after = (try fm.attributesOfItem(atPath: path("worktree")))[.posixPermissions] as? NSNumber
+        let after = try (fm.attributesOfItem(atPath: path("worktree")))[.posixPermissions] as? NSNumber
         XCTAssertEqual(after, before, "the seed's mode must not clamp the worktree root")
         XCTAssertEqual(try read("worktree/apps/api/.env"), "API")
     }
@@ -231,19 +231,19 @@ final class EnvSeedSyncTests: XCTestCase {
     func testEmptySeedFallsBackToTheDefault() throws {
         try writeConfig(["seed": "   "])
         let config = WorktreeSetupConfig.load(from: tmpDir.path)
-        XCTAssertEqual(config.seedDirectory(in: "/repo"), "/repo/.atelier-seed")
+        XCTAssertEqual(config.seedDirectory(in: "/repo"), "/repo/seed-files")
     }
 
     func testSeedPointingAtTheProjectItselfFallsBackToTheDefault() throws {
         try writeConfig(["seed": "."])
         let config = WorktreeSetupConfig.load(from: tmpDir.path)
-        XCTAssertEqual(config.seedDirectory(in: "/repo"), "/repo/.atelier-seed")
+        XCTAssertEqual(config.seedDirectory(in: "/repo"), "/repo/seed-files")
     }
 
     func testSeedEscapingTheProjectFallsBackToTheDefault() throws {
         try writeConfig(["seed": "../.."])
         let config = WorktreeSetupConfig.load(from: tmpDir.path)
-        XCTAssertEqual(config.seedDirectory(in: "/repo/nested"), "/repo/nested/.atelier-seed")
+        XCTAssertEqual(config.seedDirectory(in: "/repo/nested"), "/repo/nested/seed-files")
     }
 
     func testNestedRelativeSeedIsStillAllowed() throws {

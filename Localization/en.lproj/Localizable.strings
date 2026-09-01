@@ -121,7 +121,7 @@
 
 /* Projects */
 "Copy .env files (rsync)" = "Copy .env files (rsync)";
-"rsync the project's .atelier-seed directory into new worktrees. Override the location with \"seed\" in .atelier.json." = "rsync the project's .atelier-seed directory into new worktrees. Override the location with \"seed\" in .atelier.json.";
+"rsync the project's seed-files directory into new worktrees. Override the location with \"seed\" in .atelier.json." = "rsync the project's seed-files directory into new worktrees. Override the location with \"seed\" in .atelier.json.";
 
 /* Quit confirmation */
 "Quit Atelier?" = "Quit Atelier?";
@@ -471,3 +471,20 @@
 "git pull did not finish in time." = "git pull did not finish in time.";
 "rsync did not finish in time." = "rsync did not finish in time.";
 "A file or directory with this name already exists." = "A file or directory with this name already exists.";
+
+/* Environment variables */
+"Environment variables" = "Environment variables";
+"Variables defined here are exported to the run command for every workstream in this project. A port variable gets its own value per worktree." = "Variables defined here are exported to the run command for every workstream in this project. A port variable gets its own value per worktree.";
+"NAME" = "NAME";
+"value or ${OTHER_VAR}" = "value or ${OTHER_VAR}";
+"Value" = "Value";
+"Port" = "Port";
+
+/* Runner selection and approval */
+"process-compose" = "process-compose";
+"Approve this repository's process config?" = "Approve this repository's process config?";
+"%@ defines processes that run on your machine under your user account. %@ starts them." = "%@ defines processes that run on your machine under your user account. %@ starts them.";
+"Could not read this file." = "Could not read this file.";
+"(%d more lines)" = "(%d more lines)";
+"Approval covers this repository until the file changes." = "Approval covers this repository until the file changes.";
+"Names may use letters, digits and _, and cannot start with a digit." = "Names may use letters, digits and _, and cannot start with a digit.";

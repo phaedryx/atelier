@@ -105,7 +105,18 @@ Per-project commands live in `.atelier.json` at the repository root:
 These come from the repository, so Atelier asks for approval before running any
 of them, and asks again whenever they change. `seed` names a directory whose
 contents are copied into each new worktree — that is how uncommitted `.env` files
-reach a workstream. It defaults to `.atelier-seed`.
+reach a workstream. It defaults to `seed-files` (projects using the older
+`.atelier-seed` keep working).
+
+If a `process-compose.yaml` is found — in the worktree, or in the project
+directory beside it — the Environment tab offers to start the stack with
+[process-compose](https://f1bonacc1.github.io/process-compose/) instead of a
+`package.json` dev script, and a picker switches between them. Keeping it in the
+project directory means one file for every worktree, and in the bare-repo layout
+git never sees it. That
+tab also defines environment variables for the project — a literal value, or a
+port Atelier picks per worktree so several workstreams can run the same stack at
+once without colliding.
 
 ## License
 

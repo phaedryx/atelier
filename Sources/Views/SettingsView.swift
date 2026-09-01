@@ -235,7 +235,7 @@ private struct GeneralSettingsPane: View {
                 SettingToggle(
                     "Copy .env files (rsync)",
                     isOn: $copyEnvFiles,
-                    description: "rsync the project's .atelier-seed directory into new worktrees. Override the location with \"seed\" in .atelier.json."
+                    description: "rsync the project's seed-files directory into new worktrees. Override the location with \"seed\" in .atelier.json."
                 )
 
                 Picker("Theme", selection: $appearance) {

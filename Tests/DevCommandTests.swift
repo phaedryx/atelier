@@ -6,6 +6,7 @@ import XCTest
 
 final class DevCommandTests: XCTestCase {
     private var tmpDir: URL!
+    private var projectContainers: [URL] = []
     private let workstreamID = UUID()
 
     override func setUp() {
@@ -16,6 +17,11 @@ final class DevCommandTests: XCTestCase {
 
     override func tearDown() {
         DevCommandResolver.saveOverride(nil, for: workstreamID)
+        DevCommandResolver.selectRunner(nil, for: tmpDir.path)
+        for container in projectContainers {
+            try? FileManager.default.removeItem(at: container)
+        }
+        projectContainers = []
         try? FileManager.default.removeItem(at: tmpDir)
         super.tearDown()
     }
@@ -96,6 +102,7 @@ final class DevCommandTests: XCTestCase {
             scriptConfig: config,
             workstreamID: workstreamID,
             workingDirectory: tmpDir.path,
+            projectDirectory: tmpDir.path,
             override: DevCommandResolver.savedOverride(for: workstreamID)
         )
 
@@ -111,6 +118,7 @@ final class DevCommandTests: XCTestCase {
             scriptConfig: .empty,
             workstreamID: workstreamID,
             workingDirectory: tmpDir.path,
+            projectDirectory: tmpDir.path,
             override: DevCommandResolver.savedOverride(for: workstreamID)
         )
 
@@ -125,6 +133,7 @@ final class DevCommandTests: XCTestCase {
             scriptConfig: .empty,
             workstreamID: workstreamID,
             workingDirectory: tmpDir.path,
+            projectDirectory: tmpDir.path,
             override: nil
         )
 
@@ -137,10 +146,194 @@ final class DevCommandTests: XCTestCase {
             scriptConfig: .empty,
             workstreamID: workstreamID,
             workingDirectory: tmpDir.path,
+            projectDirectory: tmpDir.path,
             override: nil
         )
 
         XCTAssertNil(resolved)
+    }
+
+    // MARK: - process-compose detection
+
+    func testDetectsProcessComposeConfig() throws {
+        try writeProcessCompose(named: "process-compose.yaml")
+
+        let command = try XCTUnwrap(DevCommandResolver.detectProcessCompose(in: tmpDir.path, projectDirectory: tmpDir.path))
+
+        XCTAssertEqual(command.command, "process-compose up -U")
+        XCTAssertEqual(command.source, .processCompose)
+        XCTAssertEqual(command.sourceDescription, "process-compose.yaml")
+        XCTAssertEqual(command.trustFilePath, tmpDir.appendingPathComponent("process-compose.yaml").path)
+    }
+
+    func testDetectsShortYamlExtension() throws {
+        try writeProcessCompose(named: "process-compose.yml")
+
+        let command = try XCTUnwrap(DevCommandResolver.detectProcessCompose(in: tmpDir.path, projectDirectory: tmpDir.path))
+
+        XCTAssertEqual(command.sourceDescription, "process-compose.yml")
+    }
+
+    /// process-compose would discover a bare `compose.yaml`, but that name means
+    /// docker compose far more often, and running the wrong tool is worse than
+    /// offering nothing.
+    func testIgnoresBareComposeFile() throws {
+        try "services: {}".write(
+            to: tmpDir.appendingPathComponent("compose.yaml"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        XCTAssertNil(DevCommandResolver.detectProcessCompose(in: tmpDir.path, projectDirectory: tmpDir.path))
+    }
+
+    func testProcessComposeLeadsPackageJSON() throws {
+        try writePackageJSON(["dev": "vite"])
+        try writeProcessCompose(named: "process-compose.yaml")
+
+        let resolved = DevCommandResolver.resolve(
+            scriptConfig: .empty,
+            workstreamID: workstreamID,
+            workingDirectory: tmpDir.path,
+            projectDirectory: tmpDir.path,
+            override: nil
+        )
+
+        XCTAssertEqual(resolved?.source, .processCompose)
+    }
+
+    func testSelectedRunnerOverridesDetectionOrder() throws {
+        try writePackageJSON(["dev": "vite"])
+        try writeProcessCompose(named: "process-compose.yaml")
+        DevCommandResolver.selectRunner(.packageJSON, for: tmpDir.path)
+
+        let resolved = DevCommandResolver.resolve(
+            scriptConfig: .empty,
+            workstreamID: workstreamID,
+            workingDirectory: tmpDir.path,
+            projectDirectory: tmpDir.path,
+            override: nil
+        )
+
+        XCTAssertEqual(resolved?.source, .packageJSON)
+    }
+
+    /// A stored choice for a runner the worktree no longer has must not leave
+    /// the pane with no command at all.
+    func testSelectedRunnerFallsBackWhenAbsent() throws {
+        try writePackageJSON(["dev": "vite"])
+        DevCommandResolver.selectRunner(.processCompose, for: tmpDir.path)
+
+        let resolved = DevCommandResolver.resolve(
+            scriptConfig: .empty,
+            workstreamID: workstreamID,
+            workingDirectory: tmpDir.path,
+            projectDirectory: tmpDir.path,
+            override: nil
+        )
+
+        XCTAssertEqual(resolved?.source, .packageJSON)
+    }
+
+    func testCandidatesListsBothRunners() throws {
+        try writePackageJSON(["dev": "vite"])
+        try writeProcessCompose(named: "process-compose.yaml")
+
+        let candidates = DevCommandResolver.candidates(in: tmpDir.path, projectDirectory: tmpDir.path)
+
+        XCTAssertEqual(candidates.map(\.source), [.processCompose, .packageJSON])
+    }
+
+    // MARK: - Config in the project directory
+
+    /// The bare-repo layout keeps one config beside the worktrees, where git
+    /// cannot see it and every worktree shares it.
+    func testFindsConfigInProjectDirectory() throws {
+        let project = try makeProjectContainer()
+        try writeProcessCompose(named: "process-compose.yaml", in: project)
+
+        let command = try XCTUnwrap(
+            DevCommandResolver.detectProcessCompose(in: tmpDir.path, projectDirectory: project.path)
+        )
+
+        XCTAssertEqual(
+            command.command,
+            "process-compose up -U -f \(CommandBuilder.shellQuote(project.appendingPathComponent("process-compose.yaml").path))"
+        )
+        XCTAssertEqual(command.trustFilePath, project.appendingPathComponent("process-compose.yaml").path)
+    }
+
+    /// Naming the base config with `-f` turns off discovery, so a worktree
+    /// override has to be named too — but only when it is really there, since
+    /// process-compose treats a missing `-f` file as fatal.
+    func testPassesWorktreeOverrideAlongsideProjectConfig() throws {
+        let project = try makeProjectContainer()
+        try writeProcessCompose(named: "process-compose.yaml", in: project)
+        try writeProcessCompose(named: "process-compose.override.yaml")
+
+        let command = try XCTUnwrap(
+            DevCommandResolver.detectProcessCompose(in: tmpDir.path, projectDirectory: project.path)
+        )
+
+        XCTAssertTrue(command.command.hasSuffix(
+            "-f \(CommandBuilder.shellQuote(tmpDir.appendingPathComponent("process-compose.override.yaml").path))"
+        ), command.command)
+    }
+
+    /// A worktree carrying its own config is saying something deliberate, and
+    /// keeps discovery — so no `-f`, and its override auto-loads.
+    func testWorktreeConfigWinsOverProjectDirectory() throws {
+        let project = try makeProjectContainer()
+        try writeProcessCompose(named: "process-compose.yaml", in: project)
+        try writeProcessCompose(named: "process-compose.yaml")
+
+        let command = try XCTUnwrap(
+            DevCommandResolver.detectProcessCompose(in: tmpDir.path, projectDirectory: project.path)
+        )
+
+        XCTAssertEqual(command.command, "process-compose up -U")
+        XCTAssertEqual(command.trustFilePath, tmpDir.appendingPathComponent("process-compose.yaml").path)
+    }
+
+    /// A plain checkout passes the same path for both. The fallback must not
+    /// then re-find the worktree's own config and switch to the `-f` form.
+    func testProjectDirectoryEqualToWorktreeIsNotSearchedTwice() throws {
+        try writeProcessCompose(named: "process-compose.yaml")
+
+        let command = try XCTUnwrap(
+            DevCommandResolver.detectProcessCompose(in: tmpDir.path, projectDirectory: tmpDir.path)
+        )
+
+        XCTAssertEqual(command.command, "process-compose up -U")
+    }
+
+    func testNoConfigInEitherPlace() throws {
+        let project = try makeProjectContainer()
+
+        XCTAssertNil(DevCommandResolver.detectProcessCompose(in: tmpDir.path, projectDirectory: project.path))
+    }
+
+    private func makeProjectContainer() throws -> URL {
+        let project = tmpDir.deletingLastPathComponent().appendingPathComponent("project-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        projectContainers.append(project)
+        return project
+    }
+
+    private func writeProcessCompose(named name: String, in directory: URL) throws {
+        try "processes:\n  web:\n    command: echo hi\n".write(
+            to: directory.appendingPathComponent(name),
+            atomically: true,
+            encoding: .utf8
+        )
+    }
+
+    private func writeProcessCompose(named name: String) throws {
+        try "processes:\n  web:\n    command: echo hi\n".write(
+            to: tmpDir.appendingPathComponent(name),
+            atomically: true,
+            encoding: .utf8
+        )
     }
 
     // MARK: - Override persistence

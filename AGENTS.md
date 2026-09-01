@@ -145,7 +145,7 @@ carries the `-dev` marker.
 5. Archiving: runs teardown script, then `git worktree remove` + `tmux kill-session`
 
 ### Worktree seeding
-A new worktree gets its uncommitted files from a **seed directory** — `.atelier-seed` in the
+A new worktree gets its uncommitted files from a **seed directory** — `seed-files` in the
 project directory by default, overridden with `"seed"` in `.atelier.json`:
 ```json
 { "seed": "config/secrets" }
@@ -154,6 +154,11 @@ project directory by default, overridden with `"seed"` in `.atelier.json`:
 is already up. `EnvSeedSync.sync` rsyncs the seed's *contents* into the worktree, so nested
 layouts like `apps/api/.env` land in the right place, symlinks arrive as real files, and
 anything already in the worktree wins.
+
+The default used to be `.atelier-seed`. When the default is in play and `seed-files` does not
+exist, `WorktreeSetupConfig.seedDirectory` falls back to `.atelier-seed` if that does —
+nothing in a repository records which name a project was set up under, so a bare rename would
+have silently stopped seeding working projects. An explicit `"seed"` is never second-guessed.
 
 A relative `seed` resolves against the project directory; an absolute or `~`-rooted one is
 taken as written. A `seed` that is empty, resolves to the project directory itself, or escapes
@@ -173,6 +178,58 @@ replaced it in macOS 15. `--out-format` (rsync 3.0+) and `--chmod` (missing from
 fail on one side, so the copied count is derived from the filesystem rather than rsync's output,
 and directory modes are restored in Swift rather than via `--chmod`. Do not add flags here
 without checking both.
+
+### Dev command and runners
+`DevCommandResolver` picks what the Environment tab's Start button runs, in order: the `run`
+script from `.atelier.json`, then a per-workstream override the user typed, then the best
+runner detected for the worktree. Detection finds `process-compose.yaml` / `process-compose.yml`
+and a `dev` script in `package.json`, in that order. When both are present the Environment tab
+shows a picker; the choice is stored per project in `atelier.devRunner.<projectDirectory>`.
+
+A process-compose config is looked for in the **worktree first, then the project directory**.
+The project directory is the better home in the bare-repo layout: it sits outside every
+worktree, so git cannot see it (no ignore rule needed) and one file serves every worktree
+instead of each growing a copy that drifts — `EnvSeedSync`'s `--ignore-existing` would never
+update those copies. A config in the worktree still wins, because a worktree carrying its own
+is saying something deliberate.
+
+process-compose always runs with the *worktree* as cwd, and resolves a relative `working_dir`
+against its own cwd rather than against the config's location, so `working_dir: apps/api` lands
+inside the worktree from either home.
+
+Three details of the invocation are load-bearing:
+
+- `-U` puts the control API on a unix socket instead of TCP :8080, so it does not add a
+  listening port for `atelier-run` to mistake for the app's.
+- A worktree config is run with **no `-f`**, because passing one turns off process-compose's own
+  discovery — which is what auto-loads a sibling `process-compose.override.yaml`.
+- A project-directory config must be named with `-f`, which costs that discovery, so a
+  worktree-level override is passed with a second `-f` — but only when it exists, since
+  process-compose treats a missing `-f` file as fatal.
+
+A `process-compose.yaml` is repository-provided content that executes, so it is approval-gated
+exactly like a `run` script: `ScriptTrust.isApproved(runnerFile:for:)` fingerprints the file's
+contents, and editing it asks again. This is tracked apart from `ScriptTrust.isApproved(_:for:)`
+so approving a process config cannot also release a setup script. (The `package.json` path is
+still ungated — Atelier composes `pnpm run dev` itself, but the script body is the repository's.
+That gap predates this and closing it would force re-approval on every existing project.)
+
+### Project environment variables
+A project can define variables that are exported into its run command, edited in the
+Environment tab and stored per project under `atelier.projectEnvVars`. A definition is either a
+literal — with `${NAME}` references to other definitions expanded — or a **computed port**.
+
+Definitions are per project and values are per workstream: `BFF_PORT` is defined once, and each
+worktree receives its own number. A computed port starts from `PortAllocator.port(for:salt:)`,
+the same DJB2 hash that produces `ATELIER_PORT` but salted with the variable's name, then walks
+forward past any port already claimed in this pass or already bound. Deterministic-first matters
+— a port that changed every run would break bookmarks, OAuth redirect URIs, and CORS
+allowlists — and the probe only covers the common case; nothing can close the window between
+checking a port and a child binding it.
+
+Resolution runs on appear and after an edit, never inside a view update, because probing binds
+a socket. Project definitions merge over Atelier's own variables, so a project that wants
+`ATELIER_PORT` to mean something specific can say so.
 
 ### Script configuration
 Scripts are loaded from `.atelier.json` in the project directory:

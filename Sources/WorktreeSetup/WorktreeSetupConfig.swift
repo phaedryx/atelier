@@ -3,11 +3,15 @@
 
 import Foundation
 
-struct WorktreeSetupConfig: Codable, Sendable {
+struct WorktreeSetupConfig: Codable {
     /// Project-relative directory whose contents are rsync'd into every new
     /// worktree — the home for `.env` files and anything else deliberately kept
     /// out of git. Overridden per project with `"seed"` in `.atelier.json`.
-    static let defaultSeedDirectory = ".atelier-seed"
+    static let defaultSeedDirectory = "seed-files"
+
+    /// What the default seed directory was called before it was renamed.
+    /// Projects set up under the old name keep working: see `seedDirectory(in:)`.
+    static let legacySeedDirectory = ".atelier-seed"
 
     var baseBranch: String
     var packageManager: PackageManager?
@@ -15,7 +19,7 @@ struct WorktreeSetupConfig: Codable, Sendable {
     var symlinks: [String]
     var postSetupCommands: [String]
 
-    enum PackageManager: String, Codable, Sendable {
+    enum PackageManager: String, Codable {
         case npm, yarn, pnpm, bun
 
         var installCommand: [String] {
@@ -68,10 +72,24 @@ struct WorktreeSetupConfig: Codable, Sendable {
     /// via `..`, falls back to the default — the sync copies a whole directory
     /// tree, and pointing it at the repo root would pour the repo (and `.git`)
     /// into every new worktree.
+    /// A project seeded before the directory was renamed still has its files
+    /// under the old name, and nothing in the repository records that. So when
+    /// the default location is in play and it does not exist, the old name is
+    /// used if it does — otherwise the rename would quietly stop seeding
+    /// projects that were working, and the failure would surface as a worktree
+    /// missing its `.env` rather than as anything about a rename.
     func seedDirectory(in projectDirectory: String) -> String {
-        Self.resolveSeed(seed, in: projectDirectory)
-            ?? Self.resolveSeed(Self.defaultSeedDirectory, in: projectDirectory)
+        let fallback = Self.resolveSeed(Self.defaultSeedDirectory, in: projectDirectory)
             ?? (projectDirectory as NSString).appendingPathComponent(Self.defaultSeedDirectory)
+        let resolved = Self.resolveSeed(seed, in: projectDirectory) ?? fallback
+
+        guard resolved == fallback, !FileManager.default.fileExists(atPath: resolved) else {
+            return resolved
+        }
+        guard let legacy = Self.resolveSeed(Self.legacySeedDirectory, in: projectDirectory),
+              FileManager.default.fileExists(atPath: legacy)
+        else { return resolved }
+        return legacy
     }
 
     static func resolveSeed(_ seed: String, in projectDirectory: String) -> String? {
@@ -95,10 +113,10 @@ struct WorktreeSetupConfig: Codable, Sendable {
     }
 }
 
-// Declared in an extension so the memberwise initializer survives. Every field
-// is optional on the wire: a config that sets only `seed` must not fail to
-// decode, because `load` swallows the error and silently reverts the whole
-// config — including the seed — to the defaults.
+/// Declared in an extension so the memberwise initializer survives. Every field
+/// is optional on the wire: a config that sets only `seed` must not fail to
+/// decode, because `load` swallows the error and silently reverts the whole
+/// config — including the seed — to the defaults.
 extension WorktreeSetupConfig {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
