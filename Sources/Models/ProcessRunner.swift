@@ -25,9 +25,10 @@ enum ProcessRunner {
     /// Deadline tiers. Named rather than inline so the choice at each call site
     /// is reviewable, and so "this is slow" can be fixed in one place.
     enum Timeout {
-        /// Commands that only touch the local filesystem: git plumbing on a
-        /// working copy, tmux bookkeeping, `--version` probes.
-        static let local: TimeInterval = 30
+        /// Commands that only touch the local filesystem: git plumbing that
+        /// reads, tmux bookkeeping, `--version` probes. Not for anything that
+        /// writes a whole working tree — that scales with the user's repository.
+        static let local: TimeInterval = 60
         /// Anything that can reach the network — fetch, pull, push, `gh`.
         /// Generous, because a slow link is not a hang.
         static let network: TimeInterval = 120

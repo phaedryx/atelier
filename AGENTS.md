@@ -204,9 +204,11 @@ output passes the ~64 KB pipe buffer — reachable for `git fetch` on a
 many-branch repository, or any package-manager install.
 
 Pick a deadline from `ProcessRunner.Timeout` rather than inlining a number:
-`local` for filesystem-only work, `network` for anything reaching a remote,
-`userCommand` for commands out of the user's repository, `install` for package
-managers. Git spawns also set `GIT_TERMINAL_PROMPT=0` and `GIT_ASKPASS`, because
+`local` for reads and ref-level writes, `network` for anything reaching a remote,
+`userCommand` for work whose size the user controls, `install` for package
+managers. The distinction that matters is not local-versus-remote but whether the
+repository's size sets the duration: `git status` is `local`, while `git worktree
+add` checks out a whole tree and goes through `GitOperations.runOnWholeTree`. Git spawns also set `GIT_TERMINAL_PROMPT=0` and `GIT_ASKPASS`, because
 a GUI app has no terminal on which to answer a credential prompt, so the prompt
 is itself a hang.
 

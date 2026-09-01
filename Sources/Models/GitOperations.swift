@@ -494,11 +494,11 @@ enum GitOperations {
         )
 
         // Create worktree with new branch based off the default branch
-        let result = run(args: ["worktree", "add", "-b", branchName, worktreeDir.path, baseBranch], in: projectPath)
+        let result = runOnWholeTree(args: ["worktree", "add", "-b", branchName, worktreeDir.path, baseBranch], in: projectPath)
 
         if result == nil {
             // Branch might already exist, try without -b
-            let fallback = run(args: ["worktree", "add", worktreeDir.path, branchName], in: projectPath)
+            let fallback = runOnWholeTree(args: ["worktree", "add", worktreeDir.path, branchName], in: projectPath)
             guard fallback != nil else { return nil }
         }
 
@@ -561,7 +561,7 @@ enum GitOperations {
     static func removeWorktree(projectPath: String, worktreePath: String) {
         let worktreeDir = URL(fileURLWithPath: worktreePath)
 
-        _ = run(args: ["worktree", "remove", "--force", worktreePath], in: projectPath)
+        _ = runOnWholeTree(args: ["worktree", "remove", "--force", worktreePath], in: projectPath)
 
         // Clean up empty directories
         try? FileManager.default.removeItem(at: worktreeDir)
@@ -620,7 +620,7 @@ enum GitOperations {
 
     /// Force-remove a git worktree by path, discarding uncommitted changes.
     static func forceRemoveWorktreeByPath(worktreePath: String, projectPath: String) {
-        _ = run(args: ["worktree", "remove", "--force", worktreePath], in: projectPath)
+        _ = runOnWholeTree(args: ["worktree", "remove", "--force", worktreePath], in: projectPath)
 
         let fm = FileManager.default
         if fm.fileExists(atPath: worktreePath) {
@@ -632,8 +632,8 @@ enum GitOperations {
     /// Discard all uncommitted changes: reset staged, checkout unstaged, clean untracked.
     static func discardAllChanges(at path: String) {
         _ = run(args: ["reset", "HEAD"], in: path)
-        _ = run(args: ["checkout", "--", "."], in: path)
-        _ = run(args: ["clean", "-fd"], in: path)
+        _ = runOnWholeTree(args: ["checkout", "--", "."], in: path)
+        _ = runOnWholeTree(args: ["clean", "-fd"], in: path)
     }
 
     private static func parseStatus(_ char: Character) -> WorktreeDetail.FileChange.Status {
@@ -749,7 +749,7 @@ enum GitOperations {
             if let allowedPaths, !allowedPaths.contains(standardizedPath) {
                 continue
             }
-            let result = run(args: ["worktree", "remove", wt.path], in: projectPath)
+            let result = runOnWholeTree(args: ["worktree", "remove", wt.path], in: projectPath)
             if result != nil {
                 pruned += 1
             }
@@ -934,7 +934,7 @@ enum GitOperations {
 
         // Reset the working tree only if it is clean
         if !hasUncommittedChanges(at: path) {
-            _ = run(args: ["reset", "--hard", "--quiet"], in: path)
+            _ = runOnWholeTree(args: ["reset", "--hard", "--quiet"], in: path)
             logger.info("[Atelier] Updated \(branch, privacy: .public) to latest")
         } else {
             logger.info("[Atelier] Updated \(branch, privacy: .public) ref but working tree has local changes, skipping reset")
@@ -1092,7 +1092,18 @@ enum GitOperations {
         return environment
     }
 
+    /// Git commands that only read, or that touch a handful of refs. A minute is
+    /// far past any of them; past it, git is wedged.
     private static func run(args: [String], in directory: String) -> String? {
         runWithTimeout(args: args, in: directory, timeout: ProcessRunner.Timeout.local)
+    }
+
+    /// Git commands that write a whole working tree — `worktree add` checks one
+    /// out, `worktree remove`, `reset --hard`, `checkout -- .` and `clean -fd`
+    /// rewrite or delete one. How long they take is a property of the user's
+    /// repository, so they get the loose tier; `run`'s minute would abort a
+    /// legitimate checkout of a large repository partway through.
+    private static func runOnWholeTree(args: [String], in directory: String) -> String? {
+        runWithTimeout(args: args, in: directory, timeout: ProcessRunner.Timeout.userCommand)
     }
 }
