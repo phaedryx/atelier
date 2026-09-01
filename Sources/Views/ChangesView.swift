@@ -404,7 +404,9 @@ struct ChangesView: View {
                 "text": c.text,
                 "isOrphaned": c.isOrphaned,
             ]
-            if let endLine = c.endLine { entry["endLine"] = endLine }
+            if let endLine = c.endLine {
+                entry["endLine"] = endLine
+            }
             return entry
         }
         bridge.setComments(payload)
@@ -572,7 +574,9 @@ struct ChangesView: View {
     /// Pure classification of a file's diff body. Decides BEFORE any content is
     /// read so git-show / disk reads are skipped for binary and deferred files.
     nonisolated static func classify(isBinary: Bool, changedLines: Int, sizeHint: Int) -> PayloadClass {
-        if isBinary { return .binary }
+        if isBinary {
+            return .binary
+        }
         if changedLines > largeFileLineThreshold || sizeHint > largeFileByteThreshold {
             return .deferred
         }

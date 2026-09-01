@@ -31,7 +31,9 @@ struct Workstream: Identifiable, Hashable, Codable {
     /// The user-facing label. Falls back to the branch-tracked `name` when no override is set.
     var label: String {
         let trimmed = displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let trimmed, !trimmed.isEmpty { return trimmed }
+        if let trimmed, !trimmed.isEmpty {
+            return trimmed
+        }
         return name
     }
 

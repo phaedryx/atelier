@@ -319,14 +319,22 @@ enum GitOperations {
             let statusChar = statusField.prefix(1)
             switch statusChar {
             case "A":
-                if fields.count >= 2 { files.append(DiffFile(relativePath: String(fields[1]), status: .added)) }
+                if fields.count >= 2 {
+                    files.append(DiffFile(relativePath: String(fields[1]), status: .added))
+                }
             case "M":
-                if fields.count >= 2 { files.append(DiffFile(relativePath: String(fields[1]), status: .modified)) }
+                if fields.count >= 2 {
+                    files.append(DiffFile(relativePath: String(fields[1]), status: .modified))
+                }
             case "D":
-                if fields.count >= 2 { files.append(DiffFile(relativePath: String(fields[1]), status: .deleted)) }
+                if fields.count >= 2 {
+                    files.append(DiffFile(relativePath: String(fields[1]), status: .deleted))
+                }
             case "R":
                 // Rename: use the new path (last field).
-                if fields.count >= 3 { files.append(DiffFile(relativePath: String(fields[2]), status: .renamed)) }
+                if fields.count >= 3 {
+                    files.append(DiffFile(relativePath: String(fields[2]), status: .renamed))
+                }
             default:
                 continue
             }
@@ -421,7 +429,9 @@ enum GitOperations {
     /// Number of newline-terminated lines in a file (best-effort, 0 on failure).
     private static func lineCount(atPath path: String) -> Int {
         guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { return 0 }
-        if content.isEmpty { return 0 }
+        if content.isEmpty {
+            return 0
+        }
         return content.split(separator: "\n", omittingEmptySubsequences: false).count
             - (content.hasSuffix("\n") ? 1 : 0)
     }
@@ -544,7 +554,9 @@ enum GitOperations {
 
         let existing = (try? String(contentsOf: excludeURL, encoding: .utf8)) ?? ""
         let lines = existing.components(separatedBy: .newlines)
-        if lines.contains(pattern) { return }
+        if lines.contains(pattern) {
+            return
+        }
 
         let entry = existing.hasSuffix("\n") || existing.isEmpty ? pattern + "\n" : "\n" + pattern + "\n"
         if let data = entry.data(using: .utf8), let handle = try? FileHandle(forWritingTo: excludeURL) {
@@ -886,7 +898,9 @@ enum GitOperations {
                 current = nil
             }
         }
-        if let current { paths.append(current) }
+        if let current {
+            paths.append(current)
+        }
         return paths
     }
 
@@ -958,7 +972,9 @@ enum GitOperations {
 
             if xy == "!!" {
                 // Ignored — strip trailing slash for directories
-                if filePath.hasSuffix("/") { filePath = String(filePath.dropLast()) }
+                if filePath.hasSuffix("/") {
+                    filePath = String(filePath.dropLast())
+                }
                 result[filePath] = .ignored
             } else if xy == "??" {
                 result[filePath] = .untracked
@@ -1058,11 +1074,21 @@ enum GitOperations {
     static func isValidBranchName(_ name: String) -> Bool {
         guard !name.isEmpty else { return false }
         let forbiddenCharacters = CharacterSet(charactersIn: " ~^:?*[\\")
-        if name.rangeOfCharacter(from: forbiddenCharacters) != nil { return false }
-        if name.contains("..") || name.contains("@{") || name.contains("//") { return false }
-        if name.hasPrefix("-") { return false }
-        if name.hasSuffix(".") || name.hasSuffix("/") || name.hasSuffix(".lock") { return false }
-        if name.unicodeScalars.contains(where: { $0.value < 0x20 }) { return false }
+        if name.rangeOfCharacter(from: forbiddenCharacters) != nil {
+            return false
+        }
+        if name.contains("..") || name.contains("@{") || name.contains("//") {
+            return false
+        }
+        if name.hasPrefix("-") {
+            return false
+        }
+        if name.hasSuffix(".") || name.hasSuffix("/") || name.hasSuffix(".lock") {
+            return false
+        }
+        if name.unicodeScalars.contains(where: { $0.value < 0x20 }) {
+            return false
+        }
         return true
     }
 

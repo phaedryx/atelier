@@ -13,7 +13,9 @@ final class CommandLineToolsTests: XCTestCase {
             for: "claude",
             environment: ["SHELL": "/bin/zsh"],
             isExecutable: { path in
-                if path == "/opt/homebrew/bin/claude" { knownLocationChecked = true }
+                if path == "/opt/homebrew/bin/claude" {
+                    knownLocationChecked = true
+                }
                 return path == "/Users/me/.nvm/versions/node/v22/bin/claude"
             },
             resolveFromPath: { _, _ in nil },
@@ -36,7 +38,9 @@ final class CommandLineToolsTests: XCTestCase {
                 let rawPath = env["PATH"] ?? ""
                 for dir in rawPath.split(separator: ":") {
                     let candidate = "\(dir)/\(name)"
-                    if candidate == "/custom/bin/mytool" { return candidate }
+                    if candidate == "/custom/bin/mytool" {
+                        return candidate
+                    }
                 }
                 return nil
             },

@@ -63,7 +63,9 @@ struct ShortcutClient {
         guard let http = response as? HTTPURLResponse else {
             throw ShortcutError.transport("Not an HTTP response")
         }
-        if let error = ShortcutError.forStatus(http.statusCode) { throw error }
+        if let error = ShortcutError.forStatus(http.statusCode) {
+            throw error
+        }
 
         do {
             return try JSONDecoder().decode(T.self, from: data)

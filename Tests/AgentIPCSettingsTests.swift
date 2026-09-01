@@ -22,7 +22,9 @@ final class AgentIPCSettingsTests: XCTestCase {
     override func tearDown() {
         clearSettings()
         for (key, value) in saved {
-            if let value { UserDefaults.standard.set(value, forKey: key) }
+            if let value {
+                UserDefaults.standard.set(value, forKey: key)
+            }
         }
         saved.removeAll()
         super.tearDown()
@@ -62,7 +64,9 @@ final class AgentIPCSettingsTests: XCTestCase {
     private func waitForEndpoint(timeout: TimeInterval = 5) throws -> IPCEndpoint? {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if let endpoint = IPCEndpoint.read() { return endpoint }
+            if let endpoint = IPCEndpoint.read() {
+                return endpoint
+            }
             usleep(20_000)
         }
         return nil
@@ -71,7 +75,9 @@ final class AgentIPCSettingsTests: XCTestCase {
     private func waitForNoEndpoint(timeout: TimeInterval = 5) throws -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if IPCEndpoint.read() == nil { return true }
+            if IPCEndpoint.read() == nil {
+                return true
+            }
             usleep(20_000)
         }
         return false

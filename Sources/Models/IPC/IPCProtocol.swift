@@ -165,7 +165,9 @@ enum IPCFraming {
         var remainder = buffer
         while let index = remainder.firstIndex(of: terminator) {
             let line = remainder[remainder.startIndex ..< index]
-            if !line.isEmpty { lines.append(Data(line)) }
+            if !line.isEmpty {
+                lines.append(Data(line))
+            }
             remainder = Data(remainder[remainder.index(after: index)...])
         }
         return (lines, remainder)

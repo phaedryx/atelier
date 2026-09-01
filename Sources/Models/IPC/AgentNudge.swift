@@ -54,7 +54,9 @@ final class AgentNudge {
     ) -> Bool {
         guard nudgeEnabled, hasSurface else { return false }
         guard state.turnHasEnded else { return false }
-        if let lastNudge, now.timeIntervalSince(lastNudge) < cooldown { return false }
+        if let lastNudge, now.timeIntervalSince(lastNudge) < cooldown {
+            return false
+        }
         return true
     }
 

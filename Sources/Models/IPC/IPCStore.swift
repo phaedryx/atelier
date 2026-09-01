@@ -67,8 +67,12 @@ actor IPCStore {
     /// or is due to receive — so an undelivered message can never be orphaned by
     /// its peer expiring.
     private func isAlive(_ peer: Peer) -> Bool {
-        if pinned.contains(peer.id) { return true }
-        if Date().timeIntervalSince(peer.lastSeen) <= peerTTL { return true }
+        if pinned.contains(peer.id) {
+            return true
+        }
+        if Date().timeIntervalSince(peer.lastSeen) <= peerTTL {
+            return true
+        }
         for (_, msgs) in inbox {
             if msgs.contains(where: { $0.from == peer.id || $0.to == peer.id }) {
                 return true
@@ -81,7 +85,9 @@ actor IPCStore {
     /// Every public API gates on this so an expired peer cannot be revived.
     private func aliveOrPurge(_ id: UUID) -> Peer? {
         guard let peer = peers[id] else { return nil }
-        if isAlive(peer) { return peer }
+        if isAlive(peer) {
+            return peer
+        }
         peers.removeValue(forKey: id)
         inbox.removeValue(forKey: id)
         return nil

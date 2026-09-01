@@ -54,7 +54,9 @@ final class WorkspaceModel: ObservableObject {
 
     @discardableResult
     func ensureEditorBridge() -> MonacoEditorBridge {
-        if let editorBridge { return editorBridge }
+        if let editorBridge {
+            return editorBridge
+        }
         let bridge = MonacoEditorBridge()
         editorBridge = bridge
         return bridge
@@ -62,7 +64,9 @@ final class WorkspaceModel: ObservableObject {
 
     @discardableResult
     func ensureDiffBridge() -> MonacoDiffBridge {
-        if let diffBridge { return diffBridge }
+        if let diffBridge {
+            return diffBridge
+        }
         let bridge = MonacoDiffBridge()
         diffBridge = bridge
         return bridge
@@ -85,25 +89,43 @@ final class WorkspaceModel: ObservableObject {
     // MARK: - Derived state
 
     var hasBrowserTabs: Bool {
-        tabs.contains { if case .browser = $0 { true } else { false } }
+        tabs.contains {
+            if case .browser = $0 {
+                true
+            } else {
+                false
+            }
+        }
     }
 
     var hasEditorTabs: Bool {
-        tabs.contains { if case .editor = $0 { true } else { false } }
+        tabs.contains {
+            if case .editor = $0 {
+                true
+            } else {
+                false
+            }
+        }
     }
 
     var isEditorTabActive: Bool {
-        if case .editor = activeTab { return true }
+        if case .editor = activeTab {
+            return true
+        }
         return false
     }
 
     var isActiveEditorDirty: Bool {
-        if case let .editor(id) = activeTab { return editorDirtyState[id] == true }
+        if case let .editor(id) = activeTab {
+            return editorDirtyState[id] == true
+        }
         return false
     }
 
     func isEditorDirty(_ tab: WorkspaceTab) -> Bool {
-        if case let .editor(id) = tab { return editorDirtyState[id] == true }
+        if case let .editor(id) = tab {
+            return editorDirtyState[id] == true
+        }
         return false
     }
 
@@ -194,7 +216,9 @@ final class WorkspaceModel: ObservableObject {
     /// over `tabs` alone would strand the dead terminal's title behind it.
     func reconcile(liveSurfaceIDs: Set<UUID>) {
         let deadTabs = tabs.filter { tab in
-            if case let .terminal(id) = tab { return !liveSurfaceIDs.contains(id) }
+            if case let .terminal(id) = tab {
+                return !liveSurfaceIDs.contains(id)
+            }
             return false
         }
         guard !deadTabs.isEmpty else { return }

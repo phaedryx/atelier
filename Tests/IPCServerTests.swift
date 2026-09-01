@@ -65,7 +65,9 @@ final class IPCServerTests: XCTestCase {
         while Date() < deadline {
             var chunk = [UInt8](repeating: 0, count: 8192)
             let read = recv(fd, &chunk, chunk.count, 0)
-            if read > 0 { buffer.append(contentsOf: chunk[0 ..< read]) }
+            if read > 0 {
+                buffer.append(contentsOf: chunk[0 ..< read])
+            }
             let (lines, _) = IPCFraming.lines(from: buffer)
             if let line = lines.first {
                 return try JSONDecoder().decode(IPCResponse.self, from: line)
@@ -208,8 +210,12 @@ final class IPCServerTests: XCTestCase {
         var chunk = [UInt8](repeating: 0, count: 4096)
         while Date() < deadline {
             let read = recv(fd, &chunk, chunk.count, MSG_DONTWAIT)
-            if read == 0 { return true }
-            if read < 0, errno != EAGAIN, errno != EWOULDBLOCK { return true }
+            if read == 0 {
+                return true
+            }
+            if read < 0, errno != EAGAIN, errno != EWOULDBLOCK {
+                return true
+            }
             usleep(20_000)
         }
         return false
@@ -289,7 +295,9 @@ final class IPCServerTests: XCTestCase {
                 on: second
             )
             accepted = response.error == nil
-            if !accepted { usleep(50_000) }
+            if !accepted {
+                usleep(50_000)
+            }
         }
         XCTAssertTrue(accepted, "a returning helper must be able to reclaim its own peer")
     }
@@ -326,7 +334,9 @@ final class IPCServerTests: XCTestCase {
             )
             guard case let .peers(peers) = response.payload else { return XCTFail("expected peers") }
             listed = peers
-            if listed.isEmpty { break }
+            if listed.isEmpty {
+                break
+            }
             usleep(50_000)
         } while Date() < deadline
 
@@ -422,7 +432,9 @@ final class IPCServerTests: XCTestCase {
         while Date() < deadline, second == nil {
             let current = IPCEndpoint.read()
             second = current?.port == restarted.boundPort ? current : nil
-            if second == nil { usleep(20_000) }
+            if second == nil {
+                usleep(20_000)
+            }
         }
         XCTAssertNotNil(second, "the restarted listener did not publish a new endpoint")
         XCTAssertNotEqual(second?.port, first.port)
@@ -537,7 +549,9 @@ private final class MCPProcess {
         nextID += 1
         let id = nextID
         var message: [String: Any] = ["jsonrpc": "2.0", "id": id, "method": method]
-        if let params { message["params"] = params }
+        if let params {
+            message["params"] = params
+        }
         guard let data = try? JSONSerialization.data(withJSONObject: message) else { return nil }
         input.fileHandleForWriting.write(data)
         input.fileHandleForWriting.write(Data([0x0A]))
@@ -549,7 +563,9 @@ private final class MCPProcess {
             buffer = remainder
             for line in lines {
                 guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
-                if object["id"] as? Int == id { return object }
+                if object["id"] as? Int == id {
+                    return object
+                }
             }
         }
         return nil

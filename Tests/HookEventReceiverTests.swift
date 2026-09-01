@@ -26,7 +26,9 @@ final class HookEventReceiverTests: XCTestCase {
         var port: UInt16?
         while Date() < deadline, port == nil {
             port = receiver.boundPort
-            if port == nil { usleep(20_000) }
+            if port == nil {
+                usleep(20_000)
+            }
         }
         let resolved = try XCTUnwrap(port, "hook receiver did not bind a port")
 

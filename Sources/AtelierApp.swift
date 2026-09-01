@@ -245,7 +245,11 @@ struct AtelierApp: App {
                         Text("Open Directory"),
                         isPresented: Binding(
                             get: { pendingURLDirectory != nil },
-                            set: { if !$0 { pendingURLDirectory = nil } }
+                            set: {
+                                if !$0 {
+                                    pendingURLDirectory = nil
+                                }
+                            }
                         )
                     ) {
                         Button("Allow") {

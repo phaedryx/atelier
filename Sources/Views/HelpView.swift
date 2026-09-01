@@ -152,10 +152,18 @@ private struct ShortcutRow: View {
     var body: some View {
         LabeledContent(description) {
             HStack(spacing: 2) {
-                if ctrl { Image(systemName: "control") }
-                if cmd { Image(systemName: "command") }
-                if option { Image(systemName: "option") }
-                if shift { Image(systemName: "shift") }
+                if ctrl {
+                    Image(systemName: "control")
+                }
+                if cmd {
+                    Image(systemName: "command")
+                }
+                if option {
+                    Image(systemName: "option")
+                }
+                if shift {
+                    Image(systemName: "shift")
+                }
                 Text(keys)
             }
             .font(.system(size: 12, design: .monospaced))

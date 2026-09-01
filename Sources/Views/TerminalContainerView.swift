@@ -416,7 +416,9 @@ struct TerminalContainerView: View {
     /// The command that starts the dev server: config run script, user
     /// override, or the repo's package.json dev script.
     private var resolvedRunCommand: String? {
-        if let run = scriptConfig.run { return run }
+        if let run = scriptConfig.run {
+            return run
+        }
         return resolvedDevCommand?.command
     }
 
@@ -468,7 +470,9 @@ struct TerminalContainerView: View {
         if appEnv.toolStatus.claudeSupportsSessionName {
             resume.option("--name", workstreamName)
         }
-        if bypassPermissions { resume.flag("--dangerously-skip-permissions") }
+        if bypassPermissions {
+            resume.flag("--dangerously-skip-permissions")
+        }
         if let combinedSystemPrompt {
             resume.option("--append-system-prompt", combinedSystemPrompt)
         }
@@ -481,7 +485,9 @@ struct TerminalContainerView: View {
         if appEnv.toolStatus.claudeSupportsSessionName {
             fresh.option("--name", workstreamName)
         }
-        if bypassPermissions { fresh.flag("--dangerously-skip-permissions") }
+        if bypassPermissions {
+            fresh.flag("--dangerously-skip-permissions")
+        }
         if let combinedSystemPrompt {
             fresh.option("--append-system-prompt", combinedSystemPrompt)
         }
@@ -777,7 +783,9 @@ struct TerminalContainerView: View {
             .onChange(of: workstreamName) { rebuildClaudeCommand() }
             .onChange(of: appEnv.isDetecting) {
                 rebuildClaudeCommand()
-                if isActive { preloadSurfaces() }
+                if isActive {
+                    preloadSurfaces()
+                }
                 // Tmux mode isn't resolvable until detection finishes; restore
                 // the run session then, not just on the Environment tab's own
                 // appearance, so a live session is picked up even if that tab
@@ -839,7 +847,9 @@ struct TerminalContainerView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .closeTerminal)) { _ in
                 guard isActive else { return }
-                if model.activeTab.isCloseable { closeTab(model.activeTab) }
+                if model.activeTab.isCloseable {
+                    closeTab(model.activeTab)
+                }
             }
     }
 
@@ -944,7 +954,9 @@ struct TerminalContainerView: View {
             .onChange(of: portDetector.status) { _, newStatus in
                 // Once the session materializes (atelier-run wrote state), the
                 // waiting overlay is driven by the status itself.
-                if newStatus != .none { browserStartPending = false }
+                if newStatus != .none {
+                    browserStartPending = false
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .switchByNumber)) { notification in
                 guard isActive else { return }
@@ -1055,7 +1067,9 @@ struct TerminalContainerView: View {
     }
 
     private func tabLabel(_ tab: WorkspaceTab) -> String? {
-        if let fixed = tab.kind.staticLabel { return fixed }
+        if let fixed = tab.kind.staticLabel {
+            return fixed
+        }
         switch tab {
         case let .browser(id):
             guard !useCompactTabs else { return nil }
@@ -1102,8 +1116,12 @@ struct TerminalContainerView: View {
         guard sessionMode != .waitingForTools, !appEnv.isDetecting else { return }
         guard setupGateState != .awaitingApproval else { return }
         guard portDetector.status == .none else { return }
-        if runCommandIsGated, !scriptsApproved { return }
-        if model.runStarted { stopRun() }
+        if runCommandIsGated, !scriptsApproved {
+            return
+        }
+        if model.runStarted {
+            stopRun()
+        }
         doStartRun()
     }
 
@@ -1303,7 +1321,9 @@ struct TerminalContainerView: View {
     }
 
     private func expandFileTreeFolder(_ relativePath: String) {
-        if let node = FileNode.findNode(atPath: relativePath, in: fileTree), node.isLoaded { return }
+        if let node = FileNode.findNode(atPath: relativePath, in: fileTree), node.isLoaded {
+            return
+        }
         let gen = refreshGeneration
         let root = workingDirectory
         DispatchQueue.global(qos: .userInitiated).async {
@@ -1411,7 +1431,9 @@ struct TerminalContainerView: View {
         case let .browser(id):
             surfaceCache.removeWebView(for: id)
             // The browser tab owns the dev server: closing the last one stops it.
-            if !model.hasBrowserTabs { stopRun() }
+            if !model.hasBrowserTabs {
+                stopRun()
+            }
         case let .editor(id):
             model.editorBridge?.closeModel(modelId: id.uuidString)
         default:
@@ -1813,12 +1835,16 @@ private struct GitHubActionMenu: View {
     }
 
     private var isRunning: Bool {
-        if case .running = runner.state { return true }
+        if case .running = runner.state {
+            return true
+        }
         return false
     }
 
     private func isRunningAction(_ action: QuickAction) -> Bool {
-        if case let .running(a) = runner.state { return a == action }
+        if case let .running(a) = runner.state {
+            return a == action
+        }
         return false
     }
 
@@ -2296,7 +2322,9 @@ final class TerminalSurfaceCache: ObservableObject {
     }
 
     func webView(for id: UUID) -> WKWebView {
-        if let existing = webViews[id] { return existing }
+        if let existing = webViews[id] {
+            return existing
+        }
         let view = BrowserWebView()
         webViews[id] = view
         return view
@@ -2368,8 +2396,12 @@ final class TerminalSurfaceCache: ObservableObject {
             }
         }
         for id in derivedIDs {
-            if surfaces[id] != nil { removeSurface(for: id) }
-            if webViews[id] != nil { removeWebView(for: id) }
+            if surfaces[id] != nil {
+                removeSurface(for: id)
+            }
+            if webViews[id] != nil {
+                removeWebView(for: id)
+            }
         }
     }
 

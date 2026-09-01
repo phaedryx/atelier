@@ -363,7 +363,11 @@ struct ProjectOverviewView: View {
             "Purge Worktree",
             isPresented: Binding(
                 get: { worktreeToPurge != nil },
-                set: { if !$0 { worktreeToPurge = nil; worktreePurgeWarning = nil } }
+                set: {
+                    if !$0 {
+                        worktreeToPurge = nil; worktreePurgeWarning = nil
+                    }
+                }
             )
         ) {
             Button("Cancel", role: .cancel) {
@@ -661,8 +665,12 @@ private struct WorkstreamRow: View {
 
     /// The most descriptive label we have for this workstream.
     private var headline: String {
-        if let prTitle { return prTitle }
-        if let taskDescription { return taskDescription }
+        if let prTitle {
+            return prTitle
+        }
+        if let taskDescription {
+            return taskDescription
+        }
         return workstream.label
     }
 

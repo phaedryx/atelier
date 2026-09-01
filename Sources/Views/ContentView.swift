@@ -130,11 +130,15 @@ struct ContentView: View {
         switch selection {
         case let .project(id):
             let found = projects.first(where: { $0.id == id })
-            if found == nil { logger.warning("[Atelier] activeProject: project \(id, privacy: .public) not found in \(projects.count, privacy: .public) projects") }
+            if found == nil {
+                logger.warning("[Atelier] activeProject: project \(id, privacy: .public) not found in \(projects.count, privacy: .public) projects")
+            }
             return found
         case let .workstream(wsID):
             let found = projects.first(where: { $0.workstreams.contains(where: { $0.id == wsID }) })
-            if found == nil { logger.warning("[Atelier] activeProject: workstream \(wsID, privacy: .public) not found in any project") }
+            if found == nil {
+                logger.warning("[Atelier] activeProject: workstream \(wsID, privacy: .public) not found in any project")
+            }
             return found
         case .settings, .help:
             return nil
@@ -282,7 +286,11 @@ struct ContentView: View {
                 "Remove Workstream",
                 isPresented: Binding(
                     get: { workstreamToRemove != nil },
-                    set: { if !$0 { workstreamToRemove = nil } }
+                    set: {
+                        if !$0 {
+                            workstreamToRemove = nil
+                        }
+                    }
                 )
             ) {
                 Button("Cancel", role: .cancel) { workstreamToRemove = nil }
@@ -296,7 +304,11 @@ struct ContentView: View {
                 "Purge Workstream",
                 isPresented: Binding(
                     get: { workstreamToPurge != nil },
-                    set: { if !$0 { workstreamToPurge = nil } }
+                    set: {
+                        if !$0 {
+                            workstreamToPurge = nil
+                        }
+                    }
                 )
             ) {
                 Button("Cancel", role: .cancel) { workstreamToPurge = nil }
@@ -314,7 +326,11 @@ struct ContentView: View {
                 "Projects Not Found",
                 isPresented: Binding(
                     get: { !removedProjectNames.isEmpty },
-                    set: { if !$0 { removedProjectNames = [] } }
+                    set: {
+                        if !$0 {
+                            removedProjectNames = []
+                        }
+                    }
                 )
             ) {
                 Button("OK") { removedProjectNames = [] }
@@ -358,11 +374,15 @@ struct ContentView: View {
                     newValue?.save()
                 }
                 let wsID: UUID? = {
-                    if case let .workstream(id) = newValue { return id }
+                    if case let .workstream(id) = newValue {
+                        return id
+                    }
                     return nil
                 }()
                 agentStateTracker.currentSelection = wsID
-                if let wsID { agentStateTracker.markSeen(workstreamID: wsID) }
+                if let wsID {
+                    agentStateTracker.markSeen(workstreamID: wsID)
+                }
             }
             .onKeyPress(.escape) {
                 if selection == .settings || selection == .help {
