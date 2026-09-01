@@ -130,7 +130,9 @@ struct ChangesFileTreeSidebar: View {
         // Selection drives the scroll — works for both mouse clicks and keyboard
         // navigation. Skipped when selection is cleared (mode switch / reload).
         .onChange(of: selectedFilePath) { _, newValue in
-            if let newValue { onSelect(newValue) }
+            if let newValue {
+                onSelect(newValue)
+            }
         }
     }
 }

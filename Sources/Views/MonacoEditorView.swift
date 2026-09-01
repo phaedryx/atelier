@@ -132,7 +132,9 @@ final class MonacoEditorBridge {
 
     /// Lazily creates the WKWebView and starts loading Monaco.
     func ensureWebView() -> EditorWebView {
-        if let webView { return webView }
+        if let webView {
+            return webView
+        }
 
         let coord = Coordinator(bridge: self)
         coordinator = coord
@@ -178,7 +180,9 @@ final class MonacoEditorBridge {
                     "text": text,
                     "languageId": languageId,
                 ]
-                if let filePath { args["filePath"] = filePath }
+                if let filePath {
+                    args["filePath"] = filePath
+                }
                 try? await wv.callAsyncJavaScript(
                     "window.editorAPI.openFile(modelId, text, languageId, filePath)",
                     arguments: args,

@@ -139,7 +139,9 @@ enum EnvSeedSync {
         }
 
         let status = output.status
-        if status == 0 { return .success }
+        if status == 0 {
+            return .success
+        }
         let stderr = output.stderrText.isEmpty ? "rsync exit \(status)" : output.stderrText
         if partialTransferExitCodes.contains(status) {
             return .partial(stderr)

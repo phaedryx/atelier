@@ -75,7 +75,9 @@ enum CommandLineTools {
             lock.lock()
             defer { lock.unlock() }
 
-            if storage.resolved { return storage.path }
+            if storage.resolved {
+                return storage.path
+            }
             storage.resolved = true
 
             // Bounded: `-i` starts an *interactive* shell, and one without a

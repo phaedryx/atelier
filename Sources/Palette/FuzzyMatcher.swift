@@ -9,7 +9,9 @@ enum FuzzyMatcher {
     /// score is 0. Matches at the start of the candidate, at word boundaries,
     /// and in consecutive runs score higher.
     static func score(query: String, candidate: String) -> Int {
-        if query.isEmpty { return 1 }
+        if query.isEmpty {
+            return 1
+        }
         let q = Array(query.lowercased())
         let c = Array(candidate.lowercased())
         var qi = 0

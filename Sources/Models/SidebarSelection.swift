@@ -10,12 +10,16 @@ enum SidebarSelection: Hashable, Codable {
     case help
 
     var projectID: UUID? {
-        if case let .project(id) = self { return id }
+        if case let .project(id) = self {
+            return id
+        }
         return nil
     }
 
     var workstreamID: UUID? {
-        if case let .workstream(id) = self { return id }
+        if case let .workstream(id) = self {
+            return id
+        }
         return nil
     }
 

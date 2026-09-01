@@ -79,7 +79,9 @@ enum ShortcutBranchName {
     private static func slugify(_ title: String, limit: Int?) -> String {
         let collapsed = title.lowercased().map { $0.isLetter || $0.isNumber ? $0 : "-" }
         var words = String(collapsed).split(separator: "-", omittingEmptySubsequences: true)
-        if let limit { words = Array(words.prefix(limit)) }
+        if let limit {
+            words = Array(words.prefix(limit))
+        }
         return words.joined(separator: "-")
     }
 

@@ -118,7 +118,9 @@ final class ChangeAnnotationStore: ObservableObject {
             if let newLine = Self.matchLine(anchor: updated.lineText, near: updated.line, in: lines) {
                 let delta = newLine - updated.line
                 updated.line = newLine
-                if let end = updated.endLine { updated.endLine = end + delta }
+                if let end = updated.endLine {
+                    updated.endLine = end + delta
+                }
                 updated.isOrphaned = false
             } else {
                 updated.isOrphaned = true
@@ -139,11 +141,17 @@ final class ChangeAnnotationStore: ObservableObject {
         func matches(_ candidate: Int) -> Bool {
             candidate >= 1 && candidate <= lines.count && lines[candidate - 1] == anchor
         }
-        if matches(line) { return line }
+        if matches(line) {
+            return line
+        }
         guard window >= 1 else { return nil }
         for distance in 1 ... window {
-            if matches(line - distance) { return line - distance } // earlier wins ties
-            if matches(line + distance) { return line + distance }
+            if matches(line - distance) {
+                return line - distance
+            } // earlier wins ties
+            if matches(line + distance) {
+                return line + distance
+            }
         }
         return nil
     }
@@ -187,7 +195,9 @@ enum ChangeReviewFormatter {
             lines.append("")
             lines.append(path)
             let sorted = grouped[path]!.sorted { a, b in
-                if a.line != b.line { return a.line < b.line }
+                if a.line != b.line {
+                    return a.line < b.line
+                }
                 return (a.endLine ?? a.line) < (b.endLine ?? b.line)
             }
             for comment in sorted {

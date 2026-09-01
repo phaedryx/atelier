@@ -523,7 +523,9 @@ final class AppEnvironment: ObservableObject {
 
             await MainActor.run {
                 self.commitChanges {
-                    if let repo { self.githubRepoCache[directory] = repo }
+                    if let repo {
+                        self.githubRepoCache[directory] = repo
+                    }
                     self.githubPRCache[directory] = prs
                     if let branch, let pr = branchPR {
                         self.githubBranchPRCache["\(directory)|\(branch)"] = pr

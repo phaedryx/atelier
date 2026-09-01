@@ -10,6 +10,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Formatting is otherwise enforced only by the prek pre-commit hook, which
+  # requires each developer to have run `prek install`. That is how the tree
+  # drifted far enough to need a wholesale format pass. This job makes it
+  # actually enforced, and needs no submodules, Zig, or Xcode, so it fails in
+  # seconds rather than after the full build.
+  lint:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+
+      # Read the version from prek.toml so the hook and CI cannot disagree
+      # about which SwiftFormat is authoritative.
+      - name: Resolve pinned SwiftFormat version
+        id: pin
+        run: |
+          version=$(grep -A3 'nicklockwood/SwiftFormat' prek.toml | grep 'rev = ' | head -1 | sed -E 's/.*"(.+)".*/\1/')
+          if [ -z "$version" ]; then
+            echo "error: could not read the SwiftFormat pin from prek.toml" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Pinned SwiftFormat: $version"
+
+      - name: Install SwiftFormat
+        run: |
+          curl -fsSL -o swiftformat.zip \
+            "https://github.com/nicklockwood/SwiftFormat/releases/download/${{ steps.pin.outputs.version }}/swiftformat.zip"
+          unzip -q swiftformat.zip -d "$RUNNER_TEMP/swiftformat"
+          chmod +x "$RUNNER_TEMP/swiftformat/swiftformat"
+          echo "$RUNNER_TEMP/swiftformat" >> "$GITHUB_PATH"
+
+      - name: Check formatting
+        run: swiftformat Sources Tests --lint
+
   build-and-test:
     runs-on: macos-15
     steps:

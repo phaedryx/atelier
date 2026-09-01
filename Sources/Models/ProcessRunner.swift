@@ -78,8 +78,12 @@ enum ProcessRunner {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
-        if let environment { process.environment = environment }
-        if let currentDirectory { process.currentDirectoryURL = currentDirectory }
+        if let environment {
+            process.environment = environment
+        }
+        if let currentDirectory {
+            process.currentDirectoryURL = currentDirectory
+        }
 
         let outPipe = Pipe()
         let errPipe = Pipe()

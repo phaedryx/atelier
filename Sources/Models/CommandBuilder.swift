@@ -52,7 +52,9 @@ struct CommandBuilder {
         let simple = !s.isEmpty && s.allSatisfy {
             $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" || $0 == "." || $0 == "/" || $0 == ":" || $0 == "~" || $0 == "@" || $0 == "+" || $0 == "="
         }
-        if simple { return s }
+        if simple {
+            return s
+        }
         return "'\(s.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 
@@ -62,7 +64,9 @@ struct CommandBuilder {
         let simple = !s.isEmpty && s.allSatisfy {
             $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" || $0 == "." || $0 == "/" || $0 == ":" || $0 == "~" || $0 == "@" || $0 == "+" || $0 == "="
         }
-        if simple { return s }
+        if simple {
+            return s
+        }
         if isFish(shell) {
             return fishQuote(s)
         }

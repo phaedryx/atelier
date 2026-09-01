@@ -174,7 +174,9 @@ private func writeClipboardText(_ plainText: String) {
 
 private func sendDesktopNotification(title: String, body: String, suppressWhenActive: Bool) {
     DispatchQueue.main.async {
-        if suppressWhenActive, NSApp.isActive { return }
+        if suppressWhenActive, NSApp.isActive {
+            return
+        }
         let center = UNUserNotificationCenter.current()
         let content = UNMutableNotificationContent()
         content.title = title

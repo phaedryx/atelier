@@ -57,13 +57,17 @@ final class WorktreeHeadWatcher: @unchecked Sendable {
         let dotGit = URL(fileURLWithPath: path).appendingPathComponent(".git")
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: dotGit.path, isDirectory: &isDirectory) else { return nil }
-        if isDirectory.boolValue { return dotGit.path }
+        if isDirectory.boolValue {
+            return dotGit.path
+        }
 
         guard let contents = try? String(contentsOf: dotGit, encoding: .utf8) else { return nil }
         guard let line = contents.split(separator: "\n").first(where: { $0.hasPrefix("gitdir:") }) else { return nil }
         let target = line.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespaces)
         guard !target.isEmpty else { return nil }
-        if target.hasPrefix("/") { return target }
+        if target.hasPrefix("/") {
+            return target
+        }
         return URL(fileURLWithPath: path).appendingPathComponent(target).standardizedFileURL.path
     }
 

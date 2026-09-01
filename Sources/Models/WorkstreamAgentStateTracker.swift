@@ -291,7 +291,9 @@ final class WorkstreamAgentStateTracker: ObservableObject {
         case .agentToolStart:
             upsert(event.agentId, name: event.name) { run in
                 run.activity = event.activity ?? run.activity
-                if run.state == .stalled { run.state = .working }
+                if run.state == .stalled {
+                    run.state = .working
+                }
             }
             if event.agentId == "main", state(for: wsID) == .stalled {
                 states[wsID] = .working
@@ -435,7 +437,9 @@ final class WorkstreamAgentStateTracker: ObservableObject {
             for idx in updated.indices {
                 guard updated[idx].state == .working, updated[idx].lastEventAt < cutoff else { continue }
                 // Waiting on the user isn't stalling.
-                if case .needsAttention(.permission) = rowState { continue }
+                if case .needsAttention(.permission) = rowState {
+                    continue
+                }
                 updated[idx].state = .stalled
                 changed = true
             }

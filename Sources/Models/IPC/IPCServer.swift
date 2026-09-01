@@ -149,7 +149,9 @@ final class IPCServer: @unchecked Sendable {
             guard let self else { return }
 
             var accumulated = buffer
-            if let data { accumulated.append(data) }
+            if let data {
+                accumulated.append(data)
+            }
 
             // Checked before splitting, on everything held rather than on the
             // unterminated tail: a newline arriving in the same chunk as a huge

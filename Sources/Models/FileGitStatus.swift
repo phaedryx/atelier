@@ -44,19 +44,27 @@ struct GitFileStatusProvider {
             case .ignored: continue
             }
         }
-        if hasModified { return .modified }
-        if hasUntracked { return .untracked }
+        if hasModified {
+            return .modified
+        }
+        if hasUntracked {
+            return .untracked
+        }
         return nil
     }
 
     /// Whether a path is gitignored (exact match or inside an ignored ancestor directory).
     func isIgnored(_ relativePath: String) -> Bool {
-        if fileStatuses[relativePath] == .ignored { return true }
+        if fileStatuses[relativePath] == .ignored {
+            return true
+        }
         // Check if any ancestor directory is ignored
         var current = relativePath
         while let slashIndex = current.lastIndex(of: "/") {
             current = String(current[current.startIndex ..< slashIndex])
-            if ignoredDirectories.contains(current) { return true }
+            if ignoredDirectories.contains(current) {
+                return true
+            }
         }
         return false
     }

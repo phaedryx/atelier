@@ -118,8 +118,12 @@ enum FileFinder {
 
         return best
             .sorted { lhs, rhs in
-                if lhs.score != rhs.score { return lhs.score > rhs.score }
-                if lhs.path.count != rhs.path.count { return lhs.path.count < rhs.path.count }
+                if lhs.score != rhs.score {
+                    return lhs.score > rhs.score
+                }
+                if lhs.path.count != rhs.path.count {
+                    return lhs.path.count < rhs.path.count
+                }
                 return lhs.path.localizedCaseInsensitiveCompare(rhs.path) == .orderedAscending
             }
             .map(\.path)
