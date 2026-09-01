@@ -3,7 +3,7 @@
 
 import Foundation
 
-struct WorktreeSetupConfig: Codable, Sendable {
+struct WorktreeSetupConfig: Codable {
     /// Project-relative directory whose contents are rsync'd into every new
     /// worktree — the home for `.env` files and anything else deliberately kept
     /// out of git. Overridden per project with `"seed"` in `.atelier.json`.
@@ -15,15 +15,15 @@ struct WorktreeSetupConfig: Codable, Sendable {
     var symlinks: [String]
     var postSetupCommands: [String]
 
-    enum PackageManager: String, Codable, Sendable {
+    enum PackageManager: String, Codable {
         case npm, yarn, pnpm, bun
 
         var installCommand: [String] {
             switch self {
-            case .npm: return ["npm", "ci", "--prefer-offline"]
-            case .yarn: return ["yarn", "install", "--immutable"]
-            case .pnpm: return ["pnpm", "install", "--frozen-lockfile"]
-            case .bun: return ["bun", "install", "--frozen-lockfile"]
+            case .npm: ["npm", "ci", "--prefer-offline"]
+            case .yarn: ["yarn", "install", "--immutable"]
+            case .pnpm: ["pnpm", "install", "--frozen-lockfile"]
+            case .bun: ["bun", "install", "--frozen-lockfile"]
             }
         }
     }
@@ -95,10 +95,10 @@ struct WorktreeSetupConfig: Codable, Sendable {
     }
 }
 
-// Declared in an extension so the memberwise initializer survives. Every field
-// is optional on the wire: a config that sets only `seed` must not fail to
-// decode, because `load` swallows the error and silently reverts the whole
-// config — including the seed — to the defaults.
+/// Declared in an extension so the memberwise initializer survives. Every field
+/// is optional on the wire: a config that sets only `seed` must not fail to
+/// decode, because `load` swallows the error and silently reverts the whole
+/// config — including the seed — to the defaults.
 extension WorktreeSetupConfig {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)

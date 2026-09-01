@@ -16,14 +16,13 @@ enum ShortcutStoryID {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
-        let candidate: String
-        if let marker = trimmed.range(of: urlMarker) {
+        let candidate: String = if let marker = trimmed.range(of: urlMarker) {
             // A pasted URL usually carries a trailing slug: .../story/17411/some-title
-            candidate = String(trimmed[marker.upperBound...].prefix { $0.isNumber })
+            String(trimmed[marker.upperBound...].prefix { $0.isNumber })
         } else if trimmed.count > prefix.count, trimmed.prefix(prefix.count).lowercased() == prefix {
-            candidate = String(trimmed.dropFirst(prefix.count))
+            String(trimmed.dropFirst(prefix.count))
         } else {
-            candidate = trimmed
+            trimmed
         }
 
         // Public ids are positive, so 0 and negatives are malformed input rather than ids.

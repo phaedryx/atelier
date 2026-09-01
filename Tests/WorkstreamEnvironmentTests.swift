@@ -36,7 +36,6 @@ final class WorkstreamEnvironmentTests: XCTestCase {
         XCTAssertEqual(vars["ATELIER_DEFAULT_BRANCH"], "main")
     }
 
-
     // MARK: - Conductor aliases
 
     func testConductorAliases() {
@@ -150,5 +149,4 @@ final class WorkstreamEnvironmentTests: XCTestCase {
             XCTAssertEqual(vars[legacy], vars[key], "\(legacy) should mirror \(key)")
         }
     }
-
 }

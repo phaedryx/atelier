@@ -20,7 +20,7 @@ final class SwiftConcurrencySendableTests: XCTestCase {
         assertSendable(AppInfo(name: "Terminal", bundleID: "com.apple.Terminal"))
     }
 
-    private func assertSendable<T: Sendable>(_ value: T) {
+    private func assertSendable(_ value: some Sendable) {
         _ = value
     }
 }

@@ -1,0 +1,11 @@
+# ABOUTME: SwiftFormat configuration for Atelier.
+# ABOUTME: Option names use the pre-0.61 spelling because prek pins SwiftFormat 0.60.1.
+
+# os.Logger's message parameter is an @autoclosure, so `self` is required inside
+# its string interpolations. SwiftFormat cannot detect that on its own, and
+# stripping it is a build error rather than a style change.
+--selfrequired log,trace,debug,info,notice,warning,error,critical,fault
+
+# Digit grouping here is the author's call — `1_000` and `1024` both appear
+# deliberately. Leave decimal literals exactly as written.
+--decimalgrouping ignore

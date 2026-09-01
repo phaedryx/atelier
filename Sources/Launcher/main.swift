@@ -141,17 +141,17 @@ private final class PortScanner: @unchecked Sendable {
         self.timer = timer
         timer.schedule(deadline: .now() + .seconds(1), repeating: .seconds(1))
         timer.setEventHandler { [weak self] in
-            guard let self, self.active else { return }
-            self.pollCount += 1
+            guard let self, active else { return }
+            pollCount += 1
 
-            let ports = listeningPorts(in: processTree(rootPID: self.pid))
-            let result = self.tracker.update(listeningPorts: ports)
-            self.detectedPorts = result.detectedPorts
-            self.selectedPort = result.selectedPort
+            let ports = listeningPorts(in: processTree(rootPID: pid))
+            let result = tracker.update(listeningPorts: ports)
+            detectedPorts = result.detectedPorts
+            selectedPort = result.selectedPort
 
             let status: RunStateStatus = result.detectedPorts.isEmpty ? .starting : .running
             let state = RunStateSnapshot(
-                pid: self.pid,
+                pid: pid,
                 status: status,
                 detectedPorts: result.detectedPorts,
                 selectedPort: result.selectedPort,
@@ -160,12 +160,12 @@ private final class PortScanner: @unchecked Sendable {
             try? RunStateStore.write(state, for: workstreamID)
 
             if result.selectedPort != nil {
-                self.active = false
+                active = false
                 timer.cancel()
                 return
             }
 
-            if self.pollCount == 60 {
+            if pollCount == 60 {
                 timer.schedule(deadline: .now() + .seconds(60), repeating: .seconds(60))
             }
         }

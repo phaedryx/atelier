@@ -79,8 +79,8 @@ struct ScriptConfig {
 
         var errorDescription: String? {
             switch self {
-            case let .unreadable(path): return "Cannot read \(path)"
-            case let .invalidJSON(detail): return "Invalid JSON: \(detail)"
+            case let .unreadable(path): "Cannot read \(path)"
+            case let .invalidJSON(detail): "Invalid JSON: \(detail)"
             }
         }
     }

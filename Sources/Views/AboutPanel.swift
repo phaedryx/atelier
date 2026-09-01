@@ -27,7 +27,7 @@ enum AboutPanel {
             attributes: [
                 .font: NSFont.systemFont(ofSize: 11),
                 .foregroundColor: NSColor.secondaryLabelColor,
-                .paragraphStyle: paragraph
+                .paragraphStyle: paragraph,
             ]
         )
 
@@ -35,7 +35,7 @@ enum AboutPanel {
             ("Tad Thorley", AppConstants.repositoryURL),
             ("Factory Floor", AppConstants.upstreamURL),
             ("David Poblador i Garcia", AppConstants.upstreamAuthorURL),
-            ("Andrés González", AppConstants.upstreamEnhancerURL)
+            ("Andrés González", AppConstants.upstreamEnhancerURL),
         ]
         for (name, url) in links {
             let range = (credits.string as NSString).range(of: name)

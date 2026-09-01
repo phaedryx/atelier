@@ -5,7 +5,7 @@ import Foundation
 
 // MARK: - Models
 
-struct Peer: Sendable, Codable {
+struct Peer: Codable {
     let id: UUID
     let name: String
     let role: String
@@ -13,7 +13,7 @@ struct Peer: Sendable, Codable {
     let registeredAt: Date
 }
 
-struct Message: Sendable, Codable {
+struct Message: Codable {
     let id: UUID
     let from: UUID
     let to: UUID
@@ -33,11 +33,11 @@ enum IPCError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unregisteredPeer:
-            return "You must register_peer first."
+            "You must register_peer first."
         case let .peerNotFound(id):
-            return "Peer not found: \(id.uuidString). Use list_peers to see available peers."
+            "Peer not found: \(id.uuidString). Use list_peers to see available peers."
         case .contentTooLarge:
-            return "Message content exceeds maximum size (64KB)."
+            "Message content exceeds maximum size (64KB)."
         }
     }
 }

@@ -46,9 +46,9 @@ final class WorkstreamAgentStateTracker: ObservableObject {
         var turnHasEnded: Bool {
             switch self {
             case .idle, .needsAttention(.justFinished):
-                return true
+                true
             case .working, .stalled, .needsAttention(.permission):
-                return false
+                false
             }
         }
     }

@@ -8,11 +8,10 @@ func shouldRestoreRunSession(useTmux: Bool, hasRunScript: Bool, hasExistingRunSe
 }
 
 func scriptCommand(script: String, role: String, shell: String = CommandBuilder.userShell) -> String {
-    let inner: String
-    if role == "setup" {
-        inner = "\(script); printf '\\nSetup completed in this terminal.\\n'"
+    let inner: String = if role == "setup" {
+        "\(script); printf '\\nSetup completed in this terminal.\\n'"
     } else {
-        inner = script
+        script
     }
     return "\(shell) -lic \(CommandBuilder.shellQuote(inner, forShell: shell))"
 }
@@ -240,14 +239,13 @@ struct EnvironmentTabView: View {
     }
 
     private func sourceTag(for source: DevCommand.Source) -> some View {
-        let text: String
-        switch source {
+        let text: String = switch source {
         case .configScript:
-            text = ".atelier.json"
+            ".atelier.json"
         case .override:
-            text = NSLocalizedString("Custom", comment: "")
+            NSLocalizedString("Custom", comment: "")
         case .packageJSON:
-            text = NSLocalizedString("From package.json", comment: "")
+            NSLocalizedString("From package.json", comment: "")
         }
         return Text(text)
             .font(.system(size: 9, design: .monospaced))

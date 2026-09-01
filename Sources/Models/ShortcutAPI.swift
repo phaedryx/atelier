@@ -43,7 +43,7 @@ struct ShortcutWorkflow: Codable, Equatable {
     }
 }
 
-extension Collection where Element == ShortcutWorkflow {
+extension Collection<ShortcutWorkflow> {
     /// A state id is unique across the workspace, not per workflow, so this searches all of them.
     func stateName(for stateID: Int) -> String? {
         for workflow in self {
@@ -102,10 +102,10 @@ enum ShortcutError: Error, Equatable {
     /// Maps an HTTP status to an error, or nil when the response succeeded.
     static func forStatus(_ code: Int) -> ShortcutError? {
         switch code {
-        case 200 ..< 300: return nil
-        case 401, 403: return .unauthorized
-        case 404: return .notFound
-        default: return .http(code)
+        case 200 ..< 300: nil
+        case 401, 403: .unauthorized
+        case 404: .notFound
+        default: .http(code)
         }
     }
 
@@ -118,17 +118,17 @@ enum ShortcutError: Error, Equatable {
     var message: String {
         switch self {
         case .noToken:
-            return NSLocalizedString("No Shortcut API token. Add one in Settings > Integrations.", comment: "Shortcut error")
+            NSLocalizedString("No Shortcut API token. Add one in Settings > Integrations.", comment: "Shortcut error")
         case .unauthorized:
-            return NSLocalizedString("Shortcut rejected the API token.", comment: "Shortcut error")
+            NSLocalizedString("Shortcut rejected the API token.", comment: "Shortcut error")
         case .notFound:
-            return NSLocalizedString("No such Shortcut story.", comment: "Shortcut error")
+            NSLocalizedString("No such Shortcut story.", comment: "Shortcut error")
         case let .http(code):
-            return String(format: NSLocalizedString("Shortcut returned HTTP %d.", comment: "Shortcut error"), code)
+            String(format: NSLocalizedString("Shortcut returned HTTP %d.", comment: "Shortcut error"), code)
         case let .transport(detail):
-            return detail
+            detail
         case .decoding:
-            return NSLocalizedString("Could not read Shortcut's response.", comment: "Shortcut error")
+            NSLocalizedString("Could not read Shortcut's response.", comment: "Shortcut error")
         }
     }
 }

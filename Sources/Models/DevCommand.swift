@@ -49,7 +49,7 @@ enum DevCommandResolver {
     /// `override` is the per-workstream override already loaded by the caller.
     static func resolve(
         scriptConfig: ScriptConfig,
-        workstreamID: UUID,
+        workstreamID _: UUID,
         workingDirectory: String,
         override: String?
     ) -> DevCommand? {
@@ -80,7 +80,8 @@ enum DevCommandResolver {
         let fm = FileManager.default
         let url = URL(fileURLWithPath: directory)
         if fm.fileExists(atPath: url.appendingPathComponent("bun.lock").path)
-            || fm.fileExists(atPath: url.appendingPathComponent("bun.lockb").path) {
+            || fm.fileExists(atPath: url.appendingPathComponent("bun.lockb").path)
+        {
             return "bun"
         }
         if fm.fileExists(atPath: url.appendingPathComponent("pnpm-lock.yaml").path) {

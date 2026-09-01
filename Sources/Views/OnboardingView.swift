@@ -177,7 +177,7 @@ private struct PrerequisiteRow: View {
                     .foregroundStyle(.secondary)
             }
 
-            if optional && !status.isInstalled {
+            if optional, !status.isInstalled {
                 Text("Optional")
                     .font(.caption)
                     .foregroundStyle(.tertiary)

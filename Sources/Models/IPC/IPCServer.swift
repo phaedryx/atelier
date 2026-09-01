@@ -36,7 +36,10 @@ final class IPCServer: @unchecked Sendable {
     /// The port this listener bound to, once ready. Read this rather than
     /// `ipc.json` when you need *this* server's port: the file is shared, and a
     /// server shutting down removes it.
-    var boundPort: UInt16? { queue.sync { currentPort } }
+    var boundPort: UInt16? {
+        queue.sync { currentPort }
+    }
+
     private var currentPort: UInt16?
 
     init(service: IPCService = .shared) {
@@ -54,17 +57,17 @@ final class IPCServer: @unchecked Sendable {
     func stop() {
         queue.async { [weak self] in
             guard let self else { return }
-            self.listener?.cancel()
-            self.listener = nil
-            self.currentPort = nil
-            for connection in self.connections.values {
+            listener?.cancel()
+            listener = nil
+            currentPort = nil
+            for connection in connections.values {
                 connection.cancel()
             }
-            self.connections.removeAll()
-            self.connectionPeers.removeAll()
-            self.peerOwners.removeAll()
+            connections.removeAll()
+            connectionPeers.removeAll()
+            peerOwners.removeAll()
 
-            let service = self.service
+            let service = service
             Task { await service.releaseAll() }
             try? FileManager.default.removeItem(at: IPCEndpoint.fileURL)
         }
@@ -163,14 +166,14 @@ final class IPCServer: @unchecked Sendable {
                 // of this read belongs to a socket that is already closing, and
                 // acting on it would bind peers to a connection whose `forget`
                 // has not run yet.
-                guard self.handle(line: line, on: connection) else { return }
+                guard handle(line: line, on: connection) else { return }
             }
 
             if isComplete || error != nil {
                 connection.cancel()
                 return
             }
-            self.receive(on: connection, buffer: remainder)
+            receive(on: connection, buffer: remainder)
         }
     }
 

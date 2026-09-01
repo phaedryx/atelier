@@ -75,7 +75,7 @@ struct WorktreeDetailSheet: View {
                         }
                     }
 
-                    if detail.changes.isEmpty && detail.unmergedCommits.isEmpty {
+                    if detail.changes.isEmpty, detail.unmergedCommits.isEmpty {
                         Section {
                             Text("No uncommitted changes or unmerged commits found.")
                                 .foregroundStyle(.secondary)

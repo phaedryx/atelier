@@ -41,7 +41,7 @@ struct InlineTextField: NSViewRepresentable {
         return textField
     }
 
-    func updateNSView(_ nsView: NSTextField, context: Context) {
+    func updateNSView(_: NSTextField, context: Context) {
         context.coordinator.onCommit = onCommit
         context.coordinator.onCancel = onCancel
     }
@@ -61,7 +61,7 @@ struct InlineTextField: NSViewRepresentable {
         func installClickMonitor() {
             clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] event in
                 guard let self, !self.didEnd else { return event }
-                if let textField = self.textField,
+                if let textField,
                    let eventWindow = event.window,
                    eventWindow == textField.window
                 {
@@ -76,7 +76,7 @@ struct InlineTextField: NSViewRepresentable {
                         }
                     }
                 }
-                self.finish(commit: true)
+                finish(commit: true)
                 return event
             }
         }
@@ -99,7 +99,7 @@ struct InlineTextField: NSViewRepresentable {
             }
         }
 
-        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        func control(_: NSControl, textView _: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             if commandSelector == #selector(NSResponder.insertNewline(_:)) {
                 finish(commit: true)
                 return true
@@ -111,7 +111,7 @@ struct InlineTextField: NSViewRepresentable {
             return false
         }
 
-        func controlTextDidEndEditing(_ obj: Notification) {
+        func controlTextDidEndEditing(_: Notification) {
             finish(commit: true)
         }
 

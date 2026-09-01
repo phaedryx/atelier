@@ -38,8 +38,12 @@ final class WorktreeHeadWatcher: @unchecked Sendable {
     }
 
     deinit {
-        for source in sources.values { source.cancel() }
-        for work in pending.values { work.cancel() }
+        for source in sources.values {
+            source.cancel()
+        }
+        for work in pending.values {
+            work.cancel()
+        }
     }
 
     /// The git directory holding HEAD for the worktree at `path`, or nil when
@@ -69,11 +73,11 @@ final class WorktreeHeadWatcher: @unchecked Sendable {
     func sync(paths: Set<String>) {
         queue.async { [weak self] in
             guard let self else { return }
-            for path in self.sources.keys where !paths.contains(path) {
+            for path in sources.keys where !paths.contains(path) {
                 self.sources.removeValue(forKey: path)?.cancel()
                 self.pending.removeValue(forKey: path)?.cancel()
             }
-            for path in paths where self.sources[path] == nil {
+            for path in paths where sources[path] == nil {
                 self.attach(to: path)
             }
         }
@@ -117,11 +121,11 @@ final class WorktreeHeadWatcher: @unchecked Sendable {
         pending.removeValue(forKey: worktreePath)?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            self.pending.removeValue(forKey: worktreePath)
+            pending.removeValue(forKey: worktreePath)
             // Re-check membership: the path may have been unwatched while this
             // was waiting out the debounce.
-            guard self.sources[worktreePath] != nil else { return }
-            self.onChange(worktreePath)
+            guard sources[worktreePath] != nil else { return }
+            onChange(worktreePath)
         }
         pending[worktreePath] = work
         queue.asyncAfter(deadline: .now() + debounce, execute: work)

@@ -6,7 +6,9 @@ import Darwin
 import XCTest
 
 final class HookEventReceiverTests: XCTestCase {
-    private var receiver: HookEventReceiver { HookEventReceiver.shared }
+    private var receiver: HookEventReceiver {
+        HookEventReceiver.shared
+    }
 
     override func tearDown() {
         receiver.onEvent = nil

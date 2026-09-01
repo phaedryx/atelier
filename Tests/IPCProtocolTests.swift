@@ -30,7 +30,7 @@ final class IPCProtocolTests: XCTestCase {
         XCTAssertNil(identity.peerID)
     }
 
-    func test_framing_splitsOnNewlinesAndKeepsThePartialLine() throws {
+    func test_framing_splitsOnNewlinesAndKeepsThePartialLine() {
         var buffer = Data("{\"a\":1}\n{\"b\":2}\n{\"c\"".utf8)
         let (lines, remainder) = IPCFraming.lines(from: buffer)
         XCTAssertEqual(lines.map { String(decoding: $0, as: UTF8.self) }, ["{\"a\":1}", "{\"b\":2}"])

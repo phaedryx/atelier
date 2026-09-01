@@ -5,7 +5,6 @@
 import XCTest
 
 final class IPCStoreTests: XCTestCase {
-
     // MARK: - Helpers
 
     private func makeStore() -> IPCStore {
@@ -154,7 +153,7 @@ final class IPCStoreTests: XCTestCase {
             )
             XCTFail("Expected IPCError.peerNotFound to be thrown")
         } catch let error as IPCError {
-            if case .peerNotFound(let id) = error {
+            if case let .peerNotFound(id) = error {
                 XCTAssertEqual(id, unknownID,
                                "peerNotFound should carry the unknown peer's UUID")
             } else {
@@ -249,7 +248,7 @@ final class IPCStoreTests: XCTestCase {
         let peerB = await store.registerPeer(name: "B", role: "terminal")
 
         // Act — send 101 messages; limit is 100
-        for i in 0..<101 {
+        for i in 0 ..< 101 {
             _ = try await store.sendMessage(
                 from: peerA.id, to: peerB.id, content: "msg-\(i)"
             )
@@ -417,7 +416,7 @@ final class IPCStoreTests: XCTestCase {
         // Assert
         let updatedPeer = await store.peerStatus(id: peerA.id)
         XCTAssertNotNil(updatedPeer)
-        XCTAssertTrue(updatedPeer!.lastSeen > oneSecondAgo,
+        XCTAssertTrue(try XCTUnwrap(updatedPeer?.lastSeen) > oneSecondAgo,
                       "lastSeen should be updated after sending a message")
     }
 
@@ -443,17 +442,18 @@ final class IPCStoreTests: XCTestCase {
         // Assert
         let updatedPeer = await store.peerStatus(id: peerB.id)
         XCTAssertNotNil(updatedPeer)
-        XCTAssertTrue(updatedPeer!.lastSeen > oneSecondAgo,
+        XCTAssertTrue(try XCTUnwrap(updatedPeer?.lastSeen) > oneSecondAgo,
                       "lastSeen should be updated after receiving messages")
     }
 
     // ============================================================
     // MARK: - Issue #31: New TTL auto-extension contract
+
     // ============================================================
 
     // ==================== Change 1: Bidirectional Bump ====================
 
-    // Test 1
+    /// Test 1
     func test_sendMessage_bumpsRecipientLastSeen() async throws {
         // Contract: sendMessage(from: A, to: B) must bump BOTH A and B's lastSeen.
         // Arrange
@@ -472,11 +472,11 @@ final class IPCStoreTests: XCTestCase {
         // Assert
         let updatedB = await store.peerStatus(id: peerB.id)
         XCTAssertNotNil(updatedB, "Recipient should still exist")
-        XCTAssertTrue(updatedB!.lastSeen > oneSecondAgo,
+        XCTAssertTrue(try XCTUnwrap(updatedB?.lastSeen) > oneSecondAgo,
                       "Recipient's lastSeen should bump on sendMessage")
     }
 
-    // Test 2
+    /// Test 2
     func test_broadcast_bumpsAllRecipientsLastSeen() async throws {
         // Contract: broadcast(from: A) must bump A and ALL alive recipients' lastSeen.
         // Arrange
@@ -497,13 +497,13 @@ final class IPCStoreTests: XCTestCase {
         let updatedC = await store.peerStatus(id: peerC.id)
         XCTAssertNotNil(updatedB)
         XCTAssertNotNil(updatedC)
-        XCTAssertTrue(updatedB!.lastSeen > oneSecondAgo,
+        XCTAssertTrue(try XCTUnwrap(updatedB?.lastSeen) > oneSecondAgo,
                       "Recipient B's lastSeen should bump on broadcast")
-        XCTAssertTrue(updatedC!.lastSeen > oneSecondAgo,
+        XCTAssertTrue(try XCTUnwrap(updatedC?.lastSeen) > oneSecondAgo,
                       "Recipient C's lastSeen should bump on broadcast")
     }
 
-    // Test 3
+    /// Test 3
     func test_receiveMessages_bumpsAllSendersLastSeen() async throws {
         // Contract: receiveMessages(for: B) bumps B and ALL distinct senders'
         // lastSeen for messages returned in this call.
@@ -534,15 +534,15 @@ final class IPCStoreTests: XCTestCase {
         let updatedC = await store.peerStatus(id: peerC.id)
         XCTAssertNotNil(updatedA)
         XCTAssertNotNil(updatedC)
-        XCTAssertTrue(updatedA!.lastSeen > oneSecondAgo,
+        XCTAssertTrue(try XCTUnwrap(updatedA?.lastSeen) > oneSecondAgo,
                       "Sender A's lastSeen should bump when B receives A's message")
-        XCTAssertTrue(updatedC!.lastSeen > oneSecondAgo,
+        XCTAssertTrue(try XCTUnwrap(updatedC?.lastSeen) > oneSecondAgo,
                       "Sender C's lastSeen should bump when B receives C's message")
     }
 
     // ==================== Change 2: Unread Message Pinning ====================
 
-    // Test 5
+    /// Test 5
     func test_unreadMessage_pinsRecipientAlive_inListPeers() async throws {
         // Contract: An in-flight (unread) message pins its recipient alive even
         // when the recipient's lastSeen exceeds peerTTL.
@@ -570,7 +570,7 @@ final class IPCStoreTests: XCTestCase {
                       "Recipient B must be pinned alive while it has an unread message")
     }
 
-    // Test 6
+    /// Test 6
     func test_unreadMessage_pinsSenderAlive_inListPeers() async throws {
         // Contract: An in-flight message also pins its sender alive (so the
         // sender is still around to receive a reply).
@@ -596,7 +596,7 @@ final class IPCStoreTests: XCTestCase {
                       "Sender A must be pinned alive while its message is unread")
     }
 
-    // Test 7
+    /// Test 7
     func test_unreadMessage_pinsRecipientAlive_inPeerStatus() async throws {
         // Contract: Pin must also be visible via peerStatus, not only listPeers.
         // Arrange
@@ -620,7 +620,7 @@ final class IPCStoreTests: XCTestCase {
         XCTAssertEqual(status?.id, peerB.id)
     }
 
-    // Test 8
+    /// Test 8
     func test_pinLifts_afterReceive_recipientThenPurged() async throws {
         // Contract: Once the unread message is received (Round 7:
         // receiveMessages deletes it from the inbox as it returns it), the
@@ -652,7 +652,7 @@ final class IPCStoreTests: XCTestCase {
                        "Recipient B should be purged after pin lifts and TTL elapses")
     }
 
-    // Test 9
+    /// Test 9
     func test_pinLifts_afterReceive_senderThenPurged() async throws {
         // Contract (mirror of test 8): once the unread message is gone, the
         // sender is no longer pinned and its stale lastSeen makes it purgeable.
@@ -682,7 +682,7 @@ final class IPCStoreTests: XCTestCase {
                        "Sender A should be purged after pin lifts and TTL elapses")
     }
 
-    // Test 10
+    /// Test 10
     func test_broadcast_pinsSenderWhileAnyRecipientUnread() async throws {
         // Contract: A broadcaster is pinned alive as long as any recipient
         // still has an unread copy of the broadcast.
@@ -707,7 +707,7 @@ final class IPCStoreTests: XCTestCase {
                       "Broadcaster A should be pinned alive while any recipient still has the unread broadcast")
     }
 
-    // Test 11
+    /// Test 11
     func test_broadcast_partialReceive_keepsSenderPinned() async throws {
         // Contract: Pin holds while at least ONE recipient still has the
         // broadcast unread.
@@ -735,7 +735,7 @@ final class IPCStoreTests: XCTestCase {
                       "A should remain pinned while C still has the broadcast unread")
     }
 
-    // Test 12
+    /// Test 12
     func test_broadcast_fullReceive_unpinsSender() async throws {
         // Contract: Once ALL recipients have received (and thereby
         // deleted) their copy, the pin lifts and A's stale lastSeen makes
@@ -767,7 +767,7 @@ final class IPCStoreTests: XCTestCase {
 
     // ==================== Change 3: No Time-Based Drop ====================
 
-    // Test 14 (test 13 is the rewritten existing #12 above)
+    /// Test 14 (test 13 is the rewritten existing #12 above)
     func test_messageRetention_governedByPeerLiveness_purgedWithRecipient() async throws {
         // Contract: Removing a recipient must also remove their inbox.
         // receiveMessages on a removed peer returns [].
@@ -791,7 +791,7 @@ final class IPCStoreTests: XCTestCase {
 
     // ==================== Change 0: Revive Prevention ====================
 
-    // Test 15
+    /// Test 15
     func test_expiredPeer_noUnread_cannotSendMessage() async throws {
         // Contract: An expired peer with no in-flight message must NOT be able
         // to revive itself by calling sendMessage. The call must throw
@@ -828,7 +828,7 @@ final class IPCStoreTests: XCTestCase {
                        "Expired sender must be purged after the rejected sendMessage call")
     }
 
-    // Test 16
+    /// Test 16
     func test_expiredPeer_noUnread_cannotReceiveMessages() async {
         // Contract: An expired peer with no in-flight message must NOT be able
         // to revive itself via receiveMessages. The call must return [] AND the
@@ -852,7 +852,7 @@ final class IPCStoreTests: XCTestCase {
                        "Expired peer must be purged on receiveMessages, not silently bumped")
     }
 
-    // Test 18
+    /// Test 18
     func test_expiredRecipient_noUnread_sendThrowsPeerNotFound() async throws {
         // Contract: An alive sender targeting an expired recipient (with no pin)
         // must get peerNotFound. The lazy purge in aliveOrPurge removes the
@@ -873,7 +873,7 @@ final class IPCStoreTests: XCTestCase {
             )
             XCTFail("Expected IPCError.peerNotFound because B is expired with no pin")
         } catch let error as IPCError {
-            if case .peerNotFound(let id) = error {
+            if case let .peerNotFound(id) = error {
                 XCTAssertEqual(id, peerB.id,
                                "peerNotFound should carry the expired recipient's UUID")
             } else {
@@ -886,8 +886,8 @@ final class IPCStoreTests: XCTestCase {
 
     // ==================== Change 4: peerStatus Purge Unification ====================
 
-    // Test 19
-    func test_peerStatus_expiredPeer_purgesPeerAndInbox() async throws {
+    /// Test 19
+    func test_peerStatus_expiredPeer_purgesPeerAndInbox() async {
         // Contract: peerStatus on an expired peer with no pin must return nil
         // AND tear down the peer + inbox (consistent with listPeers' purge).
         // Arrange
@@ -918,10 +918,10 @@ final class IPCStoreTests: XCTestCase {
 
     // ==================== Round 3: inboxCount(for:) ====================
 
-    // Unlike receiveMessages, inboxCount is a read-only query used to
-    // refresh AgentRegistry's unread-message badge after a
-    // send/broadcast/receive — it must report the real count without the
-    // liveness side effect (bumping lastSeen) receiveMessages has.
+    /// Unlike receiveMessages, inboxCount is a read-only query used to
+    /// refresh AgentRegistry's unread-message badge after a
+    /// send/broadcast/receive — it must report the real count without the
+    /// liveness side effect (bumping lastSeen) receiveMessages has.
     func test_inboxCount_returnsMessageCountWithoutMutatingLastSeen() async throws {
         // Arrange
         let store = makeStore()
@@ -979,7 +979,7 @@ final class IPCStoreTests: XCTestCase {
         let countAfter = await store.inboxCount(for: recipient.id)
         XCTAssertEqual(countAfter, 0,
                        "receiveMessages must immediately clear inboxCount — it deletes every " +
-                       "message it returns")
+                           "message it returns")
 
         // The messages are gone, not merely hidden from the count — a
         // second receiveMessages call returns nothing (delete-on-read).
@@ -1004,7 +1004,7 @@ final class IPCStoreTests: XCTestCase {
         let countAfterNewMessage = await store.inboxCount(for: recipient.id)
         XCTAssertEqual(countAfterNewMessage, 1,
                        "A newly-sent message must count even though an earlier message to the " +
-                       "same peer was already received")
+                           "same peer was already received")
     }
 
     // ==================== Round 3: inboxCounts(for:) batch ====================
@@ -1028,7 +1028,7 @@ final class IPCStoreTests: XCTestCase {
         XCTAssertEqual(counts[peerC.id], 0)
     }
 
-    func test_inboxCounts_unknownPeerID_readsZero() async throws {
+    func test_inboxCounts_unknownPeerID_readsZero() async {
         let store = makeStore()
         let counts = await store.inboxCounts(for: [UUID()])
         XCTAssertEqual(counts.count, 1)
@@ -1061,7 +1061,7 @@ final class IPCStoreTests: XCTestCase {
         XCTAssertEqual(result.role, "worker", "updatePeer must apply the new role")
         XCTAssertEqual(result.registeredAt, peer.registeredAt,
                        "updatePeer must preserve the original registeredAt — it renames the existing " +
-                       "registration, it does not recreate it")
+                           "registration, it does not recreate it")
         XCTAssertGreaterThan(result.lastSeen, oneMinuteAgo,
                              "updatePeer must bump lastSeen like other liveness-touching operations")
 
@@ -1134,7 +1134,7 @@ final class IPCStoreTests: XCTestCase {
         XCTAssertEqual(result.role, "original-role")
         XCTAssertGreaterThan(result.lastSeen, oneMinuteAgo,
                              "updatePeer must still bump lastSeen even when both fields are preserved " +
-                             "unchanged — it's still a liveness-touching operation")
+                                 "unchanged — it's still a liveness-touching operation")
     }
 
     // ==================== Round 7: delete-on-read (at-most-once) ====================
@@ -1168,8 +1168,8 @@ final class IPCStoreTests: XCTestCase {
         // Assert
         XCTAssertTrue(secondInbox.isEmpty,
                       "receiveMessages must delete-on-read: a message already returned by an earlier " +
-                      "call must not be returned again, with no separate ackMessages step required " +
-                      "to remove it")
+                          "call must not be returned again, with no separate ackMessages step required " +
+                          "to remove it")
     }
 
     func test_receiveMessages_deleteOnRead_doesNotAffectOtherPeersOrLaterMessages() async throws {
@@ -1201,7 +1201,7 @@ final class IPCStoreTests: XCTestCase {
         let inboxBAgain = await store.receiveMessages(for: peerB.id)
         XCTAssertEqual(inboxBAgain.count, 1,
                        "A message sent after a delete-on-read receive must still be returned on the " +
-                       "next receive — deletion is per-message, not a peer-wide flag")
+                           "next receive — deletion is per-message, not a peer-wide flag")
         XCTAssertEqual(inboxBAgain.first?.content, "after the first receive")
     }
 
@@ -1262,7 +1262,7 @@ final class IPCStoreTests: XCTestCase {
         let redelivered = await store.receiveMessages(for: peerB.id)
         XCTAssertEqual(redelivered.map(\.id), [msg1.id, msg2.id],
                        "requeued messages must be returned before anything that arrived after the " +
-                       "failed receive")
+                           "failed receive")
     }
 
     func test_requeue_emptyMessages_isNoOp() async throws {
@@ -1311,14 +1311,14 @@ final class IPCStoreTests: XCTestCase {
         let peerB = await store.registerPeer(name: "B", role: "terminal")
 
         // 60 messages, all received (and thereby deleted) in one call.
-        for i in 0..<60 {
+        for i in 0 ..< 60 {
             _ = try await store.sendMessage(from: peerA.id, to: peerB.id, content: "requeued-\(i)")
         }
         let received = await store.receiveMessages(for: peerB.id)
         XCTAssertEqual(received.count, 60, "Precondition: all 60 messages were received in one call")
 
         // 50 more arrive during the gap before requeue runs — 60 + 50 = 110, over the 100 cap.
-        for i in 0..<50 {
+        for i in 0 ..< 50 {
             _ = try await store.sendMessage(from: peerA.id, to: peerB.id, content: "gap-\(i)")
         }
 
@@ -1331,15 +1331,15 @@ final class IPCStoreTests: XCTestCase {
                        "Combined total must be trimmed to maxMessagesPerPeer (100)")
 
         let contents = redelivered.map(\.content)
-        for i in 0..<10 {
+        for i in 0 ..< 10 {
             XCTAssertFalse(contents.contains("requeued-\(i)"),
                            "The oldest 10 of the requeued messages must be dropped to make room")
         }
-        for i in 10..<60 {
+        for i in 10 ..< 60 {
             XCTAssertTrue(contents.contains("requeued-\(i)"),
                           "Requeued messages after the dropped oldest 10 must survive the trim")
         }
-        for i in 0..<50 {
+        for i in 0 ..< 50 {
             XCTAssertTrue(contents.contains("gap-\(i)"),
                           "Messages that arrived during the gap must all survive the trim")
         }

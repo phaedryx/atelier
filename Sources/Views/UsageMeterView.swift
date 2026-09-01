@@ -24,15 +24,18 @@ struct UsageMeterView: View {
                 row(
                     label: NSLocalizedString("5h", comment: "Usage meter label: 5-hour session window"),
                     window: report.session,
-                    help: NSLocalizedString("Current session", comment: "Usage meter tooltip: 5-hour session window"))
+                    help: NSLocalizedString("Current session", comment: "Usage meter tooltip: 5-hour session window")
+                )
                 row(
                     label: NSLocalizedString("wk", comment: "Usage meter label: weekly all-models window"),
                     window: report.week,
-                    help: NSLocalizedString("Current week (all models)", comment: "Usage meter tooltip: weekly all-models window"))
+                    help: NSLocalizedString("Current week (all models)", comment: "Usage meter tooltip: weekly all-models window")
+                )
                 row(
                     label: NSLocalizedString("fb", comment: "Usage meter label: weekly model-specific window"),
                     window: report.modelWeek,
-                    help: modelWeekHelp(report.modelName))
+                    help: modelWeekHelp(report.modelName)
+                )
             }
             .padding(.horizontal, 4)
             .contentShape(Rectangle())
@@ -74,8 +77,10 @@ struct UsageMeterView: View {
         String(
             format: NSLocalizedString(
                 "Current week (%@)",
-                comment: "Usage meter tooltip: weekly model-specific window; placeholder is the model name"),
-            modelName ?? NSLocalizedString("model", comment: "Fallback model name in the usage meter tooltip"))
+                comment: "Usage meter tooltip: weekly model-specific window; placeholder is the model name"
+            ),
+            modelName ?? NSLocalizedString("model", comment: "Fallback model name in the usage meter tooltip")
+        )
     }
 
     private func helpText(_ name: String, resetText: String?) -> String {
@@ -83,8 +88,10 @@ struct UsageMeterView: View {
         return String(
             format: NSLocalizedString(
                 "%1$@ — resets %2$@",
-                comment: "Usage meter tooltip: window name and reset time"),
+                comment: "Usage meter tooltip: window name and reset time"
+            ),
             name,
-            resetText)
+            resetText
+        )
     }
 }

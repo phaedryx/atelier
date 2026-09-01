@@ -14,7 +14,6 @@ private let logger = Logger(subsystem: "atelier", category: "hook-router")
 ///
 /// Thread safety: protected by `NSLock`.
 final class HookEventRouter: @unchecked Sendable {
-
     static let shared = HookEventRouter()
 
     private let lock = NSLock()

@@ -14,7 +14,7 @@ import Foundation
 /// boundary against the agent. It stops another app colliding on the port and
 /// stops a stray `fetch` from a page in the embedded browser. That is the whole
 /// claim.
-struct IPCEndpoint: Codable, Sendable {
+struct IPCEndpoint: Codable {
     let port: UInt16
     let token: String
 
@@ -33,7 +33,7 @@ struct IPCEndpoint: Codable, Sendable {
 /// Six, deliberately. Calix's IPC core is the same six; everything else it
 /// grew — pane/tab control, LSP, shell integration — is a different feature
 /// with a different trust story.
-enum IPCTool: String, Codable, Sendable, CaseIterable {
+enum IPCTool: String, Codable, CaseIterable {
     case registerPeer = "register_peer"
     case listPeers = "list_peers"
     case sendMessage = "send_message"
@@ -47,7 +47,7 @@ enum IPCTool: String, Codable, Sendable, CaseIterable {
 /// `arguments` is `[String: String]` rather than arbitrary JSON because every
 /// tool in this surface takes only string arguments (peer ids, names, roles,
 /// message bodies). That keeps both ends free of a hand-rolled JSON value type.
-struct IPCRequest: Codable, Sendable {
+struct IPCRequest: Codable {
     /// Correlates the response; the helper matches replies by this.
     let id: String
     let token: String
@@ -70,7 +70,7 @@ struct IPCRequest: Codable, Sendable {
 ///
 /// The helper is a child of the terminal that launched the agent, so it reads
 /// all of this from its own environment — no config interpolation, no headers.
-struct IPCClientIdentity: Codable, Sendable {
+struct IPCClientIdentity: Codable {
     /// `ATELIER_WORKSTREAM_ID`, when the helper was launched inside a workstream.
     let workstreamID: String?
     /// `ATELIER_WORKSTREAM`, for display.
@@ -102,7 +102,7 @@ struct IPCClientIdentity: Codable, Sendable {
 /// the app-side context (workstream, inbox depth) the store deliberately
 /// doesn't know about, and no `Date` values that would need a shared encoding
 /// strategy on both ends.
-struct IPCPeerInfo: Codable, Sendable {
+struct IPCPeerInfo: Codable {
     let id: String
     let name: String
     let role: String
@@ -113,7 +113,7 @@ struct IPCPeerInfo: Codable, Sendable {
 }
 
 /// A delivered message as reported to an agent.
-struct IPCMessageInfo: Codable, Sendable {
+struct IPCMessageInfo: Codable {
     let id: String
     let from: String
     let fromName: String
@@ -123,7 +123,7 @@ struct IPCMessageInfo: Codable, Sendable {
 }
 
 /// The result of a successful call.
-enum IPCPayload: Codable, Sendable {
+enum IPCPayload: Codable {
     case peers([IPCPeerInfo])
     case peer(IPCPeerInfo)
     case messages([IPCMessageInfo])
@@ -131,7 +131,7 @@ enum IPCPayload: Codable, Sendable {
 }
 
 /// One reply from the app to a helper.
-struct IPCResponse: Codable, Sendable {
+struct IPCResponse: Codable {
     let id: String
     let payload: IPCPayload?
     let error: String?

@@ -351,7 +351,7 @@ struct MonacoDiffView: NSViewRepresentable {
                 webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             ])
             DispatchQueue.main.async {
-                self.bridge.relayout()
+                bridge.relayout()
             }
         }
     }

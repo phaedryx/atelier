@@ -85,7 +85,7 @@ struct ProjectOverviewView: View {
                                 }
                             }
                             .alert("Pull failed", isPresented: $showPullError, presenting: pullErrorMessage) { _ in
-                                Button("OK", role: .cancel) { }
+                                Button("OK", role: .cancel) {}
                             } message: { msg in
                                 Text(msg)
                             }
@@ -387,8 +387,8 @@ struct ProjectOverviewView: View {
     }
 
     private var prunableWorktrees: [WorktreeInfo] {
-        return worktrees.filter { worktree in
-            guard !worktree.isMain && !worktree.isDirty && !worktree.hasBranchCommits else { return false }
+        worktrees.filter { worktree in
+            guard !worktree.isMain, !worktree.isDirty, !worktree.hasBranchCommits else { return false }
             return !workstreamPaths.contains(Self.standardizedPath(worktree.path))
         }
     }
@@ -420,7 +420,7 @@ struct ProjectOverviewView: View {
                 switch result {
                 case .success:
                     appEnv.refreshRepoInfo(for: dir)
-                case .failure(let message):
+                case let .failure(message):
                     pullErrorMessage = message
                     showPullError = true
                 }
@@ -454,9 +454,9 @@ struct ProjectOverviewView: View {
     private func sortedWorkstreams(_ workstreams: [Workstream]) -> [Workstream] {
         switch workstreamSortOrder {
         case .recent:
-            return workstreams.sorted { $0.lastAccessedAt > $1.lastAccessedAt }
+            workstreams.sorted { $0.lastAccessedAt > $1.lastAccessedAt }
         case .alphabetical:
-            return workstreams.sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
+            workstreams.sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
         }
     }
 
@@ -522,7 +522,7 @@ private struct WorktreeInfoRow: View {
     let isWorkstream: Bool
     var isPurging: Bool = false
     let onAdopt: () -> Void
-    var onPurge: (() -> Void)? = nil
+    var onPurge: (() -> Void)?
 
     @EnvironmentObject var appEnv: AppEnvironment
 
@@ -597,7 +597,7 @@ private struct WorktreeInfoRow: View {
                 Text("main")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            } else if !isWorkstream && !isPurging {
+            } else if !isWorkstream, !isPurging {
                 HStack(spacing: 6) {
                     Button(action: onAdopt) {
                         HStack(spacing: 4) {
@@ -928,16 +928,16 @@ private struct PRBadge: View {
 
     private var color: Color {
         switch state {
-        case "MERGED": return .purple
-        case "CLOSED": return .red
-        default: return .green
+        case "MERGED": .purple
+        case "CLOSED": .red
+        default: .green
         }
     }
 
     private var icon: String {
         switch state {
-        case "MERGED": return "arrow.triangle.merge"
-        default: return "arrow.triangle.pull"
+        case "MERGED": "arrow.triangle.merge"
+        default: "arrow.triangle.pull"
         }
     }
 

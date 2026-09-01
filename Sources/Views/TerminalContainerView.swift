@@ -50,13 +50,13 @@ enum RestorableWorkspaceTab: String, Codable {
     func workspaceTab() -> WorkspaceTab {
         switch self {
         case .info:
-            return .info
+            .info
         case .agent:
-            return .agent
+            .agent
         case .changes:
-            return .changes
+            .changes
         case .environment:
-            return .environment
+            .environment
         }
     }
 }
@@ -156,13 +156,13 @@ enum WorkspaceTab: Hashable {
 extension WorkspaceTab {
     var kind: WorkspaceTabKind {
         switch self {
-        case .info: return .info
-        case .agent: return .agent
-        case .changes: return .changes
-        case .environment: return .environment
-        case .terminal: return .terminal
-        case .browser: return .browser
-        case .editor: return .editor
+        case .info: .info
+        case .agent: .agent
+        case .changes: .changes
+        case .environment: .environment
+        case .terminal: .terminal
+        case .browser: .browser
+        case .editor: .editor
         }
     }
 
@@ -171,9 +171,9 @@ extension WorkspaceTab {
     var dragIdentifier: String {
         switch self {
         case let .terminal(id), let .browser(id), let .editor(id):
-            return id.uuidString
+            id.uuidString
         default:
-            return kind.id
+            kind.id
         }
     }
 }
@@ -1051,7 +1051,7 @@ struct TerminalContainerView: View {
     /// (Only `tabLabel`'s browser branch consults this; editor tabs keep their
     /// filename either way.)
     private var useCompactTabs: Bool {
-        model.tabs.filter { $0.kind.staticLabel == nil }.count > Self.compactTabThreshold
+        model.tabs.count(where: { $0.kind.staticLabel == nil }) > Self.compactTabThreshold
     }
 
     private func tabLabel(_ tab: WorkspaceTab) -> String? {
@@ -1153,8 +1153,8 @@ struct TerminalContainerView: View {
     private func markBrowserStartPending() {
         browserStartPending = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [self] in
-            guard self.browserStartPending else { return }
-            self.browserStartPending = false
+            guard browserStartPending else { return }
+            browserStartPending = false
         }
     }
 
@@ -1288,11 +1288,10 @@ struct TerminalContainerView: View {
         let gen = refreshGeneration
         let currentTree = fileTree
         DispatchQueue.global(qos: .userInitiated).async {
-            let tree: [FileNode]
-            if currentTree.isEmpty {
-                tree = FileNode.buildShallowTree(rootPath: workingDirectory)
+            let tree: [FileNode] = if currentTree.isEmpty {
+                FileNode.buildShallowTree(rootPath: workingDirectory)
             } else {
-                tree = FileNode.refreshLoadedNodes(in: currentTree, rootPath: workingDirectory)
+                FileNode.refreshLoadedNodes(in: currentTree, rootPath: workingDirectory)
             }
             let statuses = GitOperations.fileStatuses(at: workingDirectory)
             DispatchQueue.main.async {
@@ -1655,7 +1654,7 @@ private struct WorkspaceTabButton: View {
     let tab: WorkspaceTab
     let label: String?
     let icon: String
-    var shortcut: String? = nil
+    var shortcut: String?
     let isActive: Bool
     var isDirty: Bool = false
     let onSelect: () -> Void
@@ -1825,9 +1824,9 @@ private struct GitHubActionMenu: View {
 
     private func resultState(for action: QuickAction) -> QuickActionState? {
         switch runner.state {
-        case let .succeeded(a) where a == action: return runner.state
-        case let .failed(a) where a == action: return runner.state
-        default: return nil
+        case let .succeeded(a) where a == action: runner.state
+        case let .failed(a) where a == action: runner.state
+        default: nil
         }
     }
 
@@ -1963,8 +1962,8 @@ private enum PrimaryAction: Equatable, Identifiable {
 
     var id: String {
         switch self {
-        case let .quickAction(qa): return qa.id
-        case let .openPR(pr): return "openPR-\(pr.number)"
+        case let .quickAction(qa): qa.id
+        case let .openPR(pr): "openPR-\(pr.number)"
         }
     }
 }
@@ -2457,10 +2456,10 @@ final class TerminalSurfaceCache: ObservableObject {
         sendText(to: surfaceID, text: text)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self, whileSafe() else { return }
-            self.sendReturn(to: surfaceID)
+            sendReturn(to: surfaceID)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 guard let self, whileSafe() else { return }
-                self.sendReturn(to: surfaceID)
+                sendReturn(to: surfaceID)
             }
         }
     }

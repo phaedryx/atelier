@@ -181,7 +181,7 @@ struct ProjectSidebar: View {
             )
             .tag(SidebarSelection.project(project.id))
 
-            if hasChildren && expandedProjects.contains(project.id) {
+            if hasChildren, expandedProjects.contains(project.id) {
                 let sortedWorkstreamIDs = cachedSortedWorkstreamIDs[project.id] ?? project.workstreams.map(\.id)
                 ForEach(sortedWorkstreamIDs, id: \.self) { workstreamID in
                     if let (pIdx, wIdx) = cachedWorkstreamIndex[workstreamID],
@@ -844,7 +844,7 @@ struct ProjectSidebar: View {
         panel.prompt = NSLocalizedString("Select", comment: "")
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
-            self.addProject(name: url.lastPathComponent, directory: url.path)
+            addProject(name: url.lastPathComponent, directory: url.path)
         }
     }
 
@@ -981,11 +981,10 @@ func copyTextToPasteboard(_ text: String) {
 /// Opens a directory in the user's configured terminal, falling back to Apple Terminal.
 func openDirectoryInTerminal(_ directory: String) {
     let terminalBundleID = UserDefaults.standard.string(forKey: "atelier.defaultTerminal") ?? ""
-    let appURL: URL?
-    if !terminalBundleID.isEmpty {
-        appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: terminalBundleID)
+    let appURL: URL? = if !terminalBundleID.isEmpty {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: terminalBundleID)
     } else {
-        appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal")
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal")
     }
     guard let appURL else { return }
     let config = NSWorkspace.OpenConfiguration()
