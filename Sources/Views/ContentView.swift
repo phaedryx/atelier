@@ -765,6 +765,15 @@ private struct UsagePolling: ViewModifier {
     @Environment(\.scenePhase) private var scenePhase
     let store: UsageStore
 
+    /// Whether any window is actually on screen. Injectable for tests.
+    ///
+    /// `scenePhase` alone is not enough: on macOS, hiding the app reports
+    /// `.background`, but *miniaturizing* the window only reports `.inactive` —
+    /// which is also what a visible-but-unfocused window reports. `isVisible`
+    /// is false for both hidden and miniaturized windows, so it separates
+    /// "nobody can see the meter" from "the meter just isn't frontmost".
+    var isOnScreen: () -> Bool = { NSApp.windows.contains(where: \.isVisible) }
+
     /// Matches `UsageStore`'s own throttle, so a tick that lands early is a
     /// cheap no-op rather than a spawned process.
     private static let interval: TimeInterval = 300
@@ -772,16 +781,16 @@ private struct UsagePolling: ViewModifier {
     func body(content: Content) -> some View {
         content
             .onReceive(Timer.publish(every: Self.interval, on: .main, in: .common).autoconnect()) { _ in
-                // Each tick spawns a `claude` process. Skip it while the window
-                // is closed or miniaturized — nobody can read the meter, and
-                // the phase change below catches up when it returns.
-                guard scenePhase != .background else { return }
+                // Each tick spawns a `claude` process. Skip it when no window is
+                // on screen — nobody can read the meter, and the phase change
+                // below catches up when one comes back.
+                guard isOnScreen() else { return }
                 Task { await store.refresh() }
             }
             .onChange(of: scenePhase) { _, phase in
                 // Back on screen: the meter may be a full interval stale.
                 // `refresh()` is still throttled, so this stays cheap.
-                guard phase != .background else { return }
+                guard phase == .active else { return }
                 Task { await store.refresh() }
             }
     }

@@ -51,6 +51,10 @@ enum CommandLineTools {
         return nil
     }
 
+    /// Ceiling on the login-shell PATH lookup. Resolved once per process, so
+    /// this is only ever paid once — but it must be paid, not waited on forever.
+    static let loginShellPathTimeout: TimeInterval = 10
+
     private static let shellPathCache = ShellPathCache()
 
     static func loginShellPath(shell: String) -> String? {
@@ -67,31 +71,28 @@ enum CommandLineTools {
             var path: String?
         }
 
-        func resolve(shell: String) -> String? {
+        func resolve(shell: String, timeout: TimeInterval = CommandLineTools.loginShellPathTimeout) -> String? {
             lock.lock()
             defer { lock.unlock() }
 
             if storage.resolved { return storage.path }
             storage.resolved = true
 
-            let process = Process()
-            let pipe = Pipe()
-            process.executableURL = URL(fileURLWithPath: shell)
-            process.arguments = ["-lic", "printenv PATH"]
-            process.standardOutput = pipe
-            process.standardError = FileHandle.nullDevice
-            do {
-                try process.run()
-                process.waitUntilExit()
-                guard process.terminationStatus == 0 else { return nil }
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let result = String(data: data, encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                storage.path = result
-                return result
-            } catch {
-                return nil
-            }
+            // Bounded: `-i` starts an *interactive* shell, and one without a
+            // usable terminal can block indefinitely. This runs while holding
+            // the lock, so a hang here stalls every caller — tool detection and
+            // the usage probe included. On timeout `path(for:)` falls back to
+            // the process PATH and the known locations.
+            let data = ProcessRunner.run(
+                executable: shell,
+                arguments: ["-lic", "printenv PATH"],
+                timeout: timeout
+            )
+            guard let data else { return nil }
+            let result = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            storage.path = result
+            return result
         }
     }
 
