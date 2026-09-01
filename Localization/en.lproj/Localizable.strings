@@ -16,8 +16,6 @@
 /* Project Overview */
 "No workstreams yet" = "No workstreams yet";
 "Workstreams" = "Workstreams";
-"Press " = "Press ";
-"to create one." = "to create one.";
 
 /* Sidebar */
 "Recent" = "Recent";
@@ -87,17 +85,13 @@
 "None" = "None";
 "Browser" = "Browser";
 "Editor" = "Editor";
-"New Editor (\u2318E)" = "New Editor (\u2318E)";
 "Find File" = "Find File";
 "Copy File Path" = "Copy File Path";
-"Copied: %@" = "Copied: %@";
 "File path copied" = "File path copied";
-"No file open" = "No file open";
 "Find File (\u2318P)" = "Find File (\u2318P)";
 "Search files by name" = "Search files by name";
 "No files found" = "No files found";
 "Scanning files…" = "Scanning files…";
-"Open File" = "Open File";
 "Toggle file tree" = "Toggle file tree";
 "Select a file to edit" = "Select a file to edit";
 "GitHub" = "GitHub";
@@ -116,10 +110,8 @@
 "Prune" = "Prune";
 "Clean" = "Clean";
 "Uncommitted changes" = "Uncommitted changes";
-"Archiving..." = "Archiving...";
 "Purging..." = "Purging...";
 "Commits ahead" = "Commits ahead";
-"Open as workstream" = "Open as workstream";
 "Worktrees on disk for this repository. Pruning removes clean worktrees that are not associated with a workstream." = "Worktrees on disk for this repository. Pruning removes clean worktrees that are not associated with a workstream.";
 "Prune %d clean worktree" = "Prune %d clean worktree";
 "Prune %d clean worktrees" = "Prune %d clean worktrees";
@@ -241,8 +233,6 @@
 "Previous tab" = "Previous tab";
 "Next tab" = "Next tab";
 "Navigation" = "Navigation";
-"Works from any view in a project" = "Works from any view in a project";
-"Switch workstream" = "Switch workstream";
 "External Apps" = "External Apps";
 "Opens the current workstream directory" = "Opens the current workstream directory";
 "Open in external browser" = "Open in external browser";
@@ -284,11 +274,8 @@
 /* EnvironmentTabView */
 "Setup" = "Setup";
 "Run" = "Run";
-"Restart %@ script" = "Restart %@ script";
-"Start %@ script" = "Start %@ script";
 "No %@ script configured" = "No %@ script configured";
 "Add a %@ field to .atelier.json:" = "Add a %@ field to .atelier.json:";
-"Also supports .atelier/config.json." = "Also supports .atelier/config.json.";
 
 /* Dev server */
 "Dev command" = "Dev command";
@@ -370,14 +357,12 @@
 "Setup failed." = "Setup failed.";
 "Continue to Agent" = "Continue to Agent";
 
-"Restarting..." = "Restarting...";
 "Preparing workstream..." = "Preparing workstream...";
 
 /* Environment Tab */
 "Using scripts from %@" = "Using scripts from %@";
 
 /* Quick Actions */
-"Quick Actions" = "Quick Actions";
 "Commit" = "Commit";
 "Push" = "Push";
 "Create PR" = "Create PR";
@@ -387,16 +372,6 @@
 "gh CLI is not installed." = "gh CLI is not installed.";
 "Claude Code is not installed." = "Claude Code is not installed.";
 "Enable \"Bypass permission prompts\" in Settings." = "Enable \"Bypass permission prompts\" in Settings.";
-"No GitHub remote found for this project." = "No GitHub remote found for this project.";
-"Quick action debug" = "Quick action debug";
-"Show a debug panel with command output from quick actions (Create PR, Commit & Push)." = "Show a debug panel with command output from quick actions (Create PR, Commit & Push).";
-
-/* Sidebar - Agent state indicator */
-"Agent is working" = "Agent is working";
-"Agent finished — needs review" = "Agent finished — needs review";
-"Agent is awaiting permission" = "Agent is awaiting permission";
-"Agent is idle" = "Agent is idle";
-"Worktree path missing" = "Worktree path missing";
 
 /* Project overview - pull button */
 "Pull" = "Pull";
@@ -436,9 +411,7 @@
 "Waiting for approval" = "Waiting for approval";
 "Done" = "Done";
 "Idle" = "Idle";
-"Agent may be stalled" = "Agent may be stalled";
 "Context: %1$lld tokens · %2$lld%%" = "Context: %1$lld tokens · %2$lld%%";
-"%lld agents active" = "%lld agents active";
 
 /* Sidebar usage meter */
 "5h" = "5h";
@@ -452,8 +425,6 @@
 
 /* Coding agent */
 "Claude Code" = "Claude Code";
-/* Quick action results */
-"Raw output" = "Raw output";
 
 /* Agent IPC */
 "Agent messaging" = "Agent messaging";
@@ -495,3 +466,8 @@
 "Could not determine the repository's default branch." = "Could not determine the repository's default branch.";
 "git was not found on your PATH." = "git was not found on your PATH.";
 "git %@ failed (exit %d)" = "git %@ failed (exit %d)";
+/* Process deadlines */
+"git push did not finish in time." = "git push did not finish in time.";
+"git pull did not finish in time." = "git pull did not finish in time.";
+"rsync did not finish in time." = "rsync did not finish in time.";
+"A file or directory with this name already exists." = "A file or directory with this name already exists.";

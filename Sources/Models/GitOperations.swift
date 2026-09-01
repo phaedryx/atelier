@@ -494,11 +494,11 @@ enum GitOperations {
         )
 
         // Create worktree with new branch based off the default branch
-        let result = run(args: ["worktree", "add", "-b", branchName, worktreeDir.path, baseBranch], in: projectPath)
+        let result = runOnWholeTree(args: ["worktree", "add", "-b", branchName, worktreeDir.path, baseBranch], in: projectPath)
 
         if result == nil {
             // Branch might already exist, try without -b
-            let fallback = run(args: ["worktree", "add", worktreeDir.path, branchName], in: projectPath)
+            let fallback = runOnWholeTree(args: ["worktree", "add", worktreeDir.path, branchName], in: projectPath)
             guard fallback != nil else { return nil }
         }
 
@@ -561,7 +561,7 @@ enum GitOperations {
     static func removeWorktree(projectPath: String, worktreePath: String) {
         let worktreeDir = URL(fileURLWithPath: worktreePath)
 
-        _ = run(args: ["worktree", "remove", "--force", worktreePath], in: projectPath)
+        _ = runOnWholeTree(args: ["worktree", "remove", "--force", worktreePath], in: projectPath)
 
         // Clean up empty directories
         try? FileManager.default.removeItem(at: worktreeDir)
@@ -620,7 +620,7 @@ enum GitOperations {
 
     /// Force-remove a git worktree by path, discarding uncommitted changes.
     static func forceRemoveWorktreeByPath(worktreePath: String, projectPath: String) {
-        _ = run(args: ["worktree", "remove", "--force", worktreePath], in: projectPath)
+        _ = runOnWholeTree(args: ["worktree", "remove", "--force", worktreePath], in: projectPath)
 
         let fm = FileManager.default
         if fm.fileExists(atPath: worktreePath) {
@@ -632,8 +632,8 @@ enum GitOperations {
     /// Discard all uncommitted changes: reset staged, checkout unstaged, clean untracked.
     static func discardAllChanges(at path: String) {
         _ = run(args: ["reset", "HEAD"], in: path)
-        _ = run(args: ["checkout", "--", "."], in: path)
-        _ = run(args: ["clean", "-fd"], in: path)
+        _ = runOnWholeTree(args: ["checkout", "--", "."], in: path)
+        _ = runOnWholeTree(args: ["clean", "-fd"], in: path)
     }
 
     private static func parseStatus(_ char: Character) -> WorktreeDetail.FileChange.Status {
@@ -670,23 +670,25 @@ enum GitOperations {
     }
 
     /// Push the current branch to origin, setting upstream if needed.
+    ///
+    /// Bounded: a push reaches the network, so it can stall indefinitely on a
+    /// dead connection with nothing to cancel it.
     static func pushCurrentBranch(at path: String) -> (success: Bool, output: String) {
         guard let gitPath else { return (false, "git not found") }
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: gitPath)
-        process.arguments = ["-C", path, "push", "-u", "origin", "HEAD"]
-        process.standardOutput = pipe
-        process.standardError = pipe
-        do {
-            try process.run()
-            process.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(data: data, encoding: .utf8) ?? ""
-            return (process.terminationStatus == 0, output)
-        } catch {
-            return (false, error.localizedDescription)
+        guard let result = ProcessRunner.capture(
+            executable: gitPath,
+            arguments: ["-C", path, "push", "-u", "origin", "HEAD"],
+            environment: gitEnvironment,
+            timeout: ProcessRunner.Timeout.network
+        ) else {
+            return (false, NSLocalizedString("git push did not finish in time.", comment: ""))
         }
+        // git push reports progress on stderr and little else, so both streams
+        // go back to the caller, which shows them verbatim.
+        let combined = [result.stdoutText, result.stderrText]
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+        return (result.isSuccess, combined)
     }
 
     /// List existing worktrees for a project with branch and dirty status.
@@ -747,7 +749,7 @@ enum GitOperations {
             if let allowedPaths, !allowedPaths.contains(standardizedPath) {
                 continue
             }
-            let result = run(args: ["worktree", "remove", wt.path], in: projectPath)
+            let result = runOnWholeTree(args: ["worktree", "remove", wt.path], in: projectPath)
             if result != nil {
                 pruned += 1
             }
@@ -932,7 +934,7 @@ enum GitOperations {
 
         // Reset the working tree only if it is clean
         if !hasUncommittedChanges(at: path) {
-            _ = run(args: ["reset", "--hard", "--quiet"], in: path)
+            _ = runOnWholeTree(args: ["reset", "--hard", "--quiet"], in: path)
             logger.info("[Atelier] Updated \(branch, privacy: .public) to latest")
         } else {
             logger.info("[Atelier] Updated \(branch, privacy: .public) ref but working tree has local changes, skipping reset")
@@ -984,30 +986,23 @@ enum GitOperations {
     /// Returns stdout on success and stderr (or an explanatory message) on failure.
     static func pullCurrentBranch(at path: String) -> PullResult {
         guard let gitPath else { return .failure("git not found") }
-        let process = Process()
-        let outPipe = Pipe()
-        let errPipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: gitPath)
-        process.arguments = ["pull", "--ff-only"]
-        process.currentDirectoryURL = URL(fileURLWithPath: path)
-        process.standardOutput = outPipe
-        process.standardError = errPipe
-        do {
-            try process.run()
-            process.waitUntilExit()
-            let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-            let out = String(data: outData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let err = String(data: errData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if process.terminationStatus == 0 {
-                let msg = out.isEmpty ? err : out
-                return .success(msg)
-            }
-            let reason = err.isEmpty ? "git pull failed (exit \(process.terminationStatus))" : err
-            return .failure(reason)
-        } catch {
-            return .failure("\(error)")
+        // Bounded: a pull reaches the network and the caller is a UI action.
+        guard let result = ProcessRunner.capture(
+            executable: gitPath,
+            arguments: ["pull", "--ff-only"],
+            environment: gitEnvironment,
+            currentDirectory: URL(fileURLWithPath: path),
+            timeout: ProcessRunner.Timeout.network
+        ) else {
+            return .failure(NSLocalizedString("git pull did not finish in time.", comment: ""))
         }
+
+        let out = result.stdoutText
+        let err = result.stderrText
+        guard result.isSuccess else {
+            return .failure(err.isEmpty ? "git pull failed (exit \(result.status))" : err)
+        }
+        return .success(out.isEmpty ? err : out)
     }
 
     // MARK: - Private
@@ -1032,37 +1027,32 @@ enum GitOperations {
         runWithTimeout(args: ["fetch", "origin", branch, "--no-tags"], in: path, timeout: 5)
     }
 
+    /// Runs git and returns stdout, or nil if git is missing, exited non-zero,
+    /// or outlived `timeout`.
+    ///
+    /// `ProcessRunner` owns the deadline and drains both pipes concurrently,
+    /// which is what makes a large `git show`/`git status` safe: git blocks
+    /// writing to a full pipe once its output passes the ~64 KB macOS buffer,
+    /// so draining one stream while the other fills would wedge it.
     @discardableResult
     private static func runWithTimeout(args: [String], in directory: String, timeout: TimeInterval) -> String? {
-        guard let gitPath else { return nil }
-        let process = Process()
-        let pipe = Pipe()
-        let errPipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: gitPath)
-        process.arguments = args
-        process.currentDirectoryURL = URL(fileURLWithPath: directory)
-        process.standardOutput = pipe
-        process.standardError = errPipe
-        do {
-            try process.run()
-        } catch {
+        guard let gitPath else {
+            logger.warning("[Atelier] git run: gitPath is nil")
             return nil
         }
+        guard let output = ProcessRunner.capture(
+            executable: gitPath,
+            arguments: args,
+            environment: gitEnvironment,
+            currentDirectory: URL(fileURLWithPath: directory),
+            timeout: timeout
+        ) else { return nil }
 
-        let deadline = DispatchTime.now() + timeout
-        let group = DispatchGroup()
-        group.enter()
-        process.terminationHandler = { _ in group.leave() }
-
-        if group.wait(timeout: deadline) == .timedOut {
-            process.terminate()
-            logger.info("[Atelier] git \(args.joined(separator: " "), privacy: .public) timed out after \(timeout, privacy: .public)s")
+        guard output.isSuccess else {
+            logger.warning("[Atelier] git \(args.joined(separator: " "), privacy: .public) failed (exit \(output.status, privacy: .public)): \(output.stderrText, privacy: .public)")
             return nil
         }
-
-        guard process.terminationStatus == 0 else { return nil }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        return String(data: data, encoding: .utf8)
+        return String(data: output.stdout, encoding: .utf8)
     }
 
     /// Validates a candidate workstream name for use as a git branch name.
@@ -1089,38 +1079,31 @@ enum GitOperations {
         return result.isEmpty ? "unnamed" : result
     }
 
+    /// Git's environment for every spawn here.
+    ///
+    /// `GIT_TERMINAL_PROMPT=0` and `GIT_ASKPASS` are what keep an auth failure
+    /// from becoming a hang: a GUI app has no terminal to answer a credential
+    /// prompt on, so git must fail instead of waiting. `BareRepoClone.run` sets
+    /// the same pair for the same reason.
+    private static var gitEnvironment: [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        environment["GIT_TERMINAL_PROMPT"] = "0"
+        environment["GIT_ASKPASS"] = "/usr/bin/true"
+        return environment
+    }
+
+    /// Git commands that only read, or that touch a handful of refs. A minute is
+    /// far past any of them; past it, git is wedged.
     private static func run(args: [String], in directory: String) -> String? {
-        guard let gitPath else {
-            logger.warning("[Atelier] git run: gitPath is nil")
-            return nil
-        }
-        let process = Process()
-        let pipe = Pipe()
-        let errPipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: gitPath)
-        process.arguments = args
-        process.currentDirectoryURL = URL(fileURLWithPath: directory)
-        process.standardOutput = pipe
-        process.standardError = errPipe
-        do {
-            try process.run()
-            // Drain stdout AND stderr to end BEFORE waitUntilExit() to avoid a
-            // deadlock when git output exceeds the ~64 KB macOS pipe buffer
-            // (e.g. `git show`/`git diff` on large files): the child blocks on a
-            // full pipe while we'd be blocked waiting for it to exit. The reads
-            // block only until the child closes each fd, which it does on exit.
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else {
-                let errStr = String(data: errData, encoding: .utf8) ?? ""
-                logger.warning("[Atelier] git \(args.joined(separator: " "), privacy: .public) failed (exit \(process.terminationStatus, privacy: .public)): \(errStr, privacy: .public)")
-                return nil
-            }
-            return String(data: data, encoding: .utf8)
-        } catch {
-            logger.warning("[Atelier] git \(args.joined(separator: " "), privacy: .public) threw: \(error, privacy: .public)")
-            return nil
-        }
+        runWithTimeout(args: args, in: directory, timeout: ProcessRunner.Timeout.local)
+    }
+
+    /// Git commands that write a whole working tree — `worktree add` checks one
+    /// out, `worktree remove`, `reset --hard`, `checkout -- .` and `clean -fd`
+    /// rewrite or delete one. How long they take is a property of the user's
+    /// repository, so they get the loose tier; `run`'s minute would abort a
+    /// legitimate checkout of a large repository partway through.
+    private static func runOnWholeTree(args: [String], in directory: String) -> String? {
+        runWithTimeout(args: args, in: directory, timeout: ProcessRunner.Timeout.userCommand)
     }
 }

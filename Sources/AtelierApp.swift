@@ -46,9 +46,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationDidFinishLaunching(_: Notification) {
         guard !isRunningXCTest() else { return }
 
-        // Debug settings should not persist across launches
-        UserDefaults.standard.set(false, forKey: "atelier.quickActionDebug")
-
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         Self.requestNotificationAuthorization(using: center)
@@ -127,7 +124,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationWillTerminate(_: Notification) {
         guard !isRunningXCTest() else { return }
         HookEventReceiver.shared.stop()
-        let tmuxPath = ToolStatus.detect().tmux.path
+        // `ToolStatus.detect()` would do — but it spawns five probes including
+        // `gh auth status`, which reaches the network, and this runs on the main
+        // thread as the app is quitting. All that is wanted is one path lookup.
+        let tmuxPath = CommandLineTools.path(for: "tmux")
         if let tmuxPath {
             TmuxSession.killAllSessions(tmuxPath: tmuxPath)
         }

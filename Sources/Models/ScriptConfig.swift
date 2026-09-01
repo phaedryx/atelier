@@ -57,16 +57,18 @@ struct ScriptConfig {
             logger.info("Skipping unapproved teardown script for \(projectDirectory, privacy: .public)")
             return
         }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: CommandBuilder.userShell)
-        process.arguments = ["-lic", teardown]
-        process.currentDirectoryURL = URL(fileURLWithPath: directory)
-
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-
-        try? process.run()
-        process.waitUntilExit()
+        // Bounded at the user-command tier: this blocks archiving, and a
+        // teardown that never returns would strand the workstream. The bound is
+        // generous enough that a real `docker compose down` finishes inside it.
+        let finished = ProcessRunner.succeeds(
+            executable: CommandBuilder.userShell,
+            arguments: ["-lic", teardown],
+            currentDirectory: URL(fileURLWithPath: directory),
+            timeout: ProcessRunner.Timeout.userCommand
+        )
+        if !finished {
+            logger.info("Teardown script for \(projectDirectory, privacy: .public) did not succeed")
+        }
     }
 
     // MARK: - Loader

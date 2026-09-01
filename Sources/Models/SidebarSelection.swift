@@ -2,9 +2,6 @@
 // ABOUTME: Can be either a project or a workstream, enabling single-selection across both.
 
 import Foundation
-import OSLog
-
-private let logger = Logger(subsystem: "atelier", category: "sidebar-selection")
 
 enum SidebarSelection: Hashable, Codable {
     case project(UUID)

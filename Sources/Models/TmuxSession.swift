@@ -123,29 +123,24 @@ enum TmuxSession {
     }
 
     /// Kill a tmux session by name.
+    ///
+    /// Bounded, like every tmux call here: these are local and near-instant, so
+    /// a wait that does not return means the server is wedged — and archiving a
+    /// workstream must not wedge with it.
     static func killSession(tmuxPath: String, sessionName: String) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: tmuxPath)
-        process.arguments = ["-L", socketName, "kill-session", "-t", sessionName]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        try? process.run()
-        process.waitUntilExit()
+        ProcessRunner.succeeds(
+            executable: tmuxPath,
+            arguments: ["-L", socketName, "kill-session", "-t", sessionName],
+            timeout: ProcessRunner.Timeout.local
+        )
     }
 
     static func sessionExists(tmuxPath: String, sessionName: String) -> Bool {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: tmuxPath)
-        process.arguments = ["-L", socketName, "has-session", "-t", sessionName]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-            process.waitUntilExit()
-            return process.terminationStatus == 0
-        } catch {
-            return false
-        }
+        ProcessRunner.succeeds(
+            executable: tmuxPath,
+            arguments: ["-L", socketName, "has-session", "-t", sessionName],
+            timeout: ProcessRunner.Timeout.local
+        )
     }
 
     /// Kill the agent tmux session for a workstream.
@@ -158,13 +153,13 @@ enum TmuxSession {
     /// Call on app termination to prevent orphaned sessions.
     static func killAllSessions(tmuxPath: String) {
         logger.detailed("Killing tmux server on socket \(socketName)")
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: tmuxPath)
-        process.arguments = ["-L", socketName, "kill-server"]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        try? process.run()
-        process.waitUntilExit()
+        // Bounded: this runs on app termination, where a wedged tmux would
+        // otherwise keep the app from quitting.
+        ProcessRunner.succeeds(
+            executable: tmuxPath,
+            arguments: ["-L", socketName, "kill-server"],
+            timeout: ProcessRunner.Timeout.local
+        )
     }
 
     private static func sanitize(_ name: String) -> String {

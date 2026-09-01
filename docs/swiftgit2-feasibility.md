@@ -1,5 +1,10 @@
 # SwiftGit2 Feasibility Assessment
 
+> **Status: not adopted.** Kept as the record of why. The verdict is at the end:
+> SwiftGit2 has no worktree bindings, and adding them is ~2-3 weeks plus ongoing
+> maintenance for a problem shelling out to `git` already solves. Atelier still
+> spawns `git`; see `GitOperations`.
+
 ## What is SwiftGit2?
 
 [SwiftGit2](https://github.com/SwiftGit2/SwiftGit2) is a Swift wrapper around

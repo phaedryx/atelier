@@ -1,5 +1,9 @@
 # Corner Office — Remote Coordinator Design
 
+> **Status: not started.** A design for something that does not exist. Nothing in
+> Atelier implements Corner Office, and no code references it — read this as a
+> proposal, not as a description of the app.
+
 ## Overview
 
 Corner Office is a lightweight coordinator that assigns work, demands status updates,

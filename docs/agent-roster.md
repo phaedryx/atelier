@@ -152,15 +152,14 @@ red at 85% or more (`ContextMeter`).
 
 ## Testing
 
-```bash
-# Full lifecycle test (requires app running with a workstream open)
-bash scripts/test-hook-tracer.sh /path/to/worktree
+Everything here is covered by XCTest: `HookInstallerTests` for the
+`settings.json` merge (idempotency, foreign hooks, malformed input),
+`HookEventReceiverTests` for the receiver, and
+`WorkstreamAgentStateTrackerTests` for roster transitions. Run them with
+`./scripts/dev.sh test`.
 
-# HookInstaller idempotency test
-bash scripts/test-hook-installer.sh
-```
-
-Unit tests for roster transitions live alongside other XCTest suites.
+For an end-to-end check, run the app, open a workstream, and confirm roster
+cards appear while subagents are live.
 
 ## Troubleshooting
 

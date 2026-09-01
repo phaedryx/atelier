@@ -7,7 +7,7 @@ import OSLog
 private let logger = Logger(subsystem: "atelier", category: "vibe.asyncsetup")
 
 /// Represents the current state of async worktree setup.
-enum AsyncSetupState: Sendable, Equatable {
+enum AsyncSetupState: Equatable {
     case idle
     case inProgress(step: String, progress: Double)
     case completed
@@ -162,7 +162,7 @@ actor AsyncSetupService {
 
         // Step 6: Install dependencies (longest step)
         await updateState(for: workstreamID, to: .inProgress(step: "Installing dependencies", progress: 0.7))
-        logger.warning("[SETUP-DEBUG] About to run DependencyInstaller.install in \(worktreePath, privacy: .public)")
+        logger.detailed("Running the dependency install in \(worktreePath)")
         let installResult: DependencyInstaller.InstallResult? = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
                 let result = DependencyInstaller.install(in: worktreePath, config: config)
@@ -170,9 +170,9 @@ actor AsyncSetupService {
             }
         }
         if let result = installResult {
-            logger.warning("[SETUP-DEBUG] Install result: success=\(result.success) output=\(result.output.prefix(200), privacy: .public) error=\(result.errorOutput.prefix(200), privacy: .public)")
+            logger.detailed("Install finished: success=\(result.success) output=\(result.output.prefix(200)) error=\(result.errorOutput.prefix(200))")
         } else {
-            logger.warning("[SETUP-DEBUG] Install returned nil (needsInstall=false or no package manager)")
+            logger.detailed("Nothing to install: needsInstall was false, or no package manager was detected")
         }
         if let result = installResult, !result.success {
             errors.append("Dependency install failed: \(result.errorOutput)")
@@ -253,5 +253,4 @@ actor AsyncSetupService {
     func clearState(for workstreamID: UUID) {
         states.removeValue(forKey: workstreamID)
     }
-
 }

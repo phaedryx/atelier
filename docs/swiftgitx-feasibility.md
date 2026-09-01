@@ -1,5 +1,10 @@
 # SwiftGitX Feasibility Assessment
 
+> **Status: not adopted.** Kept as the record of why, and as the more serious of
+> the two libgit2 assessments — it sketches a partial adoption (SwiftGitX for
+> reads, `Process("git")` for worktrees) that remains viable if the read path
+> ever needs the speed. Nothing here is built; `GitOperations` spawns `git`.
+
 ## What is SwiftGitX?
 
 [SwiftGitX](https://github.com/ibrahimcetin/SwiftGitX) is a modern Swift wrapper
