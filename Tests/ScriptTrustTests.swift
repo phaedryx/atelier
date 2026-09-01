@@ -68,7 +68,7 @@ final class ScriptTrustTests: XCTestCase {
         let approved = makeConfig(setup: "make build")
         ScriptTrust.approve(approved, for: tmpDir.path)
 
-        let moved = makeConfig(run: "make build")
+        let moved = makeConfig(teardown: "make build")
         XCTAssertFalse(ScriptTrust.isApproved(moved, for: tmpDir.path))
     }
 
@@ -145,11 +145,10 @@ final class ScriptTrustTests: XCTestCase {
 
     private func makeConfig(
         setup: String? = nil,
-        run: String? = nil,
         teardown: String? = nil,
         source: String = ".atelier.json"
     ) -> ScriptConfig {
-        ScriptConfig(setup: setup, run: run, teardown: teardown, source: source, loadError: nil)
+        ScriptConfig(setup: setup, teardown: teardown, source: source, loadError: nil)
     }
 
     private func writeTeardownConfig(touching marker: URL) {

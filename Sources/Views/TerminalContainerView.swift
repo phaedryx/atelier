@@ -320,7 +320,6 @@ struct TerminalContainerView: View {
     @State private var defaultBranch = "main"
     @State private var setupGateState: SetupGateState = .notNeeded
     @State private var scriptsApproved = false
-    @State private var runnerFileApproved = false
     @State private var envVarDefinitions: [EnvVarDefinition] = []
     /// Resolved once per change rather than per render: resolving probes TCP
     /// ports, which has no business running inside a view update.
@@ -352,8 +351,6 @@ struct TerminalContainerView: View {
         let savedOverride = DevCommandResolver.savedOverride(for: workstreamID)
         _devCommandOverride = State(initialValue: savedOverride)
         _resolvedDevCommand = State(initialValue: DevCommandResolver.resolve(
-            scriptConfig: scriptConfig,
-            workstreamID: workstreamID,
             workingDirectory: workingDirectory,
             projectDirectory: projectDirectory,
             override: savedOverride
@@ -422,44 +419,10 @@ struct TerminalContainerView: View {
         portDetector.status == .starting || (portDetector.status == .none && browserStartPending)
     }
 
-    /// The command that starts the dev server: config run script, user
-    /// override, or the repo's package.json dev script.
+    /// The command that starts the dev server: the user's override, or the
+    /// detected runner.
     private var resolvedRunCommand: String? {
-        if let run = scriptConfig.run { return run }
-        return resolvedDevCommand?.command
-    }
-
-    /// Whether the command comes from a config `run` script, which is gated on
-    /// `scriptsApproved`. This is deliberately *not* the whole approval story —
-    /// a runner config read out of the worktree is gated separately, on
-    /// `runnerFileApproved`. Anything deciding whether it may start must ask
-    /// `runCommandApproved`, which covers both; this one only reports which
-    /// approval pane the Environment tab should show.
-    private var runCommandIsGated: Bool {
-        scriptConfig.run != nil
-    }
-
-    /// The runner config the resolved command would execute, when it has one.
-    private var runnerTrustFile: DevCommand? {
-        guard scriptConfig.run == nil, let command = resolvedDevCommand,
-              command.trustFilePath != nil
-        else { return nil }
-        return command
-    }
-
-    /// The runner config still waiting to be approved. Nil once approved, so
-    /// the run pane shows the terminal instead of the approval sheet.
-    private var pendingRunnerApproval: DevCommand? {
-        runnerFileApproved ? nil : runnerTrustFile
-    }
-
-    /// Whether everything this run command reads from the repository has been
-    /// approved. Both gates must clear, and they are tracked apart because
-    /// approving a process config must not also release a setup script.
-    private var runCommandApproved: Bool {
-        if runCommandIsGated, !scriptsApproved { return false }
-        if pendingRunnerApproval != nil { return false }
-        return true
+        resolvedDevCommand?.command
     }
 
     /// Env vars for the run/dev-server surface. Adds the var that silences
@@ -720,17 +683,13 @@ struct TerminalContainerView: View {
                     useTmux: useTmux,
                     environmentVars: runEnvironmentVars,
                     runCommand: runCommandString,
-                    runCommandIsGated: runCommandIsGated,
                     devCommand: resolvedDevCommand,
                     runnerCandidates: runnerCandidates,
                     onSelectRunner: selectRunner,
-                    pendingRunnerApproval: pendingRunnerApproval,
-                    onApproveRunner: approveRunnerFile,
                     envVarDefinitions: $envVarDefinitions,
                     resolvedEnvVars: resolvedProjectEnvVars,
                     devCommandOverride: $devCommandOverride,
                     runStarted: $model.runStarted,
-                    scriptsApproved: $scriptsApproved,
                     runGeneration: $runGeneration,
                     onStart: doStartRun,
                     onStop: stopRun,
@@ -849,7 +808,6 @@ struct TerminalContainerView: View {
             .onReceive(NotificationCenter.default.publisher(for: .rerunScript)) { _ in
                 guard isActive else { return }
                 guard resolvedRunCommand != nil else { return }
-                guard runCommandApproved else { return }
                 if model.runStarted {
                     restartRun()
                 } else {
@@ -1158,14 +1116,12 @@ struct TerminalContainerView: View {
         guard sessionMode != .waitingForTools, !appEnv.isDetecting else { return }
         guard setupGateState != .awaitingApproval else { return }
         guard portDetector.status == .none else { return }
-        if !runCommandApproved { return }
         if model.runStarted { stopRun() }
         doStartRun()
     }
 
-    /// Starts the run session without re-checking approval. Every caller has
-    /// already cleared `runCommandApproved` — the Environment tab's controls are
-    /// disabled until it does, and `startRunIfNeeded` guards on it directly.
+    /// Starts the run session. The dev command is either the user's own or one
+    /// Atelier composed from a detected runner, so there is nothing to approve.
     @MainActor
     private func doStartRun() {
         guard let command = resolvedRunCommand else { return }
@@ -1287,33 +1243,13 @@ struct TerminalContainerView: View {
         refreshDevCommand()
     }
 
-    private func approveRunnerFile() {
-        guard let path = runnerTrustFile?.trustFilePath else { return }
-        ScriptTrust.approve(runnerFile: path, for: projectDirectory)
-        runnerFileApproved = true
-        doStartRun()
-    }
-
     private func refreshDevCommand() {
         runnerCandidates = DevCommandResolver.candidates(in: workingDirectory, projectDirectory: projectDirectory)
         resolvedDevCommand = DevCommandResolver.resolve(
-            scriptConfig: scriptConfig,
-            workstreamID: workstreamID,
             workingDirectory: workingDirectory,
             projectDirectory: projectDirectory,
             override: devCommandOverride
         )
-        refreshRunnerApproval()
-    }
-
-    /// Re-reads approval for the runner config. Bound to the file's contents,
-    /// so an edited config lands back in the approval pane.
-    private func refreshRunnerApproval() {
-        guard let path = runnerTrustFile?.trustFilePath else {
-            runnerFileApproved = false
-            return
-        }
-        runnerFileApproved = ScriptTrust.isApproved(runnerFile: path, for: projectDirectory)
     }
 
     /// Recomputes the project's environment variables for this worktree.
@@ -1345,15 +1281,11 @@ struct TerminalContainerView: View {
               let tmuxPath = appEnv.toolStatus.tmux.path else { return }
         let session = TmuxSession.sessionName(project: projectName, workstream: workstreamName, role: "run")
         let hasExistingRunSession = TmuxSession.sessionExists(tmuxPath: tmuxPath, sessionName: session)
-        // Covers both gates: a config `run` script and a runner config read out
-        // of the worktree. A command Atelier composed itself is never gated.
-        let approved = runCommandApproved
         if shouldRestoreRunSession(
             useTmux: useTmux,
             hasRunScript: resolvedRunCommand != nil,
             hasExistingRunSession: hasExistingRunSession,
-            wasStoppedManually: model.runStoppedManually,
-            isApproved: approved
+            wasStoppedManually: model.runStoppedManually
         ) {
             model.runStarted = true
         }

@@ -1,13 +1,11 @@
 // ABOUTME: Resolves the command that starts a workstream's local dev server.
-// ABOUTME: Precedence: .atelier.json run script, user override, selected detected runner.
+// ABOUTME: Precedence: user override, then the selected detected runner.
 
 import Foundation
 
 /// The command that starts a workstream's dev server, and where it came from.
 struct DevCommand: Equatable {
     enum Source: String, Equatable, Codable {
-        /// run script from .atelier.json (or fallback config). Still approval-gated.
-        case configScript
         /// Per-workstream command saved by the user in the Environment pane.
         case override
         /// Auto-detected process-compose config in the worktree.
@@ -19,17 +17,6 @@ struct DevCommand: Equatable {
     let command: String
     let source: Source
     let sourceDescription: String?
-    /// The repository-provided file whose contents this command executes, when
-    /// there is one. Approval is bound to that file, so an edited config has to
-    /// be approved again.
-    let trustFilePath: String?
-
-    init(command: String, source: Source, sourceDescription: String?, trustFilePath: String? = nil) {
-        self.command = command
-        self.source = source
-        self.sourceDescription = sourceDescription
-        self.trustFilePath = trustFilePath
-    }
 }
 
 enum DevCommandResolver {
@@ -121,18 +108,13 @@ enum DevCommandResolver {
         return found.first
     }
 
-    /// Resolution order: config run script > user override > selected detected runner.
+    /// Resolution order: user override, then the selected detected runner.
     /// `override` is the per-workstream override already loaded by the caller.
     static func resolve(
-        scriptConfig: ScriptConfig,
-        workstreamID _: UUID,
         workingDirectory: String,
         projectDirectory: String,
         override: String?
     ) -> DevCommand? {
-        if let run = scriptConfig.run {
-            return DevCommand(command: run, source: .configScript, sourceDescription: scriptConfig.source)
-        }
         if let override, !override.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return DevCommand(command: override, source: .override, sourceDescription: nil)
         }
@@ -166,8 +148,7 @@ enum DevCommandResolver {
             return DevCommand(
                 command: "process-compose up -U",
                 source: .processCompose,
-                sourceDescription: name,
-                trustFilePath: worktree.appendingPathComponent(name).path
+                sourceDescription: name
             )
         }
 
@@ -187,8 +168,7 @@ enum DevCommandResolver {
         return DevCommand(
             command: (["process-compose", "up", "-U"] + flags).joined(separator: " "),
             source: .processCompose,
-            sourceDescription: name,
-            trustFilePath: project.appendingPathComponent(name).path
+            sourceDescription: name
         )
     }
 

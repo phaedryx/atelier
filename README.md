@@ -99,11 +99,12 @@ git worktree add "$def"
 Per-project commands live in `.atelier.json` at the repository root:
 
 ```json
-{ "setup": "cmd", "run": "cmd", "teardown": "cmd", "seed": "config/secrets" }
+{ "setup": "cmd", "teardown": "cmd", "seed": "config/secrets" }
 ```
 
-These come from the repository, so Atelier asks for approval before running any
-of them, and asks again whenever they change. `seed` names a directory whose
+These come from the repository and run unattended — setup when a worktree is
+created, teardown when one is archived — so Atelier asks for approval before
+running either, and asks again whenever they change. `seed` names a directory whose
 contents are copied into each new worktree — that is how uncommitted `.env` files
 reach a workstream. It defaults to `seed-files` (projects using the older
 `.atelier-seed` keep working).

@@ -480,11 +480,8 @@
 "Value" = "Value";
 "Port" = "Port";
 
-/* Runner selection and approval */
+/* Runner selection */
 "process-compose" = "process-compose";
-"Approve this repository's process config?" = "Approve this repository's process config?";
-"%@ defines processes that run on your machine under your user account. %@ starts them." = "%@ defines processes that run on your machine under your user account. %@ starts them.";
-"Could not read this file." = "Could not read this file.";
-"(%d more lines)" = "(%d more lines)";
-"Approval covers this repository until the file changes." = "Approval covers this repository until the file changes.";
 "Names may use letters, digits and _, and cannot start with a digit." = "Names may use letters, digits and _, and cannot start with a digit.";
+"No dev command found" = "No dev command found";
+"Add a process-compose.yaml to this worktree or the project directory, or a dev script to package.json. Or set a command with Customize above." = "Add a process-compose.yaml to this worktree or the project directory, or a dev script to package.json. Or set a command with Customize above.";

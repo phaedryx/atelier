@@ -93,30 +93,11 @@ final class DevCommandTests: XCTestCase {
 
     // MARK: - Resolution precedence
 
-    func testConfigRunScriptWinsOverEverything() throws {
-        try writePackageJSON(["dev": "vite"])
-        DevCommandResolver.saveOverride("npm --prefix frontend run dev", for: workstreamID)
-        let config = ScriptConfig(setup: nil, run: "make serve", teardown: nil, source: ".atelier.json", loadError: nil)
-
-        let resolved = DevCommandResolver.resolve(
-            scriptConfig: config,
-            workstreamID: workstreamID,
-            workingDirectory: tmpDir.path,
-            projectDirectory: tmpDir.path,
-            override: DevCommandResolver.savedOverride(for: workstreamID)
-        )
-
-        XCTAssertEqual(resolved?.command, "make serve")
-        XCTAssertEqual(resolved?.source, .configScript)
-    }
-
     func testOverrideBeatsPackageJSONDetection() throws {
         try writePackageJSON(["dev": "vite"])
         DevCommandResolver.saveOverride("npm run dev -- --port 3000", for: workstreamID)
 
         let resolved = DevCommandResolver.resolve(
-            scriptConfig: .empty,
-            workstreamID: workstreamID,
             workingDirectory: tmpDir.path,
             projectDirectory: tmpDir.path,
             override: DevCommandResolver.savedOverride(for: workstreamID)
@@ -130,8 +111,6 @@ final class DevCommandTests: XCTestCase {
         try writePackageJSON(["dev": "next dev"])
 
         let resolved = DevCommandResolver.resolve(
-            scriptConfig: .empty,
-            workstreamID: workstreamID,
             workingDirectory: tmpDir.path,
             projectDirectory: tmpDir.path,
             override: nil
@@ -143,8 +122,6 @@ final class DevCommandTests: XCTestCase {
 
     func testNothingDetectedReturnsNil() {
         let resolved = DevCommandResolver.resolve(
-            scriptConfig: .empty,
-            workstreamID: workstreamID,
             workingDirectory: tmpDir.path,
             projectDirectory: tmpDir.path,
             override: nil
@@ -163,7 +140,6 @@ final class DevCommandTests: XCTestCase {
         XCTAssertEqual(command.command, "process-compose up -U")
         XCTAssertEqual(command.source, .processCompose)
         XCTAssertEqual(command.sourceDescription, "process-compose.yaml")
-        XCTAssertEqual(command.trustFilePath, tmpDir.appendingPathComponent("process-compose.yaml").path)
     }
 
     func testDetectsShortYamlExtension() throws {
@@ -192,8 +168,6 @@ final class DevCommandTests: XCTestCase {
         try writeProcessCompose(named: "process-compose.yaml")
 
         let resolved = DevCommandResolver.resolve(
-            scriptConfig: .empty,
-            workstreamID: workstreamID,
             workingDirectory: tmpDir.path,
             projectDirectory: tmpDir.path,
             override: nil
@@ -208,8 +182,6 @@ final class DevCommandTests: XCTestCase {
         DevCommandResolver.selectRunner(.packageJSON, for: tmpDir.path)
 
         let resolved = DevCommandResolver.resolve(
-            scriptConfig: .empty,
-            workstreamID: workstreamID,
             workingDirectory: tmpDir.path,
             projectDirectory: tmpDir.path,
             override: nil
@@ -225,8 +197,6 @@ final class DevCommandTests: XCTestCase {
         DevCommandResolver.selectRunner(.processCompose, for: tmpDir.path)
 
         let resolved = DevCommandResolver.resolve(
-            scriptConfig: .empty,
-            workstreamID: workstreamID,
             workingDirectory: tmpDir.path,
             projectDirectory: tmpDir.path,
             override: nil
@@ -260,7 +230,6 @@ final class DevCommandTests: XCTestCase {
             command.command,
             "process-compose up -U -f \(CommandBuilder.shellQuote(project.appendingPathComponent("process-compose.yaml").path))"
         )
-        XCTAssertEqual(command.trustFilePath, project.appendingPathComponent("process-compose.yaml").path)
     }
 
     /// Naming the base config with `-f` turns off discovery, so a worktree
@@ -292,7 +261,6 @@ final class DevCommandTests: XCTestCase {
         )
 
         XCTAssertEqual(command.command, "process-compose up -U")
-        XCTAssertEqual(command.trustFilePath, tmpDir.appendingPathComponent("process-compose.yaml").path)
     }
 
     /// A plain checkout passes the same path for both. The fallback must not

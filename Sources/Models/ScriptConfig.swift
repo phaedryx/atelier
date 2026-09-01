@@ -1,4 +1,4 @@
-// ABOUTME: Loads setup/run/teardown script configuration from project config files.
+// ABOUTME: Loads setup/teardown script configuration from project config files.
 // ABOUTME: Resolves from .atelier.json, legacy .factoryfloor.json, .emdash.json, conductor.json, or .superset/config.json.
 
 import Foundation
@@ -8,12 +8,11 @@ private let logger = Logger(subsystem: "atelier", category: "script-config")
 
 struct ScriptConfig {
     let setup: String?
-    let run: String?
     let teardown: String?
     let source: String?
     let loadError: String?
 
-    static let empty = ScriptConfig(setup: nil, run: nil, teardown: nil, source: nil, loadError: nil)
+    static let empty = ScriptConfig(setup: nil, teardown: nil, source: nil, loadError: nil)
 
     /// Load script config for a project directory.
     /// Checks .atelier.json first, then the legacy .factoryfloor.json, then
@@ -37,7 +36,7 @@ struct ScriptConfig {
                 return try candidate.loader(candidate.path)
             } catch {
                 logger.error("Failed to load \(candidate.path): \(error.localizedDescription)")
-                return ScriptConfig(setup: nil, run: nil, teardown: nil, source: candidate.source, loadError: error.localizedDescription)
+                return ScriptConfig(setup: nil, teardown: nil, source: candidate.source, loadError: error.localizedDescription)
             }
         }
 
@@ -45,7 +44,7 @@ struct ScriptConfig {
     }
 
     var hasAnyScript: Bool {
-        setup != nil || run != nil || teardown != nil
+        setup != nil || teardown != nil
     }
 
     /// Run the teardown script synchronously in the given directory.
@@ -85,48 +84,44 @@ struct ScriptConfig {
         }
     }
 
-    /// { "setup": "cmd", "run": "cmd", "teardown": "cmd" }
+    /// { "setup": "cmd", "teardown": "cmd" }
     private static func loadAtelier(_ path: String) throws -> ScriptConfig {
         let dict = try loadJSON(path)
         let setup = dict["setup"] as? String
-        let run = dict["run"] as? String
         let teardown = dict["teardown"] as? String
-        guard setup != nil || run != nil || teardown != nil else {
+        guard setup != nil || teardown != nil else {
             return .empty
         }
-        return ScriptConfig(setup: nonEmpty(setup), run: nonEmpty(run), teardown: nonEmpty(teardown), source: URL(fileURLWithPath: path).lastPathComponent, loadError: nil)
+        return ScriptConfig(setup: nonEmpty(setup), teardown: nonEmpty(teardown), source: URL(fileURLWithPath: path).lastPathComponent, loadError: nil)
     }
 
-    /// .emdash.json: { "scripts": { "setup": "cmd", "run": "cmd", "teardown": "cmd" } }
+    /// .emdash.json: { "scripts": { "setup": "cmd", "teardown": "cmd" } }
     private static func loadEmdash(_ path: String) throws -> ScriptConfig {
         let dict = try loadJSON(path)
         guard let scripts = dict["scripts"] as? [String: Any] else { return .empty }
         let setup = scripts["setup"] as? String
-        let run = scripts["run"] as? String
         let teardown = scripts["teardown"] as? String
-        guard setup != nil || run != nil || teardown != nil else { return .empty }
-        return ScriptConfig(setup: nonEmpty(setup), run: nonEmpty(run), teardown: nonEmpty(teardown), source: ".emdash.json", loadError: nil)
+        guard setup != nil || teardown != nil else { return .empty }
+        return ScriptConfig(setup: nonEmpty(setup), teardown: nonEmpty(teardown), source: ".emdash.json", loadError: nil)
     }
 
-    /// conductor.json: { "scripts": { "setup": "cmd", "run": "cmd", "archive": "cmd" } }
+    /// conductor.json: { "scripts": { "setup": "cmd", "archive": "cmd" } }
     private static func loadConductor(_ path: String) throws -> ScriptConfig {
         let dict = try loadJSON(path)
         guard let scripts = dict["scripts"] as? [String: Any] else { return .empty }
         let setup = scripts["setup"] as? String
-        let run = scripts["run"] as? String
         let teardown = scripts["archive"] as? String
-        guard setup != nil || run != nil || teardown != nil else { return .empty }
-        return ScriptConfig(setup: nonEmpty(setup), run: nonEmpty(run), teardown: nonEmpty(teardown), source: "conductor.json", loadError: nil)
+        guard setup != nil || teardown != nil else { return .empty }
+        return ScriptConfig(setup: nonEmpty(setup), teardown: nonEmpty(teardown), source: "conductor.json", loadError: nil)
     }
 
-    /// .superset/config.json: { "setup": ["cmd1", "cmd2"], "run": ["cmd"], "teardown": ["cmd"] }
+    /// .superset/config.json: { "setup": ["cmd1", "cmd2"], "teardown": ["cmd"] }
     private static func loadSuperset(_ path: String) throws -> ScriptConfig {
         let dict = try loadJSON(path)
         let setup = joinCommands(dict["setup"])
-        let run = joinCommands(dict["run"])
         let teardown = joinCommands(dict["teardown"])
-        guard setup != nil || run != nil || teardown != nil else { return .empty }
-        return ScriptConfig(setup: setup, run: run, teardown: teardown, source: ".superset/config.json", loadError: nil)
+        guard setup != nil || teardown != nil else { return .empty }
+        return ScriptConfig(setup: setup, teardown: teardown, source: ".superset/config.json", loadError: nil)
     }
 
     // MARK: - Helpers

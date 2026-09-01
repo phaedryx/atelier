@@ -27,7 +27,6 @@ struct ScriptApprovalView: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 commandRow(NSLocalizedString("Setup", comment: ""), scriptConfig.setup)
-                commandRow(NSLocalizedString("Run", comment: ""), scriptConfig.run)
                 commandRow(NSLocalizedString("Teardown", comment: ""), scriptConfig.teardown)
             }
             .padding(12)

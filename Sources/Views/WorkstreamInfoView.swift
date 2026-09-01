@@ -189,13 +189,6 @@ struct WorkstreamInfoView: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
-                        if let run = scriptConfig.run {
-                            LabeledContent("Run") {
-                                Text(run)
-                                    .font(.system(.body, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
                         if let teardown = scriptConfig.teardown {
                             LabeledContent("Teardown") {
                                 Text(teardown)

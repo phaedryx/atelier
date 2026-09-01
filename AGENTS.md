@@ -180,10 +180,10 @@ and directory modes are restored in Swift rather than via `--chmod`. Do not add 
 without checking both.
 
 ### Dev command and runners
-`DevCommandResolver` picks what the Environment tab's Start button runs, in order: the `run`
-script from `.atelier.json`, then a per-workstream override the user typed, then the best
-runner detected for the worktree. Detection finds `process-compose.yaml` / `process-compose.yml`
-and a `dev` script in `package.json`, in that order. When both are present the Environment tab
+`DevCommandResolver` picks what the Environment tab's Start button runs, in order: the
+per-workstream override the user typed, then the best runner detected for the worktree.
+Detection finds `process-compose.yaml` / `process-compose.yml` and a `dev` script in
+`package.json`, in that order. When both are present the Environment tab
 shows a picker; the choice is stored per project in `atelier.devRunner.<projectDirectory>`.
 
 A process-compose config is looked for in the **worktree first, then the project directory**.
@@ -207,12 +207,12 @@ Three details of the invocation are load-bearing:
   worktree-level override is passed with a second `-f` — but only when it exists, since
   process-compose treats a missing `-f` file as fatal.
 
-A `process-compose.yaml` is repository-provided content that executes, so it is approval-gated
-exactly like a `run` script: `ScriptTrust.isApproved(runnerFile:for:)` fingerprints the file's
-contents, and editing it asks again. This is tracked apart from `ScriptTrust.isApproved(_:for:)`
-so approving a process config cannot also release a setup script. (The `package.json` path is
-still ungated — Atelier composes `pnpm run dev` itself, but the script body is the repository's.
-That gap predates this and closing it would force re-approval on every existing project.)
+Starting a dev command is **not** gated. `ScriptTrust` covers `setup` and `teardown`, which run
+without the user watching — setup fires during worktree creation and teardown during archiving —
+but Start is a deliberate press on a command the pane is already showing, and neither detected
+runner has an approval story worth the interstitial: the `package.json` path never had one, and
+gating only process-compose would have been inconsistent for no gain. If dev commands are ever
+gated again, gate both.
 
 ### Project environment variables
 A project can define variables that are exported into its run command, edited in the
@@ -234,17 +234,21 @@ a socket. Project definitions merge over Atelier's own variables, so a project t
 ### Script configuration
 Scripts are loaded from `.atelier.json` in the project directory:
 ```json
-{ "setup": "cmd", "run": "cmd", "teardown": "cmd" }
+{ "setup": "cmd", "teardown": "cmd" }
 ```
+
+There is deliberately no `run` key: what Start runs comes from detection or the user's own
+override (see **Dev command and runners**). A config that still carries `run` loads fine — the
+key is ignored.
 Falls back to `.emdash.json`, `conductor.json`, or `.superset/config.json` if not found.
 When using a fallback config, compatibility env vars are injected (e.g. `CONDUCTOR_*`, `EMDASH_*`, `SUPERSET_*`).
 
-These commands come from the repository, so none of them run until the user approves them.
+These commands come from the repository, so neither runs until the user approves them.
 `ScriptTrust` stores approval per project directory against a SHA-256 fingerprint of the
 commands and their source file, so an edited config has to be approved again. The gate covers
-`setup` (`SetupGateState.resolve`), `run` (`shouldRestoreRunSession` and the Environment tab
-controls), and `teardown` (`ScriptConfig.runTeardown`). Any new execution path for
-repository-provided commands must check `ScriptTrust.isApproved` first.
+`setup` (`SetupGateState.resolve`) and `teardown` (`ScriptConfig.runTeardown`) — the two that
+run unattended. Any new *unattended* execution path for repository-provided commands must check
+`ScriptTrust.isApproved` first.
 
 ### Port detection
 Run scripts are wrapped in the `atelier-run` launcher binary (bundled at `Contents/Helpers/atelier-run`).

@@ -3,8 +3,8 @@
 
 import SwiftUI
 
-func shouldRestoreRunSession(useTmux: Bool, hasRunScript: Bool, hasExistingRunSession: Bool, wasStoppedManually: Bool, isApproved: Bool) -> Bool {
-    useTmux && hasRunScript && hasExistingRunSession && !wasStoppedManually && isApproved
+func shouldRestoreRunSession(useTmux: Bool, hasRunScript: Bool, hasExistingRunSession: Bool, wasStoppedManually: Bool) -> Bool {
+    useTmux && hasRunScript && hasExistingRunSession && !wasStoppedManually
 }
 
 func scriptCommand(script: String, role: String, shell: String = CommandBuilder.userShell) -> String {
@@ -26,22 +26,16 @@ struct EnvironmentTabView: View {
     let environmentVars: [String: String]
     /// Final assembled run command (atelier-run + tmux wrap), set once the session starts.
     let runCommand: String?
-    /// Whether the command comes from the repo config and needs approval.
-    let runCommandIsGated: Bool
-    /// The resolved dev command when no run script is configured.
+    /// The resolved dev command: the user's override, or a detected runner.
     let devCommand: DevCommand?
     /// Every runner detected in the worktree. A picker appears past one.
     let runnerCandidates: [DevCommand]
     let onSelectRunner: (DevCommand.Source) -> Void
-    /// The runner config awaiting approval, if the resolved command reads one.
-    let pendingRunnerApproval: DevCommand?
-    let onApproveRunner: () -> Void
     @Binding var envVarDefinitions: [EnvVarDefinition]
     /// What the definitions above evaluate to in this worktree.
     let resolvedEnvVars: [String: String]
     @Binding var devCommandOverride: String?
     @Binding var runStarted: Bool
-    @Binding var scriptsApproved: Bool
     @Binding var runGeneration: Int
     let onStart: () -> Void
     let onStop: () -> Void
@@ -58,7 +52,7 @@ struct EnvironmentTabView: View {
 
     /// The short, human-readable command this pane would run.
     private var runCommandPreference: String? {
-        scriptConfig.run ?? devCommand?.command
+        devCommand?.command
     }
 
     var body: some View {
@@ -101,14 +95,6 @@ struct EnvironmentTabView: View {
                 Text(title)
                     .font(.system(size: 12, weight: .semibold))
 
-                if let command = runCommandPreference, scriptConfig.run != nil {
-                    Text(command)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-
                 if runCommandPreference != nil, RunLauncher.executableURL() == nil {
                     Text("No port detection")
                         .font(.system(size: 9))
@@ -133,27 +119,13 @@ struct EnvironmentTabView: View {
 
             Divider()
 
-            if scriptConfig.run == nil {
-                devCommandSection
-                Divider()
-            }
+            devCommandSection
+            Divider()
 
             envVarSection
             Divider()
 
-            if let pending = pendingRunnerApproval, let path = pending.trustFilePath {
-                RunnerApprovalView(filePath: path, command: pending.command, onApprove: onApproveRunner)
-            } else if runCommandIsGated, !scriptsApproved {
-                ScriptApprovalView(
-                    scriptConfig: scriptConfig,
-                    approveLabel: NSLocalizedString("Approve and Start", comment: ""),
-                    onApprove: {
-                        ScriptTrust.approve(scriptConfig, for: projectDirectory)
-                        scriptsApproved = true
-                        onStart()
-                    }
-                )
-            } else if runStarted, let runCommand {
+            if runStarted, let runCommand {
                 SingleTerminalView(
                     surfaceID: runID,
                     workingDirectory: workingDirectory,
@@ -254,8 +226,7 @@ struct EnvironmentTabView: View {
     private func runnerLabel(for candidate: DevCommand) -> String {
         switch candidate.source {
         case .processCompose: return NSLocalizedString("process-compose", comment: "")
-        case .packageJSON: return candidate.command
-        case .configScript, .override: return candidate.command
+        case .packageJSON, .override: return candidate.command
         }
     }
 
@@ -323,8 +294,6 @@ struct EnvironmentTabView: View {
     private func sourceTag(for source: DevCommand.Source) -> some View {
         let text: String
         switch source {
-        case .configScript:
-            text = ".atelier.json"
         case .override:
             text = NSLocalizedString("Custom", comment: "")
         case .processCompose:
@@ -372,31 +341,28 @@ struct EnvironmentTabView: View {
         .background(Color.blue.opacity(0.05))
     }
 
-    private func scriptInstructions(title: String) -> some View {
+    /// Shown when nothing was detected and no command has been set. Names the
+    /// two things that would make Start work rather than a config key, because
+    /// detection is now the only path in.
+    private func scriptInstructions(title _: String) -> some View {
         VStack(spacing: 12) {
             Image(systemName: "doc.text")
                 .font(.system(size: 28))
                 .foregroundStyle(.tertiary)
-            Text(String(format: NSLocalizedString("No %@ script configured", comment: ""), title.lowercased()))
+            Text("No dev command found")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
-            Text(String(format: NSLocalizedString("Add a %@ field to .atelier.json:", comment: ""), title.lowercased()))
+            Text("Add a process-compose.yaml to this worktree or the project directory, or a dev script to package.json. Or set a command with Customize above.")
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
-            Text("{ \"\(title.lowercased())\": \"your-command\" }")
-                .font(.system(size: 11, design: .monospaced))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(Color.primary.opacity(0.05))
-                .clipShape(RoundedRectangle(cornerRadius: 4))
-                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 380)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var runControlsEnabled: Bool {
-        guard runCommandPreference != nil, pendingRunnerApproval == nil else { return false }
-        return runCommandIsGated ? scriptsApproved : true
+        runCommandPreference != nil
     }
 }
 
