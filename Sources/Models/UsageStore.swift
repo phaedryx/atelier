@@ -31,10 +31,13 @@ final class UsageStore: ObservableObject {
         }
         guard !isRefreshing else { return }
         isRefreshing = true
+        // `defer`, not a trailing assignment: an early return or a cancelled
+        // task would otherwise leave the flag set and the guard above would
+        // reject every later refresh, including the meter's forced click.
+        defer { isRefreshing = false }
         lastRefresh = now
         if let fetched = await fetch() {
             report = fetched
         }
-        isRefreshing = false
     }
 }

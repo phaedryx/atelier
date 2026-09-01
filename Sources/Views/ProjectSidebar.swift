@@ -1287,7 +1287,7 @@ private struct WorkstreamRow: View {
                 }
 
                 if showsMainContextMeter, let usage = mainContextUsage {
-                    ContextMeter(usage: usage, style: .bar)
+                    ContextMeter(usage: usage)
                         .opacity(isAgentActive ? 1 : 0.45)
                         .animation(.easeInOut(duration: 0.2), value: isAgentActive)
                 }

@@ -1,5 +1,5 @@
 // ABOUTME: Horizontal context-window meter (bar + percentage) used on the
-// ABOUTME: workstream row and on roster subagent cards.
+// ABOUTME: workstream row.
 
 import SwiftUI
 
@@ -14,17 +14,10 @@ import SwiftUI
 ///   orange, past `qualityCriticalThreshold` (300k) at red, because response
 ///   quality decays in absolute terms even when a large window still has room.
 ///
-/// - `.compact`: fixed 40×3pt capsule with a % label beneath (roster cards).
-/// - `.bar`: flexible track filling the available width with a
-///   "12.3k · 6%" label trailing (workstream row).
+/// Renders as a flexible track filling the available width with a
+/// "12.3k · 6%" label trailing.
 struct ContextMeter: View {
-    enum Style {
-        case compact
-        case bar
-    }
-
     let usage: WorkstreamAgentStateTracker.ContextUsage
-    var style: Style = .compact
 
     private var fraction: Double {
         min(max(usage.fraction, 0), 1)
@@ -77,9 +70,9 @@ struct ContextMeter: View {
     static func compactTokenCount(_ tokens: Int) -> String {
         let tokens = max(tokens, 0)
         switch tokens {
-        case ..<1_000: return "\(tokens)"
-        case ..<100_000: return String(format: "%.1fk", Double(tokens) / 1_000)
-        case ..<1_000_000: return "\(tokens / 1_000)k"
+        case ..<1000: return "\(tokens)"
+        case ..<100_000: return String(format: "%.1fk", Double(tokens) / 1000)
+        case ..<1_000_000: return "\(tokens / 1000)k"
         default: return String(format: "%.1fM", Double(tokens) / 1_000_000)
         }
     }
@@ -90,54 +83,33 @@ struct ContextMeter: View {
     }
 
     var body: some View {
-        switch style {
-        case .compact:
-            VStack(alignment: .trailing, spacing: 2) {
+        HStack(spacing: 4) {
+            GeometryReader { proxy in
                 ZStack(alignment: .leading) {
                     Capsule()
                         .fill(.quaternary)
-                        .frame(width: 40, height: 3)
                     Capsule()
                         .fill(fillColor)
-                        .frame(width: 40 * fraction, height: 3)
+                        .frame(width: max(0, proxy.size.width * fraction))
                 }
-                Text(percentLabel)
-                    .font(.system(size: 8, design: .monospaced))
-                    .foregroundStyle(.secondary)
             }
-            .help(helpText)
-
-        case .bar:
-            HStack(spacing: 4) {
-                GeometryReader { proxy in
-                    ZStack(alignment: .leading) {
-                        Capsule()
-                            .fill(.quaternary)
-                        Capsule()
-                            .fill(fillColor)
-                            .frame(width: max(0, proxy.size.width * fraction))
-                    }
-                }
-                .frame(height: 3)
-                Text(barLabel)
-                    .font(.system(size: 8, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .fixedSize()
-            }
-            .help(barHelpText)
+            .frame(height: 3)
+            Text(barLabel)
+                .font(.system(size: 8, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .fixedSize()
         }
-    }
-
-    private var helpText: String {
-        NSLocalizedString("Context window usage", comment: "Tooltip for the per-agent context meter")
+        .help(barHelpText)
     }
 
     private var barHelpText: String {
         String(
             format: NSLocalizedString(
                 "Context: %1$lld tokens · %2$lld%%",
-                comment: "Tooltip for the workstream context bar: exact token count and percent of window"),
+                comment: "Tooltip for the workstream context bar: exact token count and percent of window"
+            ),
             usage.usedTokens,
-            Int(fraction * 100))
+            Int(fraction * 100)
+        )
     }
 }

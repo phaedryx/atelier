@@ -18,31 +18,70 @@ struct UsageReport: Equatable {
     /// `Current week (Fable): 29% used`.
     var modelName: String?
 
-    var isEmpty: Bool { session == nil && week == nil && modelWeek == nil }
+    var isEmpty: Bool {
+        session == nil && week == nil && modelWeek == nil
+    }
 }
 
 enum UsageProbe {
-    /// Run `claude -p /usage --output-format json` and parse the result. Returns nil if
-    /// claude isn't installed, the call fails, or nothing parseable comes back.
-    /// Blocks on a subprocess — must be called off the main actor.
-    static func fetch(shell: String = CommandBuilder.userShell) -> UsageReport? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: shell)
-        process.arguments = ["-lic", "claude -p '/usage' --output-format json"]
-        process.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
-        let outPipe = Pipe()
-        process.standardOutput = outPipe
-        process.standardError = Pipe()
+    /// Ceiling on a single probe. Generous enough for a cold `claude` start,
+    /// short enough that a wedged one is only one stale refresh cycle.
+    static let timeout: TimeInterval = 30
 
-        do {
-            try process.run()
-        } catch {
-            return nil
+    /// Run `claude -p /usage --output-format json` and parse the result. Returns nil if
+    /// claude isn't installed, the call fails or hangs, or nothing parseable comes back.
+    /// Blocks on a subprocess — must be called off the main actor.
+    ///
+    /// The binary is executed directly rather than through `sh -lic`: a login
+    /// *interactive* shell evaluates the user's whole rc every probe, and this
+    /// runs on a timer. `CommandLineTools.path(for:)` already resolves against
+    /// the login-shell PATH (cached process-wide), so the shell buys nothing.
+    static func fetch(
+        claudePath: String? = CommandLineTools.path(for: "claude"),
+        timeout: TimeInterval = timeout
+    ) -> UsageReport? {
+        guard let claudePath else { return nil }
+        let data = ProcessRunner.run(
+            executable: claudePath,
+            arguments: ["-p", "/usage", "--output-format", "json"],
+            environment: childEnvironment(),
+            currentDirectory: FileManager.default.homeDirectoryForCurrentUser,
+            timeout: timeout
+        )
+        return data.flatMap(parse)
+    }
+
+    /// The app's own environment, hardened for a GUI-launched child.
+    ///
+    /// Two things must be right or `/usage` comes back useless:
+    ///
+    /// - `PATH`: a GUI process inherits launchd's minimal PATH, and `claude`
+    ///   shells out to tools that must resolve the way they do in a terminal.
+    ///   The login-shell PATH is cached process-wide, so this is nearly free.
+    /// - `USER`: without it `claude -p /usage` silently returns the *cost
+    ///   summary* ("Total cost: $0.0000 …") instead of the plan-usage text,
+    ///   and `parseText` finds no "% used" line to read. Verified by
+    ///   bisecting the environment; `LOGNAME` does not substitute for it.
+    ///   launchd normally provides it, but it is cheap to guarantee.
+    static func childEnvironment(
+        base: [String: String] = ProcessInfo.processInfo.environment,
+        loginShellPath: (String) -> String? = { CommandLineTools.loginShellPath(shell: $0) },
+        userName: String = NSUserName(),
+        homeDirectory: String = NSHomeDirectory()
+    ) -> [String: String] {
+        var environment = base
+        if let shell = environment["SHELL"], !shell.isEmpty,
+           let path = loginShellPath(shell)
+        {
+            environment["PATH"] = path
         }
-        let data = outPipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else { return nil }
-        return parse(data)
+        if environment["USER"]?.isEmpty ?? true {
+            environment["USER"] = userName
+        }
+        if environment["HOME"]?.isEmpty ?? true {
+            environment["HOME"] = homeDirectory
+        }
+        return environment
     }
 
     /// Parse the `--output-format json` envelope, then the human-readable `result` text.
