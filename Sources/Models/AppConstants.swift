@@ -3,26 +3,6 @@
 
 import Foundation
 
-func resolvedConfigDirectory(
-    configDirectoryName: String,
-    environment: [String: String],
-    defaultConfigBase: URL,
-    isRunningTests: Bool
-) -> URL {
-    let configBase: URL
-    if let xdg = environment["XDG_CONFIG_HOME"], !xdg.isEmpty {
-        configBase = URL(fileURLWithPath: xdg)
-    } else {
-        configBase = defaultConfigBase
-    }
-
-    if isRunningTests {
-        return configBase.appendingPathComponent("\(configDirectoryName)-tests")
-    }
-
-    return configBase.appendingPathComponent(configDirectoryName)
-}
-
 func isRunningXCTest(environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
     environment["XCTestConfigurationFilePath"] != nil
 }
@@ -36,9 +16,7 @@ enum AppConstants {
         #endif
     }()
 
-    static let appName: String = {
-        "Atelier"
-    }()
+    static let appName: String = "Atelier"
 
     /// GitHub `owner/repo` backing the repository and documentation URLs below.
     static let repositorySlug: String = "phaedryx/atelier"
@@ -75,17 +53,6 @@ enum AppConstants {
         #else
             return version
         #endif
-    }
-
-    /// Config directory: ~/.config/atelier/ (respects XDG_CONFIG_HOME).
-    /// XCTest uses ~/.config/atelier-tests/ to keep test data isolated.
-    static var configDirectory: URL {
-        resolvedConfigDirectory(
-            configDirectoryName: "atelier",
-            environment: ProcessInfo.processInfo.environment,
-            defaultConfigBase: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config"),
-            isRunningTests: isRunningXCTest()
-        )
     }
 
     /// Cache directory: ~/Library/Caches/atelier/.

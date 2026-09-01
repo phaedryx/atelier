@@ -396,14 +396,6 @@ struct TerminalContainerView: View {
         PortAllocator.port(for: workingDirectory)
     }
 
-    private var portSubtitle: String {
-        let label = appEnv.taskDescription(for: workingDirectory) ?? projectName
-        if let port = portDetector.selectedPort {
-            return "\(label) · localhost:\(port) · New Browser via \u{2318}\u{21E7}P"
-        }
-        return label
-    }
-
     private var browserDefaultURL: String {
         let port = portDetector.selectedPort ?? workstreamPort
         return "http://localhost:\(port)/"
@@ -2063,36 +2055,6 @@ private struct ContentWidthKey: PreferenceKey {
     }
 }
 
-private struct AddTabButton: View {
-    let label: String
-    let icon: String
-    let shortcut: String
-    let action: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.system(size: 11))
-                Text(label)
-                    .font(.system(size: 11))
-                (Text(Image(systemName: "command")) + Text(shortcut))
-                    .font(.system(size: 9))
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(isHovering ? Color.primary.opacity(0.05) : .clear)
-            .clipShape(RoundedRectangle(cornerRadius: 5))
-            .foregroundStyle(.secondary)
-        }
-        .buttonStyle(.borderless)
-        .onHover { isHovering = $0 }
-    }
-}
-
 // MARK: - SingleTerminalView
 
 struct SingleTerminalView: View {
@@ -2206,99 +2168,6 @@ private struct TerminalSurfaceView: NSViewRepresentable {
                 terminalView.window?.makeFirstResponder(terminalView)
             }
         }
-    }
-}
-
-// MARK: - Quick action debug
-
-private struct QuickActionDebugView: View {
-    @ObservedObject var runner: QuickActionRunner
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Quick Action Log")
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                if !runner.log.isEmpty {
-                    Button("Clear") { runner.clearLog() }
-                        .font(.system(size: 10))
-                        .buttonStyle(.borderless)
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-
-            if runner.log.isEmpty {
-                Text("No quick actions run yet.")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, 4)
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 8) {
-                        ForEach(runner.log) { entry in
-                            QuickActionLogRow(entry: entry)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-            }
-        }
-        .frame(height: 200)
-        .background(.background)
-    }
-}
-
-private struct QuickActionLogRow: View {
-    let entry: QuickActionLogEntry
-    @State private var showsRawOutput = false
-
-    private static let timeFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm:ss"
-        return f
-    }()
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Text(Self.timeFormatter.string(from: entry.timestamp))
-                    .foregroundStyle(.tertiary)
-                Text(entry.action.label)
-                    .foregroundStyle(.primary)
-                if let code = entry.exitCode {
-                    Text("exit \(code)")
-                        .foregroundStyle(code == 0 ? .green : .red)
-                } else {
-                    ProgressView()
-                        .controlSize(.mini)
-                }
-            }
-            .font(.system(size: 11, weight: .medium, design: .monospaced))
-
-            Text("$ " + entry.command)
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-
-            if !entry.output.isEmpty {
-                DisclosureGroup(isExpanded: $showsRawOutput) {
-                    Text(entry.output)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } label: {
-                    Text("Raw output")
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.tertiary)
-                }
-            }
-        }
-        .padding(.horizontal, 8)
     }
 }
 

@@ -1,10 +1,7 @@
 // ABOUTME: Handles atomic file writes for JSON persistence.
-// ABOUTME: Ensures the config directory exists and writes via temp file for crash safety.
+// ABOUTME: Creates the parent directory as needed and writes via temp file for crash safety.
 
 import Foundation
-import OSLog
-
-private let logger = Logger(subsystem: "atelier", category: "file-persistence")
 
 enum FilePersistence {
     /// Write data atomically to a file, creating parent directories if needed.
