@@ -8,6 +8,9 @@ import WebKit
 
 struct MarkdownContentView: NSViewRepresentable {
     let markdown: String
+    /// Called with the rendered document height once it has laid out. Only set by
+    /// `SelfSizingMarkdownView`; the full-pane use fills its container and does not care.
+    var onContentHeight: ((CGFloat) -> Void)?
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -21,6 +24,9 @@ struct MarkdownContentView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
+        // Assigned before the guard: reporting a height re-renders the parent, which lands
+        // back here with the markdown unchanged, and the callback must survive that.
+        context.coordinator.onContentHeight = onContentHeight
         guard context.coordinator.lastMarkdown != markdown else { return }
         context.coordinator.lastMarkdown = markdown
         let html = renderMarkdownToHTML(markdown)
@@ -34,6 +40,30 @@ struct MarkdownContentView: NSViewRepresentable {
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         var lastMarkdown: String?
+        var onContentHeight: ((CGFloat) -> Void)?
+
+        func webView(_ webView: WKWebView, didFinish _: WKNavigation!) {
+            measureContentHeight(webView)
+            // `didFinish` can land before layout settles, and a first read that comes back
+            // short would stick: unchanged markdown never triggers another load, so nothing
+            // would measure again. One delayed re-read is what actually catches that.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self, weak webView] in
+                guard let self, let webView else { return }
+                measureContentHeight(webView)
+            }
+        }
+
+        private func measureContentHeight(_ webView: WKWebView) {
+            guard let onContentHeight else { return }
+            // `allowsContentJavaScript` gates scripts inside the loaded document, not
+            // host-side evaluation. If that ever stops holding, the result is nil and the
+            // caller keeps its fallback height rather than collapsing to nothing.
+            let script = "Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)"
+            webView.evaluateJavaScript(script) { value, _ in
+                guard let number = value as? NSNumber, number.doubleValue > 0 else { return }
+                onContentHeight(CGFloat(number.doubleValue))
+            }
+        }
 
         func webView(
             _: WKWebView,
@@ -51,6 +81,24 @@ struct MarkdownContentView: NSViewRepresentable {
             }
             decisionHandler(.allow)
         }
+    }
+}
+
+/// A markdown pane that sizes itself to its content, for embedding inside a `Form` section.
+///
+/// `MarkdownContentView` wraps a `WKWebView`, which has no intrinsic content size. In the
+/// full-height docs pane that is fine because it fills whatever it is given, but dropped into
+/// a Form row it would collapse to nothing. This measures the rendered document instead, and
+/// caps the result so a long story description cannot push the rest of the tab off-screen.
+struct SelfSizingMarkdownView: View {
+    let markdown: String
+    var maxHeight: CGFloat = 320
+
+    @State private var contentHeight: CGFloat?
+
+    var body: some View {
+        MarkdownContentView(markdown: markdown) { contentHeight = $0 }
+            .frame(height: min(contentHeight ?? maxHeight, maxHeight))
     }
 }
 

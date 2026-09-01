@@ -1,5 +1,5 @@
 // ABOUTME: GitHub operations using the gh CLI.
-// ABOUTME: Fetches repo info, PRs, and branch-specific PR status.
+// ABOUTME: Fetches repo info, PRs, and branch-specific PR status including checks and review state.
 
 import Foundation
 
@@ -15,15 +15,213 @@ struct GitHubRepoInfo {
 struct GitHubPR: Equatable {
     let number: Int
     let title: String
+    /// Raw gh state: OPEN, MERGED, or CLOSED. Prefer `status`, which also folds in `isDraft`.
     let state: String
     let branch: String
     let url: String
+    let isDraft: Bool
+    /// APPROVED, CHANGES_REQUESTED, or REVIEW_REQUIRED. Nil when no review is required —
+    /// gh reports that as an empty string, which `decode` normalizes away so callers can
+    /// use `if let` without rendering a blank row.
+    let reviewDecision: String?
+    let checks: ChecksRollup
+
+    init(
+        number: Int,
+        title: String,
+        state: String,
+        branch: String,
+        url: String,
+        isDraft: Bool = false,
+        reviewDecision: String? = nil,
+        checks: ChecksRollup = .none
+    ) {
+        self.number = number
+        self.title = title
+        self.state = state
+        self.branch = branch
+        self.url = url
+        self.isDraft = isDraft
+        self.reviewDecision = reviewDecision
+        self.checks = checks
+    }
+
+    /// What the PR actually is, as far as the UI is concerned.
+    ///
+    /// Exists so views stop re-deriving this from `state` string comparisons; three of them
+    /// used `state == "MERGED" ? .purple : .green`, which painted a closed-unmerged PR green
+    /// once those stopped being filtered out of the cache.
+    enum Status {
+        case draft
+        case open
+        case merged
+        case closed
+    }
+
+    /// The combined state of every check on the PR's head commit.
+    enum ChecksRollup {
+        /// No checks ran, or none of them reported a pass or a failure.
+        case none
+        case pending
+        case passing
+        case failing
+    }
+
+    var status: Status {
+        switch state.uppercased() {
+        case "MERGED": .merged
+        // A merged PR is never a draft, whatever the flag says, so this order matters.
+        case "OPEN": isDraft ? .draft : .open
+        default: .closed
+        }
+    }
+
+    // MARK: - Decoding
+
+    /// Parses the array `gh pr list --json` prints.
+    ///
+    /// Split out from the `gh` calls so the rollup reduction below is testable without a
+    /// subprocess or a network round trip — this repo only ever produces one of the two
+    /// `statusCheckRollup` shapes, so the app alone cannot exercise the other.
+    static func decode(_ data: Data) -> [GitHubPR] {
+        guard let json = try? JSONSerialization.jsonObject(with: data),
+              let array = json as? [[String: Any]]
+        else { return [] }
+        return array.compactMap(from)
+    }
+
+    /// One entry, or nil when a field the UI needs is missing. Optional fields default rather
+    /// than fail the entry, so a caller requesting a narrower `--json` set still decodes.
+    private static func from(_ dict: [String: Any]) -> GitHubPR? {
+        guard let number = dict["number"] as? Int,
+              let title = dict["title"] as? String,
+              let state = dict["state"] as? String,
+              let branch = dict["headRefName"] as? String,
+              let url = dict["url"] as? String
+        else { return nil }
+
+        let decision = (dict["reviewDecision"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+
+        return GitHubPR(
+            number: number,
+            title: title,
+            state: state,
+            branch: branch,
+            url: url,
+            isDraft: dict["isDraft"] as? Bool ?? false,
+            reviewDecision: decision,
+            checks: ChecksRollup(entries: dict["statusCheckRollup"] as? [[String: Any]] ?? [])
+        )
+    }
+
+    /// The best PR per branch.
+    ///
+    /// `gh pr list --state all` can return several PRs for one branch, and now that closed
+    /// ones are retained, an abandoned PR can shadow the live one. Ranking by status first
+    /// and recency second makes the choice deterministic instead of leaving it to gh's
+    /// ordering — which is what `uniquingKeysWith: { first, _ in first }` did before.
+    static func byBranch(_ prs: [GitHubPR]) -> [String: GitHubPR] {
+        Dictionary(prs.map { ($0.branch, $0) }, uniquingKeysWith: { lhs, rhs in
+            if lhs.rank != rhs.rank {
+                return lhs.rank < rhs.rank ? lhs : rhs
+            }
+            return lhs.number > rhs.number ? lhs : rhs
+        })
+    }
+
+    /// Lower sorts first. Draft ranks with open: it is still the live PR for the branch.
+    private var rank: Int {
+        switch status {
+        case .draft, .open: 0
+        case .merged: 1
+        case .closed: 2
+        }
+    }
+}
+
+extension GitHubPR.ChecksRollup {
+    /// Reduces the `statusCheckRollup` array to a single state.
+    ///
+    /// Failing outranks pending: a run with one failed check is already doomed, so reporting
+    /// it as still-running would be misleading.
+    init(entries: [[String: Any]]) {
+        var sawPending = false
+        var sawPassing = false
+
+        for entry in entries {
+            switch Self.signal(for: entry) {
+            case .failing:
+                self = .failing
+                return
+            case .pending:
+                sawPending = true
+            case .passing:
+                sawPassing = true
+            case .none:
+                continue
+            }
+        }
+
+        if sawPending {
+            self = .pending
+        } else if sawPassing {
+            self = .passing
+        } else {
+            self = .none
+        }
+    }
+
+    /// Normalizes the two entry shapes gh emits into one signal.
+    ///
+    /// `CheckRun` carries `status` plus `conclusion`; `StatusContext` carries `state` and
+    /// neither of the others. Dispatching on which key is present rather than on `__typename`
+    /// means an entry kind gh adds later degrades to `.none` instead of being misread.
+    private static func signal(for entry: [String: Any]) -> Self {
+        if let state = entry["state"] as? String {
+            return fromStatusContext(state: state)
+        }
+        if let status = entry["status"] as? String {
+            return fromCheckRun(status: status, conclusion: entry["conclusion"] as? String)
+        }
+        return .none
+    }
+
+    private static func fromCheckRun(status: String, conclusion: String?) -> Self {
+        guard status.uppercased() == "COMPLETED" else { return .pending }
+        switch conclusion?.uppercased() {
+        case "SUCCESS":
+            return .passing
+        case "FAILURE", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE":
+            return .failing
+        // SKIPPED, NEUTRAL, and CANCELLED are not failures — this matches GitHub's own
+        // rollup, which shows a green check when the only non-successes are skips.
+        default:
+            return .none
+        }
+    }
+
+    private static func fromStatusContext(state: String) -> Self {
+        switch state.uppercased() {
+        case "SUCCESS":
+            .passing
+        case "FAILURE", "ERROR":
+            .failing
+        case "PENDING", "EXPECTED":
+            .pending
+        default:
+            .none
+        }
+    }
 }
 
 enum GitHubOperations {
     private static var gitPath: String? {
         CommandLineTools.path(for: "git")
     }
+
+    /// The `--json` field set every PR query requests. Kept in one place so a field added for
+    /// one call site cannot silently go missing from another and decode as its default.
+    private static let prFields = "number,title,state,headRefName,url,isDraft,reviewDecision,statusCheckRollup"
 
     /// Check if the project has a GitHub remote.
     static func hasGitHubRemote(at path: String) -> Bool {
@@ -85,66 +283,34 @@ enum GitHubOperations {
 
     /// Fetch open PRs for this repo.
     static func openPRs(ghPath: String, at path: String, limit: Int = 5) -> [GitHubPR] {
-        guard let json = run(ghPath, args: ["pr", "list", "--json", "number,title,state,headRefName,url", "--limit", "\(limit)"], in: path) else { return [] }
-        guard let data = json.data(using: .utf8),
-              let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
-
-        return array.compactMap { dict in
-            guard let number = dict["number"] as? Int,
-                  let title = dict["title"] as? String,
-                  let state = dict["state"] as? String,
-                  let branch = dict["headRefName"] as? String,
-                  let url = dict["url"] as? String else { return nil }
-            return GitHubPR(number: number, title: title, state: state, branch: branch, url: url)
-        }
+        decode(run(ghPath, args: ["pr", "list", "--json", prFields, "--limit", "\(limit)"], in: path))
     }
 
-    /// Fetch open and merged PRs for this repo, most-recent-first.
-    /// Closed-but-unmerged PRs are filtered out so they don't render a badge.
-    static func openAndMergedPRs(ghPath: String, at path: String, limit: Int = 100) -> [GitHubPR] {
-        guard let json = run(ghPath, args: ["pr", "list", "--state", "all", "--json", "number,title,state,headRefName,url", "--limit", "\(limit)"], in: path) else { return [] }
-        guard let data = json.data(using: .utf8),
-              let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
-
-        return array.compactMap { dict in
-            guard let number = dict["number"] as? Int,
-                  let title = dict["title"] as? String,
-                  let state = dict["state"] as? String,
-                  let branch = dict["headRefName"] as? String,
-                  let url = dict["url"] as? String else { return nil }
-            guard state == "OPEN" || state == "MERGED" else { return nil }
-            return GitHubPR(number: number, title: title, state: state, branch: branch, url: url)
-        }
+    /// Fetch PRs for this repo in every state, most-recent-first.
+    ///
+    /// Closed-but-unmerged PRs used to be filtered out here, which made them indistinguishable
+    /// from a branch that never had a PR at all — the section simply vanished. They are kept
+    /// now and rendered as closed; `GitHubPR.byBranch` is what stops a stale one winning.
+    static func recentPRs(ghPath: String, at path: String, limit: Int = 100) -> [GitHubPR] {
+        decode(run(ghPath, args: ["pr", "list", "--state", "all", "--json", prFields, "--limit", "\(limit)"], in: path))
     }
 
-    /// Find an open PR for a specific branch.
+    /// Find the PR for a specific branch, in whatever state it is in.
+    ///
+    /// Asks for several rather than `--limit 1`: a branch can carry an abandoned PR plus a
+    /// live one, and gh's ordering does not guarantee which arrives first.
     static func prForBranch(ghPath: String, at path: String, branch: String) -> GitHubPR? {
-        guard let json = run(ghPath, args: ["pr", "list", "--head", branch, "--json", "number,title,state,headRefName,url", "--limit", "1"], in: path) else { return nil }
-        guard let data = json.data(using: .utf8),
-              let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
-              let dict = array.first else { return nil }
-
-        guard let number = dict["number"] as? Int,
-              let title = dict["title"] as? String,
-              let state = dict["state"] as? String,
-              let branch = dict["headRefName"] as? String,
-              let url = dict["url"] as? String else { return nil }
-        return GitHubPR(number: number, title: title, state: state, branch: branch, url: url)
+        let prs = decode(run(
+            ghPath,
+            args: ["pr", "list", "--head", branch, "--state", "all", "--json", prFields, "--limit", "10"],
+            in: path
+        ))
+        return GitHubPR.byBranch(prs)[branch] ?? prs.first
     }
 
-    /// Find a merged PR for a specific branch.
-    static func mergedPRForBranch(ghPath: String, at path: String, branch: String) -> GitHubPR? {
-        guard let json = run(ghPath, args: ["pr", "list", "--head", branch, "--state", "merged", "--json", "number,title,state,headRefName,url", "--limit", "1"], in: path) else { return nil }
-        guard let data = json.data(using: .utf8),
-              let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
-              let dict = array.first else { return nil }
-
-        guard let number = dict["number"] as? Int,
-              let title = dict["title"] as? String,
-              let state = dict["state"] as? String,
-              let branch = dict["headRefName"] as? String,
-              let url = dict["url"] as? String else { return nil }
-        return GitHubPR(number: number, title: title, state: state, branch: branch, url: url)
+    private static func decode(_ json: String?) -> [GitHubPR] {
+        guard let data = json?.data(using: .utf8) else { return [] }
+        return GitHubPR.decode(data)
     }
 
     /// Bounded: `gh` reaches the GitHub API, and an unreachable host would
