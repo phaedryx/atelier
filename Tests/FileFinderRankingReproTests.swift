@@ -21,7 +21,6 @@ final class FileFinderRankingReproTests: XCTestCase {
             "README.md",
         ]
         let order = results(for: "papoover", in: files)
-        print("[repro] order for 'papoover': \(order)")
         XCTAssertEqual(order.first, "src/papoover.tsx")
         XCTAssertFalse(order.contains("docs/prd.md"))
         XCTAssertFalse(order.contains("lib/pool.ts"))
@@ -44,7 +43,7 @@ final class FileFinderRankingReproTests: XCTestCase {
     }
 
     func testResultsAreBounded() {
-        var files = (0..<100).map { "src/file-\($0).ts" }
+        var files = (0 ..< 100).map { "src/file-\($0).ts" }
         files.append("src/target.tsx")
         let order = results(for: "target", in: files)
         XCTAssertEqual(order.count, 1)
