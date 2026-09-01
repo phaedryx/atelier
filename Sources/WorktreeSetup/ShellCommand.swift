@@ -19,36 +19,35 @@ enum ShellCommand {
             return false
         }
 
-        let process = Process()
-        let errPipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: shellPath)
-        process.arguments = ["-c", command]
-        process.currentDirectoryURL = URL(fileURLWithPath: directory)
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = errPipe
-
         // GUI apps inherit a minimal PATH from launchd. Inject the login shell
         // PATH so commands can find tools installed via version managers (nvm, etc.).
         let shell = CommandBuilder.userShell
+        var environment: [String: String]?
         if let resolvedPath = CommandLineTools.loginShellPath(shell: shell) {
             var env = ProcessInfo.processInfo.environment
             env["PATH"] = resolvedPath
-            process.environment = env
+            environment = env
         }
 
-        do {
-            try process.run()
-            process.waitUntilExit()
-            if process.terminationStatus != 0 {
-                let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-                let errStr = String(data: errData, encoding: .utf8) ?? ""
-                logger.warning("Post-setup command '\(command, privacy: .public)' failed: \(errStr, privacy: .public)")
-                return false
-            }
-            return true
-        } catch {
-            logger.warning("Failed to run post-setup command '\(command, privacy: .public)': \(error, privacy: .public)")
+        // Bounded at the user-command tier: the command comes from the user's
+        // repository, so it is long by nature but must still end. `ProcessRunner`
+        // drains both streams concurrently — reading stderr only after the exit,
+        // as this used to, wedges any command chatty enough to fill the pipe.
+        guard let result = ProcessRunner.capture(
+            executable: shellPath,
+            arguments: ["-c", command],
+            environment: environment,
+            currentDirectory: URL(fileURLWithPath: directory),
+            timeout: ProcessRunner.Timeout.userCommand
+        ) else {
+            logger.warning("Post-setup command '\(command, privacy: .public)' did not finish in time")
             return false
         }
+
+        guard result.isSuccess else {
+            logger.warning("Post-setup command '\(command, privacy: .public)' failed: \(result.stderrText, privacy: .public)")
+            return false
+        }
+        return true
     }
 }

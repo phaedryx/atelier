@@ -858,23 +858,22 @@ struct ToolStatus {
         return "Not authenticated"
     }
 
+    /// Bounded: these probes run when the Environment pane appears, and
+    /// `gh auth status` reaches the network. Without a deadline one stalled
+    /// binary leaves the pane spinning with no way out.
     private static func runCommand(_ path: String, args: [String], includeStderr: Bool = false) -> String? {
-        let process = Process()
-        let pipe = Pipe()
-        let errPipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = args
-        process.standardOutput = pipe
-        process.standardError = includeStderr ? pipe : errPipe
-        do {
-            try process.run()
-            process.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            guard process.terminationStatus == 0 || includeStderr else { return nil }
-            return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        } catch {
-            return nil
-        }
+        guard let output = ProcessRunner.capture(
+            executable: path,
+            arguments: args,
+            timeout: ProcessRunner.Timeout.network
+        ) else { return nil }
+        guard output.isSuccess || includeStderr else { return nil }
+        // Some of these tools report on stderr — `gh auth status` and `--help`
+        // among them — so callers that need it ask for both streams.
+        guard includeStderr else { return output.stdoutText }
+        return [output.stdoutText, output.stderrText]
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
     }
 }
 

@@ -147,22 +147,15 @@ enum GitHubOperations {
         return GitHubPR(number: number, title: title, state: state, branch: branch, url: url)
     }
 
+    /// Bounded: `gh` reaches the GitHub API, and an unreachable host would
+    /// otherwise stall the caller with nothing to cancel it.
     private static func run(_ command: String, args: [String], in directory: String) -> String? {
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: command)
-        process.arguments = args
-        process.currentDirectoryURL = URL(fileURLWithPath: directory)
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else { return nil }
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        } catch {
-            return nil
-        }
+        guard let data = ProcessRunner.run(
+            executable: command,
+            arguments: args,
+            currentDirectory: URL(fileURLWithPath: directory),
+            timeout: ProcessRunner.Timeout.network
+        ) else { return nil }
+        return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

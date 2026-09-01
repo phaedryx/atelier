@@ -226,6 +226,11 @@ enum BareRepoClone {
 
     /// Runs git, keeping stderr so failures can be shown to the user rather
     /// than only logged — a clone fails for reasons they need to read.
+    ///
+    /// Deliberately not `ProcessRunner`: a clone has no honest deadline, and
+    /// this path already has the better answer — a `Cancellation` the user
+    /// drives, plus the concurrent drain and `GIT_TERMINAL_PROMPT=0` that stop
+    /// it wedging on a full pipe or a credential prompt.
     private static func run(
         _ args: [String],
         in directory: String,

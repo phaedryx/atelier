@@ -21,7 +21,7 @@ enum EnvSeedSync {
 
     /// What a sync attempt did. `noSeedDirectory` and a failed run are
     /// deliberately distinct: both copy zero files, but only one is a problem.
-    enum Outcome: Sendable, Equatable {
+    enum Outcome: Equatable {
         case noSeedDirectory
         case copied(Int)
         case partial(copied: Int, reason: String)
@@ -126,31 +126,25 @@ enum EnvSeedSync {
             trailingSlash(worktreeDir),
         ]
 
-        let process = Process()
-        let errPipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: rsyncPath)
-        process.arguments = arguments
-        // Discarded rather than piped: nothing reads it, and a second pipe that
-        // nobody drains can fill its buffer and wedge rsync mid-transfer.
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = errPipe
-
-        do {
-            try process.run()
-            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-
-            let stderr = String(data: errData, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let status = process.terminationStatus
-            if status == 0 { return .success }
-            if partialTransferExitCodes.contains(status) {
-                return .partial(stderr.isEmpty ? "rsync exit \(status)" : stderr)
-            }
-            return .failure(stderr.isEmpty ? "rsync exit \(status)" : stderr)
-        } catch {
-            return .failure("\(error)")
+        // Bounded at the user-command tier: the seed's size is the user's to
+        // choose, so the deadline is generous and only catches a true wedge.
+        // `ProcessRunner` drains stdout and stderr concurrently, which is what
+        // keeps a chatty rsync from filling a pipe nobody is reading.
+        guard let output = ProcessRunner.capture(
+            executable: rsyncPath,
+            arguments: arguments,
+            timeout: ProcessRunner.Timeout.userCommand
+        ) else {
+            return .failure(NSLocalizedString("rsync did not finish in time.", comment: ""))
         }
+
+        let status = output.status
+        if status == 0 { return .success }
+        let stderr = output.stderrText.isEmpty ? "rsync exit \(status)" : output.stderrText
+        if partialTransferExitCodes.contains(status) {
+            return .partial(stderr)
+        }
+        return .failure(stderr)
     }
 
     private static func trailingSlash(_ path: String) -> String {

@@ -160,23 +160,23 @@ final class QuickActionRunner: ObservableObject {
         let path = ghPath
         let branch = branchName
         Task.detached {
-            let process = Process()
-            let pipe = Pipe()
-            process.executableURL = URL(fileURLWithPath: path)
-            process.arguments = ["pr", "close", branch, "--comment", "Closed from Atelier"]
-            process.currentDirectoryURL = URL(fileURLWithPath: dir)
-            process.standardOutput = pipe
-            process.standardError = pipe
+            // Bounded, unlike `runShellCommand` below: this one never registers a
+            // `runningProcess`, so `cancel()` cannot reach it and a stalled `gh`
+            // would leave the action spinning forever.
             let success: Bool
             let output: String
-            do {
-                try process.run()
-                process.waitUntilExit()
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                output = String(data: data, encoding: .utf8) ?? ""
-                success = process.terminationStatus == 0
-            } catch {
-                output = "Failed to launch: \(error.localizedDescription)"
+            if let result = ProcessRunner.capture(
+                executable: path,
+                arguments: ["pr", "close", branch, "--comment", "Closed from Atelier"],
+                currentDirectory: URL(fileURLWithPath: dir),
+                timeout: ProcessRunner.Timeout.network
+            ) {
+                output = [result.stdoutText, result.stderrText]
+                    .filter { !$0.isEmpty }
+                    .joined(separator: "\n")
+                success = result.isSuccess
+            } else {
+                output = "gh pr close did not finish in time"
                 success = false
             }
             await MainActor.run {
@@ -205,6 +205,9 @@ final class QuickActionRunner: ObservableObject {
         logger.info("Quick action \(actionRaw) starting in \(dir)")
         logger.info("Command: \(fullCommand)")
 
+        // Deliberately not `ProcessRunner`: this runs the user's own command,
+        // which has no honest deadline, and it registers `runningProcess` so
+        // `cancel()` can stop it — cancellation the user drives beats a guess.
         Task.detached {
             let process = Process()
             let pipe = Pipe()

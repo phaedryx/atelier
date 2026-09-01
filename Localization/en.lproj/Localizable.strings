@@ -495,3 +495,8 @@
 "Could not determine the repository's default branch." = "Could not determine the repository's default branch.";
 "git was not found on your PATH." = "git was not found on your PATH.";
 "git %@ failed (exit %d)" = "git %@ failed (exit %d)";
+/* Process deadlines */
+"git push did not finish in time." = "git push did not finish in time.";
+"git pull did not finish in time." = "git pull did not finish in time.";
+"rsync did not finish in time." = "rsync did not finish in time.";
+"A file or directory with this name already exists." = "A file or directory with this name already exists.";

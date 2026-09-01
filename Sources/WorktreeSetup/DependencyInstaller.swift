@@ -7,7 +7,7 @@ import OSLog
 private let logger = Logger(subsystem: "atelier", category: "vibe.deps")
 
 enum DependencyInstaller {
-    struct InstallResult: Sendable {
+    struct InstallResult {
         let success: Bool
         let output: String
         let errorOutput: String
@@ -61,56 +61,58 @@ enum DependencyInstaller {
             )
         }
 
-        let process = Process()
-        let outPipe = Pipe()
-        let errPipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: toolPath)
-        process.arguments = Array(command.dropFirst())
-        process.currentDirectoryURL = URL(fileURLWithPath: worktreeDir)
-        process.standardOutput = outPipe
-        process.standardError = errPipe
-
         // GUI apps inherit a minimal PATH from launchd. Inject the login shell
         // PATH so that shebang-based tools (e.g. npm → #!/usr/bin/env node)
         // can resolve their runtime.
         let shell = CommandBuilder.userShell
+        var environment: [String: String]?
         if let shellPath = CommandLineTools.loginShellPath(shell: shell) {
             var env = ProcessInfo.processInfo.environment
             env["PATH"] = shellPath
-            process.environment = env
+            environment = env
         }
 
-        do {
-            try process.run()
-            process.waitUntilExit()
+        // `ProcessRunner` drains both streams concurrently. That is not a nicety
+        // here: an install is the chattiest thing this app spawns, and a package
+        // manager that outgrows the ~64 KB pipe buffer on either stream blocks
+        // writing to it while we wait for an exit that can no longer come.
+        // The deadline is the loosest tier for the same reason — a cold install
+        // is minutes, so it is there to break a wedge, not to enforce a pace.
+        guard let result = ProcessRunner.capture(
+            executable: toolPath,
+            arguments: Array(command.dropFirst()),
+            environment: environment,
+            currentDirectory: URL(fileURLWithPath: worktreeDir),
+            timeout: ProcessRunner.Timeout.install
+        ) else {
+            return InstallResult(
+                success: false,
+                output: "",
+                errorOutput: "\(command[0]) did not finish in time"
+            )
+        }
 
-            let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(data: outData, encoding: .utf8) ?? ""
-            let errorOutput = String(data: errData, encoding: .utf8) ?? ""
+        let output = String(data: result.stdout, encoding: .utf8) ?? ""
+        let errorOutput = String(data: result.stderr, encoding: .utf8) ?? ""
 
-            var success = process.terminationStatus == 0
-            if success {
-                // Verify node_modules was actually created. Some package managers
-                // (notably Yarn v1) can exit 0 even when the install was aborted
-                // (e.g. engine incompatibility), leaving no node_modules behind.
-                let nodeModulesPath = URL(fileURLWithPath: worktreeDir)
-                    .appendingPathComponent("node_modules").path
-                if !FileManager.default.fileExists(atPath: nodeModulesPath) {
-                    success = false
-                    let reason = errorOutput.isEmpty ? output : errorOutput
-                    logger.warning("Install exited 0 but node_modules missing. Output: \(reason.prefix(300), privacy: .public)")
-                } else {
-                    logger.info("Dependency install completed successfully")
-                }
+        var success = result.isSuccess
+        if success {
+            // Verify node_modules was actually created. Some package managers
+            // (notably Yarn v1) can exit 0 even when the install was aborted
+            // (e.g. engine incompatibility), leaving no node_modules behind.
+            let nodeModulesPath = URL(fileURLWithPath: worktreeDir)
+                .appendingPathComponent("node_modules").path
+            if !FileManager.default.fileExists(atPath: nodeModulesPath) {
+                success = false
+                let reason = errorOutput.isEmpty ? output : errorOutput
+                logger.warning("Install exited 0 but node_modules missing. Output: \(reason.prefix(300), privacy: .public)")
             } else {
-                logger.warning("Dependency install failed (exit \(process.terminationStatus, privacy: .public)): \(errorOutput, privacy: .public)")
+                logger.info("Dependency install completed successfully")
             }
-
-            return InstallResult(success: success, output: output, errorOutput: errorOutput)
-        } catch {
-            logger.warning("Failed to run \(command[0], privacy: .public): \(error, privacy: .public)")
-            return InstallResult(success: false, output: "", errorOutput: error.localizedDescription)
+        } else {
+            logger.warning("Dependency install failed (exit \(result.status, privacy: .public)): \(errorOutput, privacy: .public)")
         }
+
+        return InstallResult(success: success, output: output, errorOutput: errorOutput)
     }
 }
