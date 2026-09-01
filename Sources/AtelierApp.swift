@@ -46,9 +46,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationDidFinishLaunching(_: Notification) {
         guard !isRunningXCTest() else { return }
 
-        // Debug settings should not persist across launches
-        UserDefaults.standard.set(false, forKey: "atelier.quickActionDebug")
-
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         Self.requestNotificationAuthorization(using: center)

@@ -297,7 +297,6 @@ struct TerminalContainerView: View {
     @AppStorage("atelier.autoRenameBranch") private var autoRenameBranch: Bool = false
     @AppStorage("atelier.allowOutsideWorktree") private var allowOutsideWorktree: Bool = false
     @AppStorage(AgentIPCSettings.enabledKey) private var agentIPC: Bool = false
-    @AppStorage("atelier.quickActionDebug") private var quickActionDebug: Bool = false
     @AppStorage("atelier.editorTabActive") private var editorTabActive: Bool = false
     @AppStorage("atelier.editorFileDirty") private var editorFileDirty: Bool = false
     @State private var scriptConfig: ScriptConfig = .empty

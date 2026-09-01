@@ -675,7 +675,6 @@ private struct IntegrationsSettingsPane: View {
 
 private struct AdvancedSettingsPane: View {
     @AppStorage("atelier.detailedLogging") private var detailedLogging: Bool = false
-    @AppStorage("atelier.quickActionDebug") private var quickActionDebug: Bool = false
 
     @State private var showingClearConfirm = false
 
@@ -705,12 +704,6 @@ private struct AdvancedSettingsPane: View {
                         }
                     }
                 }
-
-                SettingToggle(
-                    "Quick action debug",
-                    isOn: $quickActionDebug,
-                    description: "Show a debug panel with command output from quick actions (Create PR, Commit & Push)."
-                )
 
                 LabeledContent("Clear project list") {
                     Button("Clear All...", role: .destructive, action: { showingClearConfirm = true })
