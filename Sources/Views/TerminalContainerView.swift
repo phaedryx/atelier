@@ -589,11 +589,16 @@ struct TerminalContainerView: View {
             .fixedSize()
 
             if let pr = branchPR, let url = URL(string: pr.url) {
-                let prColor: Color = pr.state == "MERGED" ? .purple : .green
+                let prColor = pr.status.color
                 Button(action: { NSWorkspace.shared.open(url) }) {
                     HStack(spacing: 4) {
-                        Image(systemName: pr.state == "MERGED" ? "arrow.triangle.merge" : "arrow.triangle.pull")
+                        Image(systemName: pr.status.symbolName)
                             .font(.system(size: 11))
+                        if pr.checks != .none {
+                            Image(systemName: pr.checks.symbolName)
+                                .font(.system(size: 9))
+                                .foregroundStyle(pr.checks.color)
+                        }
                         Text(verbatim: "#\(pr.number)")
                             .font(.system(size: 11, weight: .medium, design: .monospaced))
                     }
@@ -648,9 +653,7 @@ struct TerminalContainerView: View {
         case .info:
             WorkstreamInfoView(
                 workstreamID: workstreamID,
-                workstreamName: workstreamLabel,
                 workingDirectory: workingDirectory,
-                projectName: projectName,
                 projectDirectory: projectDirectory,
                 scriptConfig: scriptConfig,
                 scriptsApproved: $scriptsApproved

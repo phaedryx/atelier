@@ -471,3 +471,34 @@
 "git pull did not finish in time." = "git pull did not finish in time.";
 "rsync did not finish in time." = "rsync did not finish in time.";
 "A file or directory with this name already exists." = "A file or directory with this name already exists.";
+
+/* Workstream info tab - Local section */
+"Local" = "Local";
+"Working tree" = "Working tree";
+
+/* Workstream info tab - GitHub section */
+"Pull Request" = "Pull Request";
+"Open pull request" = "Open pull request";
+"gh not installed or not authenticated" = "gh not installed or not authenticated";
+"None for this branch" = "None for this branch";
+"Checks" = "Checks";
+"Review" = "Review";
+
+/* Pull request status */
+"Draft" = "Draft";
+"Open" = "Open";
+"Merged" = "Merged";
+"Closed" = "Closed";
+
+/* Pull request check rollup */
+"No checks" = "No checks";
+"Running" = "Running";
+"Passing" = "Passing";
+"Failing" = "Failing";
+
+/* Pull request review decision */
+"Changes requested" = "Changes requested";
+"Review required" = "Review required";
+
+/* Workstream info tab - Shortcut section */
+"Type" = "Type";

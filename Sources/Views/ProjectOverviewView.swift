@@ -546,15 +546,20 @@ private struct WorktreeInfoRow: View {
                 if !worktree.isMain {
                     HStack(spacing: 8) {
                         if let pr, !isPurging {
-                            let prColor: Color = pr.state == "MERGED" ? .purple : .green
                             Link(destination: URL(string: pr.url)!) {
                                 HStack(spacing: 3) {
-                                    Image(systemName: pr.state == "MERGED" ? "arrow.triangle.merge" : "arrow.triangle.pull")
+                                    Image(systemName: pr.status.symbolName)
                                         .font(.system(size: 10))
                                     Text(verbatim: "#\(pr.number)")
                                         .font(.caption)
                                 }
-                                .foregroundStyle(prColor)
+                                .foregroundStyle(pr.status.color)
+                            }
+                            if pr.checks != .none {
+                                Image(systemName: pr.checks.symbolName)
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(pr.checks.color)
+                                    .help(Text(pr.checks.label))
                             }
                         }
                         if isPurging {
@@ -614,7 +619,9 @@ private struct WorktreeInfoRow: View {
                     }
                     .buttonStyle(.plain)
                     if let onPurge {
-                        let isMerged = pr?.state == "MERGED"
+                        // Purge stays merged-only. A closed-unmerged PR now renders honestly
+                        // but does not imply the branch is safe to discard.
+                        let isMerged = pr?.status == .merged
                         Button(action: onPurge) {
                             HStack(spacing: 4) {
                                 Image(systemName: "trash")
