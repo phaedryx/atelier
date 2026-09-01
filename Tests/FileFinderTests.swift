@@ -67,8 +67,8 @@ final class FileFinderTests: XCTestCase {
 
     func testBasenameMatchOutranksPathMatch() throws {
         let query = "editor"
-        let basename = FileFinder.score(query: query, path: "Sources/Views/EditorView.swift")!
-        let pathOnly = FileFinder.score(query: query, path: "editorial/README.md")!
+        let basename = try XCTUnwrap(FileFinder.score(query: query, path: "Sources/Views/EditorView.swift"))
+        let pathOnly = try XCTUnwrap(FileFinder.score(query: query, path: "editorial/README.md"))
         let noMatch = FileFinder.score(query: query, path: "Sources/Models/FileFinder.swift")
 
         XCTAssertGreaterThan(basename, pathOnly)
@@ -76,27 +76,27 @@ final class FileFinderTests: XCTestCase {
     }
 
     func testPrefixOutranksLaterMatch() throws {
-        let first = FileFinder.score(query: "file", path: "FileFinder.swift")!
-        let later = FileFinder.score(query: "file", path: "MyFile.swift")!
+        let first = try XCTUnwrap(FileFinder.score(query: "file", path: "FileFinder.swift"))
+        let later = try XCTUnwrap(FileFinder.score(query: "file", path: "MyFile.swift"))
         XCTAssertGreaterThan(first, later)
     }
 
     func testContiguousMatchOutranksSubsequence() throws {
-        let contiguous = FileFinder.score(query: "finder", path: "Source/FileFinder.swift")!
-        let subsequence = FileFinder.score(query: "fd", path: "Source/FileFinder.swift")!
+        let contiguous = try XCTUnwrap(FileFinder.score(query: "finder", path: "Source/FileFinder.swift"))
+        let subsequence = try XCTUnwrap(FileFinder.score(query: "fd", path: "Source/FileFinder.swift"))
         XCTAssertGreaterThan(contiguous, subsequence)
     }
 
-    func testSubsequenceMatching() throws {
+    func testSubsequenceMatching() {
         XCTAssertNotNil(FileFinder.score(query: "smf", path: "Sources/Models/FileFinder.swift"))
         XCTAssertNil(FileFinder.score(query: "xyz", path: "Sources/Models/FileFinder.swift"))
     }
 
-    func testEmptyQueryMatchesNothing() throws {
+    func testEmptyQueryMatchesNothing() {
         XCTAssertNil(FileFinder.score(query: "", path: "FileFinder.swift"))
     }
 
-    func testCaseInsensitiveMatch() throws {
+    func testCaseInsensitiveMatch() {
         XCTAssertNotNil(FileFinder.score(query: "SWIFT", path: "Sources/Models/FileFinder.swift"))
     }
 
@@ -189,7 +189,7 @@ final class FileFinderTests: XCTestCase {
 
     private static func prefixes(of word: String) -> [String] {
         var result: [String] = []
-        for length in 1...word.count {
+        for length in 1 ... word.count {
             result.append(String(word.prefix(length)))
         }
         return result

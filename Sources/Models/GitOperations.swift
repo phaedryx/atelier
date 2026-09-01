@@ -62,11 +62,11 @@ struct WorktreeDetail {
 
             var icon: String {
                 switch self {
-                case .modified: return "pencil"
-                case .added: return "plus"
-                case .deleted: return "minus"
-                case .renamed: return "arrow.right"
-                case .untracked: return "questionmark"
+                case .modified: "pencil"
+                case .added: "plus"
+                case .deleted: "minus"
+                case .renamed: "arrow.right"
+                case .untracked: "questionmark"
                 }
             }
         }
@@ -340,7 +340,7 @@ enum GitOperations {
         guard let output = run(args: ["ls-files", "--others", "--exclude-standard"], in: path) else {
             return
         }
-        let existing = Set(files.map { $0.relativePath })
+        let existing = Set(files.map(\.relativePath))
         for rawLine in output.split(separator: "\n", omittingEmptySubsequences: true) {
             let filePath = String(rawLine)
             guard !filePath.isEmpty, !existing.contains(filePath) else { continue }
@@ -527,15 +527,14 @@ enum GitOperations {
         // Ask git where the file lives rather than assuming `.git` is a
         // directory — in a worktree, and in the .bare container layout, it is a
         // file pointing elsewhere, and the hardcoded path silently goes nowhere.
-        let excludeURL: URL
-        if let gitPath = run(args: ["rev-parse", "--git-path", "info/exclude"], in: repoPath)?
+        let excludeURL: URL = if let gitPath = run(args: ["rev-parse", "--git-path", "info/exclude"], in: repoPath)?
             .trimmingCharacters(in: .whitespacesAndNewlines), !gitPath.isEmpty
         {
-            excludeURL = gitPath.hasPrefix("/")
+            gitPath.hasPrefix("/")
                 ? URL(fileURLWithPath: gitPath)
                 : URL(fileURLWithPath: repoPath).appendingPathComponent(gitPath).standardized
         } else {
-            excludeURL = URL(fileURLWithPath: repoPath).appendingPathComponent(".git/info/exclude")
+            URL(fileURLWithPath: repoPath).appendingPathComponent(".git/info/exclude")
         }
         let fm = FileManager.default
 
@@ -638,11 +637,11 @@ enum GitOperations {
 
     private static func parseStatus(_ char: Character) -> WorktreeDetail.FileChange.Status {
         switch char {
-        case "M": return .modified
-        case "A": return .added
-        case "D": return .deleted
-        case "R": return .renamed
-        default: return .modified
+        case "M": .modified
+        case "A": .added
+        case "D": .deleted
+        case "R": .renamed
+        default: .modified
         }
     }
 
@@ -778,11 +777,10 @@ enum GitOperations {
             return nil
         }
 
-        let commonURL: URL
-        if commonDir.hasPrefix("/") {
-            commonURL = URL(fileURLWithPath: commonDir)
+        let commonURL = if commonDir.hasPrefix("/") {
+            URL(fileURLWithPath: commonDir)
         } else {
-            commonURL = URL(fileURLWithPath: path).appendingPathComponent(commonDir).standardized
+            URL(fileURLWithPath: path).appendingPathComponent(commonDir).standardized
         }
 
         return commonURL.deletingLastPathComponent().standardizedFileURL.path
@@ -1014,13 +1012,12 @@ enum GitOperations {
         guard run(args: ["remote", "get-url", "origin"], in: path) != nil else { return }
 
         // Determine which branch to fetch
-        let branch: String
-        if let ref = run(args: ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], in: path) {
+        let branch: String = if let ref = run(args: ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], in: path) {
             // e.g. "origin/main" -> "main"
-            branch = ref.trimmingCharacters(in: .whitespacesAndNewlines)
+            ref.trimmingCharacters(in: .whitespacesAndNewlines)
                 .replacingOccurrences(of: "origin/", with: "")
         } else {
-            branch = "main"
+            "main"
         }
 
         // Fetch with timeout — don't block worktree creation

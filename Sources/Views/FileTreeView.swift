@@ -61,9 +61,9 @@ private let untrackedColor = Color(red: 0.451, green: 0.788, blue: 0.569) // #73
 
 private func gitTextColor(for status: FileGitStatus?) -> Color {
     switch status {
-    case .modified: return modifiedColor
-    case .untracked: return untrackedColor
-    case .ignored, .none: return .primary
+    case .modified: modifiedColor
+    case .untracked: untrackedColor
+    case .ignored, .none: .primary
     }
 }
 

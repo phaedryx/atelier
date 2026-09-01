@@ -29,20 +29,20 @@ enum EnvSeedSync {
 
         var copiedCount: Int {
             switch self {
-            case .noSeedDirectory, .failed: return 0
-            case let .copied(count): return count
-            case let .partial(count, _): return count
+            case .noSeedDirectory, .failed: 0
+            case let .copied(count): count
+            case let .partial(count, _): count
             }
         }
 
         /// Non-nil when the caller should surface something to the user.
         var problemDescription: String? {
             switch self {
-            case .noSeedDirectory, .copied: return nil
+            case .noSeedDirectory, .copied: nil
             case let .partial(count, reason):
-                return "Some seed files were not copied (\(count) copied): \(reason)"
+                "Some seed files were not copied (\(count) copied): \(reason)"
             case let .failed(reason):
-                return "Failed to copy seed files: \(reason)"
+                "Failed to copy seed files: \(reason)"
             }
         }
     }
@@ -89,7 +89,7 @@ enum EnvSeedSync {
             return .failed(reason: reason)
         }
 
-        var copied = absentBefore.filter { exists(at: (worktreeDir as NSString).appendingPathComponent($0)) }.count
+        var copied = absentBefore.count(where: { exists(at: (worktreeDir as NSString).appendingPathComponent($0)) })
         copied += replaceStaleSymlinks(staleSymlinks, seedDirectory: seedDirectory, worktreeDir: worktreeDir)
         restore(directoryModes)
 

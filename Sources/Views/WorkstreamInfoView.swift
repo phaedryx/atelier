@@ -429,7 +429,7 @@ struct DirectoryRow: View {
 private struct DirectoryActionButton: View {
     var icon: String = ""
     var assetIcon: String?
-    var color: Color? = nil
+    var color: Color?
     let tooltip: String
     let action: () -> Void
 

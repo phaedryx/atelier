@@ -1,8 +1,8 @@
 // ABOUTME: Tests for ChangeReviewFormatter: the [Code Review] text block sent to the agent.
 // ABOUTME: Covers header labels per mode, file/line sorting, ranges, and orphaned comments.
 
-import XCTest
 @testable import Atelier
+import XCTest
 
 final class ChangeReviewFormatterTests: XCTestCase {
     private func comment(

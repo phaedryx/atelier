@@ -1,8 +1,8 @@
 // ABOUTME: Tests for ReviewCommentEvent.parse — the JS->Swift comment message decoding.
 // ABOUTME: Covers added/edited/deleted bodies, optional fields, and malformed-input rejection.
 
-import XCTest
 @testable import Atelier
+import XCTest
 
 final class ReviewCommentEventTests: XCTestCase {
     func testParseAdded() {

@@ -1,9 +1,9 @@
 // ABOUTME: Tests for terminal input coordinate conversion.
 // ABOUTME: Verifies AppKit mouse positions are translated to Ghostty's top-left Y axis.
 
+@testable import Atelier
 import Cocoa
 import XCTest
-@testable import Atelier
 
 @MainActor
 final class TerminalViewTests: XCTestCase {

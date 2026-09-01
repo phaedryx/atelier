@@ -202,9 +202,9 @@ final class TerminalView: NSView {
         // report the init frame (800x600) instead of their actual layout size.
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            let size = self.bounds.size
+            let size = bounds.size
             if size.width > 0, size.height > 0 {
-                self.notifySizeChanged(size)
+                notifySizeChanged(size)
             }
         }
     }
@@ -406,34 +406,33 @@ final class TerminalView: NSView {
         // detected as a release.
         var action = GHOSTTY_ACTION_RELEASE
         if mods.rawValue & mod != 0 {
-            let sidePressed: Bool
-            switch event.keyCode {
+            let sidePressed: Bool = switch event.keyCode {
             case 0x38:
-                sidePressed = event.modifierFlags.rawValue
+                event.modifierFlags.rawValue
                     & UInt(NX_DEVICELSHIFTKEYMASK) != 0
             case 0x3C:
-                sidePressed = event.modifierFlags.rawValue
+                event.modifierFlags.rawValue
                     & UInt(NX_DEVICERSHIFTKEYMASK) != 0
             case 0x3B:
-                sidePressed = event.modifierFlags.rawValue
+                event.modifierFlags.rawValue
                     & UInt(NX_DEVICELCTLKEYMASK) != 0
             case 0x3E:
-                sidePressed = event.modifierFlags.rawValue
+                event.modifierFlags.rawValue
                     & UInt(NX_DEVICERCTLKEYMASK) != 0
             case 0x3A:
-                sidePressed = event.modifierFlags.rawValue
+                event.modifierFlags.rawValue
                     & UInt(NX_DEVICELALTKEYMASK) != 0
             case 0x3D:
-                sidePressed = event.modifierFlags.rawValue
+                event.modifierFlags.rawValue
                     & UInt(NX_DEVICERALTKEYMASK) != 0
             case 0x37:
-                sidePressed = event.modifierFlags.rawValue
+                event.modifierFlags.rawValue
                     & UInt(NX_DEVICELCMDKEYMASK) != 0
             case 0x36:
-                sidePressed = event.modifierFlags.rawValue
+                event.modifierFlags.rawValue
                     & UInt(NX_DEVICERCMDKEYMASK) != 0
             default:
-                sidePressed = true
+                true
             }
             if sidePressed {
                 action = GHOSTTY_ACTION_PRESS
@@ -622,17 +621,16 @@ final class TerminalView: NSView {
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
         let pb = sender.draggingPasteboard
 
-        let content: String?
-        if let url = pb.string(forType: .URL) {
-            content = Self.shellEscape(url)
+        let content: String? = if let url = pb.string(forType: .URL) {
+            Self.shellEscape(url)
         } else if let urls = pb.readObjects(forClasses: [NSURL.self]) as? [URL], !urls.isEmpty {
-            content = urls
+            urls
                 .map { Self.shellEscape($0.path) }
                 .joined(separator: " ")
         } else if let str = pb.string(forType: .string) {
-            content = str
+            str
         } else {
-            content = nil
+            nil
         }
 
         guard let content, let surface else { return false }

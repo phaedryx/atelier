@@ -144,7 +144,7 @@ final class IPCServerTests: XCTestCase {
         XCTAssertNil(try roundTrip(second, on: fd).error)
     }
 
-    func test_closingAConnection_retiresItsPeer() async throws {
+    func test_closingAConnection_retiresItsPeer() throws {
         let endpoint = try waitForEndpoint()
         let caller = identity(project: "/repos/atelier")
 

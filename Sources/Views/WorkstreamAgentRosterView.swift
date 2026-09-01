@@ -60,15 +60,15 @@ private struct RosterCard: View {
 
     private var statusColor: Color {
         switch run.state {
-        case .working: return .blue
-        case .stalled: return .yellow
+        case .working: .blue
+        case .stalled: .yellow
         }
     }
 
     private var statusWord: LocalizedStringKey {
         switch run.state {
-        case .working: return "Working"
-        case .stalled: return "Stalled"
+        case .working: "Working"
+        case .stalled: "Stalled"
         }
     }
 

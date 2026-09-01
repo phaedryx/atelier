@@ -93,11 +93,10 @@ struct FileNode: Identifiable {
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: fullPath, isDirectory: &isDir) else { continue }
 
-            let relativePath: String
-            if rootPath.hasSuffix("/") {
-                relativePath = String(fullPath.dropFirst(rootPath.count))
+            let relativePath = if rootPath.hasSuffix("/") {
+                String(fullPath.dropFirst(rootPath.count))
             } else {
-                relativePath = String(fullPath.dropFirst(rootPath.count + 1))
+                String(fullPath.dropFirst(rootPath.count + 1))
             }
 
             if isDir.boolValue {

@@ -1,8 +1,8 @@
 // ABOUTME: Tests for ChangeAnnotationStore: CRUD, mode scoping, and text sanitization.
 // ABOUTME: Verifies comment anchoring, scoping by mode and file, and terminal-safe text handling.
 
-import XCTest
 @testable import Atelier
+import XCTest
 
 @MainActor
 final class ChangeAnnotationStoreTests: XCTestCase {
@@ -83,15 +83,15 @@ final class ChangeAnnotationStoreTests: XCTestCase {
         store.add(filePath: path, mode: mode, side: side, line: line, endLine: endLine, lineText: lineText, text: "note")!
     }
 
-    func testReanchorExactHoldKeepsLine() {
+    func testReanchorExactHoldKeepsLine() throws {
         let store = ChangeAnnotationStore()
         _ = addComment(store, line: 2, lineText: "beta")
         store.reanchor(mode: .uncommitted, texts: ["a.swift": (original: "", modified: "alpha\nbeta\ngamma")], presentPaths: ["a.swift"])
         XCTAssertEqual(store.comments.first?.line, 2)
-        XCTAssertFalse(store.comments.first!.isOrphaned)
+        XCTAssertFalse(try XCTUnwrap(store.comments.first?.isOrphaned))
     }
 
-    func testReanchorMatchesLineWithInteriorTab() {
+    func testReanchorMatchesLineWithInteriorTab() throws {
         // The anchor is sanitized on add (tabs collapsed to spaces); the
         // re-anchor haystack must normalize the same way or every line with
         // an interior tab falsely orphans on refresh.
@@ -102,17 +102,17 @@ final class ChangeAnnotationStoreTests: XCTestCase {
             texts: ["a.swift": (original: "", modified: "first\ncase 1:\tprint(x)\n")],
             presentPaths: ["a.swift"]
         )
-        XCTAssertFalse(store.comments.first!.isOrphaned)
+        XCTAssertFalse(try XCTUnwrap(store.comments.first?.isOrphaned))
     }
 
-    func testReanchorFollowsMovedLineAndShiftsRange() {
+    func testReanchorFollowsMovedLineAndShiftsRange() throws {
         let store = ChangeAnnotationStore()
         _ = addComment(store, line: 2, endLine: 3, lineText: "beta")
         // Two lines inserted above: beta moved from 2 to 4.
         store.reanchor(mode: .uncommitted, texts: ["a.swift": (original: "", modified: "new1\nnew2\nalpha\nbeta\ngamma")], presentPaths: ["a.swift"])
         XCTAssertEqual(store.comments.first?.line, 4)
         XCTAssertEqual(store.comments.first?.endLine, 5)
-        XCTAssertFalse(store.comments.first!.isOrphaned)
+        XCTAssertFalse(try XCTUnwrap(store.comments.first?.isOrphaned))
     }
 
     func testReanchorTieBreaksToEarlierLine() {
@@ -123,61 +123,61 @@ final class ChangeAnnotationStoreTests: XCTestCase {
         XCTAssertEqual(store.comments.first?.line, 2)
     }
 
-    func testReanchorOldSideMatchesAgainstOriginalText() {
+    func testReanchorOldSideMatchesAgainstOriginalText() throws {
         let store = ChangeAnnotationStore()
         _ = addComment(store, side: .old, line: 1, lineText: "removed line")
         store.reanchor(mode: .uncommitted, texts: ["a.swift": (original: "header\nremoved line", modified: "header")], presentPaths: ["a.swift"])
         XCTAssertEqual(store.comments.first?.line, 2)
-        XCTAssertFalse(store.comments.first!.isOrphaned)
+        XCTAssertFalse(try XCTUnwrap(store.comments.first?.isOrphaned))
     }
 
-    func testReanchorOrphansWhenLineVanishes() {
+    func testReanchorOrphansWhenLineVanishes() throws {
         let store = ChangeAnnotationStore()
         _ = addComment(store, line: 2, lineText: "beta")
         store.reanchor(mode: .uncommitted, texts: ["a.swift": (original: "", modified: "alpha\ngamma")], presentPaths: ["a.swift"])
-        XCTAssertTrue(store.comments.first!.isOrphaned)
+        XCTAssertTrue(try XCTUnwrap(store.comments.first?.isOrphaned))
         XCTAssertEqual(store.comments.first?.line, 2) // line kept for the payload
     }
 
-    func testReanchorOrphansWhenFileLeavesDiff() {
+    func testReanchorOrphansWhenFileLeavesDiff() throws {
         let store = ChangeAnnotationStore()
         _ = addComment(store, line: 1, lineText: "x")
         store.reanchor(mode: .uncommitted, texts: [:], presentPaths: [])
-        XCTAssertTrue(store.comments.first!.isOrphaned)
+        XCTAssertTrue(try XCTUnwrap(store.comments.first?.isOrphaned))
     }
 
-    func testReanchorUnorphansWhenLineReturns() {
+    func testReanchorUnorphansWhenLineReturns() throws {
         let store = ChangeAnnotationStore()
         _ = addComment(store, line: 1, lineText: "back")
         store.reanchor(mode: .uncommitted, texts: [:], presentPaths: [])
-        XCTAssertTrue(store.comments.first!.isOrphaned)
+        XCTAssertTrue(try XCTUnwrap(store.comments.first?.isOrphaned))
         store.reanchor(mode: .uncommitted, texts: ["a.swift": (original: "", modified: "back")], presentPaths: ["a.swift"])
-        XCTAssertFalse(store.comments.first!.isOrphaned)
+        XCTAssertFalse(try XCTUnwrap(store.comments.first?.isOrphaned))
     }
 
-    func testReanchorLeavesFileWithoutTextsAlone() {
+    func testReanchorLeavesFileWithoutTextsAlone() throws {
         // Present in the diff but deferred/binary (no texts): leave the comment untouched.
         let store = ChangeAnnotationStore()
         _ = addComment(store, line: 9, lineText: "x")
         store.reanchor(mode: .uncommitted, texts: [:], presentPaths: ["a.swift"])
         XCTAssertEqual(store.comments.first?.line, 9)
-        XCTAssertFalse(store.comments.first!.isOrphaned)
+        XCTAssertFalse(try XCTUnwrap(store.comments.first?.isOrphaned))
     }
 
-    func testReanchorOnlyTouchesGivenMode() {
+    func testReanchorOnlyTouchesGivenMode() throws {
         let store = ChangeAnnotationStore()
         _ = addComment(store, line: 1, lineText: "gone", mode: .branch)
         store.reanchor(mode: .uncommitted, texts: [:], presentPaths: [])
-        XCTAssertFalse(store.comments.first!.isOrphaned)
+        XCTAssertFalse(try XCTUnwrap(store.comments.first?.isOrphaned))
     }
 
-    func testReanchorBlankAnchorOnlyHoldsExactPosition() {
+    func testReanchorBlankAnchorOnlyHoldsExactPosition() throws {
         let store = ChangeAnnotationStore()
         _ = addComment(store, line: 2, lineText: "")
         store.reanchor(mode: .uncommitted, texts: ["a.swift": (original: "", modified: "a\n\nb")], presentPaths: ["a.swift"])
-        XCTAssertFalse(store.comments.first!.isOrphaned)
+        XCTAssertFalse(try XCTUnwrap(store.comments.first?.isOrphaned))
         store.reanchor(mode: .uncommitted, texts: ["a.swift": (original: "", modified: "a\nb")], presentPaths: ["a.swift"])
-        XCTAssertTrue(store.comments.first!.isOrphaned)
+        XCTAssertTrue(try XCTUnwrap(store.comments.first?.isOrphaned))
     }
 
     func testMatchLineRespectsWindow() {
@@ -186,11 +186,11 @@ final class ChangeAnnotationStoreTests: XCTestCase {
         XCTAssertEqual(ChangeAnnotationStore.matchLine(anchor: "needle", near: 100, in: lines, window: 50), 121)
     }
 
-    func testReanchorIgnoresPhantomLineFromTrailingNewline() {
+    func testReanchorIgnoresPhantomLineFromTrailingNewline() throws {
         let store = ChangeAnnotationStore()
         _ = addComment(store, line: 3, lineText: "")
         // File has 2 real lines + trailing newline; line 3 must NOT hold on the phantom "".
         store.reanchor(mode: .uncommitted, texts: ["a.swift": (original: "", modified: "alpha\nbeta\n")], presentPaths: ["a.swift"])
-        XCTAssertTrue(store.comments.first!.isOrphaned)
+        XCTAssertTrue(try XCTUnwrap(store.comments.first?.isOrphaned))
     }
 }

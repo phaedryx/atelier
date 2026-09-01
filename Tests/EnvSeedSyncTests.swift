@@ -217,11 +217,11 @@ final class EnvSeedSyncTests: XCTestCase {
         try makeDirectory("worktree/apps/api")
         let fm = FileManager.default
         try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path("seed"))
-        let before = (try fm.attributesOfItem(atPath: path("worktree")))[.posixPermissions] as? NSNumber
+        let before = try (fm.attributesOfItem(atPath: path("worktree")))[.posixPermissions] as? NSNumber
 
         _ = EnvSeedSync.sync(seedDirectory: path("seed"), to: path("worktree"))
 
-        let after = (try fm.attributesOfItem(atPath: path("worktree")))[.posixPermissions] as? NSNumber
+        let after = try (fm.attributesOfItem(atPath: path("worktree")))[.posixPermissions] as? NSNumber
         XCTAssertEqual(after, before, "the seed's mode must not clamp the worktree root")
         XCTAssertEqual(try read("worktree/apps/api/.env"), "API")
     }

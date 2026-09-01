@@ -13,8 +13,8 @@ enum ChangesMode: String, CaseIterable {
 
     var label: String {
         switch self {
-        case .branch: return NSLocalizedString("Branch", comment: "Changes tab: branch diff mode")
-        case .uncommitted: return NSLocalizedString("Uncommitted", comment: "Changes tab: uncommitted diff mode")
+        case .branch: NSLocalizedString("Branch", comment: "Changes tab: branch diff mode")
+        case .uncommitted: NSLocalizedString("Uncommitted", comment: "Changes tab: uncommitted diff mode")
         }
     }
 }
@@ -46,17 +46,19 @@ struct ChangesView: View {
         /// synthetic Return would answer it.
         case busy
 
-        var id: String { rawValue }
+        var id: String {
+            rawValue
+        }
 
         var message: String {
             switch self {
             case .noAgent:
-                return NSLocalizedString(
+                NSLocalizedString(
                     "No Coding Agent terminal is running for this workstream.",
                     comment: "Changes tab: submit refused, no agent surface"
                 )
             case .busy:
-                return NSLocalizedString(
+                NSLocalizedString(
                     "The Coding Agent is busy. Submit again once it finishes its turn.",
                     comment: "Changes tab: submit refused, agent mid-turn"
                 )
@@ -137,7 +139,7 @@ struct ChangesView: View {
             configureLoadHandler()
             configureCommentHandler()
 
-            if bridge.hasContent && bridge.lastMode == mode.rawValue {
+            if bridge.hasContent, bridge.lastMode == mode.rawValue {
                 // Cached content exists for this mode — show it, refresh in background.
                 isLoading = false
                 fileCount = bridge.lastFileCount
@@ -442,7 +444,6 @@ struct ChangesView: View {
     }
 
     private func proceedWithSubmit(_ toSend: [ReviewComment]) {
-
         let workDir = workingDirectory
         let projDir = projectDirectory
         let currentMode = mode
@@ -602,12 +603,11 @@ struct ChangesView: View {
         projDir: String,
         mode: ChangesMode
     ) -> (payload: [[String: Any]], files: [DiffFile]) {
-        let diffFiles: [DiffFile]
-        switch mode {
+        let diffFiles: [DiffFile] = switch mode {
         case .branch:
-            diffFiles = GitOperations.branchDiffFiles(worktreePath: workDir, projectPath: projDir)
+            GitOperations.branchDiffFiles(worktreePath: workDir, projectPath: projDir)
         case .uncommitted:
-            diffFiles = GitOperations.uncommittedDiffFiles(at: workDir)
+            GitOperations.uncommittedDiffFiles(at: workDir)
         }
 
         let baseRef = baseRef(workDir: workDir, projDir: projDir, mode: mode)
@@ -686,9 +686,9 @@ struct ChangesView: View {
     nonisolated static func baseRef(workDir: String, projDir: String, mode: ChangesMode) -> String {
         switch mode {
         case .branch:
-            return GitOperations.mergeBase(worktreePath: workDir, projectPath: projDir) ?? "HEAD"
+            GitOperations.mergeBase(worktreePath: workDir, projectPath: projDir) ?? "HEAD"
         case .uncommitted:
-            return "HEAD"
+            "HEAD"
         }
     }
 
@@ -701,11 +701,10 @@ struct ChangesView: View {
         filePath: String,
         status: DiffFile.Status? = nil
     ) -> (original: String, modified: String) {
-        let original: String
-        if status == .added {
-            original = ""
+        let original: String = if status == .added {
+            ""
         } else {
-            original = GitOperations.fileContent(at: workDir, ref: baseRef, filePath: filePath) ?? ""
+            GitOperations.fileContent(at: workDir, ref: baseRef, filePath: filePath) ?? ""
         }
 
         let modified: String

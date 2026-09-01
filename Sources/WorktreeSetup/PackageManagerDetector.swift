@@ -7,7 +7,7 @@ import OSLog
 private let logger = Logger(subsystem: "atelier", category: "vibe.packagemanager")
 
 enum PackageManagerDetector {
-    struct Result: Sendable {
+    struct Result {
         let packageManager: WorktreeSetupConfig.PackageManager
         let installCommand: [String]
     }

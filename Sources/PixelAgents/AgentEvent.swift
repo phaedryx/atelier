@@ -3,7 +3,7 @@
 
 import Foundation
 
-struct AgentEvent: Codable, Sendable {
+struct AgentEvent: Codable {
     let type: EventType
     let agentId: String
     var name: String?
@@ -22,7 +22,7 @@ struct AgentEvent: Codable, Sendable {
     /// webview sees.
     var surfaceID: String?
 
-    enum EventType: String, Codable, Sendable {
+    enum EventType: String, Codable {
         case agentCreated
         case agentRemoved
         case agentStatus

@@ -354,7 +354,7 @@ struct ContentView: View {
                     selectionBeforeSettings = oldValue
                 }
                 // Don't persist settings/help as saved selection
-                if newValue != .settings && newValue != .help {
+                if newValue != .settings, newValue != .help {
                     newValue?.save()
                 }
                 let wsID: UUID? = {
@@ -579,13 +579,12 @@ struct ContentView: View {
     }
 
     private func openExternalTerminal() {
-        let dir: String?
-        if let ws = activeWorkstream, let project = activeProject {
-            dir = ws.workingDirectory(projectDirectory: project.directory)
+        let dir: String? = if let ws = activeWorkstream, let project = activeProject {
+            ws.workingDirectory(projectDirectory: project.directory)
         } else if let project = activeProject {
-            dir = project.directory
+            project.directory
         } else {
-            dir = nil
+            nil
         }
         guard let dir else { return }
         let terminalBundleID = UserDefaults.standard.string(forKey: "atelier.defaultTerminal") ?? ""
