@@ -72,8 +72,9 @@ final class ProcessComposeSettingsTests: XCTestCase {
     ///
     /// Padding a real path exercises the same `.trimmingCharacters` call and
     /// discriminates on every machine: trimmed, `/bin/ls` is executable and is
-    /// returned; untrimmed, `isExecutableFile` fails on `"  /bin/ls  "` and the
-    /// search — empty here — yields nil.
+    /// returned; untrimmed, `isExecutableFile` fails on the padded string, and a
+    /// configured-but-missing path returns nil rather than falling through to
+    /// the search — so the result is nil whatever the host has installed.
     ///
     /// The blank-path half of the behaviour (fall through *to the search*) is
     /// deliberately still unasserted: it can only be proved on a host that has

@@ -250,6 +250,17 @@ struct TerminalContainerView: View {
     @AppStorage("atelier.autoRenameBranch") private var autoRenameBranch: Bool = false
     @AppStorage("atelier.allowOutsideWorktree") private var allowOutsideWorktree: Bool = false
     @AppStorage(AgentIPCSettings.enabledKey) private var agentIPC: Bool = false
+    /// Both process-compose settings, observed rather than read.
+    ///
+    /// They are inputs to `runPlan`, and they are changed in the Settings
+    /// window, which never touches this view — so without an observer the pane
+    /// would keep a plan built before the change. That matters most in the state
+    /// the plan's own message describes: "process-compose was not found, set its
+    /// path in Settings" is advice the user follows, and Start has to become
+    /// enabled when they do. `@AppStorage` watches UserDefaults process-wide, so
+    /// a write from the other window lands here.
+    @AppStorage(ProcessComposeSettings.enabledKey) private var processComposeEnabled: Bool = false
+    @AppStorage(ProcessComposeSettings.binaryPathKey) private var processComposeBinaryPath: String = ""
     @AppStorage("atelier.editorTabActive") private var editorTabActive: Bool = false
     @AppStorage("atelier.editorFileDirty") private var editorFileDirty: Bool = false
     @State private var fileTree: [FileNode] = []
@@ -299,6 +310,14 @@ struct TerminalContainerView: View {
     /// into a computed property: `RunCommandPlan.plan` locates the config and
     /// stats the binary, so reading it from the view body would also put
     /// filesystem work in every render pass.
+    ///
+    /// What invalidates it: the per-workstream override, and **both
+    /// process-compose settings** — the integration switch and the binary path,
+    /// observed via `@AppStorage` because they are changed in a different window
+    /// that never touches this view. Those two are not optional. The plan's own
+    /// message tells the user to go and change them, so a plan that did not
+    /// notice would leave Start disabled after they had done exactly what it
+    /// asked. Do not drop them when adding another input here.
     @State private var runPlan: RunCommandPlan = .nothing
     /// Every file the run's config will load, for the pane to show in place of a
     /// command string. Set in the same refresh as `runPlan`.
@@ -969,6 +988,17 @@ struct TerminalContainerView: View {
             }
             .onChange(of: devCommandOverride) { _, newValue in
                 DevCommandResolver.saveOverride(newValue, for: workstreamID)
+                refreshDevCommand()
+            }
+            // The two Settings-window inputs to `runPlan`. `refreshConfigApproval`
+            // comes along because it is guarded on the same switch: with the
+            // integration turned on mid-session, a repository-provided config
+            // has to start asking for approval too.
+            .onChange(of: processComposeEnabled) { _, _ in
+                refreshConfigApproval()
+                refreshDevCommand()
+            }
+            .onChange(of: processComposeBinaryPath) { _, _ in
                 refreshDevCommand()
             }
             .onChange(of: model.runStarted) { _, started in
