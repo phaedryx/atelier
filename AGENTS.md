@@ -154,17 +154,36 @@ because there is no other setup path left. `ProcessComposeSettings.resolveBinary
 binary: a configured path is used or fails, and never falls back to a search — silently running
 a different binary than the one named is worse than reporting the named one is gone.
 
-The switch is checked in **three** places, and the third one is a security boundary rather than
-a convenience: `PhasePolicy.plan` (so no unattended phase runs), `refreshConfigApproval` (so
-nothing asks for approval it will not use), and `DevCommandResolver.detectProcessCompose` (so
-Start has nothing to run). That last one matters because the Start fallback command carries
-**no `-n`** — it runs every namespace it finds, `bootstrap` and `dispose` included, and it never
-passes through `PhasePolicy`. It is reachable exactly when the switch is off, since
-`usesProcessCompose` is false then and `resolvedRunCommand` drops to
-`resolvedDevCommand?.command`. So detection refuses to detect while the switch is off; without
-that guard, pressing Start on a freshly cloned repository with the integration *disabled* would
-execute its bootstrap and dispose processes with no approval. `Tests/DevCommandTests.swift`
-pins this; the guard is load-bearing and four of those tests fail without it.
+The switch is checked in three places: `PhasePolicy.plan` (so no unattended phase runs),
+`refreshConfigApproval` (so nothing asks for approval it will not use), and
+`DevCommandResolver.detectProcessCompose` (so Start has nothing to detect). The first two are
+about correctness. The third is one half of a security boundary whose other half is
+`RunCommandPlan` — see below.
+
+**The un-`-n`'d command must never be executed.** `DevCommandResolver.detectProcessCompose`
+builds `process-compose up -U -f <files>` for the Environment pane to *display*, so the user
+can see which files are in play. It carries no `-n`, so running it would run **every**
+namespace — `bootstrap` and `dispose` included — without passing through `PhasePolicy` or
+`ScriptTrust`. It is a display string, not a runnable one.
+
+That invariant was defended four times by guarding *preconditions*, and reopened four times by
+a different route each time: a worktree override process-compose discovered but Atelier never
+showed; `compose.yaml` winning discovery outright; the integration switch being off; and — with
+the switch **on** — `resolveBinary()` returning nil, which is ordinary rather than exotic,
+since process-compose is not in homebrew-core and `go install`, nix, mise and asdf shims all
+sit on PATH but outside the three searched directories. That last one was additionally nasty
+because `scriptCommand` wraps the fallback in `$SHELL -lic`, so PATH would resolve the very
+binary `resolveBinary` had just failed to find, defeating that function's own promise that a
+configured-but-missing path fails rather than letting a substitute run.
+
+The fallback is reachable whenever *any* precondition of the gated path fails, so enumerating
+preconditions can only ever be one behind. **So the invariant now lives at the consumer, keyed
+on the dev command's source, in `RunCommandPlan.plan`**: a `.processCompose` source has exactly
+one legal command — the phase-scoped one — and if that cannot be built the answer is `.nothing`
+and Start reports it. There is no branch that returns the display string, so a precondition
+added tomorrow makes Start inert rather than reopening the bypass. `Tests/RunCommandPlanTests.swift`
+pins it, including a test that no combination of inputs yields the display string; three of
+those fail if the fallback is put back. Do not replace this with another precondition check.
 
 **Four namespaces**, driven by `PhaseRunner` and `PhaseExecutor`:
 

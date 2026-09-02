@@ -393,8 +393,15 @@ struct TerminalContainerView: View {
     }
 
     /// The command that starts the dev server: process-compose's chained
-    /// `prepare && execute`, when the integration is fully usable, else the
-    /// user's override or the detected runner.
+    /// `prepare && execute`, or the user's own per-workstream override.
+    ///
+    /// The decision itself lives in `RunCommandPlan.plan`, which is where the
+    /// reasoning is. The short version: this must never fall back to
+    /// `resolvedDevCommand?.command` for a `.processCompose` source, because
+    /// that string carries no `-n` and would run `bootstrap` and `dispose`
+    /// without ever passing `PhasePolicy`. If the phase-scoped command cannot
+    /// be built — no config, or no binary — the answer is nil and Start reports
+    /// that, rather than running something unscoped.
     ///
     /// Not cached: every call site is inside an `.onReceive`/`.onChange`
     /// closure or an action method (`startRunIfNeeded`, `doStartRun`,
@@ -403,7 +410,14 @@ struct TerminalContainerView: View {
     /// every SwiftUI render pass. Caching it like `portPlan` would only add
     /// invalidation to get right, for no measured benefit.
     private var resolvedRunCommand: String? {
-        if let config = processComposeConfig, let binary = ProcessComposeSettings.resolveBinary() {
+        switch RunCommandPlan.plan(
+            devCommand: resolvedDevCommand,
+            config: processComposeConfig,
+            binary: ProcessComposeSettings.resolveBinary()
+        ) {
+        case let .literal(command):
+            return command
+        case let .phaseScoped(config, binary):
             PhaseRunner.ensureSocketDirectory()
             return PhaseRunner.startCommand(
                 config: config,
@@ -411,8 +425,9 @@ struct TerminalContainerView: View {
                 workstreamID: workstreamID,
                 selectedProcesses: ProcessTableModel.selected(for: workstreamID)
             )
+        case .nothing:
+            return nil
         }
-        return resolvedDevCommand?.command
     }
 
     /// Env vars for the run/dev-server surface. Adds the var that silences
@@ -1113,19 +1128,28 @@ struct TerminalContainerView: View {
     /// rather than re-locating the config, because this is read per render (via
     /// `tabContent`'s `.environment` case) and locating stats the filesystem.
     ///
-    /// `resolvedRunCommand`'s process-compose branch (`processComposeConfig`)
-    /// requires this to be true first, so the two cannot disagree about
-    /// whether process-compose is in play — including when `resolveBinary()`
-    /// fails: this stays true (a config was still detected) but
-    /// `resolvedRunCommand` falls back to the plain `process-compose up -U`,
-    /// whose unpredictable socket means the table shown here just reads
-    /// "Nothing running." That is a stale-looking table, not some other command
-    /// running under it, so it does not violate the invariant this guards —
-    /// tightening it would mean calling `resolveBinary()` (a filesystem stat)
-    /// from this per-render property, which is the cost this comment exists to
-    /// avoid.
+    /// `resolvedRunCommand`'s process-compose branch requires this to be true
+    /// first, so the two cannot disagree about whether process-compose is in
+    /// play. This can still be true while `resolveBinary()` fails — a config
+    /// was detected, there is just nothing to run it with — and in that state
+    /// `resolvedRunCommand` is now **nil**, so Start reports that no command is
+    /// available and this table simply never gets a run to poll.
     ///
-    /// The `isEnabled` half is now belt-and-braces rather than the load-bearing
+    /// A previous version of this comment reasoned about that state and
+    /// concluded it "does not violate the invariant this guards", on the
+    /// grounds that the worst case was a table reading "Nothing running."
+    /// **That was wrong, and the error was in what it measured.** The invariant
+    /// that matters is not about the table: it is that the un-`-n`'d
+    /// `process-compose up -U -f <files>` string is never executed. Back then
+    /// `resolvedRunCommand` did fall through to exactly that string when the
+    /// binary was unresolvable, which ran `bootstrap` and `dispose` with no
+    /// approval — and `scriptCommand` wrapped it in `$SHELL -lic`, so PATH
+    /// resolved the very binary `resolveBinary` had just failed to find.
+    /// Reasoning about the process table hid that for a whole review round.
+    /// `RunCommandPlan` now holds the invariant structurally; this property is
+    /// only about whether there is a socket worth polling.
+    ///
+    /// The `isEnabled` half is belt-and-braces rather than the load-bearing
     /// check: `DevCommandResolver.detectProcessCompose` refuses to detect
     /// anything while the setting is off, so a `.processCompose` source already
     /// implies it. Kept anyway, because the two are read from different places
