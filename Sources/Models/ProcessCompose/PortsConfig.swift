@@ -59,6 +59,38 @@ struct PortsConfig: Equatable {
         let ports: [String: Entry]
     }
 
+    /// Names Atelier owns. A declaration may not take one of these.
+    ///
+    /// `WorkstreamEnvironment` merges declarations *over* the `ATELIER_*` set
+    /// so a project can redefine `ATELIER_PORT`, which is deliberate and
+    /// documented. The same merge let any other `ATELIER_*` name through: a
+    /// declaration called `ATELIER_WORKTREE_DIR` replaced a filesystem path
+    /// with a port number in all four namespaces, and because the `FF_*`
+    /// mirror runs last it propagated the corrupted value too. `ATELIER_PORT`
+    /// stays allowed; the rest are refused here, where the file is read and a
+    /// specific message is possible.
+    private static let reservedNames: Set<String> = [
+        "ATELIER_WORKSTREAM_ID", "ATELIER_PROJECT", "ATELIER_WORKSTREAM",
+        "ATELIER_PROJECT_DIR", "ATELIER_WORKTREE_DIR", "ATELIER_DEFAULT_BRANCH",
+    ]
+
+    private static func validateName(_ name: String) throws {
+        if reservedNames.contains(name) {
+            throw LoadError.invalidEntry(
+                name: name,
+                reason: NSLocalizedString("is a name Atelier sets; choose another", comment: "")
+            )
+        }
+        // The FF_ mirror is derived from ATELIER_*, so an FF_ declaration is
+        // either overwritten a moment later or shadows a mirrored path.
+        if name.hasPrefix("FF_") {
+            throw LoadError.invalidEntry(
+                name: name,
+                reason: NSLocalizedString("starts with FF_, which Atelier mirrors from ATELIER_*; declare the ATELIER_ name instead", comment: "")
+            )
+        }
+    }
+
     /// Load `ports.yaml` from a directory. Returns nil when there is no such
     /// file — that is the normal state for a project that does not use ports.
     static func load(from directory: String) throws -> PortsConfig? {
@@ -91,6 +123,19 @@ struct PortsConfig: Equatable {
             case (true, nil):
                 kind = .assigned
             case let (nil, .some(port)):
+                // A port is a 16-bit number and every consumer treats it as
+                // one: it is exported into four namespaces' environments and
+                // interpolated into the browser URL. `fixed: 70000` or
+                // `fixed: -1` parsed happily and failed later, somewhere else.
+                guard (1 ... 65535).contains(port) else {
+                    throw LoadError.invalidEntry(
+                        name: name,
+                        reason: String(
+                            format: NSLocalizedString("fixed: %d is not a port between 1 and 65535", comment: ""),
+                            port
+                        )
+                    )
+                }
                 kind = .fixed(port)
             case (.some, .some):
                 throw LoadError.invalidEntry(
@@ -108,6 +153,7 @@ struct PortsConfig: Equatable {
                     reason: NSLocalizedString("needs assigned: true or fixed: <port>", comment: "")
                 )
             }
+            try validateName(name)
             entries.append(PortEntry(name: name, kind: kind, isBrowser: entry.browser == true))
         }
 

@@ -32,8 +32,15 @@ final class ProcessComposeSettingsTests: XCTestCase {
         UserDefaults.standard.removeObject(forKey: ProcessComposeSettings.binaryPathKey)
     }
 
+    /// Reads the *default*, which means clearing the key rather than writing
+    /// `false` into it first. The previous version assigned `false` and then
+    /// asserted `false`, so it passed for any implementation — including one
+    /// defaulting to `true`. That matters more here than in most places: this
+    /// setting defaulting off is what makes a fresh project get no worktree
+    /// setup, which is the load-bearing product decision on this branch.
     func testDisabledByDefault() {
-        ProcessComposeSettings.isEnabled = false
+        clearSettings()
+
         XCTAssertFalse(ProcessComposeSettings.isEnabled)
     }
 

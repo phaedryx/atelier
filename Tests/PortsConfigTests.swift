@@ -133,4 +133,66 @@ final class PortsConfigTests: XCTestCase {
         let config = try XCTUnwrap(PortsConfig.load(from: dir.path))
         XCTAssertEqual(config.entries.count, 1)
     }
+
+    // MARK: - Validation
+
+    func testAFixedPortAboveTheValidRangeIsRejected() throws {
+        try write("ports:\n  API_PORT: { fixed: 70000 }")
+
+        XCTAssertThrowsError(try PortsConfig.load(from: dir.path)) { error in
+            guard case let .invalidEntry(name, reason) = error as? PortsConfig.LoadError else {
+                return XCTFail("expected invalidEntry, got \(error)")
+            }
+            XCTAssertEqual(name, "API_PORT")
+            XCTAssertTrue(reason.contains("65535"), reason)
+        }
+    }
+
+    func testAFixedPortBelowTheValidRangeIsRejected() throws {
+        for port in ["0", "-1"] {
+            try write("ports:\n  API_PORT: { fixed: \(port) }")
+
+            XCTAssertThrowsError(try PortsConfig.load(from: dir.path), "fixed: \(port) must be refused")
+        }
+    }
+
+    func testTheEdgesOfTheValidRangeAreAccepted() throws {
+        for port in [1, 65535] {
+            try write("ports:\n  API_PORT: { fixed: \(port) }")
+
+            let config = try XCTUnwrap(try PortsConfig.load(from: dir.path))
+            XCTAssertEqual(config.entries.first?.kind, .fixed(port))
+        }
+    }
+
+    /// `WorkstreamEnvironment` merges declarations over the `ATELIER_*` set, so
+    /// without this a declaration could replace a path with a port number in
+    /// every namespace, and the `FF_*` mirror would carry the wrong value too.
+    func testADeclarationCannotShadowAPathAtelierSets() throws {
+        for name in ["ATELIER_WORKTREE_DIR", "ATELIER_PROJECT_DIR", "ATELIER_DEFAULT_BRANCH"] {
+            try write("ports:\n  \(name): { assigned: true }")
+
+            XCTAssertThrowsError(try PortsConfig.load(from: dir.path), "\(name) must be refused") { error in
+                guard case let .invalidEntry(rejected, _) = error as? PortsConfig.LoadError else {
+                    return XCTFail("expected invalidEntry for \(name), got \(error)")
+                }
+                XCTAssertEqual(rejected, name)
+            }
+        }
+    }
+
+    /// The one documented exception: a project may say what `ATELIER_PORT`
+    /// means for it.
+    func testATELIERPortMayStillBeDeclared() throws {
+        try write("ports:\n  ATELIER_PORT: { assigned: true }")
+
+        let config = try XCTUnwrap(try PortsConfig.load(from: dir.path))
+        XCTAssertEqual(config.entries.map(\.name), ["ATELIER_PORT"])
+    }
+
+    func testAnFFDeclarationIsRejected() throws {
+        try write("ports:\n  FF_PORT: { assigned: true }")
+
+        XCTAssertThrowsError(try PortsConfig.load(from: dir.path))
+    }
 }

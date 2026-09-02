@@ -521,3 +521,8 @@
 "process-compose was not found, so no %@ ran." = "process-compose was not found, so no %@ ran.";
 "This project's process-compose files came with the repository and have not been approved, so no %@ ran." = "This project's process-compose files came with the repository and have not been approved, so no %@ ran.";
 "Approval covers this repository until any of these files changes. Start is never gated by it." = "Approval covers this repository until any of these files changes. Start is never gated by it.";
+
+/* ports.yaml validation */
+"fixed: %d is not a port between 1 and 65535" = "fixed: %d is not a port between 1 and 65535";
+"is a name Atelier sets; choose another" = "is a name Atelier sets; choose another";
+"starts with FF_, which Atelier mirrors from ATELIER_*; declare the ATELIER_ name instead" = "starts with FF_, which Atelier mirrors from ATELIER_*; declare the ATELIER_ name instead";
