@@ -289,7 +289,7 @@ final class ProcessComposeConfigTests: XCTestCase {
         try write("process-compose.override.yaml", in: worktree)
         let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
 
-        XCTAssertNil(config.overridePath, "locate does not record a discovered override")
+        XCTAssertNil(config.overridePath, "locate does not record the sibling override")
         XCTAssertTrue(config.requiresApproval)
         XCTAssertEqual(config.repositoryProvidedFiles, [
             worktree.appendingPathComponent("process-compose.yaml").path,
@@ -322,13 +322,48 @@ final class ProcessComposeConfigTests: XCTestCase {
         XCTAssertEqual(config.repositoryProvidedFiles, [worktree.appendingPathComponent("process-compose.override.yaml").path])
     }
 
-    /// The user's own project-directory file is never in the approved set, so
-    /// editing it does not re-ask. It is theirs, placed by hand outside git.
-    func testTheUsersOwnConfigIsNeverInTheApprovedSet() throws {
-        try write("process-compose.yaml", in: project)
-        try write("process-compose.override.yaml", in: worktree)
+    // MARK: - The files that will execute
+
+    /// The whole point of naming files with `-f`: what runs is what was
+    /// approved. `compose.yaml` is loaded by process-compose's own discovery
+    /// (verified against v1.122.0, where it wins outright over
+    /// `process-compose.yaml`) but Atelier deliberately never detects that name,
+    /// so leaving discovery on let a repository have one file approved and a
+    /// different one run.
+    func testComposeYamlIsNeverLoaded() throws {
+        try write("process-compose.yaml", in: worktree)
+        try write("compose.yaml", in: worktree)
         let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
 
-        XCTAssertFalse(config.repositoryProvidedFiles.contains(project.appendingPathComponent("process-compose.yaml").path))
+        XCTAssertEqual(config.loadedFiles, [worktree.appendingPathComponent("process-compose.yaml").path])
+        XCTAssertFalse(config.loadedFiles.contains { $0.hasSuffix("/compose.yaml") })
+        XCTAssertFalse(config.repositoryProvidedFiles.contains { $0.hasSuffix("/compose.yaml") })
+    }
+
+    /// Exactly one override, and the one process-compose itself would have
+    /// picked. Verified against v1.122.0: with both extensions present,
+    /// discovery loads `.yml` and ignores `.yaml`. Naming both would run a file
+    /// discovery would have skipped.
+    func testOnlyTheOverrideProcessComposePrefersIsLoaded() throws {
+        try write("process-compose.yaml", in: worktree)
+        try write("process-compose.override.yaml", in: worktree)
+        try write("process-compose.override.yml", in: worktree)
+        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+
+        XCTAssertEqual(config.loadedFiles, [
+            worktree.appendingPathComponent("process-compose.yaml").path,
+            worktree.appendingPathComponent("process-compose.override.yml").path,
+        ])
+    }
+
+    /// Approval covers the files that execute, and only those: the base config
+    /// plus its override, with the user's own project-directory file excluded
+    /// and `compose.yaml` never in the picture at all.
+    func testApprovedSetEqualsTheExecutedSetForARepositoryConfig() throws {
+        try write("process-compose.yaml", in: worktree)
+        try write("process-compose.override.yml", in: worktree)
+        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+
+        XCTAssertEqual(config.repositoryProvidedFiles, config.loadedFiles)
     }
 }

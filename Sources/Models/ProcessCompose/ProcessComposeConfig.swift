@@ -20,8 +20,22 @@ struct ProcessComposeConfig: Equatable {
     /// process-compose also discovers `compose.yaml` and `compose.yml`, but that
     /// name belongs to docker compose far more often, and running the wrong tool
     /// is worse than offering nothing.
+    ///
+    /// Because Atelier now names every file with `-f` (see `loadedFiles`),
+    /// leaving those names out of this list means process-compose never loads
+    /// them either. That is the point: while discovery was left on, a repository
+    /// could ship a benign `process-compose.yaml` for Atelier to display and
+    /// approve, and a `compose.yaml` for process-compose to actually run —
+    /// verified against v1.122.0, where `compose.yaml` wins outright and
+    /// `process-compose.yaml` is never read.
     static let fileNames = ["process-compose.yaml", "process-compose.yml"]
-    static let overrideFileNames = ["process-compose.override.yaml", "process-compose.override.yml"]
+
+    /// Override names, **in the order process-compose itself prefers them**.
+    /// Verified against v1.122.0: with both extensions present, discovery loads
+    /// `.yml` and ignores `.yaml`. The order is load-bearing — `firstPresent`
+    /// resolves the override with it, so reversing it would silently change
+    /// which file wins.
+    static let overrideFileNames = ["process-compose.override.yml", "process-compose.override.yaml"]
 
     static func locate(worktree: String, projectDirectory: String) -> ProcessComposeConfig? {
         let worktreeURL = URL(fileURLWithPath: worktree)
@@ -46,7 +60,7 @@ struct ProcessComposeConfig: Equatable {
         )
     }
 
-    private static func firstPresent(_ names: [String], in directory: URL) -> String? {
+    static func firstPresent(_ names: [String], in directory: URL) -> String? {
         names.first { FileManager.default.fileExists(atPath: directory.appendingPathComponent($0).path) }
     }
 
@@ -97,34 +111,34 @@ struct ProcessComposeConfig: Equatable {
         case unknown
     }
 
-    /// Every file process-compose will actually load, which is not the same as
-    /// the ones `locate` recorded.
+    /// Every file process-compose will load, in the order it loads them.
     ///
-    /// `overridePath` is only ever set for a config in the project directory,
-    /// because that one is named with `-f` and naming it turns process-compose's
-    /// own discovery off, so a worktree override has to be named too. A config
-    /// *in* the worktree is left unnamed precisely so discovery runs — and
-    /// discovery picks up a sibling `process-compose.override.yaml` that
-    /// `locate` never recorded. Reading only `path` there would miss a
-    /// namespace the override declares and report `.empty`, silently skipping
-    /// work the user really asked for.
+    /// This list is the whole contract. `PhaseRunner.command` names each entry
+    /// with `-f`, which turns process-compose's own discovery off, so the files
+    /// that execute are exactly the files listed here — and `ScriptTrust`
+    /// fingerprints and `ConfigApprovalView` displays the repository-provided
+    /// subset of the same list. Approved set, displayed set, and executed set
+    /// are equal by construction rather than by Atelier mirroring discovery's
+    /// rules correctly.
+    ///
+    /// That mirror is what had to go. While a worktree config was left unnamed
+    /// so discovery could pick up its sibling override, the gate could only ever
+    /// be as correct as the mirror — and it was not: discovery also loads
+    /// `compose.yaml`, which Atelier deliberately does not detect, so a
+    /// repository could have one file approved and a different one run.
+    ///
+    /// Exactly one override, never both extensions. Naming both would load a
+    /// file discovery would have ignored, which is a change to which file wins;
+    /// `overrideFileNames` is ordered to match process-compose's own preference,
+    /// so `firstPresent` resolves the same one discovery would have.
     var loadedFiles: [String] {
         guard isRepositoryProvided else {
             return [path] + [overridePath].compactMap { $0 }
         }
-        // Every present override, not just the first. process-compose loads
-        // exactly one, and — verified against v1.122.0 — when both extensions
-        // exist it takes `.yml`, the opposite of the order `overrideFileNames`
-        // lists them in. Rather than encode a precedence that could change,
-        // consider both: an override that turns out not to be loaded can only
-        // move the answer from `.empty` to `.present` or `.unknown`, and both
-        // of those fail towards running the phase. Guessing wrong in the other
-        // direction is a silent skip, which is the failure this whole probe
-        // exists to prevent.
         let directory = URL(fileURLWithPath: path).deletingLastPathComponent()
-        return [path] + Self.overrideFileNames
+        let override = Self.firstPresent(Self.overrideFileNames, in: directory)
             .map { directory.appendingPathComponent($0).path }
-            .filter { FileManager.default.fileExists(atPath: $0) }
+        return [path] + [override].compactMap { $0 }
     }
 
     /// The loaded files that arrived with the repository, and therefore have to
@@ -133,11 +147,11 @@ struct ProcessComposeConfig: Equatable {
     /// Not the same as "`path` when `isRepositoryProvided`". Two cases make the
     /// difference load-bearing:
     ///
-    /// - A repository-provided base config is left unnamed so process-compose's
-    ///   own discovery runs, and discovery picks up a sibling
-    ///   `process-compose.override.yaml` that `locate` never recorded. That
-    ///   override is repository content that executes, so approving only `path`
-    ///   would show the user a benign file while an unseen sibling ran.
+    /// - A repository-provided base config has a sibling
+    ///   `process-compose.override.yml` beside it that `locate` never recorded
+    ///   but `loadedFiles` names. That override is repository content that
+    ///   executes, so approving only `path` would show the user a benign file
+    ///   while an unseen sibling ran.
     /// - A config the *user* placed in the project directory is their own, but
     ///   `overridePath` beside it points into the **worktree**, which is
     ///   repository content and is named with `-f` explicitly. The base file

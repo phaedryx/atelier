@@ -78,14 +78,45 @@ final class PhaseRunnerTests: XCTestCase {
         XCTAssertFalse(start.contains("--keep-project"), start)
     }
 
-    func testWorktreeConfigPassesNoDashF() {
+    /// A worktree config is named too, and that is the security property, not an
+    /// implementation detail. Leaving it unnamed left process-compose's own
+    /// discovery on, and discovery loads files Atelier neither displays nor
+    /// fingerprints — `compose.yaml` above all, which wins outright over
+    /// `process-compose.yaml` (verified against v1.122.0). Naming every file is
+    /// what makes the executed set equal the approved set.
+    func testWorktreeConfigIsNamedSoDiscoveryCannotAddFiles() {
         let command = PhaseRunner.command(
             phase: .execute, config: worktreeConfig, binary: binary,
             workstreamID: workstreamID, selectedProcesses: []
         )
 
-        XCTAssertFalse(command.contains(" -f "), "naming the config would disable override discovery")
+        XCTAssertTrue(command.contains("-f /repo/wt/process-compose.yaml"), command)
         XCTAssertTrue(command.contains("-n execute"), command)
+    }
+
+    /// Every loaded file is named, in order, so nothing is left to discovery.
+    func testEveryLoadedFileIsNamed() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let config = try writeConfig("""
+          web:
+            namespace: execute
+            command: "true"
+        """, in: dir)
+        try "processes: {}".write(
+            to: dir.appendingPathComponent("process-compose.override.yml"),
+            atomically: true, encoding: .utf8
+        )
+
+        let command = PhaseRunner.command(
+            phase: .execute, config: config, binary: binary,
+            workstreamID: workstreamID, selectedProcesses: []
+        )
+
+        XCTAssertEqual(config.loadedFiles.count, 2, "\(config.loadedFiles)")
+        for file in config.loadedFiles {
+            XCTAssertTrue(command.contains("-f \(file)"), command)
+        }
     }
 
     func testProjectConfigNamesTheFile() {
@@ -154,8 +185,8 @@ final class PhaseRunnerTests: XCTestCase {
     /// surface the user is already looking at and a failing prepare stops it.
     /// A real config (not a synthetic nonexistent path) so this exercises
     /// genuine "prepare is declared" parsing rather than the fail-open branch
-    /// of `namespaceIsConfidentlyEmpty` — a worktree-style config, so this
-    /// also pins the no-`-f` shape. Passes a selection to check the other
+    /// of `namespaceIsConfidentlyEmpty` — a worktree-style config, which is
+    /// named with `-f` like every other. Passes a selection to check the other
     /// half of the chain that its sibling in the "namespace-aware" section
     /// below does not: prepare always runs its whole namespace regardless of
     /// selection, so "bff" must land exactly once, at the end, on execute.

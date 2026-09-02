@@ -138,12 +138,15 @@ enum WorkstreamArchiver {
     /// worse than cleanup that did not happen, and the user has already said to
     /// remove it. `PhaseExecutor` bounds the run at `Timeout.userCommand`, so a
     /// wedged dispose delays the archive rather than blocking it forever.
-    private static func runDispose(
-        workstreamID: UUID,
-        worktreePath: String,
-        projectDirectory: String
-    ) {
-        let plan = BootstrapPolicy.plan(
+    /// What archiving would run, and why it would not.
+    ///
+    /// Split out from `runDispose` and left internal so the wiring is
+    /// observable: a `runDispose` that stopped consulting `BootstrapPolicy`
+    /// altogether would still pass every test of the policy itself. This is the
+    /// seam a test can hold, since `runDispose` proper spawns process-compose
+    /// and `purge` destroys a worktree.
+    static func disposePlan(worktreePath: String, projectDirectory: String) -> BootstrapPolicy.Plan {
+        BootstrapPolicy.plan(
             phase: .dispose,
             isEnabled: ProcessComposeSettings.isEnabled,
             config: ProcessComposeConfig.locate(
@@ -154,6 +157,14 @@ enum WorkstreamArchiver {
                 ScriptTrust.isApproved(configFiles: $0.repositoryProvidedFiles, for: projectDirectory)
             }
         )
+    }
+
+    private static func runDispose(
+        workstreamID: UUID,
+        worktreePath: String,
+        projectDirectory: String
+    ) {
+        let plan = disposePlan(worktreePath: worktreePath, projectDirectory: projectDirectory)
         let config: ProcessComposeConfig
         let binary: String
         switch plan {

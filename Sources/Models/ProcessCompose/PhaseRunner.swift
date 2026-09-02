@@ -55,11 +55,23 @@ enum PhaseRunner {
 
     /// The command for one phase.
     ///
-    /// A config in the worktree is left unnamed so process-compose's own
-    /// discovery runs and picks up a sibling override. A config in the project
-    /// directory must be named, which costs that discovery, so a worktree
-    /// override is named too — but only when it exists, because a missing `-f`
-    /// target is fatal.
+    /// **Every file is named with `-f`, always.** That turns process-compose's
+    /// own discovery off, which is the point: the files that execute are then
+    /// exactly `config.loadedFiles`, which is what `ScriptTrust` fingerprints
+    /// and what `ConfigApprovalView` displays.
+    ///
+    /// A worktree config used to be left unnamed so discovery could pick up its
+    /// sibling override. That was sound while honouring overrides was the only
+    /// goal, but it made the approval gate a mirror of discovery's rules, and a
+    /// mirror can be stepped around: discovery also loads `compose.yaml`, a name
+    /// Atelier deliberately does not detect, so a repository could ship a benign
+    /// `process-compose.yaml` to be approved and a `compose.yaml` to be run.
+    /// Verified against v1.122.0 — with both present, `compose.yaml` wins and
+    /// `process-compose.yaml` is never read. Naming the files closes the class,
+    /// not just that instance.
+    ///
+    /// `loadedFiles` existence-filters, so the "a missing `-f` target is fatal"
+    /// hazard cannot be reached through it.
     ///
     /// `keepProject` holds the control server open after every process in the
     /// namespace has finished, so a caller can read their exit codes before
@@ -90,11 +102,10 @@ enum PhaseRunner {
             parts.append("--keep-project")
         }
 
-        if !config.isRepositoryProvided {
-            parts += ["-f", CommandBuilder.shellQuote(config.path)]
-            if let override = config.overridePath {
-                parts += ["-f", CommandBuilder.shellQuote(override)]
-            }
+        // Every file, always named. See `command`'s note: this is what makes
+        // the approved set and the executed set the same set.
+        for file in config.loadedFiles {
+            parts += ["-f", CommandBuilder.shellQuote(file)]
         }
 
         parts += ["-n", phase.namespace]
@@ -108,8 +119,9 @@ enum PhaseRunner {
 
     /// What the Start button runs: prepare to completion, then execute.
     ///
-    /// One shell command in one surface, so prepare's output appears where the
-    /// user is already looking. `&&` means a failing prepare stops execute from
+    /// Both halves name their files with `-f`, as everything does now; see
+    /// `command`. One shell command in one surface, so prepare's output appears
+    /// where the user is already looking. `&&` means a failing prepare stops execute from
     /// starting. The two no longer share a socket path — `socketPath` scopes
     /// the headless phases by namespace — so the ordering here is about output
     /// and about not starting a stack whose prepare failed, nothing else.

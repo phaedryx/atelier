@@ -1,0 +1,120 @@
+// ABOUTME: Tests that archiving consults the shared unattended-phase policy for dispose.
+// ABOUTME: Holds the wiring seam, since purge itself destroys a worktree.
+
+@testable import Atelier
+import XCTest
+
+/// `BootstrapPolicyTests` covers what the policy decides. This covers that
+/// `WorkstreamArchiver` actually asks it — an archiver that stopped calling
+/// `BootstrapPolicy.plan` altogether would otherwise pass every dispose test in
+/// the suite.
+final class WorkstreamArchiverDisposeTests: XCTestCase {
+    private var project: URL!
+    private var worktree: URL!
+
+    override func setUp() {
+        super.setUp()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        project = root.appendingPathComponent("project")
+        worktree = project.appendingPathComponent("wt")
+        try! FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+        ProcessComposeSettings.isEnabled = true
+    }
+
+    override func tearDown() {
+        ScriptTrust.revokeConfigFiles(for: project.path)
+        ProcessComposeSettings.isEnabled = false
+        try? FileManager.default.removeItem(at: project.deletingLastPathComponent())
+        super.tearDown()
+    }
+
+    private func note(_ plan: BootstrapPolicy.Plan) -> String? {
+        guard case let .nothingToDo(message) = plan else { return nil }
+        return message
+    }
+
+    private func writeConfig(in dir: URL, named name: String = "process-compose.yaml") throws -> String {
+        let path = dir.appendingPathComponent(name)
+        try "processes:\n  cleanup:\n    namespace: dispose\n    command: \"true\"\n"
+            .write(to: path, atomically: true, encoding: .utf8)
+        return path.path
+    }
+
+    /// The disabled-integration branch proves the plan was consulted at all: a
+    /// `runDispose` that had kept its own inline preconditions would report
+    /// something else, or nothing.
+    func testDisposeAsksThePolicy() {
+        ProcessComposeSettings.isEnabled = false
+
+        let plan = WorkstreamArchiver.disposePlan(
+            worktreePath: worktree.path, projectDirectory: project.path
+        )
+
+        XCTAssertEqual(note(plan)?.contains("turned off"), true, String(describing: plan))
+        XCTAssertEqual(note(plan)?.contains("dispose"), true, "the note must name the phase")
+    }
+
+    func testDisposeIsRefusedForAnUnapprovedRepositoryConfig() throws {
+        _ = try writeConfig(in: worktree)
+
+        let plan = WorkstreamArchiver.disposePlan(
+            worktreePath: worktree.path, projectDirectory: project.path
+        )
+
+        XCTAssertEqual(note(plan)?.contains("have not been approved"), true, String(describing: plan))
+    }
+
+    /// Approving through the same store the pane writes to has to reach the
+    /// archiver, or dispose would be permanently dead for every repository
+    /// config.
+    func testDisposeRunsOnceTheRepositoryConfigIsApproved() throws {
+        let path = try writeConfig(in: worktree)
+        guard ProcessComposeSettings.resolveBinary() != nil else {
+            throw XCTSkip("process-compose is not installed; the binary precondition would mask this branch")
+        }
+        let config = try XCTUnwrap(
+            ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path)
+        )
+        XCTAssertEqual(config.repositoryProvidedFiles, [path])
+        ScriptTrust.approve(configFiles: config.repositoryProvidedFiles, for: project.path)
+
+        let plan = WorkstreamArchiver.disposePlan(
+            worktreePath: worktree.path, projectDirectory: project.path
+        )
+
+        guard case let .run(planned, _) = plan else {
+            return XCTFail("expected a run, got \(plan)")
+        }
+        XCTAssertEqual(planned.path, path)
+    }
+
+    /// A worktree override beside the user's own project-directory config is
+    /// repository content that dispose would execute, so archiving must gate on
+    /// it too — the bypass that `isRepositoryProvided` alone missed.
+    func testDisposeIsRefusedForAWorktreeOverrideBesideAUserConfig() throws {
+        _ = try writeConfig(in: project)
+        _ = try writeConfig(in: worktree, named: "process-compose.override.yml")
+
+        let plan = WorkstreamArchiver.disposePlan(
+            worktreePath: worktree.path, projectDirectory: project.path
+        )
+
+        XCTAssertEqual(note(plan)?.contains("have not been approved"), true, String(describing: plan))
+    }
+
+    func testDisposeNeedsNoApprovalForTheUsersOwnConfig() throws {
+        let path = try writeConfig(in: project)
+        guard ProcessComposeSettings.resolveBinary() != nil else {
+            throw XCTSkip("process-compose is not installed; the binary precondition would mask this branch")
+        }
+
+        let plan = WorkstreamArchiver.disposePlan(
+            worktreePath: worktree.path, projectDirectory: project.path
+        )
+
+        guard case let .run(planned, _) = plan else {
+            return XCTFail("expected a run, got \(plan)")
+        }
+        XCTAssertEqual(planned.path, path)
+    }
+}
