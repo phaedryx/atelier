@@ -120,16 +120,31 @@ struct ProcessSelectionView: View {
             .padding(.horizontal, 12)
             .padding(.top, 4)
 
-            ForEach(declaredProcesses, id: \.self) { name in
-                Toggle(isOn: binding(for: name)) {
-                    Text(name)
-                        .font(.system(size: 11, design: .monospaced))
+            // Wraps across the pane's width rather than one per line. Six
+            // processes is an ordinary stack and a vertical list of them pushed
+            // the Start button off the useful part of the pane.
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 130), alignment: .leading)],
+                alignment: .leading,
+                spacing: 2
+            ) {
+                ForEach(sortedProcesses, id: \.self) { name in
+                    Toggle(isOn: binding(for: name)) {
+                        Text(name)
+                            .font(.system(size: 11, design: .monospaced))
+                    }
+                    .toggleStyle(.checkbox)
                 }
-                .toggleStyle(.checkbox)
-                .padding(.horizontal, 12)
             }
+            .padding(.horizontal, 12)
         }
         .onAppear { selection = Set(ProcessTableModel.selected(for: workstreamID)) }
+    }
+
+    /// Alphabetical, and sorted here rather than trusted from the caller so
+    /// the order is a property of the list itself.
+    private var sortedProcesses: [String] {
+        declaredProcesses.sorted()
     }
 
     /// What Start will run.

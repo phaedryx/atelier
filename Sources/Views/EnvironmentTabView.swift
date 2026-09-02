@@ -127,46 +127,39 @@ struct EnvironmentTabView: View {
         let title = NSLocalizedString("Run", comment: "")
         let shortcut = "⌘⇧⏎"
         VStack(spacing: 0) {
-            HStack {
-                if runControlsEnabled, !runStarted {
-                    Button(action: onStart) {
-                        Image(systemName: "play.fill")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+            // Only once something is running. Before that this bar carried a
+            // play button, a Start button and the section title, above a pane
+            // whose body is already one big Start button — three ways to do
+            // the same thing, stacked. Stop and Rerun mean nothing until there
+            // is a run, so the bar now arrives with them.
+            if runStarted {
+                HStack {
+                    Text(title)
+                        .font(.system(size: 12, weight: .semibold))
+
+                    // Travels with the bar: it warns that the browser will not
+                    // retarget on a detected port, which only matters once a
+                    // server is actually up.
+                    if canStart, RunLauncher.executableURL() == nil {
+                        Text("No port detection")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.orange)
+                            .help("atelier-run helper not found. Run scripts will work but port detection is unavailable.")
                     }
-                    .buttonStyle(.borderless)
-                    .help(NSLocalizedString("Start", comment: ""))
-                } else {
-                    Image(systemName: "play")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
-                Text(title)
-                    .font(.system(size: 12, weight: .semibold))
 
-                if canStart, RunLauncher.executableURL() == nil {
-                    Text("No port detection")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.orange)
-                        .help("atelier-run helper not found. Run scripts will work but port detection is unavailable.")
-                }
+                    Spacer()
 
-                Spacer()
-
-                if runControlsEnabled {
-                    if runStarted {
+                    if runControlsEnabled {
                         EnvActionButton(label: NSLocalizedString("Stop", comment: ""), icon: "stop.fill", shortcut: "", action: onStop)
                         EnvActionButton(label: NSLocalizedString("Rerun", comment: ""), icon: "arrow.counterclockwise", shortcut: shortcut, action: onRestart)
-                    } else {
-                        EnvActionButton(label: NSLocalizedString("Start", comment: ""), icon: "play.fill", shortcut: shortcut, action: onStart)
                     }
                 }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(.bar)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.bar)
 
-            Divider()
+                Divider()
+            }
 
             devCommandSection
             Divider()
