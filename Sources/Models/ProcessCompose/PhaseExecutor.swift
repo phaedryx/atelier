@@ -367,11 +367,21 @@ enum PhaseExecutor {
     }
 
     /// The tail of whichever stream said something, cleaned up enough to show.
-    private static func detail(from output: ProcessRunner.Output) -> String {
+    static func detail(from output: ProcessRunner.Output) -> String {
         // process-compose writes every process's output to its own stdout,
         // including what the process sent to stderr, and keeps its stderr for
-        // its own errors — so stdout is the usual source here.
-        let text = output.stderrText.isEmpty ? output.stdoutText : output.stderrText
+        // its own errors — so stdout is the source, and stderr is the fallback
+        // for when process-compose itself failed and produced no process
+        // output at all.
+        //
+        // This preferred stderr whenever stderr was non-empty, contradicting
+        // the paragraph above, and CI proved it: on a runner with no
+        // process-compose config home the binary logs a debug line to stderr,
+        // so a failing bootstrap reported `{"level":"debug","message":"Path
+        // not found for process compose config home"}` instead of the output
+        // that explained the failure. Any stderr chatter — a warning, a
+        // deprecation — was enough to hide the real reason.
+        let text = output.stdoutText.isEmpty ? output.stderrText : output.stdoutText
         let stripped = stripTerminalEscapes(text)
         guard stripped.count > detailLimit else { return stripped }
         return "…" + stripped.suffix(detailLimit)

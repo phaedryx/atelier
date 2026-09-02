@@ -383,4 +383,37 @@ final class PhaseOutcomeReportingTests: XCTestCase {
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: stray.path))
     }
+
+    // MARK: - Which stream explains a failure
+
+    private func output(stdout: String, stderr: String) -> ProcessRunner.Output {
+        ProcessRunner.Output(
+            status: 1,
+            stdout: Data(stdout.utf8),
+            stderr: Data(stderr.utf8)
+        )
+    }
+
+    /// process-compose relays process output on its own stdout and keeps stderr
+    /// for its own diagnostics, so stdout is what explains a failure. This
+    /// preferred stderr whenever it was non-empty, which CI caught: a runner
+    /// with no process-compose config home logs a debug line to stderr, and the
+    /// reported detail became that line instead of the failing command's
+    /// output.
+    func testTheFailureDetailComesFromStdoutWhenBothStreamsHaveText() {
+        let detail = PhaseExecutor.detail(from: output(
+            stdout: "boom",
+            stderr: #"{"level":"debug","message":"Path not found for process compose config home"}"#
+        ))
+
+        XCTAssertEqual(detail, "boom")
+    }
+
+    /// The fallback still matters: if process-compose itself could not run,
+    /// there is no process output and stderr is all there is.
+    func testTheFailureDetailFallsBackToStderrWhenStdoutIsEmpty() {
+        let detail = PhaseExecutor.detail(from: output(stdout: "", stderr: "unknown flag: --nope"))
+
+        XCTAssertEqual(detail, "unknown flag: --nope")
+    }
 }
