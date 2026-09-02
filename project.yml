@@ -26,6 +26,9 @@ packages:
   swift-cmark:
     url: https://github.com/swiftlang/swift-cmark
     from: "0.8.0"
+  Yams:
+    url: https://github.com/jpsim/Yams
+    from: "5.1.0"
 
 targets:
   Atelier:
@@ -130,6 +133,7 @@ targets:
         product: cmark-gfm
       - package: swift-cmark
         product: cmark-gfm-extensions
+      - package: Yams
     preBuildScripts:
       - script: |
           set -e

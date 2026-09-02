@@ -485,3 +485,11 @@
 "Names may use letters, digits and _, and cannot start with a digit." = "Names may use letters, digits and _, and cannot start with a digit.";
 "No dev command found" = "No dev command found";
 "Add a process-compose.yaml to this worktree or the project directory, or a dev script to package.json. Or set a command with Customize above." = "Add a process-compose.yaml to this worktree or the project directory, or a dev script to package.json. Or set a command with Customize above.";
+
+/* ports.yaml */
+"ports.yaml could not be read: %@" = "ports.yaml could not be read: %@";
+"ports.yaml: %@ %@" = "ports.yaml: %@ %@";
+"ports.yaml: only one port may set browser: true (%@)" = "ports.yaml: only one port may set browser: true (%@)";
+"sets both assigned and fixed" = "sets both assigned and fixed";
+"sets assigned: false, which means nothing; remove the entry instead" = "sets assigned: false, which means nothing; remove the entry instead";
+"needs assigned: true or fixed: <port>" = "needs assigned: true or fixed: <port>";
