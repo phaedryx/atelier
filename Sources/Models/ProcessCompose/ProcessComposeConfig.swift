@@ -97,11 +97,41 @@ struct ProcessComposeConfig: Equatable {
         case unknown
     }
 
-    /// Whether the base file and the override, taken together, declare
+    /// Every file process-compose will actually load, which is not the same as
+    /// the ones `locate` recorded.
+    ///
+    /// `overridePath` is only ever set for a config in the project directory,
+    /// because that one is named with `-f` and naming it turns process-compose's
+    /// own discovery off, so a worktree override has to be named too. A config
+    /// *in* the worktree is left unnamed precisely so discovery runs — and
+    /// discovery picks up a sibling `process-compose.override.yaml` that
+    /// `locate` never recorded. Reading only `path` there would miss a
+    /// namespace the override declares and report `.empty`, silently skipping
+    /// work the user really asked for.
+    private var loadedFiles: [String] {
+        guard isRepositoryProvided else {
+            return [path] + [overridePath].compactMap { $0 }
+        }
+        // Every present override, not just the first. process-compose loads
+        // exactly one, and — verified against v1.122.0 — when both extensions
+        // exist it takes `.yml`, the opposite of the order `overrideFileNames`
+        // lists them in. Rather than encode a precedence that could change,
+        // consider both: an override that turns out not to be loaded can only
+        // move the answer from `.empty` to `.present` or `.unknown`, and both
+        // of those fail towards running the phase. Guessing wrong in the other
+        // direction is a silent skip, which is the failure this whole probe
+        // exists to prevent.
+        let directory = URL(fileURLWithPath: path).deletingLastPathComponent()
+        return [path] + Self.overrideFileNames
+            .map { directory.appendingPathComponent($0).path }
+            .filter { FileManager.default.fileExists(atPath: $0) }
+    }
+
+    /// Whether the files that will be loaded, taken together, declare
     /// `namespace`.
     func namespacePresence(_ namespace: String) -> NamespacePresence {
         var unknown = false
-        for file in [path, overridePath].compactMap({ $0 }) {
+        for file in loadedFiles {
             guard let namespaces = Self.declaredNamespaces(at: file) else {
                 unknown = true
                 continue

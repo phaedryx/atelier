@@ -227,3 +227,79 @@ final class PhaseExecutorTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(started), 30, "must not wait out the deadline")
     }
 }
+
+/// How a finished phase is turned into a report. No binary needed, so these run
+/// everywhere — including the branch where the poll and the spawned command
+/// disagree, which is the one that has been got wrong.
+final class PhaseOutcomeReportingTests: XCTestCase {
+    private func output(_ status: Int32, _ stdout: String = "") -> ProcessRunner.Output {
+        ProcessRunner.Output(status: status, stdout: Data(stdout.utf8), stderr: Data())
+    }
+
+    private func outcome(
+        _ poll: PhaseExecutor.PollResult,
+        _ output: ProcessRunner.Output?
+    ) -> PhaseExecutor.Outcome {
+        PhaseExecutor.outcome(for: .bootstrap, poll: poll, output: output)
+    }
+
+    /// The regression guard. A nil status means `down` did not land inside the
+    /// shutdown grace — nothing about the work. The poll watched every process
+    /// exit zero, so reporting "did not finish in time" here would call a
+    /// bootstrap that demonstrably succeeded a failure.
+    func testSlowShutdownDoesNotTurnASuccessIntoATimeout() {
+        XCTAssertEqual(outcome(.finished([]), nil), .succeeded)
+    }
+
+    func testCleanPollAndCleanCommandSucceeds() {
+        XCTAssertEqual(outcome(.finished([]), output(0)), .succeeded)
+    }
+
+    /// Every process clean but the command itself refused — an unparseable
+    /// config, say. That is still a real failure.
+    func testCleanPollWithAFailingCommandIsAFailure() {
+        guard case let .failed(detail) = outcome(.finished([]), output(1, "invalid config")) else {
+            return XCTFail("expected a failure")
+        }
+        XCTAssertTrue(detail.contains("invalid config"), detail)
+    }
+
+    func testFailedProcessesAreNamedWithTheirCodes() {
+        guard case let .failed(detail) = outcome(.finished([("installer", 3)]), nil) else {
+            return XCTFail("expected a failure")
+        }
+        XCTAssertTrue(detail.contains("installer"), detail)
+        XCTAssertTrue(detail.contains("3"), detail)
+    }
+
+    /// The server went away without answering, so the command's status is the
+    /// only evidence there is — and its absence really does mean it was killed.
+    func testServerGoneWithNoStatusIsATimeout() {
+        guard case let .failed(detail) = outcome(.serverGone, nil) else {
+            return XCTFail("expected a failure")
+        }
+        XCTAssertTrue(detail.contains("did not finish in time"), detail)
+    }
+
+    func testServerGoneAfterANonZeroExitIsAFailure() {
+        guard case let .failed(detail) = outcome(.serverGone, output(3, "boom")) else {
+            return XCTFail("expected a failure")
+        }
+        XCTAssertTrue(detail.contains("boom"), detail)
+    }
+
+    func testServerGoneAfterACleanExitSucceeds() {
+        XCTAssertEqual(outcome(.serverGone, output(0)), .succeeded)
+    }
+
+    func testEmptyNamespaceIsSkipped() {
+        XCTAssertEqual(outcome(.namespaceEmpty, output(0)), .skipped)
+    }
+
+    func testTimeoutIsReportedAsOne() {
+        guard case let .failed(detail) = outcome(.timedOut, nil) else {
+            return XCTFail("expected a failure")
+        }
+        XCTAssertTrue(detail.contains("did not finish in time"), detail)
+    }
+}

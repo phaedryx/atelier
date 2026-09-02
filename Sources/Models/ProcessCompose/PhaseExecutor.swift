@@ -60,11 +60,16 @@ enum PhaseExecutor {
 
     /// Run one namespace to completion.
     ///
-    /// - Parameter timeout: the ceiling for the whole phase, including
-    ///   shutdown. Capped at `ProcessRunner.Timeout.userCommand` when the config
-    ///   could not be parsed, because then it is not known that the namespace
-    ///   exists at all, and process-compose does not exit when told to run one
-    ///   that does not — it idles.
+    /// - Parameter timeout: how long the processes themselves get. It bounds
+    ///   the spawned command and the poll loop, and nothing else. Both
+    ///   `shutDown` calls sit outside it — the pre-spawn one before the clock
+    ///   starts, the post-poll one after — and each is bounded by
+    ///   `Timeout.local`, so with `shutdownGrace` the wall-clock worst case
+    ///   from entry is `timeout` + 135s. Capped at
+    ///   `ProcessRunner.Timeout.userCommand` when the config could not be
+    ///   parsed, because then it is not known that the namespace exists at all,
+    ///   and process-compose does not exit when told to run one that does
+    ///   not — it idles.
     static func run(
         phase: ProcessComposePhase,
         config: ProcessComposeConfig,
@@ -153,7 +158,12 @@ enum PhaseExecutor {
     // MARK: - Polling
 
     /// What the poll loop concluded before shutdown.
-    private enum PollResult: Equatable {
+    ///
+    /// Internal rather than private, with `outcome(for:poll:output:)`, so the
+    /// mapping from evidence to report can be tested directly. Reporting a
+    /// successful phase as a failure is the bug this whole round exists to fix,
+    /// and it lives entirely in that mapping.
+    enum PollResult: Equatable {
         /// Every process in the namespace reached a terminal state. Carries the
         /// ones that ended badly, in the order the API reported them.
         case finished([(name: String, exitCode: Int)])
@@ -240,7 +250,7 @@ enum PhaseExecutor {
 
     // MARK: - Reporting
 
-    private static func outcome(
+    static func outcome(
         for phase: ProcessComposePhase,
         poll: PollResult,
         output: ProcessRunner.Output?
@@ -260,9 +270,16 @@ enum PhaseExecutor {
             guard failures.isEmpty else {
                 return report(phase: phase, failures: failures, output: output)
             }
-            // Even with every process clean, a non-zero exit from the command
-            // itself is real — process-compose refusing the config, say.
-            return spawnFailure(phase: phase, output: output) ?? .succeeded
+            // The poll is the authoritative evidence here: it watched every
+            // process in the namespace reach a terminal state with exit code
+            // zero. A nil `output` at this point means only that `down` did not
+            // land inside `shutdownGrace` — reporting that as "did not finish in
+            // time" would call a bootstrap that demonstrably succeeded a
+            // failure. So a missing status is ignored, and only a status that
+            // actually says something (process-compose refusing the config,
+            // say) can overturn the poll.
+            guard let output, !output.isSuccess else { return .succeeded }
+            return report(phase: phase, failures: [], output: output)
 
         case .serverGone:
             // The project shut itself down before, or instead of, answering.
@@ -273,6 +290,10 @@ enum PhaseExecutor {
     }
 
     /// A failure derived from the spawned command, or nil if it exited cleanly.
+    ///
+    /// Only used where the command's status is the *only* evidence there is —
+    /// the server went away before it could be asked. Where the poll saw the
+    /// processes finish, it outranks this.
     private static func spawnFailure(phase: ProcessComposePhase, output: ProcessRunner.Output?) -> Outcome? {
         guard let output else {
             return .failed(String(

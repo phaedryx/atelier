@@ -142,8 +142,16 @@ actor AsyncSetupService {
             config: ProcessComposeConfig.locate(worktree: worktreePath, projectDirectory: projectPath),
             binary: ProcessComposeSettings.resolveBinary()
         )
-        guard case let .run(config, binary) = plan else {
-            guard case let .nothingToDo(message) = plan else { return }
+        // Exhaustive on purpose. A nested `guard case` would leave the
+        // workstream reporting `.inProgress` forever if a third `Plan` case
+        // were ever added; a `switch` cannot compile past one.
+        let config: ProcessComposeConfig
+        let binary: String
+        switch plan {
+        case let .run(planned, planBinary):
+            config = planned
+            binary = planBinary
+        case let .nothingToDo(message):
             await updateState(for: workstreamID, to: .completedWithNote(message))
             logger.info("No bootstrap for \(worktreePath, privacy: .public): \(message, privacy: .public)")
             return

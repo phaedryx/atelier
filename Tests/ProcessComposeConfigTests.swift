@@ -114,6 +114,75 @@ final class ProcessComposeConfigTests: XCTestCase {
         try "processes:\n\(body)".write(to: dir.appendingPathComponent(name), atomically: true, encoding: .utf8)
     }
 
+    /// A worktree config is left unnamed so process-compose's own discovery
+    /// runs, and discovery loads a sibling `process-compose.override.yaml` that
+    /// `locate` never records — `overridePath` is nil here by design. The probe
+    /// has to read the same files process-compose will, or a namespace declared
+    /// only in the override reads as absent and the phase is silently skipped.
+    func testOverrideDiscoveredBesideAWorktreeConfigCounts() throws {
+        try writeProcesses("""
+          web:
+            namespace: execute
+            command: "true"
+        """, in: worktree)
+        try writeProcesses("""
+          seed:
+            namespace: bootstrap
+            command: "true"
+        """, name: "process-compose.override.yaml", in: worktree)
+        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+
+        XCTAssertNil(config.overridePath, "discovery finds it; locate does not name it")
+        XCTAssertEqual(config.namespacePresence("bootstrap"), .present)
+        XCTAssertEqual(config.namespacePresence("prepare"), .empty)
+    }
+
+    /// process-compose loads exactly one override, and with both extensions
+    /// present it takes `.yml` — the opposite of the order `overrideFileNames`
+    /// lists. Taking only the first would read the file that is not loaded, so
+    /// every present override counts: over-reading can only make the probe run
+    /// a phase, while under-reading skips one silently.
+    func testEitherOverrideExtensionCounts() throws {
+        try writeProcesses("""
+          web:
+            namespace: execute
+            command: "true"
+        """, in: worktree)
+        try writeProcesses("""
+          noise:
+            namespace: execute
+            command: "true"
+        """, name: "process-compose.override.yaml", in: worktree)
+        try writeProcesses("""
+          seed:
+            namespace: bootstrap
+            command: "true"
+        """, name: "process-compose.override.yml", in: worktree)
+        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+
+        XCTAssertEqual(config.namespacePresence("bootstrap"), .present)
+    }
+
+    /// The same file beside a *project-directory* config is not loaded:
+    /// naming the base with `-f` turns discovery off, so only files named
+    /// explicitly count.
+    func testOverrideBesideAProjectConfigIsNotCountedUnlessNamed() throws {
+        try writeProcesses("""
+          web:
+            namespace: execute
+            command: "true"
+        """, in: project)
+        try writeProcesses("""
+          seed:
+            namespace: bootstrap
+            command: "true"
+        """, name: "process-compose.override.yaml", in: project)
+        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+
+        XCTAssertFalse(config.isRepositoryProvided)
+        XCTAssertEqual(config.namespacePresence("bootstrap"), .empty)
+    }
+
     func testNotConfidentlyEmptyWhenAProcessDeclaresTheNamespace() throws {
         try writeProcesses("""
           setup:
