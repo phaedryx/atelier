@@ -432,10 +432,42 @@ struct TerminalContainerView: View {
         portDetector.status == .starting || (portDetector.status == .none && browserStartPending)
     }
 
-    /// The command that starts the dev server: the user's override, or the
-    /// detected runner.
+    /// The located process-compose config, when this workstream's run is a
+    /// process-compose run. Guarded on `usesProcessCompose` rather than
+    /// re-checking `ProcessComposeSettings.isEnabled` directly, so this can
+    /// never disagree with it — including the case where a project has both a
+    /// `process-compose.yaml` and a package.json `dev` script and the (now
+    /// superseded, soon-deleted) runner picker points at the latter, and the
+    /// case where the user has an explicit per-workstream override set, which
+    /// `DevCommandResolver.resolve` already prefers over detection. Not read
+    /// from the view body, so locating the config here does not add filesystem
+    /// work to every render the way changing `usesProcessCompose` itself would.
+    private var processComposeConfig: ProcessComposeConfig? {
+        guard usesProcessCompose else { return nil }
+        return ProcessComposeConfig.locate(worktree: workingDirectory, projectDirectory: projectDirectory)
+    }
+
+    /// The command that starts the dev server: process-compose's chained
+    /// `prepare && execute`, when the integration is fully usable, else the
+    /// user's override or the detected runner.
+    ///
+    /// Not cached: every call site is inside an `.onReceive`/`.onChange`
+    /// closure or an action method (`startRunIfNeeded`, `doStartRun`,
+    /// `restartRun`, `restoreRunState`), so this runs on discrete lifecycle
+    /// events (Start pressed, tmux restore, a rerun request) rather than on
+    /// every SwiftUI render pass. Caching it like `portPlan`/`runnerCandidates`
+    /// would only add invalidation to get right, for no measured benefit.
     private var resolvedRunCommand: String? {
-        resolvedDevCommand?.command
+        if let config = processComposeConfig, let binary = ProcessComposeSettings.resolveBinary() {
+            PhaseRunner.ensureSocketDirectory()
+            return PhaseRunner.startCommand(
+                config: config,
+                binary: binary,
+                workstreamID: workstreamID,
+                selectedProcesses: ProcessTableModel.selected(for: workstreamID)
+            )
+        }
+        return resolvedDevCommand?.command
     }
 
     /// Env vars for the run/dev-server surface. Adds the var that silences
@@ -1168,8 +1200,20 @@ struct TerminalContainerView: View {
 
     /// Whether this workstream's run is a process-compose run, and so has a
     /// control socket worth polling. Read off the already-resolved dev command
-    /// rather than re-locating the config, because this is read per render and
-    /// locating stats the filesystem.
+    /// rather than re-locating the config, because this is read per render (via
+    /// `tabContent`'s `.environment` case) and locating stats the filesystem.
+    ///
+    /// `resolvedRunCommand`'s process-compose branch (`processComposeConfig`)
+    /// requires this to be true first, so the two cannot disagree about
+    /// whether process-compose is in play — including when `resolveBinary()`
+    /// fails: this stays true (a config was still detected) but
+    /// `resolvedRunCommand` falls back to the legacy `process-compose up -U`,
+    /// whose unpredictable socket means the table shown here just reads
+    /// "Nothing running." That is a stale-looking table, not a dev script
+    /// running under it, so it does not violate the invariant this guards —
+    /// tightening it would mean calling `resolveBinary()` (a filesystem stat)
+    /// from this per-render property, which is the cost this comment exists to
+    /// avoid.
     private var usesProcessCompose: Bool {
         ProcessComposeSettings.isEnabled && resolvedDevCommand?.source == .processCompose
     }

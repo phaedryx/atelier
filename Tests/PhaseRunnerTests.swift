@@ -124,6 +124,19 @@ final class PhaseRunnerTests: XCTestCase {
         XCTAssertTrue(command.hasSuffix("-n execute"), command)
     }
 
+    /// The whole point of the integration: with a config present and a binary
+    /// available, Start runs process-compose rather than a dev script.
+    func testStartCommandIsUsedWhenAConfigExists() {
+        let command = PhaseRunner.startCommand(
+            config: projectConfig, binary: binary,
+            workstreamID: workstreamID, selectedProcesses: ["bff"]
+        )
+
+        XCTAssertTrue(command.contains("-n prepare"), command)
+        XCTAssertTrue(command.contains("-n execute"), command)
+        XCTAssertTrue(command.hasSuffix("bff"), command)
+    }
+
     func testPathsWithSpacesAreQuoted() {
         let config = ProcessComposeConfig(
             path: "/repo/my project/process-compose.yaml", isRepositoryProvided: false, overridePath: nil
