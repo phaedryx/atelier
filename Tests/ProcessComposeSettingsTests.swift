@@ -59,17 +59,35 @@ final class ProcessComposeSettingsTests: XCTestCase {
         XCTAssertNil(ProcessComposeSettings.resolveBinary())
     }
 
-    /// A whitespace-only configured path must be treated the same as no configured
-    /// path at all — both fall through to searchPaths. Asserting equality with the
-    /// blank-path result (rather than just "isn't the literal whitespace string")
-    /// is what actually pins the trim-then-search behavior: an untrimmed lookup
-    /// would fail isExecutableFile on "   " and return nil, while "" still
-    /// searches — so the two would disagree if .trimmingCharacters were removed.
-    func testBlankPathFallsBackToSearch() {
+    /// The configured path is trimmed before it is used, so a path the user
+    /// pasted with surrounding whitespace resolves rather than reading as
+    /// missing.
+    ///
+    /// This replaces a test that could not fail. It asserted that a
+    /// whitespace-only path and an empty one resolve alike — true, but on any
+    /// machine without process-compose in the three search paths, CI included,
+    /// both sides are nil with the trim *and* without it, so removing
+    /// `.trimmingCharacters` left it green. It also ignored the `/bin/ls` trick
+    /// the rest of this file uses to be host-independent.
+    ///
+    /// Padding a real path exercises the same `.trimmingCharacters` call and
+    /// discriminates on every machine: trimmed, `/bin/ls` is executable and is
+    /// returned; untrimmed, `isExecutableFile` fails on `"  /bin/ls  "` and the
+    /// search — empty here — yields nil.
+    ///
+    /// The blank-path half of the behaviour (fall through *to the search*) is
+    /// deliberately still unasserted: it can only be proved on a host that has
+    /// process-compose installed, and pinning it would mean adding a
+    /// search-paths injection point to production for one test.
+    func testAPaddedConfiguredPathIsTrimmedRatherThanTreatedAsMissing() {
+        ProcessComposeSettings.binaryPath = "  /bin/ls  "
+        XCTAssertEqual(ProcessComposeSettings.resolveBinary(), "/bin/ls")
+    }
+
+    /// A whitespace-only path is not a configured path: it must not be handed to
+    /// `isExecutableFile` as-is, and it must never resolve to itself.
+    func testAWhitespaceOnlyPathIsNeverReturned() {
         ProcessComposeSettings.binaryPath = "   "
-        let whitespaceResult = ProcessComposeSettings.resolveBinary()
-        ProcessComposeSettings.binaryPath = ""
-        let emptyResult = ProcessComposeSettings.resolveBinary()
-        XCTAssertEqual(whitespaceResult, emptyResult)
+        XCTAssertNotEqual(ProcessComposeSettings.resolveBinary(), "   ")
     }
 }
