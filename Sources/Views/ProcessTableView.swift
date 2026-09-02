@@ -116,6 +116,22 @@ func processSelectionAfterToggling(
     return next == all ? [] : next.sorted()
 }
 
+/// The stored selection, reconciled against what the config declares now.
+///
+/// A selection persists per workstream while the YAML it names does not. Rename
+/// or remove a process and the stored name rides along forever: it matches
+/// nothing, so `effectiveSelection` is non-empty but contains none of the real
+/// names — every checkbox renders unchecked — and Start passes the dead name to
+/// `up -n execute`, which does not know it.
+///
+/// Names that no longer exist are dropped. If nothing survives, the result is
+/// empty, which is the canonical "all" — the same answer a fresh workstream
+/// gets, and the only sane reading of "everything I chose is gone".
+func processSelectionOnLoad(stored: [String], declared: [String]) -> [String] {
+    let surviving = Set(stored).intersection(declared)
+    return surviving.isEmpty || surviving == Set(declared) ? [] : surviving.sorted()
+}
+
 /// Which of `execute`'s processes the Start button will launch.
 ///
 /// A view of its own, and rendered by `EnvironmentTabView` in **both** the
@@ -172,7 +188,16 @@ struct ProcessSelectionView: View {
             }
             .padding(.horizontal, 12)
         }
-        .onAppear { selection = Set(ProcessTableModel.selected(for: workstreamID)) }
+        .onAppear {
+            let cleaned = processSelectionOnLoad(
+                stored: ProcessTableModel.selected(for: workstreamID),
+                declared: declaredProcesses
+            )
+            selection = Set(cleaned)
+            // Written back, not just filtered for display: otherwise Start
+            // keeps reading the stale name straight out of UserDefaults.
+            ProcessTableModel.setSelected(cleaned, for: workstreamID)
+        }
     }
 
     /// Alphabetical, and sorted here rather than trusted from the caller so

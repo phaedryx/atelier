@@ -185,4 +185,30 @@ final class EnvironmentTabViewTests: XCTestCase {
             ["b", "c"]
         )
     }
+
+    // MARK: - Reconciling a stored selection with the config
+
+    /// Rename a process in the YAML and the stored name matched nothing, so
+    /// every checkbox rendered unchecked and Start passed a name
+    /// process-compose does not know.
+    func testANameThatNoLongerExistsIsDropped() {
+        XCTAssertEqual(
+            processSelectionOnLoad(stored: ["gone", "bff"], declared: ["api", "bff"]),
+            ["bff"]
+        )
+    }
+
+    /// Everything chosen is gone: fall back to all, which is what empty means
+    /// and what a fresh workstream gets.
+    func testASelectionWithNothingSurvivingBecomesAll() {
+        XCTAssertEqual(processSelectionOnLoad(stored: ["gone", "also-gone"], declared: ["api"]), [])
+    }
+
+    func testASelectionCoveringEveryProcessCanonicalisesToAll() {
+        XCTAssertEqual(processSelectionOnLoad(stored: ["api", "bff"], declared: ["bff", "api"]), [])
+    }
+
+    func testAnUntouchedSelectionStaysUntouched() {
+        XCTAssertEqual(processSelectionOnLoad(stored: [], declared: ["api", "bff"]), [])
+    }
 }
