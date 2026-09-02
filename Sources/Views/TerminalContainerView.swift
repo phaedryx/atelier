@@ -61,38 +61,6 @@ enum RestorableWorkspaceTab: String, Codable {
     }
 }
 
-enum SetupStateStore {
-    private static let userDefaultsKey = "atelier.setupCompleted"
-
-    static func isCompleted(for workstreamID: UUID) -> Bool {
-        guard let data = UserDefaults.standard.data(forKey: userDefaultsKey),
-              let saved = try? JSONDecoder().decode(Set<String>.self, from: data)
-        else { return false }
-        return saved.contains(workstreamID.uuidString)
-    }
-
-    static func markCompleted(for workstreamID: UUID) {
-        var saved: Set<String> = []
-        if let data = UserDefaults.standard.data(forKey: userDefaultsKey),
-           let existing = try? JSONDecoder().decode(Set<String>.self, from: data)
-        {
-            saved = existing
-        }
-        saved.insert(workstreamID.uuidString)
-        guard let data = try? JSONEncoder().encode(saved) else { return }
-        UserDefaults.standard.set(data, forKey: userDefaultsKey)
-    }
-
-    static func remove(for workstreamID: UUID) {
-        guard let data = UserDefaults.standard.data(forKey: userDefaultsKey),
-              var saved = try? JSONDecoder().decode(Set<String>.self, from: data)
-        else { return }
-        saved.remove(workstreamID.uuidString)
-        guard let encoded = try? JSONEncoder().encode(saved) else { return }
-        UserDefaults.standard.set(encoded, forKey: userDefaultsKey)
-    }
-}
-
 enum WorkspaceStateStore {
     private static let userDefaultsKey = "atelier.workspaceTabs"
 
@@ -227,7 +195,7 @@ func workspaceEnvironmentVariables(
     workingDirectory: String,
     port: Int,
     defaultBranch: String,
-    scriptSource: String?
+    portPlan: PortPlan = .empty
 ) -> [String: String] {
     WorkstreamEnvironment.variables(
         workstreamID: workstreamID,
@@ -237,7 +205,7 @@ func workspaceEnvironmentVariables(
         workingDirectory: workingDirectory,
         port: port,
         defaultBranch: defaultBranch,
-        scriptSource: scriptSource
+        portPlan: portPlan
     )
 }
 
@@ -256,21 +224,6 @@ enum TerminalSessionMode: Equatable {
             }
         }
         return .standard
-    }
-}
-
-enum SetupGateState: Equatable {
-    case notNeeded
-    case awaitingApproval
-    case running
-    case failed
-    case completed
-
-    /// A setup script only runs once per workstream, and only once the user has
-    /// approved the commands the repository supplied.
-    static func resolve(hasSetupScript: Bool, setupCompleted: Bool, scriptsApproved: Bool) -> SetupGateState {
-        guard hasSetupScript, !setupCompleted else { return .notNeeded }
-        return scriptsApproved ? .running : .awaitingApproval
     }
 }
 
@@ -297,9 +250,19 @@ struct TerminalContainerView: View {
     @AppStorage("atelier.autoRenameBranch") private var autoRenameBranch: Bool = false
     @AppStorage("atelier.allowOutsideWorktree") private var allowOutsideWorktree: Bool = false
     @AppStorage(AgentIPCSettings.enabledKey) private var agentIPC: Bool = false
+    /// Both process-compose settings, observed rather than read.
+    ///
+    /// They are inputs to `runPlan`, and they are changed in the Settings
+    /// window, which never touches this view — so without an observer the pane
+    /// would keep a plan built before the change. That matters most in the state
+    /// the plan's own message describes: "process-compose was not found, set its
+    /// path in Settings" is advice the user follows, and Start has to become
+    /// enabled when they do. `@AppStorage` watches UserDefaults process-wide, so
+    /// a write from the other window lands here.
+    @AppStorage(ProcessComposeSettings.enabledKey) private var processComposeEnabled: Bool = false
+    @AppStorage(ProcessComposeSettings.binaryPathKey) private var processComposeBinaryPath: String = ""
     @AppStorage("atelier.editorTabActive") private var editorTabActive: Bool = false
     @AppStorage("atelier.editorFileDirty") private var editorFileDirty: Bool = false
-    @State private var scriptConfig: ScriptConfig = .empty
     @State private var fileTree: [FileNode] = []
     @State private var gitFileStatuses = GitFileStatusProvider()
     @State private var directoryWatcher: DirectoryWatcher?
@@ -310,13 +273,65 @@ struct TerminalContainerView: View {
     @State private var draggedCustomTab: WorkspaceTab?
     @StateObject private var portDetector: PortDetector
     @State private var browserStartPending = false
-    @State private var runGeneration = 0
-    @State private var runCommandString: String?
     @State private var devCommandOverride: String?
     @State private var resolvedDevCommand: DevCommand?
     @State private var defaultBranch = "main"
-    @State private var setupGateState: SetupGateState = .notNeeded
-    @State private var scriptsApproved = false
+    /// Every repository-provided file process-compose would load here, or empty
+    /// when there is nothing to approve — the integration is off, no config was
+    /// found, or the only config sits in the project directory and is the user's
+    /// own with no worktree override beside it.
+    ///
+    /// A list, not a path: a repository can ship a benign base config plus an
+    /// override that discovery loads, and showing only the base would ask the
+    /// user to approve a file that is not the whole of what runs.
+    ///
+    /// Resolved with a bare `ProcessComposeConfig.locate`, deliberately not
+    /// through `processComposeConfig`: that one is narrowed to the *run*, so it
+    /// disappears when the user has a per-workstream override. Bootstrap and
+    /// dispose locate unconditionally, so hanging the approval off the run's
+    /// config would hide it in exactly the case where bootstrap still wants to
+    /// run.
+    @State private var repositoryConfigFiles: [String] = []
+    @State private var configApproved = false
+    @State private var isReviewingConfig = false
+    /// Resolved once per change rather than per render: resolving binds a socket
+    /// to check whether each port is free.
+    @State private var portPlan: PortPlan = .empty
+    /// What Start may run, decided once per change in `refreshDevCommand`.
+    ///
+    /// Stored rather than recomputed because *agreement* is the invariant here,
+    /// not freshness. The Environment pane's Start button is enabled on this
+    /// value and `doStartRun` refuses on this value, so the two cannot describe
+    /// different worlds; a plan that is a moment stale but consistent is
+    /// harmless, while a fresh plan disagreeing with the button is exactly the
+    /// bug — an enabled Start that silently did nothing. Do not turn this back
+    /// into a computed property: `RunCommandPlan.plan` locates the config and
+    /// stats the binary, so reading it from the view body would also put
+    /// filesystem work in every render pass.
+    ///
+    /// What invalidates it: the per-workstream override, and **both
+    /// process-compose settings** — the integration switch and the binary path,
+    /// observed via `@AppStorage` because they are changed in a different window
+    /// that never touches this view. Those two are not optional. The plan's own
+    /// message tells the user to go and change them, so a plan that did not
+    /// notice would leave Start disabled after they had done exactly what it
+    /// asked. Do not drop them when adding another input here.
+    @State private var runPlan: RunCommandPlan = .nothing
+    /// Every file the run's config will load, for the pane to show in place of a
+    /// command string. Set in the same refresh as `runPlan`.
+    @State private var devCommandFiles: [String] = []
+    /// Why Start can do nothing, when it can do nothing and the pane's own copy
+    /// does not already explain it. Set in the same refresh as `runPlan`.
+    @State private var runUnavailableReason: String?
+    /// The last thing background setup said about this workstream.
+    ///
+    /// `AsyncSetupService` has posted `.asyncSetupStateChanged` since it
+    /// existed, and until now nothing listened — so `.completedWithNote`, the
+    /// state whose whole job is to say *why* no bootstrap ran, was written and
+    /// discarded. It is read here and rendered on the Info tab, which is
+    /// permanent and cannot be closed out from under the message.
+    @State private var setupState: AsyncSetupState = .idle
+    @StateObject private var processTable: ProcessTableModel
     init(
         workstreamID: UUID,
         workingDirectory: String,
@@ -326,7 +341,6 @@ struct TerminalContainerView: View {
         workstreamLabel: String? = nil,
         bypassPermissions: Bool,
         isActive: Bool,
-        scriptConfig: ScriptConfig = .empty,
         model: WorkspaceModel
     ) {
         self.workstreamID = workstreamID
@@ -338,25 +352,22 @@ struct TerminalContainerView: View {
         self.bypassPermissions = bypassPermissions
         self.isActive = isActive
         self.model = model
-        _scriptConfig = State(initialValue: scriptConfig)
         _portDetector = StateObject(wrappedValue: PortDetector(workstreamID: workstreamID))
+        _processTable = StateObject(wrappedValue: ProcessTableModel(
+            socketPath: PhaseRunner.socketPath(for: workstreamID)
+        ))
 
         let savedOverride = DevCommandResolver.savedOverride(for: workstreamID)
         _devCommandOverride = State(initialValue: savedOverride)
         _resolvedDevCommand = State(initialValue: DevCommandResolver.resolve(
-            scriptConfig: scriptConfig,
-            workstreamID: workstreamID,
             workingDirectory: workingDirectory,
+            projectDirectory: projectDirectory,
             override: savedOverride
         ))
     }
 
     private var claudeID: UUID {
         workstreamID
-    }
-
-    private var setupGateID: UUID {
-        derivedUUID(from: workstreamID, salt: "setup-gate")
     }
 
     private var quickActionRunner: QuickActionRunner {
@@ -367,15 +378,9 @@ struct TerminalContainerView: View {
     private var visibleSurfaceIDs: Set<UUID>? {
         switch model.activeTab {
         case .agent:
-            if setupGateState == .awaitingApproval {
-                return []
-            }
-            if setupGateState == .running || setupGateState == .failed {
-                return [setupGateID]
-            }
-            return [claudeID]
-        case let .terminal(id): return [id]
-        case .info, .changes, .environment, .browser, .editor: return []
+            [claudeID]
+        case let .terminal(id): [id]
+        case .info, .changes, .environment, .browser, .editor: []
         }
     }
 
@@ -395,15 +400,19 @@ struct TerminalContainerView: View {
         PortAllocator.port(for: workingDirectory)
     }
 
+    /// A declared `browser: true` port wins over detection: Atelier assigned it,
+    /// so there is nothing to infer. Detection cannot help here anyway —
+    /// PortSelectionTracker returns nil once more than one process is listening
+    /// and no port was expected, which is every multi-service stack.
     private var browserDefaultURL: String {
-        let port = portDetector.selectedPort ?? workstreamPort
+        let port = portPlan.browserPort ?? portDetector.selectedPort ?? workstreamPort
         return "http://localhost:\(port)/"
     }
 
     /// The run session's surface ID. Bumped on stop/restart so a fresh
     /// surface replaces the previous one.
     private var runID: UUID {
-        derivedUUID(from: workstreamID, salt: "env-run-\(runGeneration)")
+        derivedUUID(from: workstreamID, salt: "env-run-\(model.runGeneration)")
     }
 
     /// The dev server is coming up but has not exposed a port yet. Covers the
@@ -413,19 +422,64 @@ struct TerminalContainerView: View {
         portDetector.status == .starting || (portDetector.status == .none && browserStartPending)
     }
 
-    /// The command that starts the dev server: config run script, user
-    /// override, or the repo's package.json dev script.
-    private var resolvedRunCommand: String? {
-        if let run = scriptConfig.run {
-            return run
-        }
-        return resolvedDevCommand?.command
+    /// The located process-compose config, when this workstream's run is a
+    /// process-compose run.
+    ///
+    /// Asks the same two questions as `usesProcessCompose` — the integration is
+    /// on, and the resolved dev command came from a config rather than from the
+    /// user's own override, which `DevCommandResolver.resolve` prefers. It takes
+    /// the dev command as a parameter rather than reading `resolvedDevCommand`
+    /// because `refreshDevCommand` needs the config for the resolution it is in
+    /// the middle of storing, not for the previous one.
+    ///
+    /// A function, and called only from `refreshDevCommand`, so locating the
+    /// config never happens in a render pass.
+    private func processComposeConfig(for devCommand: DevCommand?) -> ProcessComposeConfig? {
+        guard ProcessComposeSettings.isEnabled, devCommand?.source == .processCompose else { return nil }
+        return ProcessComposeConfig.locate(worktree: workingDirectory, projectDirectory: projectDirectory)
     }
 
-    /// Config-provided run scripts are approval-gated; auto-detected or
-    /// user-authored dev commands are not.
-    private var runCommandIsGated: Bool {
-        scriptConfig.run != nil
+    /// The command that starts the dev server: process-compose's chained
+    /// `prepare && execute`, or the user's own per-workstream override.
+    ///
+    /// The decision itself lives in `RunCommandPlan.plan`, which is where the
+    /// reasoning is. The short version: this must never fall back to
+    /// `resolvedDevCommand?.command` for a `.processCompose` source, because
+    /// that string carries no `-n` and would run `bootstrap` and `dispose`
+    /// without ever passing `PhasePolicy`. If the phase-scoped command cannot
+    /// be built — no config, or no binary — the answer is nil and Start reports
+    /// that, rather than running something unscoped.
+    ///
+    /// Processes the located config declares in `execute`.
+    ///
+    /// Read off the stored plan's config rather than by locating again, so the
+    /// selection list and the command Start builds cannot disagree about which
+    /// config they mean. Empty when the config is unparseable, which the
+    /// selection list treats as "offer no choices" rather than "no processes".
+    private var declaredExecuteProcesses: [String] {
+        guard case let .phaseScoped(config, _) = runPlan else { return [] }
+        return config.declaredProcesses(in: ProcessComposePhase.execute.namespace) ?? []
+    }
+
+    /// Reads the stored `runPlan` rather than re-deriving one, so this is nil
+    /// for exactly the plans whose `canRun` is false — which is what the Start
+    /// button's enablement is drawn from. Deriving a second plan here is how
+    /// the button and this guard came to disagree.
+    private var resolvedRunCommand: String? {
+        switch runPlan {
+        case let .literal(command):
+            return command
+        case let .phaseScoped(config, binary):
+            PhaseRunner.ensureSocketDirectory()
+            return PhaseRunner.startCommand(
+                config: config,
+                binary: binary,
+                workstreamID: workstreamID,
+                selectedProcesses: ProcessTableModel.selected(for: workstreamID)
+            )
+        case .nothing:
+            return nil
+        }
     }
 
     /// Env vars for the run/dev-server surface. Adds the var that silences
@@ -661,8 +715,11 @@ struct TerminalContainerView: View {
                 workstreamID: workstreamID,
                 workingDirectory: workingDirectory,
                 projectDirectory: projectDirectory,
-                scriptConfig: scriptConfig,
-                scriptsApproved: $scriptsApproved
+                repositoryConfigFiles: repositoryConfigFiles,
+                configApproved: configApproved,
+                setupState: setupState,
+                onReviewConfig: { isReviewingConfig = true },
+                onRevokeConfig: revokeProcessConfig
             )
         case .changes:
             if let bridge = model.diffBridge {
@@ -684,30 +741,29 @@ struct TerminalContainerView: View {
                 EnvironmentTabView(
                     workstreamID: workstreamID,
                     workingDirectory: workingDirectory,
-                    projectDirectory: projectDirectory,
-                    scriptConfig: scriptConfig,
                     useTmux: useTmux,
                     environmentVars: runEnvironmentVars,
-                    runCommand: runCommandString,
-                    runCommandIsGated: runCommandIsGated,
+                    runCommand: model.runCommandString,
                     devCommand: resolvedDevCommand,
                     devCommandOverride: $devCommandOverride,
                     runStarted: $model.runStarted,
-                    scriptsApproved: $scriptsApproved,
-                    runGeneration: $runGeneration,
+                    runGeneration: model.runGeneration,
+                    processTable: processTable,
+                    showsProcessTable: usesProcessCompose,
+                    portsByName: portPlan.values,
+                    declaredProcesses: declaredExecuteProcesses,
+                    canStart: runPlan.canRun,
+                    devCommandFiles: devCommandFiles,
+                    startUnavailableReason: runUnavailableReason,
+                    unapprovedConfigFiles: configApproved ? [] : repositoryConfigFiles,
+                    onReviewConfig: { isReviewingConfig = true },
                     onStart: doStartRun,
                     onStop: stopRun,
                     onRestart: restartRun
                 )
             }
         case .agent:
-            if setupGateState == .awaitingApproval {
-                setupApprovalView
-            } else if setupGateState == .running {
-                setupGateRunningView
-            } else if setupGateState == .failed {
-                setupGateFailedView
-            } else if sessionMode == .waitingForTools || appEnv.isDetecting {
+            if sessionMode == .waitingForTools || appEnv.isDetecting {
                 terminalLoadingView(message: "Checking terminal tools...")
             } else if appEnv.toolStatus.claude.path == nil {
                 VStack(spacing: 16) {
@@ -814,7 +870,6 @@ struct TerminalContainerView: View {
             .onReceive(NotificationCenter.default.publisher(for: .rerunScript)) { _ in
                 guard isActive else { return }
                 guard resolvedRunCommand != nil else { return }
-                guard !runCommandIsGated || scriptsApproved else { return }
                 if model.runStarted {
                     restartRun()
                 } else {
@@ -862,6 +917,19 @@ struct TerminalContainerView: View {
             Divider()
             tabContent
         }
+        .onReceive(NotificationCenter.default.publisher(for: .asyncSetupStateChanged)) { notification in
+            guard let info = notification.userInfo,
+                  info["workstreamID"] as? UUID == workstreamID,
+                  let state = info["state"] as? AsyncSetupState else { return }
+            setupState = state
+        }
+        .task(id: workstreamID) {
+            // Seeded as well as observed: bootstrap for a brand-new workstream
+            // can finish before this view exists, and a note nobody was
+            // listening for is the bug being fixed rather than a smaller
+            // version of it.
+            setupState = await AsyncSetupService.shared.state(for: workstreamID)
+        }
         .task(id: workstreamID) {
             try? await Task.sleep(nanoseconds: 50_000_000)
             guard !Task.isCancelled else { return }
@@ -898,6 +966,7 @@ struct TerminalContainerView: View {
                 startFileTreeWatcherIfNeeded()
             }
             restoreRunState()
+            syncProcessPolling()
         }
         .onDisappear {
             if isActive {
@@ -926,33 +995,45 @@ struct TerminalContainerView: View {
 
     var body: some View {
         mainContent
-            .onChange(of: scriptsApproved) { _, approved in
-                // Approving from the Info tab releases a waiting setup script.
-                if approved {
-                    startApprovedSetup()
-                } else if model.runStarted {
-                    // Withdrawing approval stops what the repository is
-                    // already running — the entry gate alone is not enough.
-                    stopRun()
+            // On the container rather than on either tab, because both the
+            // Environment banner and the Info row open it and Environment is a
+            // closeable tab.
+            .sheet(isPresented: $isReviewingConfig) {
+                if !repositoryConfigFiles.isEmpty {
+                    ConfigApprovalView(
+                        filePaths: repositoryConfigFiles,
+                        onApprove: approveProcessConfig,
+                        onCancel: { isReviewingConfig = false }
+                    )
                 }
             }
             .onChange(of: devCommandOverride) { _, newValue in
                 DevCommandResolver.saveOverride(newValue, for: workstreamID)
-                resolvedDevCommand = DevCommandResolver.resolve(
-                    scriptConfig: scriptConfig,
-                    workstreamID: workstreamID,
-                    workingDirectory: workingDirectory,
-                    override: newValue
-                )
+                refreshDevCommand()
+            }
+            // The two Settings-window inputs to `runPlan`. `refreshConfigApproval`
+            // comes along because it is guarded on the same switch: with the
+            // integration turned on mid-session, a repository-provided config
+            // has to start asking for approval too.
+            .onChange(of: processComposeEnabled) { _, _ in
+                refreshConfigApproval()
+                refreshDevCommand()
+            }
+            .onChange(of: processComposeBinaryPath) { _, _ in
+                refreshDevCommand()
             }
             .onChange(of: model.runStarted) { _, started in
                 // A session restored from tmux (or started before TerminalApp
                 // was ready) needs its command assembled on the container side
                 // so the restored surface reattaches to the existing session.
-                if started, runCommandString == nil, let command = resolvedRunCommand {
-                    runCommandString = buildRunCommand(script: command)
+                if started, model.runCommandString == nil, let command = resolvedRunCommand {
+                    model.runCommandString = buildRunCommand(script: command)
                     preloadRunSurface()
                 }
+                // Driven here rather than from doStartRun/stopRun because a
+                // session restored from tmux sets this directly and never goes
+                // through either of them.
+                syncProcessPolling()
             }
             .onChange(of: portDetector.status) { _, newStatus in
                 // Once the session materializes (atelier-run wrote state), the
@@ -978,21 +1059,26 @@ struct TerminalContainerView: View {
                 guard let currentIndex = model.tabs.firstIndex(of: model.activeTab) else { return }
                 model.activeTab = model.tabs[(currentIndex - 1 + model.tabs.count) % model.tabs.count]
             }
-            .onReceive(NotificationCenter.default.publisher(for: .terminalChildExited)) { notification in
-                guard let surfaceID = notification.object as? UUID, surfaceID == setupGateID,
-                      let exitCode = notification.userInfo?["exitCode"] as? Int32
-                else { return }
-                handleSetupChildExited(exitCode: exitCode)
-            }
             .onReceive(NotificationCenter.default.publisher(for: .terminalTabExited)) { notification in
                 guard let surfaceID = notification.object as? UUID else { return }
-                if surfaceID == setupGateID, setupGateState == .failed {
-                    launchAgentAfterSetup()
-                    return
-                }
                 if surfaceID == runID {
                     // The dev-server session died; no port is coming.
                     browserStartPending = false
+                    // And the run is over, which has to be recorded rather than
+                    // left implied. `runStarted` stayed true here, so the pane
+                    // kept rendering `SingleTerminalView` with the stored
+                    // command — and `TerminalSurfaceView.updateNSView`
+                    // recreates a missing surface from that command on the next
+                    // render. Stopping the last process therefore rebooted the
+                    // whole stack with no user action, and Stop acted on a run
+                    // that did not exist until a render brought it back.
+                    //
+                    // `runStoppedManually` is deliberately left alone: the run
+                    // died on its own, and marking it manual would suppress the
+                    // tmux restore the user never asked to suppress.
+                    model.runStarted = false
+                    model.runCommandString = nil
+                    syncProcessPolling()
                 }
                 // Tab removal for exited terminals happens at exit time, in
                 // handleSurfaceClosed via removeTerminalTab(surfaceID:) — by
@@ -1117,27 +1203,39 @@ struct TerminalContainerView: View {
     private func startRunIfNeeded() {
         guard resolvedRunCommand != nil else { return }
         guard sessionMode != .waitingForTools, !appEnv.isDetecting else { return }
-        guard setupGateState != .awaitingApproval else { return }
         guard portDetector.status == .none else { return }
-        if runCommandIsGated, !scriptsApproved {
-            return
-        }
         if model.runStarted {
             stopRun()
         }
         doStartRun()
     }
 
-    /// Starts the run session unconditionally. Used by the Info pane controls,
-    /// which have already validated approval state.
+    /// Starts the run session. The command is either the user's own override or
+    /// the phase-scoped `prepare && execute` Atelier composes from the located
+    /// config. Nothing here is gated behind approval, because this is attended:
+    /// the user pressed Start, the output lands in a surface in front of them,
+    /// and Stop is to hand. The pane does *not* display this command — what it
+    /// shows for a process-compose source is the list of files that will be
+    /// loaded.
     @MainActor
     private func doStartRun() {
         guard let command = resolvedRunCommand else { return }
+        // A run always gets an Environment tab, because that tab is what can
+        // see and stop it. `addBrowser` starts the dev server through
+        // `startRunIfNeeded` and opens only a browser, so a run could exist
+        // with no Environment tab at all — and then the only way to stop it
+        // was closing the *last* browser tab, which nothing tells the user.
+        // Closing the Environment tab stops the run (see `forceCloseTab`), so
+        // guaranteeing the tab exists is what makes that reachable.
+        //
+        // Ensure rather than activate: the browser tab the user just asked for
+        // must keep focus.
+        model.ensureSingleton(.environment)
         killRunTmuxSession()
         surfaceCache.removeSurface(for: runID)
         model.runStoppedManually = false
-        runGeneration += 1
-        runCommandString = buildRunCommand(script: command)
+        model.runGeneration += 1
+        model.runCommandString = buildRunCommand(script: command)
         model.runStarted = true
         markBrowserStartPending()
         preloadRunSurface()
@@ -1149,8 +1247,57 @@ struct TerminalContainerView: View {
         model.runStoppedManually = true
         model.runStarted = false
         browserStartPending = false
-        runCommandString = nil
-        runGeneration += 1
+        model.runCommandString = nil
+        model.runGeneration += 1
+    }
+
+    /// Whether this workstream's run is a process-compose run, and so has a
+    /// control socket worth polling. Read off the already-resolved dev command
+    /// rather than re-locating the config, because this is read per render (via
+    /// `tabContent`'s `.environment` case) and locating stats the filesystem.
+    ///
+    /// `resolvedRunCommand`'s process-compose branch requires this to be true
+    /// first, so the two cannot disagree about whether process-compose is in
+    /// play. This can still be true while `resolveBinary()` fails — a config
+    /// was detected, there is just nothing to run it with — and in that state
+    /// `resolvedRunCommand` is now **nil**, so Start reports that no command is
+    /// available and this table simply never gets a run to poll.
+    ///
+    /// A previous version of this comment reasoned about that state and
+    /// concluded it "does not violate the invariant this guards", on the
+    /// grounds that the worst case was a table reading "Nothing running."
+    /// **That was wrong, and the error was in what it measured.** The invariant
+    /// that matters is not about the table: it is that the un-`-n`'d
+    /// `process-compose up -U -f <files>` string is never executed. Back then
+    /// `resolvedRunCommand` did fall through to exactly that string when the
+    /// binary was unresolvable, which ran `bootstrap` and `dispose` with no
+    /// approval — and `scriptCommand` wrapped it in `$SHELL -lic`, so PATH
+    /// resolved the very binary `resolveBinary` had just failed to find.
+    /// Reasoning about the process table hid that for a whole review round.
+    /// `RunCommandPlan` now holds the invariant structurally; this property is
+    /// only about whether there is a socket worth polling.
+    ///
+    /// The `isEnabled` half is belt-and-braces rather than the load-bearing
+    /// check: `DevCommandResolver.detectProcessCompose` refuses to detect
+    /// anything while the setting is off, so a `.processCompose` source already
+    /// implies it. Kept anyway, because the two are read from different places
+    /// and a reader here should not have to go and confirm that the resolver
+    /// still guards. It cannot *disagree* with the resolver — only be redundant
+    /// with it.
+    private var usesProcessCompose: Bool {
+        ProcessComposeSettings.isEnabled && resolvedDevCommand?.source == .processCompose
+    }
+
+    /// Polls the control socket exactly while a process-compose run is up.
+    /// Called from every place `runStarted` can change, including the tmux
+    /// restore path, which sets it without going through `doStartRun`.
+    @MainActor
+    private func syncProcessPolling() {
+        if model.runStarted, usesProcessCompose {
+            processTable.startPolling()
+        } else {
+            processTable.stopPolling()
+        }
     }
 
     private func restartRun() {
@@ -1159,9 +1306,9 @@ struct TerminalContainerView: View {
         surfaceCache.removeSurface(for: runID)
         model.runStoppedManually = false
         markBrowserStartPending()
-        runGeneration += 1
+        model.runGeneration += 1
         if let command = resolvedRunCommand {
-            runCommandString = buildRunCommand(script: command)
+            model.runCommandString = buildRunCommand(script: command)
         }
         model.runStarted = true
         preloadRunSurface()
@@ -1182,7 +1329,7 @@ struct TerminalContainerView: View {
     /// Create the run surface eagerly so the dev server starts even while the
     /// browser tab is active and the Info pane is not rendered.
     private func preloadRunSurface() {
-        guard let commandString = runCommandString else { return }
+        guard let commandString = model.runCommandString else { return }
         guard let app = TerminalApp.shared.app else { return }
         _ = surfaceCache.surface(
             for: runID,
@@ -1200,7 +1347,7 @@ struct TerminalContainerView: View {
         if let launcherPath = ffRunPath {
             baseCommand = runScriptCommand(script: script, workstreamID: workstreamID, launcherPath: launcherPath)
         } else {
-            baseCommand = scriptCommand(script: script, role: "run")
+            baseCommand = scriptCommand(script: script)
         }
 
         let finalCommand: String
@@ -1239,6 +1386,48 @@ struct TerminalContainerView: View {
         return finalCommand
     }
 
+    /// Re-resolve the dev command *and* the run plan, together.
+    ///
+    /// One function on purpose. The plan is derived from the dev command, and
+    /// every caller that invalidates one invalidates the other, so splitting
+    /// them would give the pane a way to render a button whose plan came from an
+    /// earlier dev command. Both are also the only two inputs the Start button
+    /// reads, so this is the whole of what has to stay in step.
+    private func refreshDevCommand() {
+        let devCommand = DevCommandResolver.resolve(
+            workingDirectory: workingDirectory,
+            projectDirectory: projectDirectory,
+            override: devCommandOverride
+        )
+        resolvedDevCommand = devCommand
+        let config = processComposeConfig(for: devCommand)
+        let binary = ProcessComposeSettings.resolveBinary()
+        devCommandFiles = config?.loadedFiles ?? []
+        runPlan = RunCommandPlan.plan(devCommand: devCommand, config: config, binary: binary)
+        runUnavailableReason = RunCommandPlan.unavailableReason(
+            devCommand: devCommand,
+            config: config,
+            binary: binary,
+            isEnabled: ProcessComposeSettings.isEnabled
+        )
+    }
+
+    /// Re-reads ports.yaml and resolves it for this worktree. A malformed file
+    /// leaves the plan empty and logs — the Environment tab surfaces the error
+    /// in Task 8; nothing here should throw into a view update.
+    private func refreshPortPlan() {
+        do {
+            guard let config = try PortsConfig.load(from: projectDirectory) else {
+                portPlan = .empty
+                return
+            }
+            portPlan = PortPlan.resolve(config, workingDirectory: workingDirectory)
+        } catch {
+            logger.warning("ports.yaml: \(error.localizedDescription, privacy: .public)")
+            portPlan = .empty
+        }
+    }
+
     private func killRunTmuxSession() {
         guard useTmux, let tmuxPath = appEnv.toolStatus.tmux.path else { return }
         let session = TmuxSession.sessionName(project: projectName, workstream: workstreamName, role: "run")
@@ -1258,14 +1447,11 @@ struct TerminalContainerView: View {
               let tmuxPath = appEnv.toolStatus.tmux.path else { return }
         let session = TmuxSession.sessionName(project: projectName, workstream: workstreamName, role: "run")
         let hasExistingRunSession = TmuxSession.sessionExists(tmuxPath: tmuxPath, sessionName: session)
-        // Dev commands (package.json / override) are never gated.
-        let approved = runCommandIsGated ? scriptsApproved : true
         if shouldRestoreRunSession(
             useTmux: useTmux,
             hasRunScript: resolvedRunCommand != nil,
             hasExistingRunSession: hasExistingRunSession,
-            wasStoppedManually: model.runStoppedManually,
-            isApproved: approved
+            wasStoppedManually: model.runStoppedManually
         ) {
             model.runStarted = true
         }
@@ -1434,11 +1620,32 @@ struct TerminalContainerView: View {
         case let .browser(id):
             surfaceCache.removeWebView(for: id)
             // The browser tab owns the dev server: closing the last one stops it.
-            if !model.hasBrowserTabs {
+            //
+            // `runStarted` guards it for the same reason the `.environment`
+            // case below is guarded: `stopRun` sets `runStoppedManually`,
+            // which suppresses the tmux restore. Without it, opening and
+            // closing a browser tab while nothing ran was enough to strand a
+            // live tmux run session for the rest of the session — the flag
+            // outlives the view on the model, and `restoreRunState` refuses to
+            // reattach once it is set.
+            if !model.hasBrowserTabs, model.runStarted {
                 stopRun()
             }
         case let .editor(id):
             model.editorBridge?.closeModel(modelId: id.uuidString)
+        case .environment:
+            // The Environment tab owns the run the same way the browser tab
+            // owns it: closing it stops the processes rather than leaving them
+            // running with nothing on screen that can see or stop them. The
+            // tab is closable and reopenable, and reopening offers Start
+            // again.
+            //
+            // Guarded on `runStarted` because `stopRun` sets
+            // `runStoppedManually`, which suppresses the tmux restore on next
+            // launch. Closing a tab that was not running must not decide that.
+            if model.runStarted {
+                stopRun()
+            }
         default:
             break
         }
@@ -1467,15 +1674,10 @@ struct TerminalContainerView: View {
         }
         appEnv.refreshWorktreeState(for: workingDirectory, projectDirectory: projectDirectory)
         rebuildClaudeCommand()
-        scriptsApproved = ScriptTrust.isApproved(scriptConfig, for: projectDirectory)
-        setupGateState = SetupGateState.resolve(
-            hasSetupScript: scriptConfig.setup != nil,
-            setupCompleted: SetupStateStore.isCompleted(for: workstreamID),
-            scriptsApproved: scriptsApproved
-        )
-        if setupGateState == .notNeeded {
-            surfaceCache.respawnableIDs.insert(claudeID)
-        }
+        refreshConfigApproval()
+        refreshPortPlan()
+        refreshDevCommand()
+        surfaceCache.respawnableIDs.insert(claudeID)
         preloadSurfaces()
         // Eagerly create the Monaco bridge so it's ready when the user opens
         // an editor tab. The WKWebView is created lazily when MonacoEditorView
@@ -1489,42 +1691,19 @@ struct TerminalContainerView: View {
     private func preloadSurfaces() {
         guard sessionMode != .waitingForTools else { return }
         guard let app = TerminalApp.shared.app else { return }
-        // Nothing may start while the setup script is waiting to be approved.
-        guard setupGateState != .awaitingApproval else { return }
-
-        if setupGateState == .running {
-            // Setup gate: only preload setup surface, agent waits.
-            if let cmd = buildSetupGateCommand() {
-                _ = surfaceCache.surface(
-                    for: setupGateID,
-                    app: app,
-                    workingDirectory: workingDirectory,
-                    command: cmd,
-                    environmentVars: terminalEnvVars,
-                    waitAfterCommand: false
-                )
-            }
-        } else {
-            // Agent surface
-            if let cmd = cachedClaudeCommand {
-                _ = surfaceCache.ensureSurface(
-                    for: claudeID,
-                    app: app,
-                    workingDirectory: workingDirectory,
-                    command: cmd,
-                    environmentVars: envVars
-                )
-            }
+        if let cmd = cachedClaudeCommand {
+            _ = surfaceCache.ensureSurface(
+                for: claudeID,
+                app: app,
+                workingDirectory: workingDirectory,
+                command: cmd,
+                environmentVars: envVars
+            )
         }
     }
 
-    private func buildSetupGateCommand() -> String? {
-        guard let setup = scriptConfig.setup else { return nil }
-        return scriptCommand(script: setup, role: "setup")
-    }
-
-    /// Env vars for surfaces that are not the Coding Agent: setup gate, run
-    /// script, and the base for terminal tabs. Clears tmux vars to prevent
+    /// Env vars for surfaces that are not the Coding Agent: the run session and
+    /// the base for terminal tabs. Clears tmux vars to prevent
     /// inheritance, and the Agent surface's id — a tab that kept it would claim
     /// the Agent's pane as its nudge target, which is the exact misdelivery the
     /// per-surface marker exists to prevent.
@@ -1540,8 +1719,9 @@ struct TerminalContainerView: View {
     ///
     /// An agent the user starts by hand in a tab can then be messaged *and*
     /// nudged in its own pane, instead of being pull-only for want of an
-    /// address. Script surfaces deliberately stay on the plain `terminalEnvVars`
-    /// above: nothing there reads an inbox, so nothing should be typed into it.
+    /// address. The run surface deliberately stays on the plain
+    /// `terminalEnvVars` above: nothing there reads an inbox, so nothing should
+    /// be typed into it.
     private func terminalEnvVars(for surfaceID: UUID) -> [String: String] {
         var vars = terminalEnvVars
         vars["ATELIER_SURFACE_ID"] = surfaceID.uuidString
@@ -1558,7 +1738,7 @@ struct TerminalContainerView: View {
             workingDirectory: workingDirectory,
             port: workstreamPort,
             defaultBranch: defaultBranch,
-            scriptSource: scriptConfig.source
+            portPlan: portPlan
         )
         // claudeID is the workstream id, so the Agent surface addresses itself
         // the same way every other surface does.
@@ -1566,99 +1746,64 @@ struct TerminalContainerView: View {
         return vars
     }
 
-    private var setupApprovalView: some View {
-        ScriptApprovalView(
-            scriptConfig: scriptConfig,
-            approveLabel: NSLocalizedString("Approve and Run Setup", comment: ""),
-            onApprove: approveScripts,
-            secondaryLabel: NSLocalizedString("Skip Setup", comment: ""),
-            onSecondary: launchAgentAfterSetup
+    // MARK: - Process config approval
+
+    /// Re-reads whether this worktree has a repository-provided config and
+    /// whether it is approved. Called on appear and after an approval, not from
+    /// the view body: it stats the worktree and hashes a file.
+    private func refreshConfigApproval() {
+        guard ProcessComposeSettings.isEnabled,
+              let config = ProcessComposeConfig.locate(
+                  worktree: workingDirectory, projectDirectory: projectDirectory
+              ),
+              config.requiresApproval
+        else {
+            repositoryConfigFiles = []
+            configApproved = false
+            return
+        }
+        repositoryConfigFiles = config.repositoryProvidedFiles
+        configApproved = ScriptTrust.isApproved(
+            configFiles: repositoryConfigFiles, for: projectDirectory
         )
     }
 
-    private func approveScripts() {
-        ScriptTrust.approve(scriptConfig, for: projectDirectory)
-        scriptsApproved = true
-        startApprovedSetup()
-    }
-
-    /// Runs the setup script once its commands have been approved.
-    private func startApprovedSetup() {
-        guard setupGateState == .awaitingApproval else { return }
-        setupGateState = .running
-        preloadSurfaces()
-        surfaceCache.updateOcclusion(visibleSurfaceIDs: visibleSurfaceIDs)
-    }
-
-    private var setupGateRunningView: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 6) {
-                ProgressView()
-                    .controlSize(.small)
-                Text("Running setup...")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                Spacer()
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(.bar)
-            Divider()
-            SingleTerminalView(
-                surfaceID: setupGateID,
-                workingDirectory: workingDirectory,
-                command: buildSetupGateCommand() ?? "",
-                isFocused: true,
-                environmentVars: terminalEnvVars
+    /// Approve the repository's config, then run the bootstrap it was refused.
+    ///
+    /// Bootstrap already ran — and reported that it did nothing — by the time
+    /// anyone can see this, so approval on its own would only help the *next*
+    /// worktree. `setupExistingWorktree` recomputes the plan against the
+    /// worktree that already exists, which is what makes this one recoverable.
+    private func approveProcessConfig() {
+        guard !repositoryConfigFiles.isEmpty else { return }
+        ScriptTrust.approve(configFiles: repositoryConfigFiles, for: projectDirectory)
+        isReviewingConfig = false
+        refreshConfigApproval()
+        // An unreadable file has no fingerprint, so `approve` was a no-op and
+        // nothing has been trusted. Do not run anything on the strength of a
+        // button press that did not take.
+        guard configApproved else { return }
+        let id = workstreamID
+        let project = projectDirectory
+        let worktree = workingDirectory
+        // Copied out for the same reason as the paths above: capturing a
+        // stored property would capture the whole view into the Task.
+        let capturedProjectName = projectName
+        let capturedWorkstreamName = workstreamName
+        Task {
+            await AsyncSetupService.shared.setupExistingWorktree(
+                workstreamID: id,
+                projectName: capturedProjectName,
+                workstreamName: capturedWorkstreamName,
+                projectPath: project,
+                worktreePath: worktree
             )
         }
     }
 
-    private var setupGateFailedView: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 6) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.yellow)
-                    .font(.system(size: 11))
-                Text("Setup failed.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button("Continue to Agent") {
-                    launchAgentAfterSetup()
-                }
-                .controlSize(.small)
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(.bar)
-            Divider()
-            SingleTerminalView(
-                surfaceID: setupGateID,
-                workingDirectory: workingDirectory,
-                command: buildSetupGateCommand() ?? "",
-                isFocused: false,
-                environmentVars: terminalEnvVars
-            )
-        }
-    }
-
-    private func handleSetupChildExited(exitCode: Int32) {
-        guard setupGateState == .running else { return }
-        if exitCode == 0 {
-            launchAgentAfterSetup()
-        } else {
-            setupGateState = .failed
-        }
-    }
-
-    private func launchAgentAfterSetup() {
-        SetupStateStore.markCompleted(for: workstreamID)
-        surfaceCache.removeSurface(for: setupGateID)
-        setupGateState = .completed
-        surfaceCache.respawnableIDs.insert(claudeID)
-        preloadSurfaces()
-        surfaceCache.updateOcclusion(visibleSurfaceIDs: visibleSurfaceIDs)
+    private func revokeProcessConfig() {
+        ScriptTrust.revokeConfigFiles(for: projectDirectory)
+        refreshConfigApproval()
     }
 
     private func terminalLoadingView(message: String) -> some View {
@@ -2227,7 +2372,6 @@ final class TerminalSurfaceCache: ObservableObject {
         let command: String?
         let initialInput: String?
         let environmentVars: [String: String]
-        let waitAfterCommand: Bool
     }
 
     init() {
@@ -2252,15 +2396,15 @@ final class TerminalSurfaceCache: ObservableObject {
         }
     }
 
-    func surface(for id: UUID, app: ghostty_app_t, workingDirectory: String, command: String? = nil, initialInput: String? = nil, environmentVars: [String: String] = [:], waitAfterCommand: Bool = true) -> TerminalView {
+    func surface(for id: UUID, app: ghostty_app_t, workingDirectory: String, command: String? = nil, initialInput: String? = nil, environmentVars: [String: String] = [:]) -> TerminalView {
         if let existing = surfaces[id] {
             existing.workstreamID = id
             return existing
         }
-        let view = TerminalView(app: app, workingDirectory: workingDirectory, command: command, initialInput: initialInput, environmentVars: environmentVars, waitAfterCommand: waitAfterCommand)
+        let view = TerminalView(app: app, workingDirectory: workingDirectory, command: command, initialInput: initialInput, environmentVars: environmentVars)
         view.workstreamID = id
         surfaces[id] = view
-        surfaceParams[id] = SurfaceParams(workingDirectory: workingDirectory, command: command, initialInput: initialInput, environmentVars: environmentVars, waitAfterCommand: waitAfterCommand)
+        surfaceParams[id] = SurfaceParams(workingDirectory: workingDirectory, command: command, initialInput: initialInput, environmentVars: environmentVars)
         if view.surface == nil {
             logger.error("Surface creation failed for \(id) command=\(command ?? "<shell>")")
             failedSurfaces[id] = command ?? "(default shell)"
@@ -2273,7 +2417,7 @@ final class TerminalSurfaceCache: ObservableObject {
 
     /// Creates the surface for `id`, replacing any existing surface whose
     /// stored command differs. A matching surface is returned untouched.
-    func ensureSurface(for id: UUID, app: ghostty_app_t, workingDirectory: String, command: String?, initialInput: String? = nil, environmentVars: [String: String] = [:], waitAfterCommand: Bool = true) -> TerminalView {
+    func ensureSurface(for id: UUID, app: ghostty_app_t, workingDirectory: String, command: String?, initialInput: String? = nil, environmentVars: [String: String] = [:]) -> TerminalView {
         if let existing = surfaces[id],
            let params = surfaceParams[id],
            params.command == command,
@@ -2292,8 +2436,7 @@ final class TerminalSurfaceCache: ObservableObject {
             workingDirectory: workingDirectory,
             command: command,
             initialInput: initialInput,
-            environmentVars: environmentVars,
-            waitAfterCommand: waitAfterCommand
+            environmentVars: environmentVars
         )
     }
 
@@ -2312,7 +2455,7 @@ final class TerminalSurfaceCache: ObservableObject {
             view.destroy()
         }
         failedSurfaces.removeValue(forKey: id)
-        let view = TerminalView(app: app, workingDirectory: params.workingDirectory, command: params.command, initialInput: params.initialInput, environmentVars: params.environmentVars, waitAfterCommand: params.waitAfterCommand)
+        let view = TerminalView(app: app, workingDirectory: params.workingDirectory, command: params.command, initialInput: params.initialInput, environmentVars: params.environmentVars)
         view.workstreamID = id
         surfaces[id] = view
         if view.surface == nil {
@@ -2441,7 +2584,7 @@ final class TerminalSurfaceCache: ObservableObject {
 
             respawning.insert(id)
             surfaces.removeValue(forKey: id)
-            let newView = TerminalView(app: app, workingDirectory: params.workingDirectory, command: params.command, initialInput: params.initialInput, environmentVars: params.environmentVars, waitAfterCommand: params.waitAfterCommand)
+            let newView = TerminalView(app: app, workingDirectory: params.workingDirectory, command: params.command, initialInput: params.initialInput, environmentVars: params.environmentVars)
             newView.workstreamID = id
             surfaces[id] = newView
             respawning.remove(id)

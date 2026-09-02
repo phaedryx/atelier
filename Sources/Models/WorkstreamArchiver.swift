@@ -2,6 +2,9 @@
 // ABOUTME: Shared by ContentView and ProjectSidebar to avoid duplicated workstream cleanup logic.
 
 import Foundation
+import OSLog
+
+private let logger = Logger(subsystem: "atelier", category: "workstream-archiver")
 
 enum WorkstreamArchiver {
     /// Paths currently being archived (background removal in progress).
@@ -34,7 +37,6 @@ enum WorkstreamArchiver {
         surfaceCache.removeWorkstreamSurfaces(for: workstreamID)
         IPCConfig.remove(for: workstreamID)
         LaunchLogger.removeLog(for: workstreamID)
-        SetupStateStore.remove(for: workstreamID)
         project.workstreams.removeAll { $0.id == workstreamID }
     }
 
@@ -57,7 +59,7 @@ enum WorkstreamArchiver {
         )
     }
 
-    /// Purges a workstream by running teardown, removing the git worktree from disk,
+    /// Purges a workstream by running its `dispose` phase, removing the git worktree from disk,
     /// deleting the local branch, updating the default branch to latest,
     /// killing tmux sessions, and evicting terminal surfaces from the cache.
     @MainActor
@@ -70,6 +72,13 @@ enum WorkstreamArchiver {
         if let ws = project.workstreams.first(where: { $0.id == workstreamID }) {
             let projectDir = project.directory
             let worktreePath = ws.worktreePath ?? projectDir
+            // Only the real worktree, never the `?? projectDir` fallback above.
+            // A workstream archived before `workstreamWorktreeReady` lands has no
+            // worktree path, and `dispose` now runs arbitrary project-authored
+            // processes — running them against the user's main checkout is a
+            // different and much worse thing than the `teardown` script this
+            // replaced ever risked.
+            let disposePath = ws.worktreePath
             let standardizedPath = URL(fileURLWithPath: worktreePath).standardizedFileURL.path
             let wsName = ws.name
             let projName = project.name
@@ -77,6 +86,7 @@ enum WorkstreamArchiver {
             let branchName = GitOperations.currentBranch(at: worktreePath)
             archivingPaths.insert(standardizedPath)
             NotificationCenter.default.post(name: archivingDidStart, object: nil)
+            let composeBinary = ProcessComposeSettings.resolveBinary()
             Task.detached {
                 defer {
                     Task { @MainActor in
@@ -84,23 +94,150 @@ enum WorkstreamArchiver {
                         NotificationCenter.default.post(name: archivingDidComplete, object: nil)
                     }
                 }
-                ScriptConfig.runTeardown(in: worktreePath, projectDirectory: projectDir)
-                GitOperations.removeWorktree(projectPath: projectDir, worktreePath: worktreePath)
-                if let branchName {
-                    GitOperations.deleteLocalBranch(at: projectDir, branchName: branchName)
-                }
-                GitOperations.fetchDefaultBranch(at: projectDir)
+                // A bootstrap for this workstream may still be running: it goes
+                // on in the background behind an already-open terminal, so
+                // "created a workstream, then archived it" overlaps them. Stop
+                // it before dispose runs in the same directory and before
+                // `git worktree remove` deletes that directory underneath it.
+                // Before anything else: stop the dev stack. In tmux mode the
+                // surface removal above only detaches, so without this the
+                // `execute` run kept going *through* dispose — two
+                // process-compose runs over one project — and then through
+                // `git worktree remove --force`, which deletes the tree under
+                // it.
                 if let tmuxPath {
-                    TmuxSession.killWorkstreamSessions(tmuxPath: tmuxPath, project: projName, workstream: wsName)
+                    TmuxSession.killRunSession(tmuxPath: tmuxPath, project: projName, workstream: wsName)
                 }
-                // Clean up the agent launch script for this workstream.
-                try? FileManager.default.removeItem(atPath: AppConstants.agentScriptPath(for: workstreamID))
+                await AsyncSetupService.shared.cancelBootstrap(
+                    for: workstreamID,
+                    binary: composeBinary,
+                    worktreePath: disposePath ?? worktreePath
+                )
+                // Everything below blocks: dispose is a whole process-compose
+                // phase at up to `Timeout.userCommand`, and each git call waits
+                // on a child. On the cooperative pool that pins a thread for
+                // minutes, so it goes to a utility queue — the same bridge
+                // `AsyncSetupService` uses for bootstrap, and for the same
+                // reason.
+                await withCheckedContinuation { continuation in
+                    DispatchQueue.global(qos: .utility).async {
+                        // Before the worktree is removed:
+                        // `ProcessComposeConfig.locate` reads the worktree, and
+                        // dispose runs in it.
+                        if let disposePath {
+                            runDispose(
+                                workstreamID: workstreamID,
+                                projectName: projName,
+                                workstreamName: wsName,
+                                worktreePath: disposePath,
+                                projectDirectory: projectDir
+                            )
+                        }
+                        GitOperations.removeWorktree(projectPath: projectDir, worktreePath: worktreePath)
+                        if let branchName {
+                            GitOperations.deleteLocalBranch(at: projectDir, branchName: branchName)
+                        }
+                        GitOperations.fetchDefaultBranch(at: projectDir)
+                        if let tmuxPath {
+                            TmuxSession.killWorkstreamSessions(tmuxPath: tmuxPath, project: projName, workstream: wsName)
+                        }
+                        // Clean up the agent launch script for this workstream.
+                        try? FileManager.default.removeItem(atPath: AppConstants.agentScriptPath(for: workstreamID))
+                        continuation.resume()
+                    }
+                }
+                // The state entry outlives the workstream otherwise: nothing
+                // else called this, so `states` grew by one per archive for the
+                // life of the process.
+                await AsyncSetupService.shared.clearState(for: workstreamID)
             }
         }
         surfaceCache.removeWorkstreamSurfaces(for: workstreamID)
         LaunchLogger.removeLog(for: workstreamID)
-        SetupStateStore.remove(for: workstreamID)
         project.workstreams.removeAll { $0.id == workstreamID }
+    }
+
+    /// Run the project's `dispose` namespace before the worktree goes away.
+    ///
+    /// This replaces the `teardown` script: a project now says what archiving
+    /// should clean up in the same file it uses for everything else.
+    ///
+    /// The preconditions are not restated here. `PhasePolicy.plan` owns
+    /// them — integration on, a config located, a binary to run it with, and
+    /// approval of every repository-provided file process-compose will load —
+    /// and dispose is unattended in exactly the way bootstrap is, so a second
+    /// inline copy would be a second security policy with no tests and no way to
+    /// follow a change made to the first.
+    ///
+    /// Nothing here can stop the archive. Every refusal returns quietly and a
+    /// failure is logged and swallowed: a workstream stranded half-archived is
+    /// worse than cleanup that did not happen, and the user has already said to
+    /// remove it. `PhaseExecutor` bounds the run at `Timeout.userCommand`, so a
+    /// wedged dispose delays the archive rather than blocking it forever.
+    /// What archiving would run, and why it would not.
+    ///
+    /// Split out from `runDispose` and left internal so the wiring is
+    /// observable: a `runDispose` that stopped consulting `PhasePolicy`
+    /// altogether would still pass every test of the policy itself. This is the
+    /// seam a test can hold, since `runDispose` proper spawns process-compose
+    /// and `purge` destroys a worktree.
+    static func disposePlan(worktreePath: String, projectDirectory: String) -> PhasePolicy.Plan {
+        PhasePolicy.plan(
+            phase: .dispose,
+            isEnabled: ProcessComposeSettings.isEnabled,
+            config: ProcessComposeConfig.locate(
+                worktree: worktreePath, projectDirectory: projectDirectory
+            ),
+            binary: ProcessComposeSettings.resolveBinary(),
+            isApproved: {
+                ScriptTrust.isApproved(configFiles: $0.repositoryProvidedFiles, for: projectDirectory)
+            }
+        )
+    }
+
+    private static func runDispose(
+        workstreamID: UUID,
+        projectName: String,
+        workstreamName: String,
+        worktreePath: String,
+        projectDirectory: String
+    ) {
+        let plan = disposePlan(worktreePath: worktreePath, projectDirectory: projectDirectory)
+        let config: ProcessComposeConfig
+        let binary: String
+        switch plan {
+        case let .run(planned, planBinary):
+            config = planned
+            binary = planBinary
+        case let .nothingToDo(message):
+            logger.info("No dispose for \(worktreePath, privacy: .public): \(message, privacy: .public)")
+            return
+        }
+
+        // The same variables `prepare` and `execute` see. A `dispose` process
+        // that has to reach the project directory or a declared port cannot do
+        // it from the app's own environment; see `PhaseEnvironment`.
+        let environment = PhaseEnvironment.variables(
+            workstreamID: workstreamID,
+            projectName: projectName,
+            workstreamName: workstreamName,
+            projectDirectory: projectDirectory,
+            worktreePath: worktreePath,
+            defaultBranch: GitOperations.defaultBranch(at: projectDirectory)
+        )
+
+        let outcome = PhaseExecutor.run(
+            phase: .dispose,
+            config: config,
+            binary: binary,
+            workstreamID: workstreamID,
+            workingDirectory: worktreePath,
+            environment: environment,
+            timeout: ProcessRunner.Timeout.userCommand
+        )
+        if case let .failed(detail) = outcome {
+            logger.warning("Dispose for \(worktreePath, privacy: .public) failed: \(detail, privacy: .public)")
+        }
     }
 
     /// Warning describing what work would be lost if the orphan worktree at `path`

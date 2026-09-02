@@ -6,41 +6,18 @@ import XCTest
 
 final class EnvironmentTabViewTests: XCTestCase {
     func testRunSessionRestoresOnlyWhenTmuxSessionExists() {
-        XCTAssertTrue(shouldRestoreRunSession(useTmux: true, hasRunScript: true, hasExistingRunSession: true, wasStoppedManually: false, isApproved: true))
-        XCTAssertFalse(shouldRestoreRunSession(useTmux: false, hasRunScript: true, hasExistingRunSession: true, wasStoppedManually: false, isApproved: true))
-        XCTAssertFalse(shouldRestoreRunSession(useTmux: true, hasRunScript: false, hasExistingRunSession: true, wasStoppedManually: false, isApproved: true))
-        XCTAssertFalse(shouldRestoreRunSession(useTmux: true, hasRunScript: true, hasExistingRunSession: false, wasStoppedManually: false, isApproved: true))
+        XCTAssertTrue(shouldRestoreRunSession(useTmux: true, hasRunScript: true, hasExistingRunSession: true, wasStoppedManually: false))
+        XCTAssertFalse(shouldRestoreRunSession(useTmux: false, hasRunScript: true, hasExistingRunSession: true, wasStoppedManually: false))
+        XCTAssertFalse(shouldRestoreRunSession(useTmux: true, hasRunScript: false, hasExistingRunSession: true, wasStoppedManually: false))
+        XCTAssertFalse(shouldRestoreRunSession(useTmux: true, hasRunScript: true, hasExistingRunSession: false, wasStoppedManually: false))
     }
 
     func testRunSessionDoesNotRestoreAfterManualStop() {
-        XCTAssertFalse(shouldRestoreRunSession(useTmux: true, hasRunScript: true, hasExistingRunSession: true, wasStoppedManually: true, isApproved: true))
-    }
-
-    func testRunSessionDoesNotRestoreWithoutApproval() {
-        XCTAssertFalse(shouldRestoreRunSession(useTmux: true, hasRunScript: true, hasExistingRunSession: true, wasStoppedManually: false, isApproved: false))
-    }
-
-    func testSetupScriptAppendsCompletionMessage() {
-        let command = scriptCommand(script: "./.hooks/atelier-setup.sh", role: "setup", shell: "/bin/zsh")
-
-        XCTAssertTrue(command.contains("./.hooks/atelier-setup.sh"))
-        XCTAssertTrue(command.contains("Setup completed in this terminal."))
-    }
-
-    func testRunScriptDoesNotAppendCompletionMessage() {
-        let command = scriptCommand(script: "just local", role: "run", shell: "/bin/zsh")
-
-        XCTAssertFalse(command.contains("Setup completed"))
-    }
-
-    func testSetupScriptWrapsInLoginShell() {
-        let command = scriptCommand(script: "setup.sh", role: "setup", shell: "/bin/zsh")
-
-        XCTAssertTrue(command.hasPrefix("/bin/zsh -lic "))
+        XCTAssertFalse(shouldRestoreRunSession(useTmux: true, hasRunScript: true, hasExistingRunSession: true, wasStoppedManually: true))
     }
 
     func testRunScriptWrapsInLoginShell() {
-        let command = scriptCommand(script: "just local", role: "run", shell: "/bin/zsh")
+        let command = scriptCommand(script: "just local", shell: "/bin/zsh")
 
         XCTAssertTrue(command.hasPrefix("/bin/zsh -lic "))
         XCTAssertTrue(command.contains("just local"))
@@ -51,5 +28,187 @@ final class EnvironmentTabViewTests: XCTestCase {
 
         XCTAssertTrue(command.contains("/bin/zsh -lic"))
         XCTAssertFalse(command.contains("/bin/sh"))
+    }
+
+    // MARK: - What the pane displays
+
+    private let displayCommand = "process-compose up -U -f /repo/ws/process-compose.yaml"
+
+    private func processComposeCommand() -> DevCommand {
+        DevCommand(
+            command: displayCommand,
+            source: .processCompose,
+            sourceDescription: "process-compose.yaml"
+        )
+    }
+
+    /// The pane shows which files are in play, which is what `RunCommandPlan`
+    /// says the display is *for* — not a command.
+    func testAProcessComposeSourceIsShownAsItsFiles() {
+        let display = devCommandDisplayText(
+            devCommand: processComposeCommand(),
+            loadedFiles: ["/repo/ws/process-compose.yaml", "/repo/ws/process-compose.override.yml"]
+        )
+
+        XCTAssertEqual(
+            display,
+            "/repo/ws/process-compose.yaml  /repo/ws/process-compose.override.yml"
+        )
+    }
+
+    /// The footgun this closes: the pane rendered `process-compose up -U -f …`
+    /// in a monospaced font. That string carries no `-n`, so anyone who copied
+    /// it into a terminal ran every namespace — `bootstrap` and `dispose`
+    /// included — with no `PhasePolicy` and no `ScriptTrust`. No input may
+    /// produce it.
+    func testNoProcessComposeInputIsEverDisplayedAsARunnableCommand() {
+        for files in [[], ["/repo/ws/process-compose.yaml"], ["/a.yaml", "/b.yml"]] {
+            let display = devCommandDisplayText(
+                devCommand: processComposeCommand(), loadedFiles: files
+            ) ?? ""
+            XCTAssertNotEqual(display, displayCommand, "files: \(files)")
+            XCTAssertFalse(display.contains("up -U"), "files: \(files)")
+            XCTAssertFalse(display.contains("-f "), "files: \(files)")
+            XCTAssertFalse(display.contains("process-compose up"), "files: \(files)")
+        }
+    }
+
+    /// With no located files there is still something honest to show — the name
+    /// of the config the resolver found — rather than falling back to the
+    /// command string.
+    func testAProcessComposeSourceWithNoFilesFallsBackToTheFileName() {
+        XCTAssertEqual(
+            devCommandDisplayText(devCommand: processComposeCommand(), loadedFiles: []),
+            "process-compose.yaml"
+        )
+    }
+
+    /// An override is the user's own text and *is* what Start runs, so it is
+    /// shown verbatim.
+    func testAnOverrideIsShownAsTheCommandItIs() {
+        XCTAssertEqual(
+            devCommandDisplayText(
+                devCommand: DevCommand(command: "just dev", source: .override, sourceDescription: nil),
+                loadedFiles: ["/repo/ws/process-compose.yaml"]
+            ),
+            "just dev"
+        )
+    }
+
+    func testNoDevCommandDisplaysNothing() {
+        XCTAssertNil(devCommandDisplayText(devCommand: nil, loadedFiles: []))
+    }
+
+    // MARK: - The selection list must be reachable before Start
+
+    /// The regression this pins: the list lived inside ProcessTableView, which
+    /// renders only under `if runStarted`, so the control for choosing what to
+    /// start appeared only after starting. `showsProcessSelection` takes no
+    /// run state at all, which is the structural half; this is the documented
+    /// half.
+    func testTheSelectionListShowsForAProcessComposeRunThatHasNotStarted() {
+        XCTAssertTrue(
+            showsProcessSelection(
+                runStarted: false, showsProcessTable: true, declaredProcesses: ["bff", "api"]
+            )
+        )
+    }
+
+    /// The other half of the same defect. The selection is read when Start is
+    /// pressed, so a checkbox toggled during a run changes nothing until the
+    /// next Stop and Start — an editable control that silently does nothing.
+    func testTheSelectionListIsHiddenOnceTheRunHasStarted() {
+        XCTAssertFalse(
+            showsProcessSelection(
+                runStarted: true, showsProcessTable: true, declaredProcesses: ["bff", "api"]
+            )
+        )
+    }
+
+    func testTheSelectionListIsHiddenWhenTheRunIsNotProcessCompose() {
+        XCTAssertFalse(
+            showsProcessSelection(
+                runStarted: false, showsProcessTable: false, declaredProcesses: ["bff", "api"]
+            )
+        )
+    }
+
+    /// An unparseable config yields no declared processes, and an empty list of
+    /// checkboxes is worse than none: it reads as "this project has no
+    /// processes" rather than "Atelier could not read the file".
+    func testTheSelectionListIsHiddenWithNoDeclaredProcesses() {
+        XCTAssertFalse(
+            showsProcessSelection(
+                runStarted: false, showsProcessTable: true, declaredProcesses: []
+            )
+        )
+    }
+
+    // MARK: - Process selection toggling
+
+    /// The reported bug, pinned. Unchecking the last box used to store empty,
+    /// which the view reads back as "all": every checkbox re-checked itself and
+    /// Start ran the whole namespace — the opposite of what was asked.
+    func testUncheckingTheLastSelectedProcessIsRefused() {
+        XCTAssertNil(
+            processSelectionAfterToggling("b", on: false, current: ["b"], declared: ["a", "b"])
+        )
+    }
+
+    /// The same click from the untouched state, where empty means all: it must
+    /// narrow to the others, never empty.
+    func testUncheckingFromTheAllSelectedStateNarrows() {
+        XCTAssertEqual(
+            processSelectionAfterToggling("a", on: false, current: [], declared: ["a", "b"]),
+            ["b"]
+        )
+    }
+
+    func testUncheckingTheLastOfASingleProcessConfigIsRefused() {
+        XCTAssertNil(
+            processSelectionAfterToggling("only", on: false, current: [], declared: ["only"])
+        )
+    }
+
+    /// Re-checking everything canonicalises back to empty, so a process added
+    /// to the YAML later is included instead of silently dropped.
+    func testSelectingEveryProcessStoresEmptyMeaningAll() {
+        XCTAssertEqual(
+            processSelectionAfterToggling("a", on: true, current: ["b"], declared: ["a", "b"]),
+            []
+        )
+    }
+
+    func testCheckingAnotherProcessKeepsAnExplicitSubsetSorted() {
+        XCTAssertEqual(
+            processSelectionAfterToggling("b", on: true, current: ["c"], declared: ["a", "b", "c"]),
+            ["b", "c"]
+        )
+    }
+
+    // MARK: - Reconciling a stored selection with the config
+
+    /// Rename a process in the YAML and the stored name matched nothing, so
+    /// every checkbox rendered unchecked and Start passed a name
+    /// process-compose does not know.
+    func testANameThatNoLongerExistsIsDropped() {
+        XCTAssertEqual(
+            processSelectionOnLoad(stored: ["gone", "bff"], declared: ["api", "bff"]),
+            ["bff"]
+        )
+    }
+
+    /// Everything chosen is gone: fall back to all, which is what empty means
+    /// and what a fresh workstream gets.
+    func testASelectionWithNothingSurvivingBecomesAll() {
+        XCTAssertEqual(processSelectionOnLoad(stored: ["gone", "also-gone"], declared: ["api"]), [])
+    }
+
+    func testASelectionCoveringEveryProcessCanonicalisesToAll() {
+        XCTAssertEqual(processSelectionOnLoad(stored: ["api", "bff"], declared: ["bff", "api"]), [])
+    }
+
+    func testAnUntouchedSelectionStaysUntouched() {
+        XCTAssertEqual(processSelectionOnLoad(stored: [], declared: ["api", "bff"]), [])
     }
 }

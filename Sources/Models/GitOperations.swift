@@ -481,7 +481,9 @@ enum GitOperations {
         return container.appendingPathComponent(sanitize(workstreamName))
     }
 
-    /// Create a git worktree for a workstream, branching off the default branch.
+    /// Create a git worktree for a workstream, branching off the base branch
+    /// (`BaseBranchSetting`, an app-wide setting the user can override in
+    /// General settings).
     /// Returns the worktree path on success, nil on failure.
     static func createWorktree(projectPath: String, projectName: String, workstreamName: String) -> String? {
         let worktreeDir = worktreeDestination(
@@ -492,10 +494,22 @@ enum GitOperations {
 
         let branchName = workstreamName
 
-        // Fetch the default branch so worktrees start from the latest remote ref
-        fetchDefaultBranch(at: projectPath)
+        // `repositoryDefault` needs a fresh remote-tracking ref to resolve
+        // against, so fetch the origin-HEAD guess first, the same way
+        // `defaultBranch` looks for one. A named setting (main/master/trunk/
+        // develop) already tells us exactly what to fetch — fetching the
+        // origin-HEAD guess instead would leave a worktree cut from a stale
+        // local copy of the branch the user actually chose.
+        let baseBranchSetting = BaseBranchSetting.current
+        if baseBranchSetting == .repositoryDefault {
+            fetchDefaultBranch(at: projectPath)
+        }
 
-        let baseBranch = defaultBranch(at: projectPath)
+        let baseBranch = BaseBranchSetting.resolve(for: projectPath)
+
+        if baseBranchSetting != .repositoryDefault {
+            fetchDefaultBranch(at: projectPath, branch: baseBranch)
+        }
 
         // Create parent directories
         try? FileManager.default.createDirectory(
@@ -513,23 +527,8 @@ enum GitOperations {
         }
 
         addExcludeEntry(at: projectPath, pattern: ".atelier-state/")
-        // The seed directory holds .env files at the repo root; without this it
-        // shows up untracked in every `git status`, one `git add -A` from being committed.
-        addExcludeEntry(at: projectPath, pattern: WorktreeSetupConfig.defaultSeedDirectory + "/")
 
         return worktreeDir.path
-    }
-
-    /// Exclude a project's configured seed directory from git, so a custom
-    /// `"seed"` path is hidden the same way the default one is. A seed outside
-    /// the project directory needs no exclude and is skipped.
-    static func excludeSeedDirectory(_ seedDirectory: String, inProject projectPath: String) {
-        let project = URL(fileURLWithPath: projectPath).standardizedFileURL.path
-        let seed = URL(fileURLWithPath: seedDirectory).standardizedFileURL.path
-        guard seed.hasPrefix(project + "/") else { return }
-        let relative = String(seed.dropFirst(project.count + 1))
-        guard !relative.isEmpty else { return }
-        addExcludeEntry(at: projectPath, pattern: relative + "/")
     }
 
     /// Append a pattern to the repo's info/exclude if not already present.
@@ -1021,14 +1020,23 @@ enum GitOperations {
 
     // MARK: - Private
 
-    /// Fetch the default branch from origin. Fails silently when there is no
-    /// remote or the network is unreachable.
-    static func fetchDefaultBranch(at path: String) {
+    /// Fetch a branch from origin. Fails silently when there is no remote or
+    /// the network is unreachable.
+    ///
+    /// With `branch` omitted, guesses at the origin's default branch (its
+    /// symbolic HEAD, or "main") — used when the caller still needs to ask
+    /// git what the default is. With `branch` given (e.g. a resolved
+    /// `BaseBranchSetting`), fetches exactly that branch instead, stripping
+    /// an `origin/` prefix if present since `git fetch origin <ref>` wants
+    /// the bare name.
+    static func fetchDefaultBranch(at path: String, branch: String? = nil) {
         // Check if origin remote exists first (fast, no network)
         guard run(args: ["remote", "get-url", "origin"], in: path) != nil else { return }
 
         // Determine which branch to fetch
-        let branch: String = if let ref = run(args: ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], in: path) {
+        let branchToFetch: String = if let branch {
+            branch.hasPrefix("origin/") ? String(branch.dropFirst("origin/".count)) : branch
+        } else if let ref = run(args: ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], in: path) {
             // e.g. "origin/main" -> "main"
             ref.trimmingCharacters(in: .whitespacesAndNewlines)
                 .replacingOccurrences(of: "origin/", with: "")
@@ -1037,7 +1045,7 @@ enum GitOperations {
         }
 
         // Fetch with timeout — don't block worktree creation
-        runWithTimeout(args: ["fetch", "origin", branch, "--no-tags"], in: path, timeout: 5)
+        runWithTimeout(args: ["fetch", "origin", branchToFetch, "--no-tags"], in: path, timeout: 5)
     }
 
     /// Runs git and returns stdout, or nil if git is missing, exited non-zero,

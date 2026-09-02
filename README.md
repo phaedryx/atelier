@@ -96,16 +96,85 @@ git worktree add "$def"
 
 ## Configuration
 
-Per-project commands live in `.atelier.json` at the repository root:
+Turn on **Enable process-compose** in Settings first — it is off by default, and
+nothing below runs until it is on, including the Environment tab's Start button.
 
-```json
-{ "setup": "cmd", "run": "cmd", "teardown": "cmd", "seed": "config/secrets" }
+Per-project commands live in a `process-compose.yaml` — in the worktree, or in
+the project directory beside it — read by
+[process-compose](https://f1bonacc1.github.io/process-compose/). Atelier drives
+four namespaces in it:
+
+| Namespace | When it runs |
+|-----------|--------------|
+| `bootstrap` | Once, in the background, when a workstream is created |
+| `prepare` | Before every Start, to completion; a failure stops `execute` |
+| `execute` | The long-lived stack, shown in the Environment tab's process table |
+| `dispose` | Once, when a workstream is archived |
+
+```yaml
+processes:
+  install:
+    namespace: bootstrap
+    command: npm ci
+  migrate:
+    namespace: prepare
+    command: npm run db:migrate
+  web:
+    namespace: execute
+    command: npm run dev -- --port $$WEB_PORT
+  cleanup:
+    namespace: dispose
+    command: docker compose down -v
 ```
 
-These come from the repository, so Atelier asks for approval before running any
-of them, and asks again whenever they change. `seed` names a directory whose
-contents are copied into each new worktree — that is how uncommitted `.env` files
-reach a workstream. It defaults to `.atelier-seed`.
+Write `$$VAR`, not `$VAR`, for a variable the shell should expand: process-compose
+runs each `command` through envsubst first, and that eats `${VAR}` **and** bare
+`$VAR`. A backslash does not escape it.
+
+`bootstrap` and `dispose` run unattended, so a config that came with the
+repository has to be approved first, and has to be approved again whenever it
+changes. A config you placed in the project directory by hand is never asked
+about — approval is gated by *where the file is*, not what is in it. `execute` is
+never gated because it is *attended*: you press Start, the stack's output lands
+in a terminal surface in front of you, and Stop is right there. The Environment
+tab shows which files are in play, not the command Start runs.
+
+Keeping the config in the project directory means one file for every worktree,
+and in the bare-repo layout git never sees it. A config in the worktree wins when
+both exist.
+
+A `ports.yaml` in the **project directory** declares the port variables Atelier
+supplies, so several workstreams can run the same stack at once without
+colliding:
+
+```yaml
+ports:
+  WEB_PORT: { assigned: true, browser: true }
+  API_PORT: { assigned: true }
+  OAUTH_PORT: { fixed: 4000 }
+```
+
+An `assigned` port gets its own number per worktree; a `fixed` one is that number
+everywhere, for values registered off the machine such as an OAuth redirect URI.
+At most one port may set `browser: true` — that is the one the embedded browser
+opens. Every name is exported to every terminal surface and to all four
+namespaces, so `bootstrap` and `dispose` see the same `ATELIER_*` variables and
+the same ports as `prepare` and `execute`.
+
+If a project has no `process-compose.yaml`, worktrees are still created and the
+Environment tab says there is nothing to run; a per-workstream command typed into
+Customize is the escape hatch. When Start cannot run for some other reason — the
+integration is switched off, or process-compose is not on disk where Atelier
+looks — the tab says which, and the Info tab reports what background setup did or
+did not do.
+
+**Base branch** (Settings → General) chooses the branch new worktrees are cut
+from: `main`, `master`, `trunk`, `develop`, or **Repository default**, which asks
+git. It governs worktree creation only. The Changes tab's diff and the
+ahead/behind counts still compare against the branch git guesses is the default,
+so if you set this to something git does not consider the default, those two
+numbers are measured against a different base than the one your branch was cut
+from.
 
 ## License
 

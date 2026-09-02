@@ -59,9 +59,14 @@ enum AppConstants {
     /// Used for transient files like run-state and tmux config.
     static var cacheDirectory: URL {
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        // `appID`, not a literal. Debug and release have different bundle
+        // identifiers but shared this directory, so the two could run side by
+        // side over one set of phase sockets and run-state files — and quitting
+        // one swept the other's live process-compose servers, mid-run, via
+        // `PhaseExecutor.stopAllServers`.
         let dirName = isRunningXCTest()
             ? "atelier-tests"
-            : "atelier"
+            : appID
         return base.appendingPathComponent(dirName)
     }
 

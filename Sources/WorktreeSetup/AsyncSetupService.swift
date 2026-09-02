@@ -1,5 +1,5 @@
-// ABOUTME: Actor that runs vibe worktree setup steps with async progress reporting.
-// ABOUTME: Claude Code launches immediately after worktree creation; deps install in background.
+// ABOUTME: Actor that creates a worktree and runs its bootstrap phase with progress reporting.
+// ABOUTME: Claude Code launches immediately; the project's own bootstrap runs in the background.
 
 import Foundation
 import OSLog
@@ -11,6 +11,13 @@ enum AsyncSetupState: Equatable {
     case idle
     case inProgress(step: String, progress: Double)
     case completed
+    /// Setup finished without doing anything, and the note says why: the
+    /// integration is off, no `process-compose.yaml` was found, the binary is
+    /// missing, or the config declares no `bootstrap` processes. The worktree
+    /// exists and is usable either way — this is deliberately neither
+    /// `.completed`, which would claim work that never happened, nor
+    /// `.failed`, which would claim a broken worktree.
+    case completedWithNote(String)
     case failed(String)
 
     static func == (lhs: AsyncSetupState, rhs: AsyncSetupState) -> Bool {
@@ -18,6 +25,7 @@ enum AsyncSetupState: Equatable {
         case (.idle, .idle): true
         case (.completed, .completed): true
         case let (.inProgress(ls, lp), .inProgress(rs, rp)): ls == rs && lp == rp
+        case let (.completedWithNote(l), .completedWithNote(r)): l == r
         case let (.failed(l), .failed(r)): l == r
         default: false
         }
@@ -30,9 +38,9 @@ extension Notification.Name {
     static let asyncSetupStateChanged = Notification.Name("atelier.asyncSetupStateChanged")
 }
 
-/// Actor that orchestrates vibe worktree setup asynchronously.
+/// Actor that orchestrates worktree setup asynchronously.
 /// The key insight: Claude Code can start immediately after `git worktree add` completes.
-/// Env copy, symlinks, Claude settings, and dep install run in the background.
+/// The project's `bootstrap` namespace runs in the background behind it.
 actor AsyncSetupService {
     /// Shared singleton for app-wide access.
     static let shared = AsyncSetupService()
@@ -40,168 +48,121 @@ actor AsyncSetupService {
     /// Track per-workstream setup state.
     private var states: [UUID: AsyncSetupState] = [:]
 
+    /// Workstreams whose bootstrap is in flight right now.
+    ///
+    /// Not derived from `states`: a caller publishes `.inProgress` before the
+    /// background work starts, so a state-based check could not tell "about to
+    /// start" from "already running".
+    ///
+    /// `runBackgroundSetup` suspends at `withCheckedContinuation`, and an actor
+    /// admits other calls across a suspension. Two concurrent bootstraps for one
+    /// workstream would share `<id>-bootstrap.sock`, and `PhaseExecutor.run`
+    /// shuts that socket down before spawning — so the second run would strand
+    /// the first's control server with no way to reach it, exactly the case
+    /// `PhaseRunner.socketPath` warns about. Reachable from revoke → Review →
+    /// Approve, and from `setupExistingWorktree` firing on
+    /// `workstreamWorktreeReady` while an approval press lands.
+    private var runningBootstraps: Set<UUID> = []
+
     /// Get the current setup state for a workstream.
     func state(for workstreamID: UUID) -> AsyncSetupState {
         states[workstreamID] ?? .idle
     }
 
-    /// Run the full async setup for a new vibe workstream.
+    /// Run the bootstrap phase after worktree creation.
     ///
-    /// This method:
-    /// 1. Creates the git worktree (blocking — must complete before anything else)
-    /// 2. Returns the worktree path immediately so the caller can launch Claude Code
-    /// 3. Kicks off background setup (env files, symlinks, Claude settings, deps)
+    /// This used to be a fixed sequence Atelier invented on the project's
+    /// behalf — rsync a seed directory, create symlinks, link Claude settings,
+    /// install dependencies, run post-setup commands — with a hard-coded
+    /// notion of what a worktree needs. It is now one step: run
+    /// whatever the project declares in the `bootstrap` namespace of its own
+    /// `process-compose.yaml`. A project that declares nothing gets nothing,
+    /// which is the point.
     ///
-    /// - Parameters:
-    ///   - workstreamID: The UUID of the workstream being set up
-    ///   - projectPath: Path to the main project/repo root
-    ///   - projectName: Name of the project
-    ///   - workstreamName: Name for the new workstream/branch
-    /// - Returns: The worktree path if worktree creation succeeded, nil otherwise.
-    func setup(
-        workstreamID: UUID,
-        projectPath: String,
-        projectName: String,
-        workstreamName: String
-    ) async -> String? {
-        // Step 1: Create worktree (must complete first)
-        await updateState(for: workstreamID, to: .inProgress(step: "Creating worktree", progress: 0.1))
-
-        let worktreePath: String? = await withCheckedContinuation { continuation in
-            // Run git worktree add on a background thread since it's a blocking Process call
-            DispatchQueue.global(qos: .userInitiated).async {
-                let path = GitOperations.createWorktree(
-                    projectPath: projectPath,
-                    projectName: projectName,
-                    workstreamName: workstreamName
-                )
-                continuation.resume(returning: path)
-            }
-        }
-
-        guard let worktreePath else {
-            logger.warning("Failed to create worktree for \(workstreamName, privacy: .public)")
-            await updateState(for: workstreamID, to: .failed("Failed to create git worktree"))
-            return nil
-        }
-
-        logger.info("Worktree created at \(worktreePath, privacy: .public), starting background setup")
-
-        // Step 2: Terminal launch happens in the caller — we just report progress.
-        await updateState(for: workstreamID, to: .inProgress(step: "Terminal ready", progress: 0.2))
-
-        // Step 3-6: Background setup — fire and forget from the caller's perspective.
-        // The caller gets the worktree path back immediately.
-        Task {
-            await runBackgroundSetup(
-                workstreamID: workstreamID,
-                projectPath: projectPath,
-                worktreePath: worktreePath
-            )
-        }
-
-        return worktreePath
-    }
-
-    /// Run the background setup steps after worktree creation.
-    /// These steps do NOT block Claude Code from launching.
+    /// Nothing here can stop the worktree from being usable. It already exists
+    /// by the time this runs, and every way of having no bootstrap to run —
+    /// integration off, no config, no binary, config not approved, no
+    /// `bootstrap` processes — reports `.completedWithNote` rather than
+    /// `.failed`. `PhasePolicy` owns both of those decisions; this method
+    /// is only the plumbing between them.
     private func runBackgroundSetup(
         workstreamID: UUID,
+        projectName: String,
+        workstreamName: String,
         projectPath: String,
         worktreePath: String
     ) async {
-        let config = WorktreeSetupConfig.load(from: projectPath)
-        var errors: [String] = []
+        // Checked and claimed without an intervening `await`, so two callers
+        // cannot both pass it.
+        guard !runningBootstraps.contains(workstreamID) else {
+            logger.info("Bootstrap for \(worktreePath, privacy: .public) is already running; ignoring the second request")
+            return
+        }
+        runningBootstraps.insert(workstreamID)
+        defer { runningBootstraps.remove(workstreamID) }
 
-        // Step 3: Copy the seed directory (env files and friends)
-        await updateState(for: workstreamID, to: .inProgress(step: "Copying env files", progress: 0.3))
-        let seedDirectory = config.seedDirectory(in: projectPath)
-        let seedOutcome: EnvSeedSync.Outcome = await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
-                guard EnvSeedSync.isEnabled() else {
-                    continuation.resume(returning: .noSeedDirectory)
-                    return
-                }
-                GitOperations.excludeSeedDirectory(seedDirectory, inProject: projectPath)
-                continuation.resume(returning: EnvSeedSync.sync(seedDirectory: seedDirectory, to: worktreePath))
+        await updateState(
+            for: workstreamID,
+            to: .inProgress(step: NSLocalizedString("Running bootstrap", comment: ""), progress: 0.5)
+        )
+
+        let plan = PhasePolicy.plan(
+            phase: .bootstrap,
+            isEnabled: ProcessComposeSettings.isEnabled,
+            config: ProcessComposeConfig.locate(worktree: worktreePath, projectDirectory: projectPath),
+            binary: ProcessComposeSettings.resolveBinary(),
+            isApproved: {
+                ScriptTrust.isApproved(configFiles: $0.repositoryProvidedFiles, for: projectPath)
             }
+        )
+        // Exhaustive on purpose. A nested `guard case` would leave the
+        // workstream reporting `.inProgress` forever if a third `Plan` case
+        // were ever added; a `switch` cannot compile past one.
+        let config: ProcessComposeConfig
+        let binary: String
+        switch plan {
+        case let .run(planned, planBinary):
+            config = planned
+            binary = planBinary
+        case let .nothingToDo(message):
+            await updateState(for: workstreamID, to: .completedWithNote(message))
+            logger.info("No bootstrap for \(worktreePath, privacy: .public): \(message, privacy: .public)")
+            return
         }
-        // A failed copy leaves a worktree with no .env and every other step
-        // succeeding, so it has to reach the user rather than only the log.
-        if let problem = seedOutcome.problemDescription {
-            errors.append(problem)
-        }
-        if case .noSeedDirectory = seedOutcome {
-            warnIfProjectHasUnseededEnvFiles(projectPath: projectPath, seedDirectory: seedDirectory)
-        }
-        logger.info("Copied \(seedOutcome.copiedCount) seed file(s)")
 
-        // Step 4: Create symlinks
-        await updateState(for: workstreamID, to: .inProgress(step: "Creating symlinks", progress: 0.5))
-        let symlinkCount: Int = await withCheckedContinuation { continuation in
+        // `PhaseExecutor.run` blocks its thread for as long as bootstrap takes,
+        // so it must not run on the actor. The environment is assembled inside
+        // the same hop for the same reason: it reads `ports.yaml` and asks git
+        // for the default branch, neither of which the actor should wait on.
+        let outcome: PhaseExecutor.Outcome = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
-                let count = SymlinkCreator.createSymlinks(
-                    from: projectPath,
-                    to: worktreePath,
-                    config: config
+                // Built here rather than inside `PhaseExecutor` so the phase
+                // layer stays free of the project model. Without it bootstrap
+                // would run with none of the `ATELIER_*` or `ports.yaml`
+                // variables the same file's `prepare` and `execute` phases see.
+                let environment = PhaseEnvironment.variables(
+                    workstreamID: workstreamID,
+                    projectName: projectName,
+                    workstreamName: workstreamName,
+                    projectDirectory: projectPath,
+                    worktreePath: worktreePath,
+                    defaultBranch: GitOperations.defaultBranch(at: projectPath)
                 )
-                continuation.resume(returning: count)
-            }
-        }
-        logger.info("Created \(symlinkCount) symlink(s)")
-
-        // Step 5: Set up Claude settings
-        await updateState(for: workstreamID, to: .inProgress(step: "Setting up Claude settings", progress: 0.6))
-        let claudeLinked: Bool = await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
-                let linked = ClaudeSettingsSetup.setup(from: projectPath, to: worktreePath)
-                continuation.resume(returning: linked)
-            }
-        }
-        logger.info("Claude settings linked: \(claudeLinked)")
-
-        // Step 6: Install dependencies (longest step)
-        await updateState(for: workstreamID, to: .inProgress(step: "Installing dependencies", progress: 0.7))
-        logger.detailed("Running the dependency install in \(worktreePath)")
-        let installResult: DependencyInstaller.InstallResult? = await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
-                let result = DependencyInstaller.install(in: worktreePath, config: config)
-                continuation.resume(returning: result)
-            }
-        }
-        if let result = installResult {
-            logger.detailed("Install finished: success=\(result.success) output=\(result.output.prefix(200)) error=\(result.errorOutput.prefix(200))")
-        } else {
-            logger.detailed("Nothing to install: needsInstall was false, or no package manager was detected")
-        }
-        if let result = installResult, !result.success {
-            errors.append("Dependency install failed: \(result.errorOutput)")
-            logger.warning("Dependency install failed: \(result.errorOutput, privacy: .public)")
-        }
-
-        // Step 7: Post-setup commands
-        await updateState(for: workstreamID, to: .inProgress(step: "Running post-setup commands", progress: 0.9))
-        for command in config.postSetupCommands {
-            let success: Bool = await withCheckedContinuation { continuation in
-                DispatchQueue.global(qos: .utility).async {
-                    let ok = ShellCommand.run(command, in: worktreePath)
-                    continuation.resume(returning: ok)
-                }
-            }
-            if !success {
-                errors.append("Post-setup command failed: \(command)")
+                continuation.resume(returning: PhaseExecutor.run(
+                    phase: .bootstrap,
+                    config: config,
+                    binary: binary,
+                    workstreamID: workstreamID,
+                    workingDirectory: worktreePath,
+                    environment: environment,
+                    timeout: ProcessRunner.Timeout.install
+                ))
             }
         }
 
-        // Done
-        if errors.isEmpty {
-            await updateState(for: workstreamID, to: .completed)
-            logger.info("Async setup completed successfully for \(worktreePath, privacy: .public)")
-        } else {
-            let errorMsg = errors.joined(separator: "; ")
-            await updateState(for: workstreamID, to: .failed(errorMsg))
-            logger.warning("Async setup completed with errors: \(errorMsg, privacy: .public)")
-        }
+        let state = PhasePolicy.state(for: outcome)
+        await updateState(for: workstreamID, to: state)
+        logger.info("Bootstrap for \(worktreePath, privacy: .public) finished: \(String(describing: state), privacy: .public)")
     }
 
     /// Update state and post notification to main thread.
@@ -217,39 +178,65 @@ actor AsyncSetupService {
         }
     }
 
-    /// Run background setup on a worktree that was already created externally.
-    /// Use this when the worktree was created by upstream GitOperations
-    /// and we just need to run the vibe-specific setup steps.
+    /// Run bootstrap on a worktree that already exists.
+    ///
+    /// Two callers. The worktree was created by upstream `GitOperations` and
+    /// only the project's own setup still has to run; or the first bootstrap
+    /// was refused because the repository's config had not been approved, the
+    /// user has now approved it, and this re-runs the plan against a worktree
+    /// that already exists. The plan is recomputed from scratch here, which is
+    /// what makes the second case work at all.
     func setupExistingWorktree(
         workstreamID: UUID,
+        projectName: String,
+        workstreamName: String,
         projectPath: String,
         worktreePath: String
     ) async {
         await updateState(for: workstreamID, to: .inProgress(step: "Setting up workspace", progress: 0.2))
         await runBackgroundSetup(
             workstreamID: workstreamID,
+            projectName: projectName,
+            workstreamName: workstreamName,
             projectPath: projectPath,
             worktreePath: worktreePath
         )
     }
 
-    /// Log a pointed warning when a project still keeps `.env` files at its root
-    /// but has no seed directory. Before the seed model those files were found by
-    /// a recursive scan and copied automatically; now they are simply not copied,
-    /// and without this the only symptom is a worktree that quietly has no env.
-    private func warnIfProjectHasUnseededEnvFiles(projectPath: String, seedDirectory: String) {
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: projectPath)) ?? []
-        let envFiles = names.filter { $0.hasPrefix(".env") }
-        guard !envFiles.isEmpty else { return }
-        logger.warning("""
-        Project \(projectPath, privacy: .public) has env file(s) \
-        \(envFiles.joined(separator: ", "), privacy: .public) but no seed directory at \
-        \(seedDirectory, privacy: .public). New worktrees will not receive them — move them into \
-        the seed directory, or set "seed" in .atelier.json.
-        """)
+    /// Remove tracked state for a workstream (cleanup after archiving).
+    /// Stop an in-flight bootstrap for this workstream and wait for it to let go.
+    ///
+    /// Archive has to do this before it removes the worktree. `dispose` and a
+    /// running `bootstrap` in the same directory are already bad — two
+    /// process-compose runs over one project — but `git worktree remove`
+    /// deleting the tree out from under a running `pnpm install` is worse, and
+    /// bootstrap's own server would then hold its ports until its 30-minute
+    /// deadline with nothing left to shut it down.
+    ///
+    /// Shutting the socket down is what makes `PhaseExecutor.run` return: the
+    /// server exits, the spawned `up` follows, and the `defer` in
+    /// `runBackgroundSetup` clears the claim. The poll below reads that claim
+    /// rather than the process, so it observes the real end of the work.
+    func cancelBootstrap(for workstreamID: UUID, binary: String?, worktreePath: String) async {
+        guard runningBootstraps.contains(workstreamID) else { return }
+        logger.info("Archive is waiting for bootstrap of \(worktreePath, privacy: .public)")
+        if let binary {
+            PhaseExecutor.shutDown(
+                binary: binary,
+                socketPath: PhaseRunner.socketPath(for: workstreamID, phase: .bootstrap),
+                workingDirectory: worktreePath
+            )
+        }
+        // Capped, because a bootstrap wedged in a way `down` cannot reach must
+        // not block the archive forever. Proceeding is then the lesser evil:
+        // the user asked for this worktree to go.
+        for _ in 0 ..< 300 {
+            guard runningBootstraps.contains(workstreamID) else { return }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        logger.warning("Bootstrap for \(worktreePath, privacy: .public) did not stop; archiving anyway")
     }
 
-    /// Remove tracked state for a workstream (cleanup after archiving).
     func clearState(for workstreamID: UUID) {
         states.removeValue(forKey: workstreamID)
     }

@@ -7,8 +7,22 @@ struct WorkstreamInfoView: View {
     let workstreamID: UUID
     let workingDirectory: String
     let projectDirectory: String
-    var scriptConfig: ScriptConfig = .empty
-    @Binding var scriptsApproved: Bool
+    /// Every repository-provided process-compose file this worktree would load.
+    /// Info is the permanent tab, so this is the approval route that survives the
+    /// user closing Environment.
+    var repositoryConfigFiles: [String] = []
+    var configApproved: Bool = false
+    /// What background setup last reported for this workstream. Info is where
+    /// it belongs: it is the permanent tab, and a `.completedWithNote` — "the
+    /// integration is off, so no bootstrap ran", "process-compose was not
+    /// found" — is a fact about the workstream, not about the run pane. Nothing
+    /// rendered it before, so those notes were written and thrown away.
+    var setupState: AsyncSetupState = .idle
+    /// No defaults: a call site that passes `repositoryConfigFiles` but forgets
+    /// these would render a Review button that silently does nothing, which is
+    /// the whole failure this gate exists to avoid.
+    let onReviewConfig: () -> Void
+    let onRevokeConfig: () -> Void
 
     @EnvironmentObject var appEnv: AppEnvironment
     @AppStorage("atelier.defaultTerminal") private var defaultTerminal: String = ""
@@ -25,7 +39,8 @@ struct WorkstreamInfoView: View {
                 localSection
                 githubSection
                 shortcutSection
-                scriptsSection
+                setupSection
+                processConfigSection
             }
             .formStyle(.grouped)
 
@@ -275,66 +290,6 @@ struct WorkstreamInfoView: View {
         }
     }
 
-    // MARK: - Scripts
-
-    @ViewBuilder
-    private var scriptsSection: some View {
-        if scriptConfig.hasAnyScript {
-            Section {
-                if let setup = scriptConfig.setup {
-                    LabeledContent("Setup") {
-                        Text(setup)
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                if let run = scriptConfig.run {
-                    LabeledContent("Run") {
-                        Text(run)
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                if let teardown = scriptConfig.teardown {
-                    LabeledContent("Teardown") {
-                        Text(teardown)
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                LabeledContent("Approval") {
-                    HStack(spacing: 10) {
-                        if scriptsApproved {
-                            Label("Approved", systemImage: "checkmark.shield")
-                                .foregroundStyle(.green)
-                            Button("Revoke") {
-                                ScriptTrust.revoke(for: projectDirectory)
-                                scriptsApproved = false
-                            }
-                        } else {
-                            Label("Not approved", systemImage: "exclamationmark.shield")
-                                .foregroundStyle(.orange)
-                            Button("Approve") {
-                                ScriptTrust.approve(scriptConfig, for: projectDirectory)
-                                scriptsApproved = true
-                            }
-                        }
-                    }
-                }
-            } header: {
-                HStack {
-                    Text("Scripts")
-                    Spacer()
-                    if let source = scriptConfig.source {
-                        Text(source)
-                            .font(.caption2)
-                            .foregroundStyle(.quaternary)
-                    }
-                }
-            }
-        }
-    }
-
     // MARK: - Actions
 
     private func copy(_ value: String, flag: Binding<Bool>) {
@@ -385,6 +340,100 @@ struct WorkstreamInfoView: View {
     @MainActor
     private func updateDocFiles(_ docFiles: [DocFile]) {
         self.docFiles = docFiles
+    }
+
+    /// Files found on disk, plus the Shortcut story description when there is one.
+    ///
+    /// The story is appended here rather than pushed into `docFiles` so it tracks the
+    /// `AppEnvironment` cache: the description arrives after the disk scan and can change
+    /// on a later refresh. Note this widens what a `DocFile` is — no longer strictly a
+    /// file on disk, but any Markdown panel the tab row can show.
+    /// What background setup did, when there is anything worth a row.
+    @ViewBuilder
+    private var setupSection: some View {
+        if let setup = setupSummary {
+            Section("Setup") {
+                LabeledContent(setup.label) {
+                    HStack(spacing: 6) {
+                        Image(systemName: setup.icon)
+                            .foregroundStyle(setup.tint)
+                        Text(setup.detail)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.trailing)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Approval for the repository's own process-compose files. Replaces the
+    /// `.atelier.json` scripts section: the gated phases are now `bootstrap`
+    /// and `dispose`, and approval is keyed on the config files themselves.
+    @ViewBuilder
+    private var processConfigSection: some View {
+        if !repositoryConfigFiles.isEmpty {
+            Section {
+                // Only the unattended phases are gated. Start is
+                // attended — a deliberate press, with the output in
+                // front of the user and Stop to hand — so it is never
+                // held behind this. Not because the pane shows the
+                // command Start runs; it does not.
+                Text("Bootstrap runs when a workstream is created and dispose when one is archived, both without asking.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                LabeledContent("Approval") {
+                    HStack(spacing: 10) {
+                        if configApproved {
+                            Label("Approved", systemImage: "checkmark.shield")
+                                .foregroundStyle(.green)
+                            Button("Revoke") { onRevokeConfig() }
+                        } else {
+                            Label("Not approved", systemImage: "exclamationmark.shield")
+                                .foregroundStyle(.orange)
+                            Button("Review") { onReviewConfig() }
+                        }
+                    }
+                }
+            } header: {
+                HStack {
+                    Text("Process Config")
+                    Spacer()
+                    Text(repositoryConfigFiles
+                        .map { ($0 as NSString).lastPathComponent }
+                        .joined(separator: ", "))
+                        .font(.caption2)
+                        .foregroundStyle(.quaternary)
+                }
+            }
+        }
+    }
+
+    /// One row's worth of what background setup did, or nil when there is
+    /// nothing worth a row.
+    ///
+    /// `.idle` and `.completed` are both silent on purpose: nothing has happened
+    /// yet, or bootstrap did exactly what the project asked and the worktree is
+    /// the evidence. The two that must speak are `.completedWithNote`, whose
+    /// entire content is the reason nothing ran, and `.failed`.
+    private var setupSummary: (label: String, detail: String, icon: String, tint: Color)? {
+        switch setupState {
+        case .idle, .completed:
+            nil
+        case let .inProgress(step, _):
+            (NSLocalizedString("Bootstrap", comment: ""), step, "clock", .secondary)
+        case let .completedWithNote(note):
+            (NSLocalizedString("Bootstrap", comment: ""), note, "info.circle", .secondary)
+        case let .failed(detail):
+            (NSLocalizedString("Bootstrap", comment: ""), detail, "exclamationmark.triangle", .orange)
+        }
+    }
+
+    private var displayedDocs: [DocFile] {
+        guard let story = appEnv.shortcutStory(for: workingDirectory),
+              let description = story.description,
+              !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return docFiles }
+        return docFiles + [DocFile(name: "Story", content: description)]
     }
 }
 

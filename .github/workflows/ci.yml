@@ -116,6 +116,27 @@ jobs:
           xcodebuild -version
           swift --version
 
+      # PhaseExecutorTests spawn a real process-compose. Without the binary
+      # they XCTSkip, and the run still reports success — so the most
+      # security-relevant end-to-end tests in the suite (bootstrap
+      # environment, failure reporting, --keep-project exit codes) were
+      # passing by never running here.
+      - name: Install process-compose
+        run: brew install f1bonacc1/tap/process-compose
+
+      # Installing is not enough: the tests probe three absolute paths, so a
+      # brew prefix change would silently return them to skipping.
+      - name: Verify process-compose is where the tests look
+        run: |
+          test -x /opt/homebrew/bin/process-compose \
+            || test -x /usr/local/bin/process-compose \
+            || test -x "$HOME/.local/bin/process-compose" \
+            || {
+              echo "::error::process-compose is not on ProcessComposeSettings.searchPaths — PhaseExecutorTests would skip"
+              exit 1
+            }
+          process-compose version
+
       # dev.sh runs xcodegen and builds the Monaco bundle itself.
       - name: Build
         run: ./scripts/dev.sh build

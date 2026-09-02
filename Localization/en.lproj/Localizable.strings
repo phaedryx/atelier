@@ -120,8 +120,6 @@
 "Remove \"%@\" from the list? Files in %@ will not be deleted." = "Remove \"%@\" from the list? Files in %@ will not be deleted.";
 
 /* Projects */
-"Copy .env files (rsync)" = "Copy .env files (rsync)";
-"rsync the project's .atelier-seed directory into new worktrees. Override the location with \"seed\" in .atelier.json." = "rsync the project's .atelier-seed directory into new worktrees. Override the location with \"seed\" in .atelier.json.";
 
 /* Quit confirmation */
 "Quit Atelier?" = "Quit Atelier?";
@@ -132,8 +130,8 @@
 "Launch at login" = "Launch at login";
 "Automatically open Atelier when you log in." = "Automatically open Atelier when you log in.";
 "Detailed logging" = "Detailed logging";
-"Log setup, run, and teardown script output to files for debugging." = "Log setup, run, and teardown script output to files for debugging.";
 "Open Logs Directory" = "Open Logs Directory";
+"Log the agent and run commands, and their output, to files for debugging." = "Log the agent and run commands, and their output, to files for debugging.";
 
 /* Settings - Environment */
 "Environment" = "Environment";
@@ -151,6 +149,8 @@
 "System" = "System";
 "Light" = "Light";
 "Dark" = "Dark";
+"Base branch" = "Base branch";
+"Repository default" = "Repository default";
 
 /* Settings - Coding Agent */
 "Auto-rename branch" = "Auto-rename branch";
@@ -274,15 +274,11 @@
 /* EnvironmentTabView */
 "Setup" = "Setup";
 "Run" = "Run";
-"No %@ script configured" = "No %@ script configured";
-"Add a %@ field to .atelier.json:" = "Add a %@ field to .atelier.json:";
 
 /* Dev server */
 "Dev command" = "Dev command";
 "Customize" = "Customize";
 "Custom" = "Custom";
-"From package.json" = "From package.json";
-"No dev command found. Add a dev script to package.json or set one below." = "No dev command found. Add a dev script to package.json or set one below.";
 "Open the command palette (⌘⇧P) and run New Browser to start the dev server." = "Open the command palette (⌘⇧P) and run New Browser to start the dev server.";
 
 /* Tab labels */
@@ -352,15 +348,13 @@
 "Rerun" = "Rerun";
 "Start" = "Start";
 "Stop" = "Stop";
+"Restart" = "Restart";
+"Nothing running." = "Nothing running.";
 
-"Running setup..." = "Running setup...";
-"Setup failed." = "Setup failed.";
-"Continue to Agent" = "Continue to Agent";
 
 "Preparing workstream..." = "Preparing workstream...";
 
 /* Environment Tab */
-"Using scripts from %@" = "Using scripts from %@";
 
 /* Quick Actions */
 "Commit" = "Commit";
@@ -380,19 +374,11 @@
 "Pulling…" = "Pulling…";
 
 /* Script approval */
-"Teardown" = "Teardown";
 "Approval" = "Approval";
 "Approved" = "Approved";
 "Not approved" = "Not approved";
 "Approve" = "Approve";
 "Revoke" = "Revoke";
-"Approve scripts from this repository?" = "Approve scripts from this repository?";
-"These commands come from %@ in the repository and run on your machine under your user account." = "These commands come from %@ in the repository and run on your machine under your user account.";
-"These commands come from the repository and run on your machine under your user account." = "These commands come from the repository and run on your machine under your user account.";
-"Approval covers this repository until the commands change." = "Approval covers this repository until the commands change.";
-"Approve and Run Setup" = "Approve and Run Setup";
-"Skip Setup" = "Skip Setup";
-"Approve and Start" = "Approve and Start";
 
 /* Agent roster */
 "Editing %@" = "Editing %@";
@@ -469,8 +455,84 @@
 /* Process deadlines */
 "git push did not finish in time." = "git push did not finish in time.";
 "git pull did not finish in time." = "git pull did not finish in time.";
-"rsync did not finish in time." = "rsync did not finish in time.";
 "A file or directory with this name already exists." = "A file or directory with this name already exists.";
+
+/* Environment variables */
+"NAME" = "NAME";
+"Value" = "Value";
+"Port" = "Port";
+
+/* Runner selection */
+"process-compose" = "process-compose";
+"No dev command found. Add a process-compose.yaml, or set a command below." = "No dev command found. Add a process-compose.yaml, or set a command below.";
+"Nothing to start" = "Nothing to start";
+"Add a process-compose.yaml to this worktree or the project directory, or set a command with Customize above." = "Add a process-compose.yaml to this worktree or the project directory, or set a command with Customize above.";
+"The process-compose integration is turned off, so nothing was detected. Turn it on in Settings, or set a command with Customize." = "The process-compose integration is turned off, so nothing was detected. Turn it on in Settings, or set a command with Customize.";
+"This project's process-compose.yaml could not be located, so there is nothing to start." = "This project's process-compose.yaml could not be located, so there is nothing to start.";
+"process-compose was not found. Install it, or set its path in Settings, then try again." = "process-compose was not found. Install it, or set its path in Settings, then try again.";
+
+/* ports.yaml */
+"ports.yaml could not be read: %@" = "ports.yaml could not be read: %@";
+"ports.yaml: %@ %@" = "ports.yaml: %@ %@";
+"ports.yaml: only one port may set browser: true (%@)" = "ports.yaml: only one port may set browser: true (%@)";
+"sets both assigned and fixed" = "sets both assigned and fixed";
+"sets assigned: false, which means nothing; remove the entry instead" = "sets assigned: false, which means nothing; remove the entry instead";
+"needs assigned: true or fixed: <port>" = "needs assigned: true or fixed: <port>";
+
+/* ProcessComposeClient */
+"The process manager is not running." = "The process manager is not running.";
+"Could not reach the process manager: %@" = "Could not reach the process manager: %@";
+"The process manager returned %d." = "The process manager returned %d.";
+"The process manager sent an unreadable response." = "The process manager sent an unreadable response.";
+
+/* Process-compose integration settings */
+"Process-Compose" = "Process-Compose";
+"Enable process-compose" = "Enable process-compose";
+"Run a project's dev stack from its process-compose.yaml, with per-worktree ports from ports.yaml." = "Run a project's dev stack from its process-compose.yaml, with per-worktree ports from ports.yaml.";
+"Binary" = "Binary";
+"auto-detect" = "auto-detect";
+"not found" = "not found";
+
+/* Worktree bootstrap phase */
+"Running bootstrap" = "Running bootstrap";
+"This project declares no bootstrap processes, so nothing ran." = "This project declares no bootstrap processes, so nothing ran.";
+"Bootstrap" = "Bootstrap";
+"Bootstrap failed: %@" = "Bootstrap failed: %@";
+"No shell was available to run the phase." = "No shell was available to run the phase.";
+"The %@ phase did not finish in time." = "The %@ phase did not finish in time.";
+"%@ failed." = "%@ failed.";
+"%1$@ exited with code %2$d." = "%1$@ exited with code %2$d.";
+
+/* Process-compose config approval */
+"Approve this repository's process config?" = "Approve this repository's process config?";
+"%@ came with this repository. Its bootstrap phase runs automatically when a workstream is created, and its dispose phase when one is archived — both without asking. They run on your machine under your user account." = "%@ came with this repository. Its bootstrap phase runs automatically when a workstream is created, and its dispose phase when one is archived — both without asking. They run on your machine under your user account.";
+"Not Now" = "Not Now";
+"Approve and Run Bootstrap" = "Approve and Run Bootstrap";
+"Could not read this file." = "Could not read this file.";
+"%@ came with this repository and has not been approved" = "%@ came with this repository and has not been approved";
+"Its bootstrap and dispose phases will not run until you review it. Start is unaffected." = "Its bootstrap and dispose phases will not run until you review it. Start is unaffected.";
+"Process Config" = "Process Config";
+"Bootstrap runs when a workstream is created and dispose when one is archived, both without asking." = "Bootstrap runs when a workstream is created and dispose when one is archived, both without asking.";
+"Review" = "Review";
+
+/* Unattended phase policy — shared by bootstrap and dispose */
+"The process-compose integration is turned off, so no %@ ran." = "The process-compose integration is turned off, so no %@ ran.";
+"This project has no process-compose.yaml, so no %@ ran." = "This project has no process-compose.yaml, so no %@ ran.";
+"process-compose was not found, so no %@ ran." = "process-compose was not found, so no %@ ran.";
+"This project's process-compose files came with the repository and have not been approved, so no %@ ran." = "This project's process-compose files came with the repository and have not been approved, so no %@ ran.";
+"Approval covers this repository until any of these files changes. Start is never gated by it." = "Approval covers this repository until any of these files changes. Start is never gated by it.";
+
+/* ports.yaml validation */
+"fixed: %d is not a port between 1 and 65535" = "fixed: %d is not a port between 1 and 65535";
+"is a name Atelier sets; choose another" = "is a name Atelier sets; choose another";
+"starts with FF_, which Atelier mirrors from ATELIER_*; declare the ATELIER_ name instead" = "starts with FF_, which Atelier mirrors from ATELIER_*; declare the ATELIER_ name instead";
+
+/* Process selection */
+"All" = "All";
+"Processes to start" = "Processes to start";
+"At least one process has to start." = "At least one process has to start.";
+"is not a usable variable name; use letters, digits and _, not starting with a digit" = "is not a usable variable name; use letters, digits and _, not starting with a digit";
+"pins port %d, which %@ already pins" = "pins port %d, which %@ already pins";
 
 /* Workstream info tab - Local section */
 "Local" = "Local";
@@ -482,7 +544,6 @@
 "gh not installed or not authenticated" = "gh not installed or not authenticated";
 "None for this branch" = "None for this branch";
 "Checks" = "Checks";
-"Review" = "Review";
 
 /* Pull request status */
 "Draft" = "Draft";

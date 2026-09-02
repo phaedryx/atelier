@@ -163,7 +163,6 @@ struct ContentView: View {
                 .navigationSubtitle(AppConstants.appName)
         } else if let workstream = activeWorkstream, let project = activeProject {
             if let workstreamID = renderableWorkstreamID(in: project, selectedWorkstreamID: workstream.id) {
-                let scriptConfig = ScriptConfig.load(from: project.directory)
                 let workspaceModel = surfaceCache.workspaceModel(
                     for: workstreamID,
                     seed: startupWorkspaceTabState(
@@ -179,7 +178,6 @@ struct ContentView: View {
                     workstreamLabel: workstream.label,
                     bypassPermissions: workstream.bypassPermissions,
                     isActive: true,
-                    scriptConfig: scriptConfig,
                     model: workspaceModel
                 )
                 .id(workstreamID)
@@ -503,11 +501,18 @@ struct ContentView: View {
                     // never promoted and the info tab shows nothing for the whole session.
                     syncShortcutStoryIDs(projects: projects)
                     logger.warning("[Atelier] workstreamWorktreeReady: updated \(workstreamID, privacy: .public) with path \(worktreePath, privacy: .public)")
-                    // Trigger vibe background setup (env copy, symlinks, Claude settings, deps)
+                    // Run the project's `bootstrap` namespace in the background.
                     let projectPath = projects[pi].directory
+                    // Names, not just paths: bootstrap runs with the same
+                    // `ATELIER_PROJECT` / `ATELIER_WORKSTREAM` the workstream's
+                    // terminals get, and only the project model knows them.
+                    let projectName = projects[pi].name
+                    let workstreamName = projects[pi].workstreams[wi].name
                     Task {
                         await AsyncSetupService.shared.setupExistingWorktree(
                             workstreamID: workstreamID,
+                            projectName: projectName,
+                            workstreamName: workstreamName,
                             projectPath: projectPath,
                             worktreePath: worktreePath
                         )
