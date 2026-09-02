@@ -14,16 +14,30 @@ final class ProcessTableModel: ObservableObject {
     @Published private(set) var error: String?
 
     private let socketPath: String
-    private let client: ProcessComposeClient
+    private let client: ProcessComposeControlling
     private var pollTask: Task<Void, Never>?
+
+    /// The refresh currently running, or the last one that ran. Every refresh
+    /// chains onto it, which is what keeps two `processes()` calls off the wire
+    /// at the same time even when a control action refreshes mid-poll.
+    private var refreshChain: Task<Void, Never>?
+
+    /// Bumped whenever the table is cleared. A refresh captures it before it
+    /// starts and re-checks it before every published write, so a reply that
+    /// arrives after `stopPolling()` is dropped instead of resurrecting the
+    /// previous run's rows.
+    private var generation = 0
 
     /// Matches PortDetector's cadence. The API also offers a push stream, which
     /// is the later optimisation once this is proven.
     private static let pollInterval = Duration.seconds(1)
 
-    init(socketPath: String) {
+    /// The client is injected so the polling, the error branches and the
+    /// post-stop suppression can be driven by a stub. They are the subtlest
+    /// behaviour here and the hardest to reach with a live binary.
+    init(socketPath: String, client: ProcessComposeControlling? = nil) {
         self.socketPath = socketPath
-        client = ProcessComposeClient(socketPath: socketPath)
+        self.client = client ?? ProcessComposeClient(socketPath: socketPath)
     }
 
     deinit { pollTask?.cancel() }
@@ -34,6 +48,7 @@ final class ProcessTableModel: ObservableObject {
     /// would stack overlapping requests on a manager that is already slow.
     func startPolling() {
         guard pollTask == nil else { return }
+        clear()
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refresh()
@@ -45,13 +60,37 @@ final class ProcessTableModel: ObservableObject {
     func stopPolling() {
         pollTask?.cancel()
         pollTask = nil
-        processes = []
-        error = nil
+        clear()
     }
 
+    /// Empties the table and invalidates anything already on the wire.
+    private func clear() {
+        generation += 1
+        refreshChain = nil
+        if !processes.isEmpty { processes = [] }
+        if error != nil { error = nil }
+    }
+
+    /// Re-reads the process list, never concurrently with another refresh.
+    ///
+    /// Each call chains onto the one before it rather than skipping: a control
+    /// action still gets a genuinely fresh read, and the reads stay ordered, so
+    /// an older reply cannot land after a newer one and overwrite it.
     func refresh() async {
+        let predecessor = refreshChain
+        let token = generation
+        let task = Task { @MainActor [weak self] in
+            await predecessor?.value
+            await self?.performRefresh(token: token)
+        }
+        refreshChain = task
+        await task.value
+    }
+
+    private func performRefresh(token: Int) async {
         do {
             let latest = try await client.processes()
+            guard token == generation else { return }
             // Every assignment here is guarded, because this runs once a second
             // for the life of the run session, beside a live terminal surface.
             // `@Published` fires `objectWillChange` from `willSet` with no
@@ -62,12 +101,26 @@ final class ProcessTableModel: ObservableObject {
             if error != nil { error = nil }
         } catch ProcessComposeClient.ClientError.notRunning {
             // Expected before Start and after Stop; not worth surfacing.
+            guard token == generation else { return }
             if !processes.isEmpty { processes = [] }
             if error != nil { error = nil }
         } catch {
+            guard token == generation else { return }
+            // A manager that is gone is not a fault, whatever shape the failure
+            // took. Stopping the last process ends the whole project, and the
+            // teardown races the request: the connection can drop mid-response,
+            // so `body(of:)` finds no header separator and throws
+            // `.malformedResponse` rather than `.notRunning`. Keying the
+            // suppression on the socket rather than on the error case covers
+            // both, and every other way that race can surface.
+            guard FileManager.default.fileExists(atPath: socketPath) else {
+                if !processes.isEmpty { processes = [] }
+                if self.error != nil { self.error = nil }
+                return
+            }
             logger.debug("poll failed: \(error.localizedDescription, privacy: .public)")
-            // Guarded for the same reason: a manager that keeps failing the same
-            // way would otherwise republish the same message once a second.
+            // Guarded for the same reason as the success path: a manager failing
+            // the same way every second must not republish the same message.
             let description = error.localizedDescription
             if self.error != description { self.error = description }
         }
@@ -102,9 +155,8 @@ final class ProcessTableModel: ObservableObject {
             failure = error.localizedDescription
         }
         await refresh()
-        if let failure, FileManager.default.fileExists(atPath: socketPath) {
-            error = failure
-        }
+        guard let failure, FileManager.default.fileExists(atPath: socketPath) else { return }
+        if error != failure { error = failure }
     }
 
     // MARK: - Selection

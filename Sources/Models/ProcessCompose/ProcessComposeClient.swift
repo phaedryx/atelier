@@ -33,7 +33,17 @@ struct ProcessComposeProcess: Decodable, Equatable, Identifiable {
     }
 }
 
-struct ProcessComposeClient {
+/// The manager operations the UI needs. A seam, so the process table's polling
+/// and its error suppression can be tested without a live process-compose:
+/// exactly the paths that only ever ran by hand otherwise.
+protocol ProcessComposeControlling: Sendable {
+    func processes() async throws -> [ProcessComposeProcess]
+    func start(_ name: String) async throws
+    func stop(_ name: String) async throws
+    func restart(_ name: String) async throws
+}
+
+struct ProcessComposeClient: ProcessComposeControlling {
     let socketPath: String
 
     /// Bound on a single blocking `read`/`write` over the socket. `processes()`
