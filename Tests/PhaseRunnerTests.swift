@@ -137,6 +137,82 @@ final class PhaseRunnerTests: XCTestCase {
         XCTAssertTrue(command.hasSuffix("bff"), command)
     }
 
+    // MARK: - Namespace-aware prepare chaining
+
+    private func makeTempDir() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private func writeConfig(_ body: String, in dir: URL) throws -> ProcessComposeConfig {
+        let path = dir.appendingPathComponent("process-compose.yaml")
+        try "processes:\n\(body)".write(to: path, atomically: true, encoding: .utf8)
+        return ProcessComposeConfig(path: path.path, isRepositoryProvided: true, overridePath: nil)
+    }
+
+    /// A config that declares both namespaces keeps the existing chain.
+    func testStartCommandChainsBothWhenConfigDeclaresPrepare() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let config = try writeConfig("""
+          setup:
+            namespace: prepare
+            command: "true"
+          web:
+            namespace: execute
+            command: "true"
+        """, in: dir)
+
+        let command = PhaseRunner.startCommand(
+            config: config, binary: binary, workstreamID: workstreamID, selectedProcesses: []
+        )
+
+        XCTAssertTrue(command.contains("-n prepare && "), command)
+        XCTAssertTrue(command.hasSuffix("-n execute"), command)
+    }
+
+    /// The bug this guards against: process-compose does not exit when told
+    /// to run an empty namespace, it idles forever, so chaining `up -n
+    /// prepare` ahead of execute for a config that never declares one would
+    /// hang Start forever. Only `execute` should run.
+    func testStartCommandRunsOnlyExecuteWhenPrepareIsNotDeclared() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let config = try writeConfig("""
+          web:
+            namespace: execute
+            command: "true"
+        """, in: dir)
+
+        let command = PhaseRunner.startCommand(
+            config: config, binary: binary, workstreamID: workstreamID, selectedProcesses: []
+        )
+
+        XCTAssertFalse(command.contains("prepare"), command)
+        XCTAssertTrue(command.contains("-n execute"), command)
+        XCTAssertFalse(command.contains("&&"), command)
+    }
+
+    /// A process with no `namespace:` key belongs to process-compose's own
+    /// default namespace, not to `prepare` — a config with only such
+    /// processes (the shape of a project that predates the namespace
+    /// convention) must not be treated as declaring `prepare`.
+    func testStartCommandTreatsUnnamespacedProcessesAsNotDeclaringPrepare() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let config = try writeConfig("""
+          web:
+            command: "true"
+        """, in: dir)
+
+        let command = PhaseRunner.startCommand(
+            config: config, binary: binary, workstreamID: workstreamID, selectedProcesses: []
+        )
+
+        XCTAssertFalse(command.contains("prepare"), command)
+    }
+
     func testPathsWithSpacesAreQuoted() {
         let config = ProcessComposeConfig(
             path: "/repo/my project/process-compose.yaml", isRepositoryProvided: false, overridePath: nil

@@ -89,19 +89,34 @@ enum PhaseRunner {
     /// One shell command in one surface, so prepare's output appears where the
     /// user is already looking and its socket is released before execute claims
     /// the same path. `&&` means a failing prepare stops execute from starting.
+    ///
+    /// `prepare` is chained only when the config actually declares a process
+    /// for it. process-compose does not exit when told to run an empty
+    /// namespace — it idles forever — so unconditionally chaining `up -n
+    /// prepare` ahead of execute would hang Start forever for any config that
+    /// has not adopted the `prepare` namespace, including one that predates
+    /// this convention and declares no namespaces at all. `execute` is never
+    /// conditional: skipping it as well would make Start silently do nothing,
+    /// which is worse than running an execute namespace that turns out empty.
+    /// `namespaceIsConfidentlyEmpty` fails open (returns false) on any parse
+    /// failure, so a config that genuinely declares `prepare` is never
+    /// silently skipped because of a read/parse error.
     static func startCommand(
         config: ProcessComposeConfig,
         binary: String,
         workstreamID: UUID,
         selectedProcesses: [String]
     ) -> String {
-        let prepare = command(
-            phase: .prepare, config: config, binary: binary,
-            workstreamID: workstreamID, selectedProcesses: []
-        )
         let execute = command(
             phase: .execute, config: config, binary: binary,
             workstreamID: workstreamID, selectedProcesses: selectedProcesses
+        )
+        guard !config.namespaceIsConfidentlyEmpty(ProcessComposePhase.prepare.namespace) else {
+            return execute
+        }
+        let prepare = command(
+            phase: .prepare, config: config, binary: binary,
+            workstreamID: workstreamID, selectedProcesses: []
         )
         return "\(prepare) && \(execute)"
     }

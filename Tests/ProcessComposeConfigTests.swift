@@ -107,4 +107,96 @@ final class ProcessComposeConfigTests: XCTestCase {
 
         XCTAssertNil(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
     }
+
+    // MARK: - Namespace declarations
+
+    private func writeProcesses(_ body: String, name: String = "process-compose.yaml", in dir: URL) throws {
+        try "processes:\n\(body)".write(to: dir.appendingPathComponent(name), atomically: true, encoding: .utf8)
+    }
+
+    func testNotConfidentlyEmptyWhenAProcessDeclaresTheNamespace() throws {
+        try writeProcesses("""
+          setup:
+            namespace: prepare
+            command: "true"
+        """, in: worktree)
+        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+
+        XCTAssertFalse(config.namespaceIsConfidentlyEmpty("prepare"))
+    }
+
+    func testConfidentlyEmptyWhenNoProcessDeclaresTheNamespace() throws {
+        try writeProcesses("""
+          web:
+            namespace: execute
+            command: "true"
+        """, in: worktree)
+        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+
+        XCTAssertTrue(config.namespaceIsConfidentlyEmpty("prepare"))
+    }
+
+    /// A process with no `namespace:` key belongs to process-compose's own
+    /// default namespace, not to `prepare` — it must not count toward it.
+    func testUnnamespacedProcessDoesNotSatisfyAnyNamespace() throws {
+        try writeProcesses("""
+          web:
+            command: "true"
+        """, in: worktree)
+        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+
+        XCTAssertTrue(config.namespaceIsConfidentlyEmpty("prepare"))
+        XCTAssertTrue(config.namespaceIsConfidentlyEmpty("execute"))
+    }
+
+    /// A namespace declared only in the override file still counts — the
+    /// override can add processes the base file never mentions.
+    func testNamespaceDeclaredOnlyInTheOverrideStillCounts() throws {
+        try writeProcesses("""
+          web:
+            namespace: execute
+            command: "true"
+        """, in: project)
+        try writeProcesses("""
+          setup:
+            namespace: prepare
+            command: "true"
+        """, name: "process-compose.override.yaml", in: worktree)
+        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+
+        XCTAssertFalse(config.namespaceIsConfidentlyEmpty("prepare"))
+    }
+
+    /// An unreadable file must fail open: never mistaken for "no namespaces".
+    func testFailsOpenWhenTheFileCannotBeRead() {
+        let config = ProcessComposeConfig(
+            path: "/nonexistent/process-compose.yaml", isRepositoryProvided: true, overridePath: nil
+        )
+
+        XCTAssertFalse(config.namespaceIsConfidentlyEmpty("prepare"))
+    }
+
+    /// Malformed YAML must fail open the same way — a parse bug must never
+    /// masquerade as an empty namespace and cause a declared phase to be
+    /// silently skipped.
+    func testFailsOpenWhenTheFileIsMalformed() throws {
+        try "processes: {web: {command: \"true\"".write(
+            to: worktree.appendingPathComponent("process-compose.yaml"), atomically: true, encoding: .utf8
+        )
+        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+
+        XCTAssertFalse(config.namespaceIsConfidentlyEmpty("prepare"))
+    }
+
+    /// A config with no `processes:` key at all doesn't parse as a
+    /// process-compose config in the shape this reads — fail open rather
+    /// than treat it as confidently declaring nothing.
+    func testFailsOpenWhenProcessesKeyIsMissing() throws {
+        try "version: \"0.5\"".write(
+            to: worktree.appendingPathComponent("process-compose.yaml"), atomically: true, encoding: .utf8
+        )
+        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+
+        XCTAssertFalse(config.namespaceIsConfidentlyEmpty("prepare"))
+    }
 }
