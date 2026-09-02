@@ -36,7 +36,6 @@ final class WorkstreamEnvironmentTests: XCTestCase {
         XCTAssertEqual(vars["ATELIER_DEFAULT_BRANCH"], "main")
     }
 
-
     // MARK: - Conductor aliases
 
     func testConductorAliases() {
@@ -151,4 +150,44 @@ final class WorkstreamEnvironmentTests: XCTestCase {
         }
     }
 
+    // MARK: - Port plan export
+
+    func testPortPlanValuesAreExported() {
+        let vars = WorkstreamEnvironment.variables(
+            workstreamID: UUID(),
+            projectName: "app",
+            workstreamName: "ws",
+            projectDirectory: "/repo",
+            workingDirectory: "/repo/ws",
+            port: 40001,
+            portPlan: PortPlan(values: ["BFF_PORT": "41476"], browserPort: 41476)
+        )
+
+        XCTAssertEqual(vars["BFF_PORT"], "41476")
+    }
+
+    /// A project naming a variable Atelier also sets should win — the project
+    /// knows what its own stack needs.
+    func testPortPlanOverridesAtelierDefaults() {
+        let vars = WorkstreamEnvironment.variables(
+            workstreamID: UUID(),
+            projectName: "app",
+            workstreamName: "ws",
+            projectDirectory: "/repo",
+            workingDirectory: "/repo/ws",
+            port: 40001,
+            portPlan: PortPlan(values: ["ATELIER_PORT": "50000"], browserPort: nil)
+        )
+
+        XCTAssertEqual(vars["ATELIER_PORT"], "50000")
+    }
+
+    func testEmptyPortPlanChangesNothing() {
+        let base = WorkstreamEnvironment.variables(
+            workstreamID: UUID(), projectName: "app", workstreamName: "ws",
+            projectDirectory: "/repo", workingDirectory: "/repo/ws", port: 40001
+        )
+
+        XCTAssertEqual(base["ATELIER_PORT"], "40001")
+    }
 }

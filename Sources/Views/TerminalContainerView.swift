@@ -227,7 +227,8 @@ func workspaceEnvironmentVariables(
     workingDirectory: String,
     port: Int,
     defaultBranch: String,
-    scriptSource: String?
+    scriptSource: String?,
+    portPlan: PortPlan = .empty
 ) -> [String: String] {
     WorkstreamEnvironment.variables(
         workstreamID: workstreamID,
@@ -237,7 +238,8 @@ func workspaceEnvironmentVariables(
         workingDirectory: workingDirectory,
         port: port,
         defaultBranch: defaultBranch,
-        scriptSource: scriptSource
+        scriptSource: scriptSource,
+        portPlan: portPlan
     )
 }
 
@@ -324,6 +326,9 @@ struct TerminalContainerView: View {
     /// Resolved once per change rather than per render: resolving probes TCP
     /// ports, which has no business running inside a view update.
     @State private var resolvedProjectEnvVars: [String: String] = [:]
+    /// Resolved once per change rather than per render: resolving binds a socket
+    /// to check whether each port is free.
+    @State private var portPlan: PortPlan = .empty
     init(
         workstreamID: UUID,
         workingDirectory: String,
@@ -401,8 +406,12 @@ struct TerminalContainerView: View {
         PortAllocator.port(for: workingDirectory)
     }
 
+    /// A declared `browser: true` port wins over detection: Atelier assigned it,
+    /// so there is nothing to infer. Detection cannot help here anyway —
+    /// PortSelectionTracker returns nil once more than one process is listening
+    /// and no port was expected, which is every multi-service stack.
     private var browserDefaultURL: String {
-        let port = portDetector.selectedPort ?? workstreamPort
+        let port = portPlan.browserPort ?? portDetector.selectedPort ?? workstreamPort
         return "http://localhost:\(port)/"
     }
 
@@ -1262,6 +1271,22 @@ struct TerminalContainerView: View {
         )
     }
 
+    /// Re-reads ports.yaml and resolves it for this worktree. A malformed file
+    /// leaves the plan empty and logs — the Environment tab surfaces the error
+    /// in Task 8; nothing here should throw into a view update.
+    private func refreshPortPlan() {
+        do {
+            guard let config = try PortsConfig.load(from: projectDirectory) else {
+                portPlan = .empty
+                return
+            }
+            portPlan = PortPlan.resolve(config, workingDirectory: workingDirectory)
+        } catch {
+            logger.warning("ports.yaml: \(error.localizedDescription, privacy: .public)")
+            portPlan = .empty
+        }
+    }
+
     private func killRunTmuxSession() {
         guard useTmux, let tmuxPath = appEnv.toolStatus.tmux.path else { return }
         let session = TmuxSession.sessionName(project: projectName, workstream: workstreamName, role: "run")
@@ -1487,6 +1512,7 @@ struct TerminalContainerView: View {
         scriptsApproved = ScriptTrust.isApproved(scriptConfig, for: projectDirectory)
         envVarDefinitions = ProjectEnvironmentVars.definitions(for: projectDirectory)
         refreshProjectEnvVars()
+        refreshPortPlan()
         refreshDevCommand()
         setupGateState = SetupGateState.resolve(
             hasSetupScript: scriptConfig.setup != nil,
@@ -1578,7 +1604,8 @@ struct TerminalContainerView: View {
             workingDirectory: workingDirectory,
             port: workstreamPort,
             defaultBranch: defaultBranch,
-            scriptSource: scriptConfig.source
+            scriptSource: scriptConfig.source,
+            portPlan: portPlan
         )
         // claudeID is the workstream id, so the Agent surface addresses itself
         // the same way every other surface does.

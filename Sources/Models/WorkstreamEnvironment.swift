@@ -15,7 +15,8 @@ enum WorkstreamEnvironment {
         workingDirectory: String,
         port: Int,
         defaultBranch: String = "main",
-        scriptSource: String? = nil
+        scriptSource: String? = nil,
+        portPlan: PortPlan = .empty
     ) -> [String: String] {
         let id = workstreamID.uuidString.lowercased()
         let portString = "\(port)"
@@ -59,6 +60,12 @@ enum WorkstreamEnvironment {
         default:
             break
         }
+
+        // Last, so a project's own declarations win over Atelier's defaults: a
+        // project that wants ATELIER_PORT to mean something specific may say so.
+        // These reach every surface, not just process-compose — a port visible
+        // only to the run pane is invisible to a test run in a terminal tab.
+        vars.merge(portPlan.values) { _, declared in declared }
 
         return vars
     }
