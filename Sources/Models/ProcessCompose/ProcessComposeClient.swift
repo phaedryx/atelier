@@ -88,6 +88,17 @@ struct ProcessComposeClient: ProcessComposeControlling {
     }
 
     func processes() async throws -> [ProcessComposeProcess] {
+        try processesSync()
+    }
+
+    /// The same request, without the `async` wrapper.
+    ///
+    /// The transport is a blocking `read`/`write` on a unix socket either way —
+    /// `processes()` never suspends. `PhaseExecutor` polls from a dedicated
+    /// thread rather than the cooperative pool, and bridging back into `async`
+    /// there would mean a `Task` plus a semaphore for no benefit. Only call
+    /// this off the main actor.
+    func processesSync() throws -> [ProcessComposeProcess] {
         try Self.decodeProcesses(request(method: "GET", path: "/processes"))
     }
 

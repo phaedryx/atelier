@@ -40,6 +40,44 @@ final class PhaseRunnerTests: XCTestCase {
         XCTAssertTrue(path.contains(String(shortUUID)), "first 8 characters must be present")
     }
 
+    /// Only `execute` gets the bare path. bootstrap now runs in the background
+    /// behind an already-open terminal, so it and execute overlap in time, and
+    /// a second `up` on a path a live server holds rebinds it — stranding the
+    /// first server rather than refusing.
+    func testHeadlessPhasesGetTheirOwnSocketPath() {
+        let execute = PhaseRunner.socketPath(for: workstreamID, phase: .execute)
+        let bootstrap = PhaseRunner.socketPath(for: workstreamID, phase: .bootstrap)
+        let dispose = PhaseRunner.socketPath(for: workstreamID, phase: .dispose)
+
+        XCTAssertEqual(execute, PhaseRunner.socketPath(for: workstreamID))
+        XCTAssertEqual(Set([execute, bootstrap, dispose]).count, 3)
+        XCTAssertTrue(bootstrap.hasSuffix("-bootstrap.sock"), bootstrap)
+        XCTAssertLessThan(bootstrap.utf8.count, 104, "the longest suffix must still fit sun_path")
+        XCTAssertTrue(dispose.hasSuffix("-dispose.sock"), dispose)
+    }
+
+    /// `--keep-project` is off by default, because `startCommand` chains
+    /// prepare into execute with `&&` and a prepare that never exits would
+    /// never let execute start.
+    func testKeepProjectIsOptInAndAbsentFromTheStartChain() {
+        let plain = PhaseRunner.command(
+            phase: .bootstrap, config: worktreeConfig, binary: binary,
+            workstreamID: workstreamID, selectedProcesses: []
+        )
+        let kept = PhaseRunner.command(
+            phase: .bootstrap, config: worktreeConfig, binary: binary,
+            workstreamID: workstreamID, selectedProcesses: [], keepProject: true
+        )
+        let start = PhaseRunner.startCommand(
+            config: worktreeConfig, binary: binary,
+            workstreamID: workstreamID, selectedProcesses: []
+        )
+
+        XCTAssertFalse(plain.contains("--keep-project"), plain)
+        XCTAssertTrue(kept.contains("--keep-project"), kept)
+        XCTAssertFalse(start.contains("--keep-project"), start)
+    }
+
     func testWorktreeConfigPassesNoDashF() {
         let command = PhaseRunner.command(
             phase: .execute, config: worktreeConfig, binary: binary,

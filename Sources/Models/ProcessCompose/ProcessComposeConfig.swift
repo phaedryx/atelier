@@ -80,19 +80,44 @@ struct ProcessComposeConfig: Equatable {
         return Set(processes.values.compactMap(\.namespace))
     }
 
-    /// Whether this config can be shown, with confidence, to assign zero
-    /// processes to `namespace` — across both the base file and the override,
-    /// when one exists. False whenever that confidence isn't there: the
-    /// namespace actually appears on some process, or either file could not be
-    /// read or parsed. `PhaseRunner.startCommand` uses this to decide whether
-    /// chaining a phase would just hang process-compose on an empty
-    /// namespace — and a parse failure must fail open into "not empty" rather
-    /// than into silently skipping a phase the user actually declared.
-    func namespaceIsConfidentlyEmpty(_ namespace: String) -> Bool {
+    /// What this config says about a namespace. Three answers, not two,
+    /// because "we could not tell" has to be actionable: a file Yams cannot
+    /// decode but process-compose accepts — a top-level `include`, a
+    /// `namespace` given as a list — is neither present nor empty, and a
+    /// caller that treats it as present will run a namespace that may not
+    /// exist and wait out its whole deadline for an answer.
+    enum NamespacePresence: Equatable {
+        /// Every file parsed, and none of them put a process in the namespace.
+        case empty
+        /// Some process declares it.
+        case present
+        /// A file could not be read, or did not parse as a process-compose
+        /// config at all. Never treat this as `empty`: a parse bug must not
+        /// silently skip a phase the project really declared.
+        case unknown
+    }
+
+    /// Whether the base file and the override, taken together, declare
+    /// `namespace`.
+    func namespacePresence(_ namespace: String) -> NamespacePresence {
+        var unknown = false
         for file in [path, overridePath].compactMap({ $0 }) {
-            guard let namespaces = Self.declaredNamespaces(at: file) else { return false }
-            if namespaces.contains(namespace) { return false }
+            guard let namespaces = Self.declaredNamespaces(at: file) else {
+                unknown = true
+                continue
+            }
+            if namespaces.contains(namespace) { return .present }
         }
-        return true
+        return unknown ? .unknown : .empty
+    }
+
+    /// Whether this config can be shown, with confidence, to assign zero
+    /// processes to `namespace`. `PhaseRunner.startCommand` uses this to decide
+    /// whether chaining a phase would just hang process-compose on an empty
+    /// namespace — and it deliberately collapses `.unknown` into "not empty",
+    /// because failing open is the safe direction when the only alternative is
+    /// silently skipping a phase the user actually declared.
+    func namespaceIsConfidentlyEmpty(_ namespace: String) -> Bool {
+        namespacePresence(namespace) == .empty
     }
 }

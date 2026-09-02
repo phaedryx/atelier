@@ -520,3 +520,5 @@
 "No shell was available to run the phase." = "No shell was available to run the phase.";
 "The %@ phase did not finish in time." = "The %@ phase did not finish in time.";
 "%@ failed." = "%@ failed.";
+"This project's process-compose.yaml came with the repository and has not been approved, so no bootstrap ran." = "This project's process-compose.yaml came with the repository and has not been approved, so no bootstrap ran.";
+"%1$@ exited with code %2$d." = "%1$@ exited with code %2$d.";

@@ -6,6 +6,7 @@ import XCTest
 
 final class PhaseExecutorTests: XCTestCase {
     private var dir: URL!
+    private var projectDir: URL!
     private var binary = ""
     private let workstreamID = UUID()
 
@@ -19,10 +20,14 @@ final class PhaseExecutorTests: XCTestCase {
         binary = found
         dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        projectDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
     }
 
     override func tearDown() {
         try? FileManager.default.removeItem(at: dir)
+        try? FileManager.default.removeItem(at: projectDir)
+        try? FileManager.default.removeItem(atPath: PhaseRunner.socketPath(for: workstreamID, phase: .bootstrap))
         super.tearDown()
     }
 
@@ -39,30 +44,67 @@ final class PhaseExecutorTests: XCTestCase {
             binary: binary,
             workstreamID: workstreamID,
             workingDirectory: dir.path,
-            // Deliberately short. Every config here declares a `bootstrap`
-            // process that exits at once, so nothing should approach this — and
+            // Deliberately short. Every config here finishes in seconds, and
             // the production deadline (`Timeout.install`, half an hour) would
-            // wedge the suite if one of them ever did.
+            // wedge the suite if one of them ever did not.
             timeout: 60
         )
     }
 
-    func testSucceedingBootstrapReports() throws {
+    /// Succeeding is not just an exit code: the processes must actually have run
+    /// in the worktree, so this asserts on the side effect rather than on the
+    /// report alone.
+    func testSucceedingBootstrapRunsInTheWorktree() throws {
         let config = try writeConfig("""
         version: "0.5"
         processes:
           ok:
             namespace: bootstrap
-            command: sh -c 'exit 0'
+            command: sh -c 'touch bootstrap-marker'
             availability: { restart: "no" }
         """)
 
         XCTAssertEqual(runBootstrap(config), .succeeded)
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: dir.appendingPathComponent("bootstrap-marker").path),
+            "bootstrap must run with the worktree as its working directory"
+        )
     }
 
-    /// A failing bootstrap is only reported when the config asks for it.
-    /// `availability.restart: exit_on_failure` is what makes process-compose
-    /// propagate the process's exit code; see the companion test below.
+    /// The only shape that reaches bootstrap in production until config
+    /// approval exists: a config the user placed in the project directory,
+    /// named with `-f` rather than discovered. It is worth its own test because
+    /// it is the one case where the config's directory and the working
+    /// directory differ — so the marker landing in the worktree proves the
+    /// working directory is inherited rather than taken from the config's
+    /// location, which the discovery-style tests cannot distinguish. It also
+    /// exercises `-f`, `--keep-project`, and `-n` together.
+    func testProjectDirectoryConfigRunsInTheWorktreeNotTheProject() throws {
+        let path = projectDir.appendingPathComponent("process-compose.yaml")
+        try """
+        version: "0.5"
+        processes:
+          ok:
+            namespace: bootstrap
+            command: sh -c 'touch bootstrap-marker'
+            availability: { restart: "no" }
+        """.write(to: path, atomically: true, encoding: .utf8)
+        let config = ProcessComposeConfig(path: path.path, isRepositoryProvided: false, overridePath: nil)
+
+        XCTAssertEqual(runBootstrap(config), .succeeded)
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: dir.appendingPathComponent("bootstrap-marker").path),
+            "bootstrap must run in the worktree"
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: projectDir.appendingPathComponent("bootstrap-marker").path),
+            "bootstrap must not run in the project directory"
+        )
+    }
+
+    /// With `availability.restart: exit_on_failure` the project shuts itself
+    /// down and propagates the exit code, so the server is gone before it can
+    /// be asked anything — the spawned command's own status is all there is.
     func testFailingBootstrapReportsFailure() throws {
         let config = try writeConfig("""
         version: "0.5"
@@ -83,22 +125,56 @@ final class PhaseExecutorTests: XCTestCase {
         XCTAssertFalse(detail.contains("\u{1B}"), detail)
     }
 
-    /// The surprising half of the contract, pinned so it is not mistaken for a
-    /// bug: under the default `restart: "no"`, `process-compose up` exits 0 even
-    /// though the process exited 3, so Atelier reports success. There is no
-    /// after-the-fact query — the server dies with the run — so a project that
-    /// wants a broken bootstrap reported has to say so in its own YAML.
-    func testFailureWithoutAnExitPolicyIsNotReported() throws {
+    /// The case the exit code cannot see. Under the default `restart: "no"`,
+    /// `process-compose up` exits 0 even though the process exited 3 — so a
+    /// bootstrap whose install failed would look exactly like one that worked.
+    /// `--keep-project` holds the control server open past the last process so
+    /// the real exit code can be read from the API, which is the only thing
+    /// that makes this reportable. If this test ever passes by reporting
+    /// success, the failure reporting has silently gone.
+    func testFailureWithoutAnExitPolicyIsStillReported() throws {
         let config = try writeConfig("""
         version: "0.5"
         processes:
-          bad:
+          installer:
             namespace: bootstrap
             command: sh -c 'exit 3'
             availability: { restart: "no" }
         """)
 
-        XCTAssertEqual(runBootstrap(config), .succeeded)
+        let outcome = runBootstrap(config)
+        guard case let .failed(detail) = outcome else {
+            return XCTFail("expected failure, got \(outcome)")
+        }
+        XCTAssertTrue(detail.contains("installer"), detail)
+        XCTAssertTrue(detail.contains("3"), detail)
+    }
+
+    /// A process whose dependency failed is `Skipped`, which is terminal — the
+    /// poll must finish rather than wait out the deadline on it.
+    func testFailedDependencyDoesNotStall() throws {
+        let config = try writeConfig("""
+        version: "0.5"
+        processes:
+          first:
+            namespace: bootstrap
+            command: sh -c 'exit 4'
+            availability: { restart: "no" }
+          second:
+            namespace: bootstrap
+            command: sh -c 'touch should-not-exist'
+            depends_on: { first: { condition: process_completed_successfully } }
+            availability: { restart: "no" }
+        """)
+
+        let outcome = runBootstrap(config)
+        guard case let .failed(detail) = outcome else {
+            return XCTFail("expected failure, got \(outcome)")
+        }
+        XCTAssertTrue(detail.contains("first"), detail)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: dir.appendingPathComponent("should-not-exist").path)
+        )
     }
 
     /// A config with no processes in the namespace is not an error — most
@@ -128,5 +204,26 @@ final class PhaseExecutorTests: XCTestCase {
         """)
 
         XCTAssertEqual(runBootstrap(config), .skipped)
+    }
+
+    /// A namespace given as a list is legal process-compose and undecodable by
+    /// the Yams shape used to find namespaces, so presence comes back
+    /// `.unknown`. The phase runs — refusing would silently skip work a project
+    /// may really have declared — and the running project's own answer, zero
+    /// processes in the namespace, ends it as a skip. Reporting a timeout here
+    /// would blame a project that has no bootstrap at all.
+    func testUnparseableConfigWithNoBootstrapIsSkippedNotTimedOut() throws {
+        let config = try writeConfig("""
+        version: "0.5"
+        processes:
+          web:
+            namespace: [execute, other]
+            command: sh -c 'exit 0'
+        """)
+        XCTAssertEqual(config.namespacePresence("bootstrap"), .unknown)
+
+        let started = Date()
+        XCTAssertEqual(runBootstrap(config), .skipped)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 30, "must not wait out the deadline")
     }
 }

@@ -121,10 +121,12 @@ actor AsyncSetupService {
     /// `process-compose.yaml`. A project that declares nothing gets nothing,
     /// which is the point.
     ///
-    /// Nothing here can stop the worktree from being usable. It already
-    /// exists by the time this runs, and every way of having no bootstrap to
-    /// run — the integration turned off, no config, no binary, no `bootstrap`
-    /// processes — reports `.completedWithNote` rather than `.failed`.
+    /// Nothing here can stop the worktree from being usable. It already exists
+    /// by the time this runs, and every way of having no bootstrap to run —
+    /// integration off, no config, no binary, config not approved, no
+    /// `bootstrap` processes — reports `.completedWithNote` rather than
+    /// `.failed`. `BootstrapPolicy` owns both of those decisions; this method
+    /// is only the plumbing between them.
     private func runBackgroundSetup(
         workstreamID: UUID,
         projectPath: String,
@@ -135,35 +137,18 @@ actor AsyncSetupService {
             to: .inProgress(step: NSLocalizedString("Running bootstrap", comment: ""), progress: 0.5)
         )
 
-        guard ProcessComposeSettings.isEnabled else {
-            await note(
-                for: workstreamID,
-                NSLocalizedString("The process-compose integration is turned off, so no bootstrap ran.", comment: "")
-            )
-            return
-        }
-        guard let config = ProcessComposeConfig.locate(worktree: worktreePath, projectDirectory: projectPath) else {
-            await note(
-                for: workstreamID,
-                NSLocalizedString("This project has no process-compose.yaml, so no bootstrap ran.", comment: "")
-            )
-            return
-        }
-        guard let binary = ProcessComposeSettings.resolveBinary() else {
-            await note(
-                for: workstreamID,
-                NSLocalizedString("process-compose was not found, so no bootstrap ran.", comment: "")
-            )
+        let plan = BootstrapPolicy.plan(
+            isEnabled: ProcessComposeSettings.isEnabled,
+            config: ProcessComposeConfig.locate(worktree: worktreePath, projectDirectory: projectPath),
+            binary: ProcessComposeSettings.resolveBinary()
+        )
+        guard case let .run(config, binary) = plan else {
+            guard case let .nothingToDo(message) = plan else { return }
+            await updateState(for: workstreamID, to: .completedWithNote(message))
+            logger.info("No bootstrap for \(worktreePath, privacy: .public): \(message, privacy: .public)")
             return
         }
 
-        // NOT YET GATED. `bootstrap` runs commands that arrived with the
-        // repository, and every other such path checks `ScriptTrust.isApproved`
-        // first. The config-file approval API and its pane land alongside
-        // `dispose`; until they do, a repository-provided config's bootstrap
-        // runs unattended at worktree creation. The check belongs here, at the
-        // policy site, not inside `PhaseExecutor`.
-        //
         // `PhaseExecutor.run` blocks its thread for as long as bootstrap takes,
         // so it must not run on the actor.
         let outcome: PhaseExecutor.Outcome = await withCheckedContinuation { continuation in
@@ -179,26 +164,9 @@ actor AsyncSetupService {
             }
         }
 
-        switch outcome {
-        case .succeeded:
-            await updateState(for: workstreamID, to: .completed)
-            logger.info("Bootstrap completed for \(worktreePath, privacy: .public)")
-        case .skipped:
-            await note(
-                for: workstreamID,
-                NSLocalizedString("This project declares no bootstrap processes, so nothing ran.", comment: "")
-            )
-        case let .failed(detail):
-            let message = String(format: NSLocalizedString("Bootstrap failed: %@", comment: ""), detail)
-            await updateState(for: workstreamID, to: .failed(message))
-            logger.warning("Bootstrap failed for \(worktreePath, privacy: .public): \(detail, privacy: .public)")
-        }
-    }
-
-    /// Finish having run nothing, saying why.
-    private func note(for workstreamID: UUID, _ message: String) async {
-        await updateState(for: workstreamID, to: .completedWithNote(message))
-        logger.info("No bootstrap for \(workstreamID, privacy: .public): \(message, privacy: .public)")
+        let state = BootstrapPolicy.state(for: outcome)
+        await updateState(for: workstreamID, to: state)
+        logger.info("Bootstrap for \(worktreePath, privacy: .public) finished: \(String(describing: state), privacy: .public)")
     }
 
     /// Update state and post notification to main thread.
