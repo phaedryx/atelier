@@ -146,6 +146,12 @@ final class ProcessTableModel: ObservableObject {
     /// expected outcome of a stop, not something to flash at the user, so a
     /// failure is only reported when the socket is still there to have one.
     private func control(_ action: () async throws -> Void) async {
+        // Captured for the same reason `performRefresh` captures it: this method
+        // publishes after two awaits, and `stopPolling()` can land in either of
+        // them. Without the token the refresh's writes would be dropped but this
+        // method's own error write would not — leaving a sticky banner over an
+        // empty table that nothing is left polling to clear.
+        let token = generation
         var failure: String?
         do {
             try await action()
@@ -154,7 +160,9 @@ final class ProcessTableModel: ObservableObject {
         } catch {
             failure = error.localizedDescription
         }
+        guard token == generation else { return }
         await refresh()
+        guard token == generation else { return }
         guard let failure, FileManager.default.fileExists(atPath: socketPath) else { return }
         if error != failure { error = failure }
     }

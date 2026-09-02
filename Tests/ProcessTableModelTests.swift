@@ -244,6 +244,29 @@ final class ProcessTableModelTests: XCTestCase {
         XCTAssertNotNil(model.error)
     }
 
+    /// A control action that fails while the table is being cleared must not
+    /// repaint it. Its refresh is dropped by the token, but so must its own
+    /// error write be — nothing is left polling to clear a banner it sets.
+    @MainActor
+    func testAControlFailureArrivingAfterStopPollingIsDiscarded() async throws {
+        let path = try makeSocketFile()
+        let stub = StubComposeClient(
+            socketPath: path,
+            replies: [.list([row("bff")])],
+            stopFailure: .http(500),
+            latency: .milliseconds(200)
+        )
+        let model = ProcessTableModel(socketPath: path, client: stub)
+
+        async let control: Void = model.stop("bff")
+        try await Task.sleep(for: .milliseconds(40))
+        model.stopPolling()
+        await control
+
+        XCTAssertNil(model.error, "a control failure painted a banner on a stopped table")
+        XCTAssertTrue(model.processes.isEmpty, "a control refresh repopulated a stopped table")
+    }
+
     /// Starting a new run must not inherit the previous one's rows.
     @MainActor
     func testStartPollingClearsWhatTheLastRunLeft() async throws {
@@ -318,6 +341,9 @@ private actor StubComposeClient: ProcessComposeControlling {
 
     func stop(_ name: String) async throws {
         stopped.append(name)
+        // A control call takes time too, which is what lets a test clear the
+        // model while one is still in flight.
+        try? await Task.sleep(for: latency)
         if removesSocketOnStop {
             try? FileManager.default.removeItem(atPath: socketPath)
         }
