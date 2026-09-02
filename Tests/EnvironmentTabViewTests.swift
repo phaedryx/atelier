@@ -108,13 +108,28 @@ final class EnvironmentTabViewTests: XCTestCase {
     /// half.
     func testTheSelectionListShowsForAProcessComposeRunThatHasNotStarted() {
         XCTAssertTrue(
-            showsProcessSelection(showsProcessTable: true, declaredProcesses: ["bff", "api"])
+            showsProcessSelection(
+                runStarted: false, showsProcessTable: true, declaredProcesses: ["bff", "api"]
+            )
+        )
+    }
+
+    /// The other half of the same defect. The selection is read when Start is
+    /// pressed, so a checkbox toggled during a run changes nothing until the
+    /// next Stop and Start — an editable control that silently does nothing.
+    func testTheSelectionListIsHiddenOnceTheRunHasStarted() {
+        XCTAssertFalse(
+            showsProcessSelection(
+                runStarted: true, showsProcessTable: true, declaredProcesses: ["bff", "api"]
+            )
         )
     }
 
     func testTheSelectionListIsHiddenWhenTheRunIsNotProcessCompose() {
         XCTAssertFalse(
-            showsProcessSelection(showsProcessTable: false, declaredProcesses: ["bff", "api"])
+            showsProcessSelection(
+                runStarted: false, showsProcessTable: false, declaredProcesses: ["bff", "api"]
+            )
         )
     }
 
@@ -122,6 +137,10 @@ final class EnvironmentTabViewTests: XCTestCase {
     /// checkboxes is worse than none: it reads as "this project has no
     /// processes" rather than "Atelier could not read the file".
     func testTheSelectionListIsHiddenWithNoDeclaredProcesses() {
-        XCTAssertFalse(showsProcessSelection(showsProcessTable: true, declaredProcesses: []))
+        XCTAssertFalse(
+            showsProcessSelection(
+                runStarted: false, showsProcessTable: true, declaredProcesses: []
+            )
+        )
     }
 }

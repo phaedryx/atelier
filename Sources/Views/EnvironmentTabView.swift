@@ -35,14 +35,25 @@ func devCommandDisplayText(devCommand: DevCommand?, loadedFiles: [String]) -> St
 
 /// Whether the "Processes to start" list should render.
 ///
-/// **Takes no `runStarted`, on purpose.** The list used to live inside
-/// `ProcessTableView`, which only renders once a run exists — so the control
-/// for choosing what to start was unreachable until after starting, the one
-/// moment it is no use. Both call sites go through this, and the absent
-/// parameter is what stops the gate coming back: a version of this that
-/// depended on the run would have to change its own signature to do it.
-func showsProcessSelection(showsProcessTable: Bool, declaredProcesses: [String]) -> Bool {
-    showsProcessTable && !declaredProcesses.isEmpty
+/// Visible before a run and hidden during one, and both halves are defects
+/// that have already shipped, in opposite directions.
+///
+/// The list first lived inside `ProcessTableView`, which renders only once a
+/// run exists, so the control for choosing what to start was unreachable until
+/// after starting — the one moment it is no use. Fixing that by making
+/// visibility independent of the run then left it editable *during* a run,
+/// where it is equally useless: the selection is read when Start is pressed
+/// (`TerminalContainerView`), so changing a checkbox mid-run silently affects
+/// nothing until the next Stop and Start.
+///
+/// So the gate is two-sided, and both sides are pinned by tests. Neither
+/// direction is the safe default to guess at.
+func showsProcessSelection(
+    runStarted: Bool,
+    showsProcessTable: Bool,
+    declaredProcesses: [String]
+) -> Bool {
+    !runStarted && showsProcessTable && !declaredProcesses.isEmpty
 }
 
 /// Wraps a command for a login shell, so it sees the PATH and shell functions
@@ -166,13 +177,6 @@ struct EnvironmentTabView: View {
 
             if runStarted, let runCommand {
                 if showsProcessTable {
-                    if showsProcessSelection(showsProcessTable: showsProcessTable, declaredProcesses: declaredProcesses) {
-                        ProcessSelectionView(
-                            workstreamID: workstreamID,
-                            declaredProcesses: declaredProcesses
-                        )
-                        Divider()
-                    }
                     ProcessTableView(model: processTable, portsByName: portsByName)
                     Divider()
                 }
@@ -185,7 +189,11 @@ struct EnvironmentTabView: View {
                 )
                 .id(runID)
             } else if canStart {
-                if showsProcessSelection(showsProcessTable: showsProcessTable, declaredProcesses: declaredProcesses) {
+                if showsProcessSelection(
+                    runStarted: runStarted,
+                    showsProcessTable: showsProcessTable,
+                    declaredProcesses: declaredProcesses
+                ) {
                     ProcessSelectionView(
                         workstreamID: workstreamID,
                         declaredProcesses: declaredProcesses

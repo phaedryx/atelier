@@ -124,9 +124,9 @@ struct ProcessSelectionView: View {
             // processes is an ordinary stack and a vertical list of them pushed
             // the Start button off the useful part of the pane.
             LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 130), alignment: .leading)],
+                columns: [GridItem(.adaptive(minimum: 105), spacing: 4, alignment: .leading)],
                 alignment: .leading,
-                spacing: 2
+                spacing: 1
             ) {
                 ForEach(sortedProcesses, id: \.self) { name in
                     Toggle(isOn: binding(for: name)) {
