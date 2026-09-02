@@ -146,6 +146,32 @@ carries the `-dev` marker.
 4. Terminal tabs: close on shell exit (Ctrl+D). Agent respawns.
 5. Archiving: runs the project's `dispose` namespace, then `git worktree remove` + `tmux kill-session`
 
+### Base branch
+`BaseBranchSetting` (`atelier.baseBranch`, Settings → General) chooses the branch new worktrees
+are cut from: `main`, `master`, `trunk`, `develop`, or `repositoryDefault`, which asks
+`GitOperations.defaultBranch`. It defaults to `.main`, and it replaced `.atelier.json`'s
+`base_branch` when that reader was deleted.
+
+It has **exactly one production reader**: `GitOperations.createWorktree`, via
+`BaseBranchSetting.resolve(for:)`. `fetchDefaultBranch` takes an optional `branch:` so the
+branch that is fetched and the branch the worktree is cut from are the same one — swapping the
+selection without that gave "pick develop, fetch main".
+
+**Known limitation, deliberate and unfixed:** three comparison sites in `GitOperations` —
+`mergeBase` (the Changes tab's diff base), the unmerged-commit log in the worktree detail, and
+`hasBranchCommits` (the ahead count) — call `defaultBranch(at:)` directly and do *not* consult
+this setting. So with the setting on `develop` in a repository whose git default is `main`, a
+worktree is cut from `develop` while its diff and its ahead count are measured against `main`.
+Two reviewers disagreed on whether those sites should follow the setting — a diff base and a
+creation base are arguably different questions — so it stays a follow-up rather than a
+half-migration finished in the dark. Do not "fix" one of the three; either all of them move or
+none do.
+
+`defaultBranch(at:)` is also read to export `ATELIER_DEFAULT_BRANCH` (`TerminalContainerView`,
+and `PhaseEnvironment`'s two callers). Those are *not* part of that follow-up: the variable
+means "what git thinks this repository's default branch is", and all three deliberately agree
+with each other rather than with the setting.
+
 ### The process-compose integration
 Everything a project asks Atelier to run lives in one **`process-compose.yaml`**, read by
 [process-compose](https://f1bonacc1.github.io/process-compose/). `atelier.processCompose.enabled`
@@ -160,11 +186,16 @@ The switch is checked in three places: `PhasePolicy.plan` (so no unattended phas
 about correctness. The third is one half of a security boundary whose other half is
 `RunCommandPlan` — see below.
 
-**The un-`-n`'d command must never be executed.** `DevCommandResolver.detectProcessCompose`
-builds `process-compose up -U -f <files>` for the Environment pane to *display*, so the user
-can see which files are in play. It carries no `-n`, so running it would run **every**
+**The un-`-n`'d command must never be executed, and is no longer displayed either.**
+`DevCommandResolver.detectProcessCompose` builds `process-compose up -U -f <files>` as the
+`.processCompose` source's `command`. It carries no `-n`, so running it would run **every**
 namespace — `bootstrap` and `dispose` included — without passing through `PhasePolicy` or
-`ScriptTrust`. It is a display string, not a runnable one.
+`ScriptTrust`. It is not a runnable string, and the pane no longer renders it: for a
+`.processCompose` source `devCommandDisplayText` shows the *files* that will be loaded, which
+is what the user needed to see. Rendering the command was a copy-paste hazard on its own, and
+Customize seeded its editable field from it — and Save turns that field into an `.override`,
+which `RunCommandPlan` runs literally. Do not put a runnable process-compose command back into
+`DevCommand.command`'s display path.
 
 That invariant was defended four times by guarding *preconditions*, and reopened four times by
 a different route each time: a worktree override process-compose discovered but Atelier never
@@ -179,11 +210,24 @@ configured-but-missing path fails rather than letting a substitute run.
 The fallback is reachable whenever *any* precondition of the gated path fails, so enumerating
 preconditions can only ever be one behind. **So the invariant now lives at the consumer, keyed
 on the dev command's source, in `RunCommandPlan.plan`**: a `.processCompose` source has exactly
-one legal command — the phase-scoped one — and if that cannot be built the answer is `.nothing`
-and Start reports it. There is no branch that returns the display string, so a precondition
-added tomorrow makes Start inert rather than reopening the bypass. `Tests/RunCommandPlanTests.swift`
-pins it, including a test that no combination of inputs yields the display string; three of
-those fail if the fallback is put back. Do not replace this with another precondition check.
+one legal command — the phase-scoped one — and if that cannot be built the answer is `.nothing`.
+There is no branch that returns the display string, so a precondition added tomorrow makes
+Start inert rather than reopening the bypass. `Tests/RunCommandPlanTests.swift` pins it,
+including a test that no combination of inputs yields the display string; three of those fail
+if the fallback is put back. Do not replace this with another precondition check.
+
+**One decision, and it is reported.** `RunCommandPlan.canRun` is what enables the Environment
+pane's Start button, and `doStartRun` refuses on the same stored plan, so the two cannot
+disagree — they did, for a round: the button was enabled on `devCommand?.command != nil` while
+the run guarded the resolved command, and an unresolvable binary rendered an enabled Start that
+did nothing in silence. `TerminalContainerView.refreshDevCommand` resolves the dev command, the
+plan and the reason together, in one function, because *agreement* is the invariant here rather
+than freshness. `RunCommandPlan.unavailableReason` explains a `.nothing`, and
+`EnvironmentTabView.scriptInstructions` — the surface that already drew for "nothing to run" —
+renders it: the integration switched off, a config that cannot be located, a binary that is not
+where the search looks. Background setup's own outcome, including `.completedWithNote`, is
+rendered on the Info tab, which is permanent; nothing observed `.asyncSetupStateChanged` before,
+so those notes were written and discarded.
 
 **Four namespaces**, driven by `PhaseRunner` and `PhaseExecutor`:
 
@@ -194,10 +238,18 @@ those fail if the fallback is put back. Do not replace this with another precond
 | `execute` | the long-lived stack, attached to a terminal surface and a process table | yes |
 | `dispose` | once, at archive (`WorkstreamArchiver.runDispose`) | no |
 
-`prepare` is chained only when the config actually declares a process for it:
-process-compose does not exit when told to run an empty namespace, it idles forever, so an
-unconditional `up -n prepare` would hang Start for every config that has not adopted it.
+`prepare` is chained only when `namespacePresence` says `.present` — never on `.unknown`.
+process-compose does not exit when told to run an empty namespace, it idles forever, so
+chaining `up -n prepare` for a namespace that turns out not to exist hangs Start with no output.
 `execute` is never conditional — skipping it would make Start silently do nothing.
+
+**`.unknown` fails closed here and open in `PhaseExecutor`, and that asymmetry is deliberate.**
+A config Yams cannot decode still gets its `bootstrap` or `dispose` run, because refusing would
+silently skip work the project may really have declared — and being wrong there costs a bounded
+wait, `min(timeout, userCommand)` plus a grace period that ends in `.skipped`. Nothing bounds
+the chained Start command: it runs in a terminal surface with no deadline, so failing open
+there trades "a declared prepare was skipped" for "Start never returns". Do not make the two
+consistent with each other; they are answering the same question under opposite costs.
 
 Three facts about this are load-bearing and easy to lose:
 
@@ -215,8 +267,13 @@ Three facts about this are load-bearing and easy to lose:
 3. **Approval is gated by the config's *location*, not its content.** A config in the worktree
    arrived with the repository and requires approval before `bootstrap` or `dispose` runs; a
    config in the project directory was placed there by hand, outside git, and is never asked
-   about. `execute` is never gated in either case — it is a deliberate press on a command the
-   Environment tab is already displaying.
+   about. `execute` is never gated in either case, because it is **attended**: a deliberate
+   press, output in a terminal surface in front of the user, Stop to hand. That, and not "the
+   pane shows the command Start runs", is the reason — the pane shows the loaded *files*, and
+   even before that it showed a display-only string rather than what Start runs. The false
+   version of this sentence was load-bearing in four places (`ScriptTrust`,
+   `ConfigApprovalView`, `EnvironmentTabView`, `WorkstreamInfoView`) and is corrected in all of
+   them. The decision to leave `execute` ungated stands; only its stated reason was wrong.
 
 `ProcessComposeConfig.locate` looks in the **worktree first, then the project directory**, and
 records `loadedFiles` (base plus the one override process-compose prefers) and
@@ -267,6 +324,21 @@ not just the run pane — a port visible only to the run pane is invisible to a 
 terminal tab. Declarations merge *over* Atelier's own variables, so a project that wants
 `ATELIER_PORT` to mean something specific may say so, and the legacy `FF_*` mirror is built
 last so it never lags behind.
+
+**And every declared name reaches all four namespaces.** `prepare` and `execute` run in a
+Ghostty surface, which is handed those variables when it is created; `bootstrap` and `dispose`
+spawn through `PhaseExecutor`, and until `PhaseEnvironment` existed their children inherited
+only the app's own environment. One `process-compose.yaml` therefore ran under two different
+environments depending on which namespace was asked for: the documented replacement for the
+seeding this integration removed, `rsync -rlpt --copy-links "$$ATELIER_PROJECT_DIR/seed-files/" .`,
+rsynced from `/seed-files/`. `PhaseEnvironment.variables` assembles the same set for the
+unattended phases, resolving `ports.yaml` itself because neither call site has a plan to hand
+over. `PhaseExecutor.run` takes it as a **required** parameter, and layers it over the inherited
+environment with the login `PATH` applied last, so a declaration cannot displace `PATH`.
+Allocation is deterministic per worktree and per name, so a plan resolved at worktree creation
+lands on the same numbers Start does — modulo the liveness probe, which walks forward past a
+port bound at the moment it looks, and which is why `fixed` exists for anything registered off
+the machine.
 
 ### Dev command resolution
 `DevCommandResolver` picks what the Environment tab's Start button runs, in order: the

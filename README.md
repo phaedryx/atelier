@@ -135,8 +135,9 @@ runs each `command` through envsubst first, and that eats `${VAR}` **and** bare
 repository has to be approved first, and has to be approved again whenever it
 changes. A config you placed in the project directory by hand is never asked
 about — approval is gated by *where the file is*, not what is in it. `execute` is
-never gated: it is a deliberate press on a command the Environment tab is already
-showing.
+never gated because it is *attended*: you press Start, the stack's output lands
+in a terminal surface in front of you, and Stop is right there. The Environment
+tab shows which files are in play, not the command Start runs.
 
 Keeping the config in the project directory means one file for every worktree,
 and in the bare-repo layout git never sees it. A config in the worktree wins when
@@ -156,11 +157,24 @@ ports:
 An `assigned` port gets its own number per worktree; a `fixed` one is that number
 everywhere, for values registered off the machine such as an OAuth redirect URI.
 At most one port may set `browser: true` — that is the one the embedded browser
-opens. Every name is exported to every terminal surface, not just the run pane.
+opens. Every name is exported to every terminal surface and to all four
+namespaces, so `bootstrap` and `dispose` see the same `ATELIER_*` variables and
+the same ports as `prepare` and `execute`.
 
 If a project has no `process-compose.yaml`, worktrees are still created and the
 Environment tab says there is nothing to run; a per-workstream command typed into
-Customize is the escape hatch.
+Customize is the escape hatch. When Start cannot run for some other reason — the
+integration is switched off, or process-compose is not on disk where Atelier
+looks — the tab says which, and the Info tab reports what background setup did or
+did not do.
+
+**Base branch** (Settings → General) chooses the branch new worktrees are cut
+from: `main`, `master`, `trunk`, `develop`, or **Repository default**, which asks
+git. It governs worktree creation only. The Changes tab's diff and the
+ahead/behind counts still compare against the branch git guesses is the default,
+so if you set this to something git does not consider the default, those two
+numbers are measured against a different base than the one your branch was cut
+from.
 
 ## License
 
