@@ -11,6 +11,16 @@ struct WorkstreamInfoView: View {
     let projectDirectory: String
     var scriptConfig: ScriptConfig = .empty
     @Binding var scriptsApproved: Bool
+    /// The repository-provided process-compose config, when there is one. Info
+    /// is the permanent tab, so this is the approval route that survives the
+    /// user closing Environment.
+    var repositoryConfigPath: String?
+    var configApproved: Bool = false
+    /// No defaults: a call site that passes `repositoryConfigPath` but forgets
+    /// these would render a Review button that silently does nothing, which is
+    /// the whole failure this gate exists to avoid.
+    let onReviewConfig: () -> Void
+    let onRevokeConfig: () -> Void
 
     @EnvironmentObject var appEnv: AppEnvironment
     @AppStorage("atelier.defaultTerminal") private var defaultTerminal: String = ""
@@ -224,6 +234,38 @@ struct WorkstreamInfoView: View {
                                     .font(.caption2)
                                     .foregroundStyle(.quaternary)
                             }
+                        }
+                    }
+                }
+
+                if let configPath = repositoryConfigPath {
+                    Section {
+                        // Only the unattended phases are gated. Start runs a
+                        // command the Environment pane already displays, so it
+                        // is never held behind this.
+                        Text("Bootstrap runs when a workstream is created and dispose when one is archived, both without asking.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        LabeledContent("Approval") {
+                            HStack(spacing: 10) {
+                                if configApproved {
+                                    Label("Approved", systemImage: "checkmark.shield")
+                                        .foregroundStyle(.green)
+                                    Button("Revoke") { onRevokeConfig() }
+                                } else {
+                                    Label("Not approved", systemImage: "exclamationmark.shield")
+                                        .foregroundStyle(.orange)
+                                    Button("Review") { onReviewConfig() }
+                                }
+                            }
+                        }
+                    } header: {
+                        HStack {
+                            Text("Process Config")
+                            Spacer()
+                            Text((configPath as NSString).lastPathComponent)
+                                .font(.caption2)
+                                .foregroundStyle(.quaternary)
                         }
                     }
                 }

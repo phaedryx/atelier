@@ -17,6 +17,8 @@ final class ScriptTrustTests: XCTestCase {
         // Each test works under a fresh temporary path, so only those need clearing.
         ScriptTrust.revoke(for: tmpDir.path)
         ScriptTrust.revoke(for: tmpDir.path + "/other")
+        ScriptTrust.revokeConfigFile(for: tmpDir.path)
+        ScriptTrust.revokeConfigFile(for: tmpDir.path + "/other")
         try? FileManager.default.removeItem(at: tmpDir)
         super.tearDown()
     }
@@ -141,7 +143,111 @@ final class ScriptTrustTests: XCTestCase {
         )
     }
 
+    // MARK: - Config file approval
+
+    func testConfigFileApprovalRoundTrips() throws {
+        let path = try writeConfig("processes: {}")
+
+        XCTAssertFalse(ScriptTrust.isApproved(configFile: path, for: tmpDir.path))
+        ScriptTrust.approve(configFile: path, for: tmpDir.path)
+        XCTAssertTrue(ScriptTrust.isApproved(configFile: path, for: tmpDir.path))
+    }
+
+    /// Approval is bound to contents, so an edited config asks again.
+    func testEditingTheConfigRevokesApproval() throws {
+        let path = try writeConfig("processes: {}")
+        ScriptTrust.approve(configFile: path, for: tmpDir.path)
+
+        _ = try writeConfig("processes:\n  web:\n    command: rm -rf /\n")
+
+        XCTAssertFalse(ScriptTrust.isApproved(configFile: path, for: tmpDir.path))
+    }
+
+    /// An unreadable file is unapproved, not trivially approved — failing open
+    /// here would run something nobody could review.
+    func testMissingConfigIsNotApproved() {
+        XCTAssertFalse(ScriptTrust.isApproved(
+            configFile: tmpDir.appendingPathComponent("nonexistent.yaml").path,
+            for: tmpDir.path
+        ))
+    }
+
+    /// Approving a file that cannot be read must not record anything, or the
+    /// file could later appear approved by matching a fingerprint of nothing.
+    func testApprovingAMissingConfigStoresNothing() throws {
+        let missing = tmpDir.appendingPathComponent("gone.yaml").path
+        ScriptTrust.approve(configFile: missing, for: tmpDir.path)
+
+        XCTAssertFalse(ScriptTrust.isApproved(configFile: missing, for: tmpDir.path))
+        // And it did not accidentally approve some other file for this project.
+        let real = try writeConfig("processes: {}")
+        XCTAssertFalse(ScriptTrust.isApproved(configFile: real, for: tmpDir.path))
+    }
+
+    func testConfigApprovalDoesNotLeakToAnotherProject() throws {
+        let path = try writeConfig("processes: {}")
+        ScriptTrust.approve(configFile: path, for: tmpDir.path)
+
+        XCTAssertFalse(ScriptTrust.isApproved(configFile: path, for: tmpDir.path + "/other"))
+    }
+
+    /// A repository-provided config lives at a different path in every worktree.
+    /// Approving the same bytes once has to cover all of them, or the user is
+    /// trained to click through the pane.
+    func testApprovalFollowsContentsNotPath() throws {
+        let text = "processes:\n  api:\n    command: true\n"
+        let first = try writeConfig(text)
+        ScriptTrust.approve(configFile: first, for: tmpDir.path)
+
+        let otherWorktree = tmpDir.appendingPathComponent("wt2")
+        try FileManager.default.createDirectory(at: otherWorktree, withIntermediateDirectories: true)
+        let second = otherWorktree.appendingPathComponent("process-compose.yaml")
+        try text.write(to: second, atomically: true, encoding: .utf8)
+
+        XCTAssertTrue(ScriptTrust.isApproved(configFile: second.path, for: tmpDir.path))
+    }
+
+    /// The file name is part of the fingerprint, so identical bytes under a
+    /// different name are a different thing to approve.
+    func testSameContentsUnderADifferentNameIsNotApproved() throws {
+        let path = try writeConfig("processes: {}")
+        ScriptTrust.approve(configFile: path, for: tmpDir.path)
+
+        let renamed = tmpDir.appendingPathComponent("process-compose.override.yaml")
+        try "processes: {}".write(to: renamed, atomically: true, encoding: .utf8)
+
+        XCTAssertFalse(ScriptTrust.isApproved(configFile: renamed.path, for: tmpDir.path))
+    }
+
+    func testRevokeConfigFileRemovesApproval() throws {
+        let path = try writeConfig("processes: {}")
+        ScriptTrust.approve(configFile: path, for: tmpDir.path)
+        ScriptTrust.revokeConfigFile(for: tmpDir.path)
+
+        XCTAssertFalse(ScriptTrust.isApproved(configFile: path, for: tmpDir.path))
+    }
+
+    /// Config-file approval and script approval are separate stores. Approving
+    /// one must not silently grant the other.
+    func testConfigApprovalIsSeparateFromScriptApproval() throws {
+        let path = try writeConfig("processes: {}")
+        ScriptTrust.approve(configFile: path, for: tmpDir.path)
+
+        XCTAssertFalse(ScriptTrust.isApproved(makeConfig(setup: "npm install"), for: tmpDir.path))
+    }
+
+    func testFingerprintIsNilForAnUnreadableFile() {
+        XCTAssertNil(ScriptTrust.fingerprint(configFile: tmpDir.appendingPathComponent("nope.yaml").path))
+    }
+
     // MARK: - Helpers
+
+    @discardableResult
+    private func writeConfig(_ contents: String) throws -> String {
+        let path = tmpDir.appendingPathComponent("process-compose.yaml")
+        try contents.write(to: path, atomically: true, encoding: .utf8)
+        return path.path
+    }
 
     private func makeConfig(
         setup: String? = nil,

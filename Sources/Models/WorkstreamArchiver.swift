@@ -2,6 +2,9 @@
 // ABOUTME: Shared by ContentView and ProjectSidebar to avoid duplicated workstream cleanup logic.
 
 import Foundation
+import OSLog
+
+private let logger = Logger(subsystem: "atelier", category: "workstream-archiver")
 
 enum WorkstreamArchiver {
     /// Paths currently being archived (background removal in progress).
@@ -84,7 +87,13 @@ enum WorkstreamArchiver {
                         NotificationCenter.default.post(name: archivingDidComplete, object: nil)
                     }
                 }
-                ScriptConfig.runTeardown(in: worktreePath, projectDirectory: projectDir)
+                // Before the worktree is removed: `ProcessComposeConfig.locate`
+                // reads the worktree, and dispose runs in it.
+                runDispose(
+                    workstreamID: workstreamID,
+                    worktreePath: worktreePath,
+                    projectDirectory: projectDir
+                )
                 GitOperations.removeWorktree(projectPath: projectDir, worktreePath: worktreePath)
                 if let branchName {
                     GitOperations.deleteLocalBranch(at: projectDir, branchName: branchName)
@@ -101,6 +110,53 @@ enum WorkstreamArchiver {
         LaunchLogger.removeLog(for: workstreamID)
         SetupStateStore.remove(for: workstreamID)
         project.workstreams.removeAll { $0.id == workstreamID }
+    }
+
+    /// Run the project's `dispose` namespace before the worktree goes away.
+    ///
+    /// This replaces the `teardown` script: a project now says what archiving
+    /// should clean up in the same file it uses for everything else. The
+    /// preconditions mirror `BootstrapPolicy.plan` — integration on, a config
+    /// located, a binary to run it with, and approval when the config arrived
+    /// with the repository — because dispose is unattended in exactly the way
+    /// bootstrap is.
+    ///
+    /// Nothing here can stop the archive. Every refusal returns quietly and a
+    /// failure is logged and swallowed: a workstream stranded half-archived is
+    /// worse than cleanup that did not happen, and the user has already said to
+    /// remove it. `PhaseExecutor` bounds the run at
+    /// `Timeout.userCommand`, so a wedged dispose delays the archive rather than
+    /// blocking it forever.
+    private static func runDispose(
+        workstreamID: UUID,
+        worktreePath: String,
+        projectDirectory: String
+    ) {
+        guard ProcessComposeSettings.isEnabled,
+              let config = ProcessComposeConfig.locate(
+                  worktree: worktreePath, projectDirectory: projectDirectory
+              ),
+              let binary = ProcessComposeSettings.resolveBinary()
+        else { return }
+
+        guard !config.isRepositoryProvided
+            || ScriptTrust.isApproved(configFile: config.path, for: projectDirectory)
+        else {
+            logger.info("Skipping dispose for \(worktreePath, privacy: .public): config not approved")
+            return
+        }
+
+        let outcome = PhaseExecutor.run(
+            phase: .dispose,
+            config: config,
+            binary: binary,
+            workstreamID: workstreamID,
+            workingDirectory: worktreePath,
+            timeout: ProcessRunner.Timeout.userCommand
+        )
+        if case let .failed(detail) = outcome {
+            logger.warning("Dispose for \(worktreePath, privacy: .public) failed: \(detail, privacy: .public)")
+        }
     }
 
     /// Warning describing what work would be lost if the orphan worktree at `path`

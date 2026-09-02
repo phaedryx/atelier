@@ -322,6 +322,20 @@ struct TerminalContainerView: View {
     @State private var defaultBranch = "main"
     @State private var setupGateState: SetupGateState = .notNeeded
     @State private var scriptsApproved = false
+    /// The repository-provided process-compose config this worktree would run
+    /// its unattended phases from, or nil when there is none to approve — the
+    /// integration is off, no config was found, or the config sits in the
+    /// project directory and is the user's own.
+    ///
+    /// Resolved with a bare `ProcessComposeConfig.locate`, deliberately not
+    /// through `processComposeConfig`: that one is narrowed to the *run*, so it
+    /// disappears when the dev-command picker points at package.json or the user
+    /// has an override. Bootstrap and dispose locate unconditionally, so hiding
+    /// the approval behind the picker would hide it in exactly the case where
+    /// bootstrap still wants to run.
+    @State private var repositoryConfigPath: String?
+    @State private var configApproved = false
+    @State private var isReviewingConfig = false
     @State private var envVarDefinitions: [EnvVarDefinition] = []
     /// Resolved once per change rather than per render: resolving probes TCP
     /// ports, which has no business running inside a view update.
@@ -701,7 +715,11 @@ struct TerminalContainerView: View {
                 projectName: projectName,
                 projectDirectory: projectDirectory,
                 scriptConfig: scriptConfig,
-                scriptsApproved: $scriptsApproved
+                scriptsApproved: $scriptsApproved,
+                repositoryConfigPath: repositoryConfigPath,
+                configApproved: configApproved,
+                onReviewConfig: { isReviewingConfig = true },
+                onRevokeConfig: revokeProcessConfig
             )
         case .changes:
             if let bridge = model.diffBridge {
@@ -739,6 +757,8 @@ struct TerminalContainerView: View {
                     processTable: processTable,
                     showsProcessTable: usesProcessCompose,
                     portsByName: portPlan.values,
+                    unapprovedConfigPath: configApproved ? nil : repositoryConfigPath,
+                    onReviewConfig: { isReviewingConfig = true },
                     onStart: doStartRun,
                     onStop: stopRun,
                     onRestart: restartRun
@@ -966,6 +986,18 @@ struct TerminalContainerView: View {
 
     var body: some View {
         mainContent
+            // On the container rather than on either tab, because both the
+            // Environment banner and the Info row open it and Environment is a
+            // closeable tab.
+            .sheet(isPresented: $isReviewingConfig) {
+                if let path = repositoryConfigPath {
+                    ConfigApprovalView(
+                        filePath: path,
+                        onApprove: approveProcessConfig,
+                        onCancel: { isReviewingConfig = false }
+                    )
+                }
+            }
             .onChange(of: scriptsApproved) { _, approved in
                 // Approving from the Info tab releases a waiting setup script.
                 if approved {
@@ -1586,6 +1618,7 @@ struct TerminalContainerView: View {
         appEnv.refreshWorktreeState(for: workingDirectory, projectDirectory: projectDirectory)
         rebuildClaudeCommand()
         scriptsApproved = ScriptTrust.isApproved(scriptConfig, for: projectDirectory)
+        refreshConfigApproval()
         envVarDefinitions = ProjectEnvironmentVars.definitions(for: projectDirectory)
         refreshProjectEnvVars()
         refreshPortPlan()
@@ -1697,6 +1730,56 @@ struct TerminalContainerView: View {
             secondaryLabel: NSLocalizedString("Skip Setup", comment: ""),
             onSecondary: launchAgentAfterSetup
         )
+    }
+
+    // MARK: - Process config approval
+
+    /// Re-reads whether this worktree has a repository-provided config and
+    /// whether it is approved. Called on appear and after an approval, not from
+    /// the view body: it stats the worktree and hashes a file.
+    private func refreshConfigApproval() {
+        guard ProcessComposeSettings.isEnabled,
+              let config = ProcessComposeConfig.locate(
+                  worktree: workingDirectory, projectDirectory: projectDirectory
+              ),
+              config.isRepositoryProvided
+        else {
+            repositoryConfigPath = nil
+            configApproved = false
+            return
+        }
+        repositoryConfigPath = config.path
+        configApproved = ScriptTrust.isApproved(configFile: config.path, for: projectDirectory)
+    }
+
+    /// Approve the repository's config, then run the bootstrap it was refused.
+    ///
+    /// Bootstrap already ran — and reported that it did nothing — by the time
+    /// anyone can see this, so approval on its own would only help the *next*
+    /// worktree. `setupExistingWorktree` recomputes the plan against the
+    /// worktree that already exists, which is what makes this one recoverable.
+    private func approveProcessConfig() {
+        guard let path = repositoryConfigPath else { return }
+        ScriptTrust.approve(configFile: path, for: projectDirectory)
+        isReviewingConfig = false
+        refreshConfigApproval()
+        // An unreadable file has no fingerprint, so `approve` was a no-op and
+        // nothing has been trusted. Do not run anything on the strength of a
+        // button press that did not take.
+        guard configApproved else { return }
+        let id = workstreamID
+        let project = projectDirectory
+        let worktree = workingDirectory
+        Task {
+            await AsyncSetupService.shared.setupExistingWorktree(
+                workstreamID: id, projectPath: project, worktreePath: worktree
+            )
+        }
+    }
+
+    private func revokeProcessConfig() {
+        ScriptTrust.revokeConfigFile(for: projectDirectory)
+        refreshConfigApproval()
     }
 
     private func approveScripts() {

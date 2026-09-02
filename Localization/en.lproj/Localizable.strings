@@ -522,3 +522,17 @@
 "%@ failed." = "%@ failed.";
 "This project's process-compose.yaml came with the repository and has not been approved, so no bootstrap ran." = "This project's process-compose.yaml came with the repository and has not been approved, so no bootstrap ran.";
 "%1$@ exited with code %2$d." = "%1$@ exited with code %2$d.";
+
+/* Process-compose config approval */
+"Approve this repository's process config?" = "Approve this repository's process config?";
+"%@ came with this repository. Its bootstrap phase runs automatically when a workstream is created, and its dispose phase when one is archived — both without asking. They run on your machine under your user account." = "%@ came with this repository. Its bootstrap phase runs automatically when a workstream is created, and its dispose phase when one is archived — both without asking. They run on your machine under your user account.";
+"Not Now" = "Not Now";
+"Approve and Run Bootstrap" = "Approve and Run Bootstrap";
+"Approval covers this repository until the file changes. Start is never gated by it." = "Approval covers this repository until the file changes. Start is never gated by it.";
+"Could not read this file." = "Could not read this file.";
+"(%d more lines)" = "(%d more lines)";
+"%@ came with this repository and has not been approved" = "%@ came with this repository and has not been approved";
+"Its bootstrap and dispose phases will not run until you review it. Start is unaffected." = "Its bootstrap and dispose phases will not run until you review it. Start is unaffected.";
+"Process Config" = "Process Config";
+"Bootstrap runs when a workstream is created and dispose when one is archived, both without asking." = "Bootstrap runs when a workstream is created and dispose when one is archived, both without asking.";
+"Review" = "Review";

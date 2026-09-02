@@ -17,10 +17,17 @@ enum BootstrapPolicy {
         case nothingToDo(String)
     }
 
+    /// - Parameter isApproved: whether the user has approved this config's
+    ///   unattended phases. Passed in as a closure rather than a `Bool` so it is
+    ///   only asked where a config exists, and so this stays testable without a
+    ///   defaults store. No default value: every call site has to state its
+    ///   policy, because the one that forgets is the one that runs a
+    ///   repository's YAML unattended.
     static func plan(
         isEnabled: Bool,
         config: ProcessComposeConfig?,
-        binary: String?
+        binary: String?,
+        isApproved: (ProcessComposeConfig) -> Bool
     ) -> Plan {
         guard isEnabled else {
             return .nothingToDo(NSLocalizedString(
@@ -40,16 +47,17 @@ enum BootstrapPolicy {
         // Fail closed. `bootstrap` executes commands that arrived with the
         // repository, unattended, the moment a workstream is created — the
         // exact thing `ScriptTrust` gates for `setup`, `run`, and `teardown`.
-        // The approval store and its pane for config files do not exist yet, so
-        // until they do a repository-provided config is refused rather than
-        // trusted. A config in the project directory was placed there by hand,
-        // outside git, and is the user's own.
+        // So a repository-provided config runs only once the user has approved
+        // its contents. A config in the project directory was placed there by
+        // hand, outside git, and is the user's own: nothing to approve.
         //
-        // REPLACE this guard when config approval lands — do not leave it and
-        // add a second gate elsewhere. It refuses unconditionally, so an
-        // approval check added alongside it would never be reached and the
-        // approval pane would silently do nothing.
-        guard !config.isRepositoryProvided else {
+        // This is the only gate. Adding a second one in `AsyncSetupService`
+        // would sit behind this guard and never be reached.
+        //
+        // Ordered after the binary check on purpose: when process-compose is
+        // missing, nothing can run whatever the user approves, and saying so is
+        // more actionable than asking for an approval that would change nothing.
+        guard !config.isRepositoryProvided || isApproved(config) else {
             return .nothingToDo(NSLocalizedString(
                 "This project's process-compose.yaml came with the repository and has not been approved, so no bootstrap ran.",
                 comment: ""

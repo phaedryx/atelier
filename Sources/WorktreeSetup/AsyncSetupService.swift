@@ -140,7 +140,8 @@ actor AsyncSetupService {
         let plan = BootstrapPolicy.plan(
             isEnabled: ProcessComposeSettings.isEnabled,
             config: ProcessComposeConfig.locate(worktree: worktreePath, projectDirectory: projectPath),
-            binary: ProcessComposeSettings.resolveBinary()
+            binary: ProcessComposeSettings.resolveBinary(),
+            isApproved: { ScriptTrust.isApproved(configFile: $0.path, for: projectPath) }
         )
         // Exhaustive on purpose. A nested `guard case` would leave the
         // workstream reporting `.inProgress` forever if a third `Plan` case
@@ -190,9 +191,14 @@ actor AsyncSetupService {
         }
     }
 
-    /// Run bootstrap on a worktree that was already created externally.
-    /// Use this when the worktree was created by upstream GitOperations
-    /// and only the project's own setup still has to run.
+    /// Run bootstrap on a worktree that already exists.
+    ///
+    /// Two callers. The worktree was created by upstream `GitOperations` and
+    /// only the project's own setup still has to run; or the first bootstrap
+    /// was refused because the repository's config had not been approved, the
+    /// user has now approved it, and this re-runs the plan against a worktree
+    /// that already exists. The plan is recomputed from scratch here, which is
+    /// what makes the second case work at all.
     func setupExistingWorktree(
         workstreamID: UUID,
         projectPath: String,

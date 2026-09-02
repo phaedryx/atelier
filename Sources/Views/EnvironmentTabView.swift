@@ -43,6 +43,10 @@ struct EnvironmentTabView: View {
     let showsProcessTable: Bool
     /// The worktree's port plan, so each row can show the port it owns.
     let portsByName: [String: String]
+    /// A repository-provided process-compose config whose unattended phases the
+    /// user has not approved, or nil when there is nothing to ask about.
+    let unapprovedConfigPath: String?
+    let onReviewConfig: () -> Void
     let onStart: () -> Void
     let onStop: () -> Void
     let onRestart: () -> Void
@@ -69,6 +73,10 @@ struct EnvironmentTabView: View {
             }
             if let source = scriptConfig.source, source != ".atelier.json" {
                 configSourceBanner(source: source)
+                Divider()
+            }
+            if let path = unapprovedConfigPath {
+                configApprovalBanner(path: path)
                 Divider()
             }
             environmentContent
@@ -365,6 +373,33 @@ struct EnvironmentTabView: View {
         }
         .padding(10)
         .background(Color.yellow.opacity(0.08))
+    }
+
+    /// A banner, not a gate. The unattended phases — bootstrap at creation,
+    /// dispose at archive — are the ones that need approval; Start runs a
+    /// command this pane is already displaying, so it stays available whether or
+    /// not the file has been approved.
+    private func configApprovalBanner(path: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.shield")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(String(
+                    format: NSLocalizedString("%@ came with this repository and has not been approved", comment: ""),
+                    (path as NSString).lastPathComponent
+                ))
+                .font(.system(size: 12, weight: .semibold))
+                Text("Its bootstrap and dispose phases will not run until you review it. Start is unaffected.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Review") { onReviewConfig() }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+        }
+        .padding(10)
+        .background(Color.orange.opacity(0.08))
     }
 
     private func configSourceBanner(source: String) -> some View {
