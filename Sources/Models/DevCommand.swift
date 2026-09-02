@@ -23,21 +23,17 @@ enum DevCommandResolver {
     private static let overrideKeyPrefix = "atelier.devCommand."
     private static let runnerKeyPrefix = "atelier.devRunner."
 
-    /// Config file names that mean "this worktree is driven by process-compose".
+    /// Config file names that mean "this worktree is driven by process-compose",
+    /// and the override names that go with them.
     ///
-    /// process-compose also discovers `compose.yaml` and `compose.yml`, but those
-    /// names belong to docker compose far more often than to process-compose, and
-    /// offering to run the wrong tool on them is worse than not offering at all.
-    /// A repository using those names can still name the command explicitly in
-    /// `.atelier.json`.
-    static let processComposeFileNames = ["process-compose.yaml", "process-compose.yml"]
-
-    /// Names process-compose auto-discovers as overrides. Atelier only needs
-    /// these when it names the base config with `-f`, which turns discovery off.
-    static let processComposeOverrideFileNames = [
-        "process-compose.override.yaml",
-        "process-compose.override.yml",
-    ]
+    /// Aliases, not copies. These were second definitions of the same two lists,
+    /// and the override one had drifted: it still listed `.yaml` before `.yml`
+    /// after `ProcessComposeConfig` was corrected to process-compose's own
+    /// preference (`.yml` wins, verified against v1.122.0). Two copies of a
+    /// discovery rule is exactly how that class of bug recurs, so there is one
+    /// definition of each and it lives with the type that owns the contract.
+    static let processComposeFileNames = ProcessComposeConfig.fileNames
+    static let processComposeOverrideFileNames = ProcessComposeConfig.overrideFileNames
 
     // MARK: - Per-workstream override
 
@@ -139,36 +135,28 @@ enum DevCommandResolver {
     ///
     /// `-U` moves the control API onto a unix socket, so it does not add a
     /// listening TCP port for the port detector to confuse with the app's.
+    /// Resolved through `ProcessComposeConfig`, so this fallback names the same
+    /// files the gated builders do.
+    ///
+    /// It used to leave a worktree config unnamed and let process-compose's own
+    /// discovery find the override. That is not an approval bypass — Start is
+    /// ungated by an explicit decision, and this command is displayed before it
+    /// runs — but it meant Start resolved its files by discovery while bootstrap
+    /// and dispose named theirs, so the two could run *different files for the
+    /// same project*: discovery loads `compose.yaml`, which Atelier does not
+    /// detect. One resolver, one answer.
     static func detectProcessCompose(in directory: String, projectDirectory: String) -> DevCommand? {
-        let worktree = URL(fileURLWithPath: directory)
-        if let name = configName(in: worktree) {
-            // No `-f`: passing one turns off process-compose's own discovery,
-            // which is what picks up a sibling `process-compose.override.yaml`.
-            // With the config in the worktree, discovery finds both for free.
-            return DevCommand(
-                command: "process-compose up -U",
-                source: .processCompose,
-                sourceDescription: name
-            )
-        }
+        guard let config = ProcessComposeConfig.locate(
+            worktree: directory, projectDirectory: projectDirectory
+        ) else { return nil }
 
-        let project = URL(fileURLWithPath: projectDirectory)
-        guard project.standardizedFileURL != worktree.standardizedFileURL,
-              let name = configName(in: project)
-        else { return nil }
-
-        // Naming the config explicitly costs discovery, so a per-worktree
-        // override has to be passed explicitly too. Only when it exists —
-        // process-compose treats a missing `-f` file as fatal.
-        var flags = ["-f", CommandBuilder.shellQuote(project.appendingPathComponent(name).path)]
-        if let override = overrideName(in: worktree) {
-            flags += ["-f", CommandBuilder.shellQuote(worktree.appendingPathComponent(override).path)]
-        }
-
+        // `loadedFiles` existence-filters, so a missing `-f` target — which
+        // process-compose treats as fatal — cannot be produced here.
+        let flags = config.loadedFiles.flatMap { ["-f", CommandBuilder.shellQuote($0)] }
         return DevCommand(
             command: (["process-compose", "up", "-U"] + flags).joined(separator: " "),
             source: .processCompose,
-            sourceDescription: name
+            sourceDescription: (config.path as NSString).lastPathComponent
         )
     }
 

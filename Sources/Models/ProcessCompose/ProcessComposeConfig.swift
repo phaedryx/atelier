@@ -12,9 +12,14 @@ struct ProcessComposeConfig: Equatable {
     /// is the user's; one inside the worktree came with a clone. This decides
     /// whether the unattended phases ask for approval.
     let isRepositoryProvided: Bool
-    /// A worktree-level override that must be named explicitly, because naming
-    /// the base config with `-f` turns off process-compose's own discovery.
-    /// Nil when the base config is in the worktree, where discovery finds it.
+    /// A worktree-level override to load alongside a base config that lives in
+    /// the project directory. Nil when the base config is itself in the
+    /// worktree — then the override is its sibling, and `loadedFiles` resolves
+    /// it from the base's own directory rather than recording it here.
+    ///
+    /// Only ever set for a project-directory base, so it is also the one loaded
+    /// file that can be repository content while `isRepositoryProvided` is
+    /// false; see `repositoryProvidedFiles`.
     let overridePath: String?
 
     /// process-compose also discovers `compose.yaml` and `compose.yml`, but that

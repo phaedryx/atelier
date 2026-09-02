@@ -60,8 +60,9 @@ final class ProcessComposeConfigTests: XCTestCase {
         XCTAssertEqual(config.path, worktree.appendingPathComponent("process-compose.yaml").path)
     }
 
-    /// Only a project-directory config needs the override named explicitly —
-    /// a worktree config keeps process-compose's own discovery.
+    /// `overridePath` is only recorded for a project-directory base. A worktree
+    /// base finds its sibling override through `loadedFiles` instead, so the
+    /// property being nil there says nothing about whether one exists.
     func testOverrideFoundOnlyForProjectDirectoryConfig() throws {
         try write("process-compose.yaml", in: project)
         try write("process-compose.override.yaml", in: worktree)
@@ -81,7 +82,7 @@ final class ProcessComposeConfigTests: XCTestCase {
             ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path)
         )
 
-        XCTAssertNil(config.overridePath, "discovery finds it; naming it would disable discovery")
+        XCTAssertNil(config.overridePath, "a worktree base resolves its sibling override through loadedFiles")
     }
 
     /// When worktree and project directory paths are the same (plain checkout),
@@ -114,11 +115,11 @@ final class ProcessComposeConfigTests: XCTestCase {
         try "processes:\n\(body)".write(to: dir.appendingPathComponent(name), atomically: true, encoding: .utf8)
     }
 
-    /// A worktree config is left unnamed so process-compose's own discovery
-    /// runs, and discovery loads a sibling `process-compose.override.yaml` that
-    /// `locate` never records — `overridePath` is nil here by design. The probe
-    /// has to read the same files process-compose will, or a namespace declared
-    /// only in the override reads as absent and the phase is silently skipped.
+    /// A sibling override beside a worktree base is loaded, and `locate` does
+    /// not record it — `overridePath` is nil here by design, and `loadedFiles`
+    /// is what resolves it. The probe has to read the same files
+    /// process-compose will be told to load, or a namespace declared only in the
+    /// override reads as absent and the phase is silently skipped.
     func testOverrideDiscoveredBesideAWorktreeConfigCounts() throws {
         try writeProcesses("""
           web:
@@ -132,25 +133,25 @@ final class ProcessComposeConfigTests: XCTestCase {
         """, name: "process-compose.override.yaml", in: worktree)
         let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
 
-        XCTAssertNil(config.overridePath, "discovery finds it; locate does not name it")
+        XCTAssertNil(config.overridePath, "loadedFiles resolves it; locate does not record it")
         XCTAssertEqual(config.namespacePresence("bootstrap"), .present)
         XCTAssertEqual(config.namespacePresence("prepare"), .empty)
     }
 
-    /// process-compose loads exactly one override, and with both extensions
-    /// present it takes `.yml` — the opposite of the order `overrideFileNames`
-    /// lists. Taking only the first would read the file that is not loaded, so
-    /// every present override counts: over-reading can only make the probe run
-    /// a phase, while under-reading skips one silently.
-    func testEitherOverrideExtensionCounts() throws {
+    /// Exactly one override is loaded, and it is the one process-compose itself
+    /// prefers: with both extensions present it takes `.yml` (verified against
+    /// v1.122.0). So a namespace declared only in the ignored `.yaml` must read
+    /// as absent — the probe's job is to describe what will run, and naming both
+    /// would make Atelier run a file process-compose would have skipped.
+    func testOnlyThePreferredOverrideExtensionCounts() throws {
         try writeProcesses("""
           web:
             namespace: execute
             command: "true"
         """, in: worktree)
         try writeProcesses("""
-          noise:
-            namespace: execute
+          ignored:
+            namespace: prepare
             command: "true"
         """, name: "process-compose.override.yaml", in: worktree)
         try writeProcesses("""
@@ -160,12 +161,17 @@ final class ProcessComposeConfigTests: XCTestCase {
         """, name: "process-compose.override.yml", in: worktree)
         let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
 
-        XCTAssertEqual(config.namespacePresence("bootstrap"), .present)
+        XCTAssertEqual(config.loadedFiles, [
+            worktree.appendingPathComponent("process-compose.yaml").path,
+            worktree.appendingPathComponent("process-compose.override.yml").path,
+        ])
+        XCTAssertEqual(config.namespacePresence("bootstrap"), .present, "declared in the loaded .yml")
+        XCTAssertEqual(config.namespacePresence("prepare"), .empty, "declared only in the ignored .yaml")
     }
 
-    /// The same file beside a *project-directory* config is not loaded:
-    /// naming the base with `-f` turns discovery off, so only files named
-    /// explicitly count.
+    /// The same file beside a *project-directory* config is only loaded when
+    /// `locate` recorded it as `overridePath`. Every loaded file is named with
+    /// `-f`, so nothing outside `loadedFiles` ever counts.
     func testOverrideBesideAProjectConfigIsNotCountedUnlessNamed() throws {
         try writeProcesses("""
           web:
@@ -281,9 +287,9 @@ final class ProcessComposeConfigTests: XCTestCase {
     }
 
     /// The first hole this closes. A repository ships a benign base config and
-    /// an override beside it; `locate` records only the base, but
-    /// process-compose's own discovery loads both. Approving the base alone
-    /// would show the user one file while another executed unattended.
+    /// an override beside it; `locate` records only the base, but both are
+    /// loaded and run. Approving the base alone would show the user one file
+    /// while another executed unattended.
     func testWorktreeOverrideIsPartOfWhatIsApproved() throws {
         try write("process-compose.yaml", in: worktree)
         try write("process-compose.override.yaml", in: worktree)

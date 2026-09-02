@@ -137,7 +137,10 @@ final class DevCommandTests: XCTestCase {
 
         let command = try XCTUnwrap(DevCommandResolver.detectProcessCompose(in: tmpDir.path, projectDirectory: tmpDir.path))
 
-        XCTAssertEqual(command.command, "process-compose up -U")
+        XCTAssertEqual(
+            command.command,
+            "process-compose up -U -f \(CommandBuilder.shellQuote(tmpDir.appendingPathComponent("process-compose.yaml").path))"
+        )
         XCTAssertEqual(command.source, .processCompose)
         XCTAssertEqual(command.sourceDescription, "process-compose.yaml")
     }
@@ -232,8 +235,8 @@ final class DevCommandTests: XCTestCase {
         )
     }
 
-    /// Naming the base config with `-f` turns off discovery, so a worktree
-    /// override has to be named too — but only when it is really there, since
+    /// Every file is named, so a worktree override beside a project-directory
+    /// base is named too — but only when it is really there, since
     /// process-compose treats a missing `-f` file as fatal.
     func testPassesWorktreeOverrideAlongsideProjectConfig() throws {
         let project = try makeProjectContainer()
@@ -249,8 +252,9 @@ final class DevCommandTests: XCTestCase {
         ), command.command)
     }
 
-    /// A worktree carrying its own config is saying something deliberate, and
-    /// keeps discovery — so no `-f`, and its override auto-loads.
+    /// A worktree carrying its own config is saying something deliberate, and it
+    /// wins. It is named with `-f` like every other file, so Start runs exactly
+    /// what bootstrap and dispose would.
     func testWorktreeConfigWinsOverProjectDirectory() throws {
         let project = try makeProjectContainer()
         try writeProcessCompose(named: "process-compose.yaml", in: project)
@@ -260,11 +264,15 @@ final class DevCommandTests: XCTestCase {
             DevCommandResolver.detectProcessCompose(in: tmpDir.path, projectDirectory: project.path)
         )
 
-        XCTAssertEqual(command.command, "process-compose up -U")
+        XCTAssertEqual(
+            command.command,
+            "process-compose up -U -f \(CommandBuilder.shellQuote(tmpDir.appendingPathComponent("process-compose.yaml").path))"
+        )
+        XCTAssertFalse(command.command.contains(project.path), command.command)
     }
 
     /// A plain checkout passes the same path for both. The fallback must not
-    /// then re-find the worktree's own config and switch to the `-f` form.
+    /// then re-find the worktree's own config and name it twice.
     func testProjectDirectoryEqualToWorktreeIsNotSearchedTwice() throws {
         try writeProcessCompose(named: "process-compose.yaml")
 
@@ -272,7 +280,48 @@ final class DevCommandTests: XCTestCase {
             DevCommandResolver.detectProcessCompose(in: tmpDir.path, projectDirectory: tmpDir.path)
         )
 
-        XCTAssertEqual(command.command, "process-compose up -U")
+        XCTAssertEqual(
+            command.command,
+            "process-compose up -U -f \(CommandBuilder.shellQuote(tmpDir.appendingPathComponent("process-compose.yaml").path))"
+        )
+    }
+
+    /// Start must name the same files the gated phases name. Discovery would
+    /// have loaded `compose.yaml` here and never read `process-compose.yaml`
+    /// (verified against v1.122.0), so a Start that relied on it would run a
+    /// different file from the one bootstrap and dispose run.
+    func testStartNamesTheSameFilesTheGatedPhasesDo() throws {
+        try writeProcessCompose(named: "process-compose.yaml")
+        try "services: {}".write(
+            to: tmpDir.appendingPathComponent("compose.yaml"), atomically: true, encoding: .utf8
+        )
+        let config = try XCTUnwrap(
+            ProcessComposeConfig.locate(worktree: tmpDir.path, projectDirectory: tmpDir.path)
+        )
+
+        let command = try XCTUnwrap(
+            DevCommandResolver.detectProcessCompose(in: tmpDir.path, projectDirectory: tmpDir.path)
+        )
+
+        for file in config.loadedFiles {
+            XCTAssertTrue(command.command.contains(CommandBuilder.shellQuote(file)), command.command)
+        }
+        XCTAssertFalse(command.command.contains("compose.yaml -f"), command.command)
+        XCTAssertFalse(command.command.hasSuffix(CommandBuilder.shellQuote(
+            tmpDir.appendingPathComponent("compose.yaml").path
+        )), command.command)
+    }
+
+    /// The override list has one definition of its order. A second copy here had
+    /// drifted to `.yaml`-first after `ProcessComposeConfig` was corrected to
+    /// process-compose's own preference.
+    func testOverrideNameOrderHasOneDefinition() {
+        XCTAssertEqual(
+            DevCommandResolver.processComposeOverrideFileNames,
+            ProcessComposeConfig.overrideFileNames
+        )
+        XCTAssertEqual(DevCommandResolver.processComposeFileNames, ProcessComposeConfig.fileNames)
+        XCTAssertEqual(ProcessComposeConfig.overrideFileNames.first, "process-compose.override.yml")
     }
 
     func testNoConfigInEitherPlace() throws {

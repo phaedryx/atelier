@@ -11,6 +11,7 @@ import XCTest
 final class WorkstreamArchiverDisposeTests: XCTestCase {
     private var project: URL!
     private var worktree: URL!
+    private var savedSettings: [String: Any?] = [:]
 
     override func setUp() {
         super.setUp()
@@ -18,14 +19,38 @@ final class WorkstreamArchiverDisposeTests: XCTestCase {
         project = root.appendingPathComponent("project")
         worktree = project.appendingPathComponent("wt")
         try! FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+
+        for key in [ProcessComposeSettings.enabledKey, ProcessComposeSettings.binaryPathKey] {
+            savedSettings[key] = UserDefaults.standard.object(forKey: key)
+        }
         ProcessComposeSettings.isEnabled = true
+        // A real, always-present executable rather than whatever this machine
+        // happens to have installed. `plan` checks the binary *before* it checks
+        // approval, so on a runner without process-compose the refusal tests
+        // would report "was not found" and fail — and those are precisely the
+        // two that assert the security refusal. This makes every branch here
+        // deterministic and independent of the host.
+        ProcessComposeSettings.binaryPath = "/bin/ls"
     }
 
     override func tearDown() {
         ScriptTrust.revokeConfigFiles(for: project.path)
-        ProcessComposeSettings.isEnabled = false
+        for (key, value) in savedSettings {
+            if let value {
+                UserDefaults.standard.set(value, forKey: key)
+            } else {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
         try? FileManager.default.removeItem(at: project.deletingLastPathComponent())
         super.tearDown()
+    }
+
+    /// Guards the guard: if this ever stops resolving, the refusal tests below
+    /// would start passing for the wrong reason (a missing binary, not a missing
+    /// approval).
+    func testTheBinaryPreconditionIsSatisfiedForEveryTestHere() {
+        XCTAssertEqual(ProcessComposeSettings.resolveBinary(), "/bin/ls")
     }
 
     private func note(_ plan: BootstrapPolicy.Plan) -> String? {
@@ -69,9 +94,6 @@ final class WorkstreamArchiverDisposeTests: XCTestCase {
     /// config.
     func testDisposeRunsOnceTheRepositoryConfigIsApproved() throws {
         let path = try writeConfig(in: worktree)
-        guard ProcessComposeSettings.resolveBinary() != nil else {
-            throw XCTSkip("process-compose is not installed; the binary precondition would mask this branch")
-        }
         let config = try XCTUnwrap(
             ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path)
         )
@@ -104,9 +126,6 @@ final class WorkstreamArchiverDisposeTests: XCTestCase {
 
     func testDisposeNeedsNoApprovalForTheUsersOwnConfig() throws {
         let path = try writeConfig(in: project)
-        guard ProcessComposeSettings.resolveBinary() != nil else {
-            throw XCTSkip("process-compose is not installed; the binary precondition would mask this branch")
-        }
 
         let plan = WorkstreamArchiver.disposePlan(
             worktreePath: worktree.path, projectDirectory: project.path
