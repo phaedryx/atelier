@@ -168,27 +168,56 @@ struct EnvironmentTabView: View {
 
     /// The environment variables this project injects, collapsed by default so
     /// the run pane keeps its space when nobody is editing them.
+    ///
+    /// Hand-rolled rather than a `DisclosureGroup`: that renders its own label
+    /// and only its triangle reliably toggles, so the header read as clickable
+    /// and mostly was not. A plain button with an explicit chevron makes the
+    /// whole header the target. `Add` sits beside it rather than inside the
+    /// editor, so the section carries one title instead of two.
     private var envVarSection: some View {
-        DisclosureGroup(isExpanded: $isShowingEnvVars) {
-            EnvVarsEditor(definitions: $envVarDefinitions, resolved: resolvedEnvVars)
-                .padding(.leading, -12)
-        } label: {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
-                Text("Environment")
-                    .font(.system(size: 12, weight: .semibold))
-                if !envVarDefinitions.isEmpty {
-                    Text("\(envVarDefinitions.count)")
-                        .font(.system(size: 9, design: .monospaced))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(Color.primary.opacity(0.06))
-                        .clipShape(Capsule())
-                        .foregroundStyle(.tertiary)
+                Button {
+                    isShowingEnvVars.toggle()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .rotationEffect(.degrees(isShowingEnvVars ? 90 : 0))
+                        Text("Environment Variables")
+                            .font(.system(size: 12, weight: .semibold))
+                        if !envVarDefinitions.isEmpty {
+                            Text("\(envVarDefinitions.count)")
+                                .font(.system(size: 9, design: .monospaced))
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(Color.primary.opacity(0.06))
+                                .clipShape(Capsule())
+                                .foregroundStyle(.tertiary)
+                        }
+                        Spacer()
+                    }
+                    // Without this the gaps between the label's pieces are not
+                    // part of the button, so the header toggles only where there
+                    // happens to be a glyph.
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                if isShowingEnvVars {
+                    Button("Add") { envVarDefinitions.append(EnvVarDefinition(name: "")) }
+                        .buttonStyle(.borderless)
+                        .font(.system(size: 11))
                 }
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+
+            if isShowingEnvVars {
+                EnvVarsEditor(definitions: $envVarDefinitions, resolved: resolvedEnvVars)
+            }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
     }
 
     /// Lets the user pick which detected runner starts the stack. Only shown

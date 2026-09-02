@@ -473,7 +473,7 @@
 "A file or directory with this name already exists." = "A file or directory with this name already exists.";
 
 /* Environment variables */
-"Environment variables" = "Environment variables";
+"Environment Variables" = "Environment Variables";
 "Variables defined here are exported to the run command for every workstream in this project. A port variable gets its own value per worktree." = "Variables defined here are exported to the run command for every workstream in this project. A port variable gets its own value per worktree.";
 "NAME" = "NAME";
 "value or ${OTHER_VAR}" = "value or ${OTHER_VAR}";

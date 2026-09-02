@@ -8,22 +8,23 @@ import SwiftUI
 /// Definitions belong to the project, values belong to the workstream: the
 /// resolved column shows what *this* worktree will receive, which is the only
 /// way to tell a computed port apart from the definition that produced it.
+///
+/// The section's title and its Add button live in the parent, so this is only
+/// the rows.
 struct EnvVarsEditor: View {
     @Binding var definitions: [EnvVarDefinition]
     /// The values these definitions produce in the current worktree.
     let resolved: [String: String]
 
+    private static let columnSpacing: CGFloat = 6
+    private static let nameWidth: CGFloat = 150
+    private static let kindWidth: CGFloat = 80
+    /// Where the value column starts, so the expansion hint lines up under it
+    /// instead of under a number someone guessed.
+    private static let valueColumnInset = nameWidth + columnSpacing + kindWidth + columnSpacing
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("Environment variables")
-                    .font(.system(size: 12, weight: .semibold))
-                Spacer()
-                Button("Add") { definitions.append(EnvVarDefinition(name: "")) }
-                    .buttonStyle(.borderless)
-                    .font(.system(size: 11))
-            }
-
             if definitions.isEmpty {
                 Text("Variables defined here are exported to the run command for every workstream in this project. A port variable gets its own value per worktree.")
                     .font(.system(size: 11))
@@ -36,16 +37,16 @@ struct EnvVarsEditor: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.bottom, 8)
     }
 
     @ViewBuilder
     private func row(for definition: Binding<EnvVarDefinition>) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: Self.columnSpacing) {
             TextField("NAME", text: definition.name)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 11, design: .monospaced))
-                .frame(width: 150)
+                .frame(width: Self.nameWidth)
                 // A name with a space or an `=` would not become a broken
                 // variable, it would become a different word in the command —
                 // so say so here rather than letting it reach a shell.
@@ -59,7 +60,7 @@ struct EnvVarsEditor: View {
                 Text("Port").tag(EnvVarDefinition.Kind.computedPort)
             }
             .labelsHidden()
-            .frame(width: 80)
+            .frame(width: Self.kindWidth)
 
             switch definition.wrappedValue.kind {
             case .literal:
@@ -95,7 +96,7 @@ struct EnvVarsEditor: View {
             Text(expanded)
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundStyle(.tertiary)
-                .padding(.leading, 242)
+                .padding(.leading, Self.valueColumnInset)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .lineLimit(1)
                 .truncationMode(.middle)
