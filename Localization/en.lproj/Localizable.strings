@@ -493,3 +493,9 @@
 "sets both assigned and fixed" = "sets both assigned and fixed";
 "sets assigned: false, which means nothing; remove the entry instead" = "sets assigned: false, which means nothing; remove the entry instead";
 "needs assigned: true or fixed: <port>" = "needs assigned: true or fixed: <port>";
+
+/* ProcessComposeClient */
+"The process manager is not running." = "The process manager is not running.";
+"Could not reach the process manager: %@" = "Could not reach the process manager: %@";
+"The process manager returned %d." = "The process manager returned %d.";
+"The process manager sent an unreadable response." = "The process manager sent an unreadable response.";
