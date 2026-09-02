@@ -184,8 +184,8 @@ final class PhaseRunnerTests: XCTestCase {
     /// Start is prepare then execute, chained, so prepare's output lands in the
     /// surface the user is already looking at and a failing prepare stops it.
     /// A real config (not a synthetic nonexistent path) so this exercises
-    /// genuine "prepare is declared" parsing rather than the fail-open branch
-    /// of `namespaceIsConfidentlyEmpty` — a worktree-style config, which is
+    /// genuine `.present` parsing rather than the `.unknown` branch
+    /// of `namespacePresence` — a worktree-style config, which is
     /// named with `-f` like every other. Passes a selection to check the other
     /// half of the chain that its sibling in the "namespace-aware" section
     /// below does not: prepare always runs its whole namespace regardless of
@@ -215,8 +215,8 @@ final class PhaseRunnerTests: XCTestCase {
     /// The whole point of the integration: with a config present and a binary
     /// available, Start runs process-compose rather than a dev script. Real
     /// config content (not a synthetic nonexistent path), so this exercises
-    /// genuine "prepare is declared" parsing rather than the fail-open branch
-    /// of `namespaceIsConfidentlyEmpty` — a project-directory-style config
+    /// genuine `.present` parsing rather than the `.unknown` branch
+    /// of `namespacePresence` — a project-directory-style config
     /// (`isRepositoryProvided: false`), so this also pins the `-f` shape and
     /// process selection together, distinct from the worktree-style sibling
     /// above.
@@ -320,6 +320,57 @@ final class PhaseRunnerTests: XCTestCase {
         )
 
         XCTAssertFalse(command.contains("prepare"), command)
+    }
+
+    /// The C3 repro, verbatim: an override file with no top-level `processes:`
+    /// key. `declaredNamespaces` returns nil for it, so `prepare` is `.unknown`
+    /// rather than `.empty` — and the previous code chained `up -n prepare`
+    /// whenever the namespace was not *confidently* empty. process-compose does
+    /// not exit on an empty namespace, and nothing bounds the chained command,
+    /// so Start hung forever with no output.
+    func testStartCommandDoesNotChainPrepareForAnUnparseableConfig() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = dir.appendingPathComponent("process-compose.yaml")
+        try """
+        processes:
+          web:
+            namespace: execute
+            command: "true"
+        """.write(to: path, atomically: true, encoding: .utf8)
+        let overridePath = dir.appendingPathComponent("process-compose.override.yaml")
+        try "version: \"0.5\"".write(to: overridePath, atomically: true, encoding: .utf8)
+        let config = ProcessComposeConfig(
+            path: path.path, isRepositoryProvided: true, overridePath: nil
+        )
+
+        XCTAssertEqual(config.namespacePresence("prepare"), .unknown, "precondition")
+
+        let command = PhaseRunner.startCommand(
+            config: config, binary: binary, workstreamID: workstreamID, selectedProcesses: []
+        )
+
+        XCTAssertFalse(command.contains("prepare"), command)
+        XCTAssertFalse(command.contains("&&"), command)
+        XCTAssertTrue(command.contains("-n execute"), command)
+    }
+
+    /// The trade this makes, stated so it is not mistaken for an oversight: a
+    /// config that really does declare `prepare` but cannot be parsed loses its
+    /// prepare phase rather than hanging Start. `PhaseExecutor` answers the same
+    /// question the other way for `bootstrap` and `dispose`, where a deadline
+    /// and a grace period bound the cost of being wrong.
+    func testStartCommandStillRunsExecuteWhenNothingCanBeParsedAtAll() {
+        let config = ProcessComposeConfig(
+            path: "/nonexistent/process-compose.yaml", isRepositoryProvided: true, overridePath: nil
+        )
+
+        let command = PhaseRunner.startCommand(
+            config: config, binary: binary, workstreamID: workstreamID, selectedProcesses: []
+        )
+
+        XCTAssertFalse(command.contains("prepare"), command)
+        XCTAssertTrue(command.contains("-n execute"), command)
     }
 
     func testPathsWithSpacesAreQuoted() {

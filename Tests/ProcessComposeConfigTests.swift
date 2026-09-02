@@ -189,7 +189,7 @@ final class ProcessComposeConfigTests: XCTestCase {
         XCTAssertEqual(config.namespacePresence("bootstrap"), .empty)
     }
 
-    func testNotConfidentlyEmptyWhenAProcessDeclaresTheNamespace() throws {
+    func testNamespaceIsPresentWhenAProcessDeclaresIt() throws {
         try writeProcesses("""
           setup:
             namespace: prepare
@@ -197,10 +197,10 @@ final class ProcessComposeConfigTests: XCTestCase {
         """, in: worktree)
         let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
 
-        XCTAssertFalse(config.namespaceIsConfidentlyEmpty("prepare"))
+        XCTAssertEqual(config.namespacePresence("prepare"), .present)
     }
 
-    func testConfidentlyEmptyWhenNoProcessDeclaresTheNamespace() throws {
+    func testNamespaceIsEmptyWhenNoProcessDeclaresIt() throws {
         try writeProcesses("""
           web:
             namespace: execute
@@ -208,7 +208,7 @@ final class ProcessComposeConfigTests: XCTestCase {
         """, in: worktree)
         let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
 
-        XCTAssertTrue(config.namespaceIsConfidentlyEmpty("prepare"))
+        XCTAssertEqual(config.namespacePresence("prepare"), .empty)
     }
 
     /// A process with no `namespace:` key belongs to process-compose's own
@@ -220,8 +220,8 @@ final class ProcessComposeConfigTests: XCTestCase {
         """, in: worktree)
         let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
 
-        XCTAssertTrue(config.namespaceIsConfidentlyEmpty("prepare"))
-        XCTAssertTrue(config.namespaceIsConfidentlyEmpty("execute"))
+        XCTAssertEqual(config.namespacePresence("prepare"), .empty)
+        XCTAssertEqual(config.namespacePresence("execute"), .empty)
     }
 
     /// A namespace declared only in the override file still counts — the
@@ -239,40 +239,46 @@ final class ProcessComposeConfigTests: XCTestCase {
         """, name: "process-compose.override.yaml", in: worktree)
         let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
 
-        XCTAssertFalse(config.namespaceIsConfidentlyEmpty("prepare"))
+        XCTAssertEqual(config.namespacePresence("prepare"), .present)
     }
 
-    /// An unreadable file must fail open: never mistaken for "no namespaces".
-    func testFailsOpenWhenTheFileCannotBeRead() {
+    /// An unreadable file is `.unknown`, never mistaken for "no namespaces".
+    /// The three `.unknown` cases below are asserted as `.unknown` rather than
+    /// as "not empty", which is what they used to say through
+    /// `namespaceIsConfidentlyEmpty`. That distinction is now load-bearing:
+    /// `PhaseRunner.startCommand` chains `prepare` only on `.present`, because
+    /// chaining it on an unparseable config hangs Start forever, while
+    /// `PhaseExecutor` still runs an `.unknown` phase on a bounded leash.
+    func testUnknownWhenTheFileCannotBeRead() {
         let config = ProcessComposeConfig(
             path: "/nonexistent/process-compose.yaml", isRepositoryProvided: true, overridePath: nil
         )
 
-        XCTAssertFalse(config.namespaceIsConfidentlyEmpty("prepare"))
+        XCTAssertEqual(config.namespacePresence("prepare"), .unknown)
     }
 
-    /// Malformed YAML must fail open the same way — a parse bug must never
+    /// Malformed YAML is `.unknown` the same way — a parse bug must never
     /// masquerade as an empty namespace and cause a declared phase to be
     /// silently skipped.
-    func testFailsOpenWhenTheFileIsMalformed() throws {
+    func testUnknownWhenTheFileIsMalformed() throws {
         try "processes: {web: {command: \"true\"".write(
             to: worktree.appendingPathComponent("process-compose.yaml"), atomically: true, encoding: .utf8
         )
         let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
 
-        XCTAssertFalse(config.namespaceIsConfidentlyEmpty("prepare"))
+        XCTAssertEqual(config.namespacePresence("prepare"), .unknown)
     }
 
     /// A config with no `processes:` key at all doesn't parse as a
-    /// process-compose config in the shape this reads — fail open rather
-    /// than treat it as confidently declaring nothing.
-    func testFailsOpenWhenProcessesKeyIsMissing() throws {
+    /// process-compose config in the shape this reads — `.unknown` rather
+    /// than treating it as confidently declaring nothing.
+    func testUnknownWhenProcessesKeyIsMissing() throws {
         try "version: \"0.5\"".write(
             to: worktree.appendingPathComponent("process-compose.yaml"), atomically: true, encoding: .utf8
         )
         let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
 
-        XCTAssertFalse(config.namespaceIsConfidentlyEmpty("prepare"))
+        XCTAssertEqual(config.namespacePresence("prepare"), .unknown)
     }
 
     // MARK: - What has to be approved

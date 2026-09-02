@@ -126,17 +126,25 @@ enum PhaseRunner {
     /// the headless phases by namespace — so the ordering here is about output
     /// and about not starting a stack whose prepare failed, nothing else.
     ///
-    /// `prepare` is chained only when the config actually declares a process
-    /// for it. process-compose does not exit when told to run an empty
-    /// namespace — it idles forever — so unconditionally chaining `up -n
-    /// prepare` ahead of execute would hang Start forever for any config that
-    /// has not adopted the `prepare` namespace, including one that predates
-    /// this convention and declares no namespaces at all. `execute` is never
-    /// conditional: skipping it as well would make Start silently do nothing,
-    /// which is worse than running an execute namespace that turns out empty.
-    /// `namespaceIsConfidentlyEmpty` fails open (returns false) on any parse
-    /// failure, so a config that genuinely declares `prepare` is never
-    /// silently skipped because of a read/parse error.
+    /// `prepare` is chained only when the config is **known** to declare a
+    /// process for it — `.present`, never `.unknown`. process-compose does not
+    /// exit when told to run an empty namespace, it idles forever, so chaining
+    /// `up -n prepare` ahead of execute for a namespace that turns out not to
+    /// exist hangs Start with no output and no way out but Stop. `execute` is
+    /// never conditional: skipping it as well would make Start silently do
+    /// nothing, which is worse than running an execute namespace that turns out
+    /// empty.
+    ///
+    /// **This is the one place `.unknown` must fail closed, and it is the
+    /// opposite of `PhaseExecutor`'s answer to the same question.** There, a
+    /// config Yams cannot decode still runs its phase, because refusing would
+    /// silently skip work the project may really have declared — and the cost of
+    /// being wrong is bounded, by `min(timeout, userCommand)` and a grace period
+    /// that ends in `.skipped`. Here nothing is bounded: the chained command
+    /// runs in a terminal surface with no deadline, so failing open trades "a
+    /// declared prepare was skipped" for "Start never returns". The costs invert,
+    /// so the direction does. Reachable today — an override file with no
+    /// top-level `processes:` key makes `declaredNamespaces` return nil.
     static func startCommand(
         config: ProcessComposeConfig,
         binary: String,
@@ -147,7 +155,7 @@ enum PhaseRunner {
             phase: .execute, config: config, binary: binary,
             workstreamID: workstreamID, selectedProcesses: selectedProcesses
         )
-        guard !config.namespaceIsConfidentlyEmpty(ProcessComposePhase.prepare.namespace) else {
+        guard config.namespacePresence(ProcessComposePhase.prepare.namespace) == .present else {
             return execute
         }
         let prepare = command(

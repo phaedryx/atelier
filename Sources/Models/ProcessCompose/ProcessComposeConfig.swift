@@ -189,14 +189,4 @@ struct ProcessComposeConfig: Equatable {
         }
         return unknown ? .unknown : .empty
     }
-
-    /// Whether this config can be shown, with confidence, to assign zero
-    /// processes to `namespace`. `PhaseRunner.startCommand` uses this to decide
-    /// whether chaining a phase would just hang process-compose on an empty
-    /// namespace — and it deliberately collapses `.unknown` into "not empty",
-    /// because failing open is the safe direction when the only alternative is
-    /// silently skipping a phase the user actually declared.
-    func namespaceIsConfidentlyEmpty(_ namespace: String) -> Bool {
-        namespacePresence(namespace) == .empty
-    }
 }
