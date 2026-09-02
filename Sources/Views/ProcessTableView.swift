@@ -88,6 +88,34 @@ struct ProcessTableView: View {
     }
 }
 
+/// The selection to store after toggling one checkbox, or nil if the toggle
+/// must be refused.
+///
+/// `current` is the stored selection, where **empty means all** — that is what
+/// `PhaseRunner` already means by it, since `up -n execute` with no names
+/// starts the whole namespace. Keeping "all" canonical as empty is what lets a
+/// project add a process to its YAML and have it included automatically.
+///
+/// The trap is that "nothing selected" wants the same representation. Storing
+/// it made unchecking the last box self-contradictory: it stored empty, the
+/// view read empty back as *all*, every checkbox re-checked itself, and Start
+/// then ran the entire namespace — the opposite of what was asked. There is no
+/// third state to store, because process-compose has no way to express "start
+/// nothing"; so the toggle is refused instead, and the view disables that last
+/// checkbox rather than accepting a click it would have to undo.
+func processSelectionAfterToggling(
+    _ name: String,
+    on isOn: Bool,
+    current: Set<String>,
+    declared: [String]
+) -> [String]? {
+    let all = Set(declared)
+    var next = current.isEmpty ? all : current
+    if isOn { next.insert(name) } else { next.remove(name) }
+    guard !next.isEmpty else { return nil }
+    return next == all ? [] : next.sorted()
+}
+
 /// Which of `execute`'s processes the Start button will launch.
 ///
 /// A view of its own, and rendered by `EnvironmentTabView` in **both** the
@@ -112,7 +140,9 @@ struct ProcessSelectionView: View {
                     .foregroundStyle(.tertiary)
                 Spacer()
                 if !selection.isEmpty {
-                    Button("All") { store(Set(declaredProcesses)) }
+                    // Stored as empty, the canonical "all" — see
+                    // `processSelectionAfterToggling`.
+                    Button("All") { store([]) }
                         .buttonStyle(.borderless)
                         .font(.system(size: 9))
                 }
@@ -134,6 +164,10 @@ struct ProcessSelectionView: View {
                             .font(.system(size: 11, design: .monospaced))
                     }
                     .toggleStyle(.checkbox)
+                    .disabled(isLastSelected(name))
+                    .help(isLastSelected(name)
+                        ? NSLocalizedString("At least one process has to start.", comment: "")
+                        : "")
                 }
             }
             .padding(.horizontal, 12)
@@ -162,15 +196,22 @@ struct ProcessSelectionView: View {
         Binding(
             get: { effectiveSelection.contains(name) },
             set: { isOn in
-                var next = effectiveSelection
-                if isOn { next.insert(name) } else { next.remove(name) }
+                guard let next = processSelectionAfterToggling(
+                    name, on: isOn, current: selection, declared: declaredProcesses
+                ) else { return }
                 store(next)
             }
         )
     }
 
-    private func store(_ next: Set<String>) {
-        let canonical = next == Set(declaredProcesses) ? [] : next.sorted()
+    /// Whether unchecking this one would leave nothing selected. Disabled
+    /// rather than silently refused, so the state reads as unavailable instead
+    /// of as a click that did nothing.
+    private func isLastSelected(_ name: String) -> Bool {
+        effectiveSelection == [name]
+    }
+
+    private func store(_ canonical: [String]) {
         selection = Set(canonical)
         ProcessTableModel.setSelected(canonical, for: workstreamID)
     }

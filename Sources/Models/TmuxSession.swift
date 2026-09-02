@@ -145,8 +145,23 @@ enum TmuxSession {
 
     /// Kill the agent tmux session for a workstream.
     static func killWorkstreamSessions(tmuxPath: String, project: String, workstream: String) {
-        let agentSession = sessionName(project: project, workstream: workstream, role: "agent")
-        killSession(tmuxPath: tmuxPath, sessionName: agentSession)
+        // Both roles. This killed only `agent`, so an archived workstream left
+        // its `run` session — and with it the whole dev stack — alive forever:
+        // nothing else names that session except `stopRun`, which archive does
+        // not call, so the processes outlived their own worktree and kept
+        // holding its ports until the app quit.
+        killSession(tmuxPath: tmuxPath, sessionName: sessionName(project: project, workstream: workstream, role: "agent"))
+        killRunSession(tmuxPath: tmuxPath, project: project, workstream: workstream)
+    }
+
+    /// Kill just the dev-server session.
+    ///
+    /// Separate because archive has to do this *before* `dispose` runs and
+    /// before the worktree is removed: a live `execute` stack during dispose
+    /// means two process-compose runs over one project, and `git worktree
+    /// remove --force` then deletes the tree from under the running one.
+    static func killRunSession(tmuxPath: String, project: String, workstream: String) {
+        killSession(tmuxPath: tmuxPath, sessionName: sessionName(project: project, workstream: workstream, role: "run"))
     }
 
     /// Kill the entire tmux server on the atelier socket.

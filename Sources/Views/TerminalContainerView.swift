@@ -1591,7 +1591,15 @@ struct TerminalContainerView: View {
         case let .browser(id):
             surfaceCache.removeWebView(for: id)
             // The browser tab owns the dev server: closing the last one stops it.
-            if !model.hasBrowserTabs { stopRun() }
+            //
+            // `runStarted` guards it for the same reason the `.environment`
+            // case below is guarded: `stopRun` sets `runStoppedManually`,
+            // which suppresses the tmux restore. Without it, opening and
+            // closing a browser tab while nothing ran was enough to strand a
+            // live tmux run session for the rest of the session — the flag
+            // outlives the view on the model, and `restoreRunState` refuses to
+            // reattach once it is set.
+            if !model.hasBrowserTabs, model.runStarted { stopRun() }
         case let .editor(id):
             model.editorBridge?.closeModel(modelId: id.uuidString)
         case .environment:

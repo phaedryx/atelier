@@ -143,4 +143,46 @@ final class EnvironmentTabViewTests: XCTestCase {
             )
         )
     }
+
+    // MARK: - Process selection toggling
+
+    /// The reported bug, pinned. Unchecking the last box used to store empty,
+    /// which the view reads back as "all": every checkbox re-checked itself and
+    /// Start ran the whole namespace — the opposite of what was asked.
+    func testUncheckingTheLastSelectedProcessIsRefused() {
+        XCTAssertNil(
+            processSelectionAfterToggling("b", on: false, current: ["b"], declared: ["a", "b"])
+        )
+    }
+
+    /// The same click from the untouched state, where empty means all: it must
+    /// narrow to the others, never empty.
+    func testUncheckingFromTheAllSelectedStateNarrows() {
+        XCTAssertEqual(
+            processSelectionAfterToggling("a", on: false, current: [], declared: ["a", "b"]),
+            ["b"]
+        )
+    }
+
+    func testUncheckingTheLastOfASingleProcessConfigIsRefused() {
+        XCTAssertNil(
+            processSelectionAfterToggling("only", on: false, current: [], declared: ["only"])
+        )
+    }
+
+    /// Re-checking everything canonicalises back to empty, so a process added
+    /// to the YAML later is included instead of silently dropped.
+    func testSelectingEveryProcessStoresEmptyMeaningAll() {
+        XCTAssertEqual(
+            processSelectionAfterToggling("a", on: true, current: ["b"], declared: ["a", "b"]),
+            []
+        )
+    }
+
+    func testCheckingAnotherProcessKeepsAnExplicitSubsetSorted() {
+        XCTAssertEqual(
+            processSelectionAfterToggling("b", on: true, current: ["c"], declared: ["a", "b", "c"]),
+            ["b", "c"]
+        )
+    }
 }

@@ -99,6 +99,15 @@ enum WorkstreamArchiver {
                 // "created a workstream, then archived it" overlaps them. Stop
                 // it before dispose runs in the same directory and before
                 // `git worktree remove` deletes that directory underneath it.
+                // Before anything else: stop the dev stack. In tmux mode the
+                // surface removal above only detaches, so without this the
+                // `execute` run kept going *through* dispose — two
+                // process-compose runs over one project — and then through
+                // `git worktree remove --force`, which deletes the tree under
+                // it.
+                if let tmuxPath {
+                    TmuxSession.killRunSession(tmuxPath: tmuxPath, project: projName, workstream: wsName)
+                }
                 await AsyncSetupService.shared.cancelBootstrap(
                     for: workstreamID,
                     binary: composeBinary,

@@ -530,3 +530,4 @@
 /* Process selection */
 "All" = "All";
 "Processes to start" = "Processes to start";
+"At least one process has to start." = "At least one process has to start.";

@@ -160,8 +160,15 @@ struct EnvironmentTabView: View {
 
                     Spacer()
 
+                    // Stop's precondition is that something is running, which
+                    // this whole bar already establishes. It used to be gated
+                    // on `canStart` alongside Rerun, so toggling the
+                    // integration off — or breaking the binary path — mid-run
+                    // took the Stop button away from a live stack, leaving
+                    // Ctrl+C in the surface as the only way out. Only Rerun
+                    // needs to know a run can be started.
+                    EnvActionButton(label: NSLocalizedString("Stop", comment: ""), icon: "stop.fill", shortcut: "", action: onStop)
                     if runControlsEnabled {
-                        EnvActionButton(label: NSLocalizedString("Stop", comment: ""), icon: "stop.fill", shortcut: "", action: onStop)
                         EnvActionButton(label: NSLocalizedString("Rerun", comment: ""), icon: "arrow.counterclockwise", shortcut: shortcut, action: onRestart)
                     }
                 }
