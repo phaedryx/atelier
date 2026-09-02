@@ -1203,6 +1203,17 @@ struct TerminalContainerView: View {
     @MainActor
     private func doStartRun() {
         guard let command = resolvedRunCommand else { return }
+        // A run always gets an Environment tab, because that tab is what can
+        // see and stop it. `addBrowser` starts the dev server through
+        // `startRunIfNeeded` and opens only a browser, so a run could exist
+        // with no Environment tab at all — and then the only way to stop it
+        // was closing the *last* browser tab, which nothing tells the user.
+        // Closing the Environment tab stops the run (see `forceCloseTab`), so
+        // guaranteeing the tab exists is what makes that reachable.
+        //
+        // Ensure rather than activate: the browser tab the user just asked for
+        // must keep focus.
+        model.ensureSingleton(.environment)
         killRunTmuxSession()
         surfaceCache.removeSurface(for: runID)
         model.runStoppedManually = false

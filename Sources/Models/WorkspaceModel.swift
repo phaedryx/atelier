@@ -161,6 +161,18 @@ final class WorkspaceModel: ObservableObject {
         activeTab = tab
     }
 
+    /// Make sure a singleton tab exists, without changing which tab is active.
+    ///
+    /// `activateSingleton` also selects the tab, which is wrong when the run is
+    /// starting as a side effect of something else — opening a browser tab
+    /// starts the dev server, and stealing focus back off the browser the user
+    /// just asked for would be its own bug.
+    func ensureSingleton(_ tab: WorkspaceTab) {
+        if !tabs.contains(tab) {
+            tabs.append(tab)
+        }
+    }
+
     private func appendAndActivate(_ tab: WorkspaceTab) {
         tabs.append(tab)
         activeTab = tab
