@@ -273,8 +273,6 @@ struct TerminalContainerView: View {
     @State private var draggedCustomTab: WorkspaceTab?
     @StateObject private var portDetector: PortDetector
     @State private var browserStartPending = false
-    @State private var runGeneration = 0
-    @State private var runCommandString: String?
     @State private var devCommandOverride: String?
     @State private var resolvedDevCommand: DevCommand?
     @State private var defaultBranch = "main"
@@ -414,7 +412,7 @@ struct TerminalContainerView: View {
     /// The run session's surface ID. Bumped on stop/restart so a fresh
     /// surface replaces the previous one.
     private var runID: UUID {
-        derivedUUID(from: workstreamID, salt: "env-run-\(runGeneration)")
+        derivedUUID(from: workstreamID, salt: "env-run-\(model.runGeneration)")
     }
 
     /// The dev server is coming up but has not exposed a port yet. Covers the
@@ -738,11 +736,11 @@ struct TerminalContainerView: View {
                     workingDirectory: workingDirectory,
                     useTmux: useTmux,
                     environmentVars: runEnvironmentVars,
-                    runCommand: runCommandString,
+                    runCommand: model.runCommandString,
                     devCommand: resolvedDevCommand,
                     devCommandOverride: $devCommandOverride,
                     runStarted: $model.runStarted,
-                    runGeneration: $runGeneration,
+                    runGeneration: model.runGeneration,
                     processTable: processTable,
                     showsProcessTable: usesProcessCompose,
                     portsByName: portPlan.values,
@@ -1017,8 +1015,8 @@ struct TerminalContainerView: View {
                 // A session restored from tmux (or started before TerminalApp
                 // was ready) needs its command assembled on the container side
                 // so the restored surface reattaches to the existing session.
-                if started, runCommandString == nil, let command = resolvedRunCommand {
-                    runCommandString = buildRunCommand(script: command)
+                if started, model.runCommandString == nil, let command = resolvedRunCommand {
+                    model.runCommandString = buildRunCommand(script: command)
                     preloadRunSurface()
                 }
                 // Driven here rather than from doStartRun/stopRun because a
@@ -1053,6 +1051,21 @@ struct TerminalContainerView: View {
                 if surfaceID == runID {
                     // The dev-server session died; no port is coming.
                     browserStartPending = false
+                    // And the run is over, which has to be recorded rather than
+                    // left implied. `runStarted` stayed true here, so the pane
+                    // kept rendering `SingleTerminalView` with the stored
+                    // command — and `TerminalSurfaceView.updateNSView`
+                    // recreates a missing surface from that command on the next
+                    // render. Stopping the last process therefore rebooted the
+                    // whole stack with no user action, and Stop acted on a run
+                    // that did not exist until a render brought it back.
+                    //
+                    // `runStoppedManually` is deliberately left alone: the run
+                    // died on its own, and marking it manual would suppress the
+                    // tmux restore the user never asked to suppress.
+                    model.runStarted = false
+                    model.runCommandString = nil
+                    syncProcessPolling()
                 }
                 // Tab removal for exited terminals happens at exit time, in
                 // handleSurfaceClosed via removeTerminalTab(surfaceID:) — by
@@ -1193,8 +1206,8 @@ struct TerminalContainerView: View {
         killRunTmuxSession()
         surfaceCache.removeSurface(for: runID)
         model.runStoppedManually = false
-        runGeneration += 1
-        runCommandString = buildRunCommand(script: command)
+        model.runGeneration += 1
+        model.runCommandString = buildRunCommand(script: command)
         model.runStarted = true
         markBrowserStartPending()
         preloadRunSurface()
@@ -1206,8 +1219,8 @@ struct TerminalContainerView: View {
         model.runStoppedManually = true
         model.runStarted = false
         browserStartPending = false
-        runCommandString = nil
-        runGeneration += 1
+        model.runCommandString = nil
+        model.runGeneration += 1
     }
 
     /// Whether this workstream's run is a process-compose run, and so has a
@@ -1265,9 +1278,9 @@ struct TerminalContainerView: View {
         surfaceCache.removeSurface(for: runID)
         model.runStoppedManually = false
         markBrowserStartPending()
-        runGeneration += 1
+        model.runGeneration += 1
         if let command = resolvedRunCommand {
-            runCommandString = buildRunCommand(script: command)
+            model.runCommandString = buildRunCommand(script: command)
         }
         model.runStarted = true
         preloadRunSurface()
@@ -1288,7 +1301,7 @@ struct TerminalContainerView: View {
     /// Create the run surface eagerly so the dev server starts even while the
     /// browser tab is active and the Info pane is not rendered.
     private func preloadRunSurface() {
-        guard let commandString = runCommandString else { return }
+        guard let commandString = model.runCommandString else { return }
         guard let app = TerminalApp.shared.app else { return }
         _ = surfaceCache.surface(
             for: runID,

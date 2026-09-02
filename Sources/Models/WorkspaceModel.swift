@@ -34,6 +34,24 @@ final class WorkspaceModel: ObservableObject {
     @Published var runStarted: Bool
     @Published var runStoppedManually: Bool
 
+    /// The run surface's generation, and the command it was started with.
+    ///
+    /// Here rather than in the view, and the pairing with `runStarted` above is
+    /// the whole point. While these were `@State` on `TerminalContainerView` —
+    /// which `ContentView` keys `.id(workstreamID)` — navigating to another
+    /// workstream and back destroyed them while `runStarted` survived here. The
+    /// view came back believing a run was live with `runGeneration` reset to 0,
+    /// so Stop called `removeSurface` on the generation-0 id, which is a no-op
+    /// against a live generation-3 surface: the stack kept running with no UI
+    /// able to see or stop it, and the next Start rebound its socket and
+    /// stranded the server.
+    ///
+    /// Deliberately absent from `WorkspaceTabSnapshot`: they must outlive a
+    /// view remount, not an app relaunch. Across a launch no surface exists and
+    /// a restored command string would be a lie.
+    @Published var runGeneration = 0
+    @Published var runCommandString: String?
+
     /// Monotonic per-kind counters. They feed `derivedUUID` salts, so they must
     /// never rewind on close — a reused salt would collide with a surface the
     /// cache still holds.

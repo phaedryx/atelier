@@ -75,7 +75,7 @@ struct EnvironmentTabView: View {
     let devCommand: DevCommand?
     @Binding var devCommandOverride: String?
     @Binding var runStarted: Bool
-    @Binding var runGeneration: Int
+    let runGeneration: Int
     /// Live process state from process-compose. Only rendered when the run is a
     /// process-compose run; otherwise nothing is polling it.
     @ObservedObject var processTable: ProcessTableModel
