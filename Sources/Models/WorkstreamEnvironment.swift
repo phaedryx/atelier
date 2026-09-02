@@ -31,14 +31,6 @@ enum WorkstreamEnvironment {
             "ATELIER_DEFAULT_BRANCH": defaultBranch,
         ]
 
-        // Run scripts that read FF_* live in the user's own repositories, where a
-        // rename here cannot reach them. Export both spellings, the same way the
-        // CONDUCTOR_/EMDASH_/SUPERSET_ aliases below cover other tools' scripts.
-        for (key, value) in Array(vars) {
-            guard let suffix = key.stripping(prefix: "ATELIER_") else { continue }
-            vars["FF_" + suffix] = value
-        }
-
         switch scriptSource {
         case "conductor.json":
             vars["CONDUCTOR_WORKSPACE_NAME"] = workstreamName
@@ -61,11 +53,22 @@ enum WorkstreamEnvironment {
             break
         }
 
-        // Last, so a project's own declarations win over Atelier's defaults: a
-        // project that wants ATELIER_PORT to mean something specific may say so.
-        // These reach every surface, not just process-compose — a port visible
-        // only to the run pane is invisible to a test run in a terminal tab.
+        // Before the FF_ mirror, so a project's own declarations win over
+        // Atelier's defaults: a project that wants ATELIER_PORT to mean
+        // something specific may say so. These reach every surface, not just
+        // process-compose — a port visible only to the run pane is invisible
+        // to a test run in a terminal tab.
         vars.merge(portPlan.values) { _, declared in declared }
+
+        // Run scripts that read FF_* live in the user's own repositories, where a
+        // rename here cannot reach them. Export both spellings, the same way the
+        // CONDUCTOR_/EMDASH_/SUPERSET_ aliases above cover other tools' scripts.
+        // Runs last, over the final ATELIER_* values (including any portPlan
+        // override), so FF_* never lags behind a project's own declaration.
+        for (key, value) in Array(vars) {
+            guard let suffix = key.stripping(prefix: "ATELIER_") else { continue }
+            vars["FF_" + suffix] = value
+        }
 
         return vars
     }

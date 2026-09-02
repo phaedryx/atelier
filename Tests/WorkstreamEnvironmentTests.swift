@@ -182,6 +182,22 @@ final class WorkstreamEnvironmentTests: XCTestCase {
         XCTAssertEqual(vars["ATELIER_PORT"], "50000")
     }
 
+    /// The FF_* mirror must reflect the overridden value, not the pre-override
+    /// default — a script reading FF_PORT should see what ATELIER_PORT says.
+    func testPortPlanOverrideIsReflectedInFFAlias() {
+        let vars = WorkstreamEnvironment.variables(
+            workstreamID: UUID(),
+            projectName: "app",
+            workstreamName: "ws",
+            projectDirectory: "/repo",
+            workingDirectory: "/repo/ws",
+            port: 40001,
+            portPlan: PortPlan(values: ["ATELIER_PORT": "50000"], browserPort: nil)
+        )
+
+        XCTAssertEqual(vars["FF_PORT"], "50000")
+    }
+
     func testEmptyPortPlanChangesNothing() {
         let base = WorkstreamEnvironment.variables(
             workstreamID: UUID(), projectName: "app", workstreamName: "ws",
