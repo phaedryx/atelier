@@ -300,6 +300,9 @@ struct TerminalContainerView: View {
     /// stats the binary, so reading it from the view body would also put
     /// filesystem work in every render pass.
     @State private var runPlan: RunCommandPlan = .nothing
+    /// Every file the run's config will load, for the pane to show in place of a
+    /// command string. Set in the same refresh as `runPlan`.
+    @State private var devCommandFiles: [String] = []
     /// Why Start can do nothing, when it can do nothing and the pane's own copy
     /// does not already explain it. Set in the same refresh as `runPlan`.
     @State private var runUnavailableReason: String?
@@ -714,6 +717,7 @@ struct TerminalContainerView: View {
                     showsProcessTable: usesProcessCompose,
                     portsByName: portPlan.values,
                     canStart: runPlan.canRun,
+                    devCommandFiles: devCommandFiles,
                     startUnavailableReason: runUnavailableReason,
                     unapprovedConfigFiles: configApproved ? [] : repositoryConfigFiles,
                     onReviewConfig: { isReviewingConfig = true },
@@ -1135,8 +1139,12 @@ struct TerminalContainerView: View {
     }
 
     /// Starts the run session. The command is either the user's own override or
-    /// one Atelier composed from the located config, and the pane displays it
-    /// before this runs, so there is nothing to approve.
+    /// the phase-scoped `prepare && execute` Atelier composes from the located
+    /// config. Nothing here is gated behind approval, because this is attended:
+    /// the user pressed Start, the output lands in a surface in front of them,
+    /// and Stop is to hand. The pane does *not* display this command — what it
+    /// shows for a process-compose source is the list of files that will be
+    /// loaded.
     @MainActor
     private func doStartRun() {
         guard let command = resolvedRunCommand else { return }
@@ -1311,6 +1319,7 @@ struct TerminalContainerView: View {
         resolvedDevCommand = devCommand
         let config = processComposeConfig(for: devCommand)
         let binary = ProcessComposeSettings.resolveBinary()
+        devCommandFiles = config?.loadedFiles ?? []
         runPlan = RunCommandPlan.plan(devCommand: devCommand, config: config, binary: binary)
         runUnavailableReason = RunCommandPlan.unavailableReason(
             devCommand: devCommand,

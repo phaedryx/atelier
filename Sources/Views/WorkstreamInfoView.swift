@@ -210,9 +210,11 @@ struct WorkstreamInfoView: View {
 
                 if !repositoryConfigFiles.isEmpty {
                     Section {
-                        // Only the unattended phases are gated. Start runs a
-                        // command the Environment pane already displays, so it
-                        // is never held behind this.
+                        // Only the unattended phases are gated. Start is
+                        // attended — a deliberate press, with the output in
+                        // front of the user and Stop to hand — so it is never
+                        // held behind this. Not because the pane shows the
+                        // command Start runs; it does not.
                         Text("Bootstrap runs when a workstream is created and dispose when one is archived, both without asking.")
                             .font(.caption)
                             .foregroundStyle(.secondary)

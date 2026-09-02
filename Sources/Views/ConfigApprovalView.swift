@@ -14,9 +14,11 @@ import SwiftUI
 /// `ScriptTrust` fingerprints, so what is shown and what is approved cannot
 /// drift apart.
 ///
-/// `execute` is deliberately not covered: it is a deliberate press on a command
-/// the Environment pane is already displaying, so gating it would ask about a
-/// file the user has just chosen to run.
+/// `execute` is deliberately not covered: it is attended. The user presses
+/// Start, its output arrives in a terminal surface in front of them, and Stop is
+/// one click away — so gating it would ask about a file the user has just chosen
+/// to run. What makes the difference is attendance, not display; the Environment
+/// pane does not show the command Start runs, and never did.
 struct ConfigApprovalView: View {
     /// The repository-provided files, in the order they are fingerprinted.
     let filePaths: [String]
@@ -56,9 +58,9 @@ struct ConfigApprovalView: View {
             .frame(maxWidth: 460)
 
             // Every file, in full. Truncating the preview would leave a payload
-            // below the cut unreachable but still covered by the button — fine
-            // for a gate on a command already displayed, not for a gate on
-            // unattended execution.
+            // below the cut unreachable but still covered by the button, and
+            // this is a gate on unattended execution: nobody will be watching
+            // when these processes run.
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(filePaths, id: \.self) { path in

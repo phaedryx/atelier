@@ -10,8 +10,11 @@ enum ScriptTrust {
     /// Whether the repository-provided process-compose files a config will load
     /// may run their unattended phases — `bootstrap` at worktree creation,
     /// `dispose` at archive — for this project. These are the only gated
-    /// phases: `execute` runs a command the Environment pane is already
-    /// displaying, on a deliberate press, and is never held behind approval.
+    /// phases: `execute` is *attended* — a deliberate press, output in a
+    /// terminal surface the user is looking at, Stop within reach — and is never
+    /// held behind approval. It is attendance that decides, not display: the
+    /// string the Environment pane renders is not the command Start runs, which
+    /// is `PhaseRunner`'s phase-scoped `prepare && execute`.
     ///
     /// Takes the whole list, never a single file. process-compose loads a base
     /// config *and* whatever override sits beside it, so fingerprinting only the

@@ -7,6 +7,32 @@ func shouldRestoreRunSession(useTmux: Bool, hasRunScript: Bool, hasExistingRunSe
     useTmux && hasRunScript && hasExistingRunSession && !wasStoppedManually
 }
 
+/// What the Environment pane shows for the effective dev command.
+///
+/// An override is shown as the command it is — the user typed it, and it is what
+/// Start runs. A process-compose config is shown as the **files** that will be
+/// loaded, and deliberately not as a command, because the string
+/// `DevCommandResolver` builds for that source is
+/// `process-compose up -U -f <files>` — no `-n`, so running it runs *every*
+/// namespace including `bootstrap` and `dispose`, past `PhasePolicy` and past
+/// `ScriptTrust`. `RunCommandPlan` makes it unreachable from Start; rendering it
+/// here made it reachable by hand, in a monospaced font that invites exactly
+/// that. The files are what `RunCommandPlan` meant the user to be able to see.
+///
+/// A free function, like its neighbours, so the property that matters — no
+/// output of this is ever a runnable process-compose command — can be tested
+/// without a view.
+func devCommandDisplayText(devCommand: DevCommand?, loadedFiles: [String]) -> String? {
+    guard let devCommand else { return nil }
+    switch devCommand.source {
+    case .override:
+        return devCommand.command
+    case .processCompose:
+        guard !loadedFiles.isEmpty else { return devCommand.sourceDescription }
+        return loadedFiles.map(\.abbreviatedPath).joined(separator: "  ")
+    }
+}
+
 /// Wraps a command for a login shell, so it sees the PATH and shell functions
 /// the user's own terminal would. Used when the `atelier-run` launcher is
 /// unavailable and the command has to be run bare.
@@ -40,6 +66,10 @@ struct EnvironmentTabView: View {
     /// resolved command — and an unresolvable process-compose binary rendered an
     /// enabled Start that did nothing and explained nothing.
     let canStart: Bool
+    /// Every file process-compose will load for this workstream, or empty when
+    /// the run is not a process-compose run. Shown instead of a command string:
+    /// see `devCommandDisplay`.
+    let devCommandFiles: [String]
     /// Why Start can do nothing, when the copy below does not already say. The
     /// states that reach this were all silent: an integration switched off, a
     /// config that vanished, and a binary the search paths do not cover.
@@ -60,12 +90,8 @@ struct EnvironmentTabView: View {
         derivedUUID(from: workstreamID, salt: "env-run-\(runGeneration)")
     }
 
-    /// What the pane shows under "Dev command". For an override this is the
-    /// command the user typed; for a process-compose config it is the files that
-    /// will be loaded, which is deliberately *not* a runnable string — see
-    /// `RunCommandPlan`.
-    private var runCommandPreference: String? {
-        devCommand?.command
+    private var devCommandDisplay: String? {
+        devCommandDisplayText(devCommand: devCommand, loadedFiles: devCommandFiles)
     }
 
     var body: some View {
@@ -160,8 +186,8 @@ struct EnvironmentTabView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                     }
                     .buttonStyle(.borderless)
-                    if let command = runCommandPreference {
-                        Text(command)
+                    if let display = devCommandDisplay {
+                        Text(display)
                             .font(.system(size: 12, design: .monospaced))
                             .foregroundStyle(.tertiary)
                     }
@@ -188,7 +214,16 @@ struct EnvironmentTabView: View {
                     if isCustomizingDevCommand {
                         isCustomizingDevCommand = false
                     } else {
-                        devCommandEditText = devCommand?.command ?? ""
+                        // Seeded only from an override — the user's own text.
+                        // Seeding it from a `.processCompose` command handed the
+                        // user the un-`-n`'d string in an editable field, and
+                        // Save turns whatever is in that field into an
+                        // `.override`, which `RunCommandPlan` runs literally.
+                        // Three clicks, no typing, and `bootstrap` and `dispose`
+                        // run with no approval.
+                        devCommandEditText = devCommand?.source == .override
+                            ? (devCommand?.command ?? "")
+                            : ""
                         isCustomizingDevCommand = true
                     }
                 }
@@ -196,9 +231,9 @@ struct EnvironmentTabView: View {
                 .font(.system(size: 11))
             }
 
-            if let devCommand {
+            if let devCommand, let display = devCommandDisplay {
                 HStack(spacing: 6) {
-                    Text(devCommand.command)
+                    Text(display)
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -255,9 +290,18 @@ struct EnvironmentTabView: View {
     }
 
     /// A banner, not a gate. The unattended phases — bootstrap at creation,
-    /// dispose at archive — are the ones that need approval; Start runs a
-    /// command this pane is already displaying, so it stays available whether or
-    /// not the file has been approved.
+    /// dispose at archive — are the ones that need approval, because nobody is
+    /// there when they run. Start is attended: the user presses it deliberately,
+    /// the stack's output lands in a terminal surface in front of them, and Stop
+    /// is right there — so it stays available whether or not the file has been
+    /// approved.
+    ///
+    /// That, and not "the pane shows the command Start runs", is the reason. The
+    /// pane never showed it: what Start runs is the phase-scoped
+    /// `prepare && execute`, assembled by `PhaseRunner`, while the string the
+    /// pane used to render was a display-only one that must never execute. The
+    /// decision to leave `execute` ungated stands; only the stated reason was
+    /// false, and it was load-bearing in four places.
     private func configApprovalBanner(paths: [String]) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "exclamationmark.shield")
