@@ -97,7 +97,7 @@ git worktree add "$def"
 ## Configuration
 
 Turn on **Enable process-compose** in Settings first — it is off by default, and
-nothing below runs until it is on.
+nothing below runs until it is on, including the Environment tab's Start button.
 
 Per-project commands live in a `process-compose.yaml` — in the worktree, or in
 the project directory beside it — read by

@@ -90,7 +90,26 @@ enum DevCommandResolver {
     /// and runs is then exactly one set. Leaving the override to discovery
     /// meant Start could load `compose.yaml` — a name Atelier does not detect —
     /// while bootstrap and dispose ran something else for the same project.
+    ///
+    /// **Nothing is detected while the integration is switched off, and that
+    /// guard is a security boundary rather than a tidiness one.** This command
+    /// carries no `-n`, so process-compose runs *every* namespace it finds —
+    /// `bootstrap` and `dispose` included. Those two are the phases
+    /// `PhasePolicy` exists to gate: they execute repository-authored processes
+    /// unattended, and they run only once the user has approved every
+    /// repository-provided file. But this command never goes through
+    /// `PhasePolicy`, so without the guard below, pressing Start on a freshly
+    /// cloned repository with the integration *disabled* would execute its
+    /// bootstrap and dispose processes with no approval and no phase scoping —
+    /// reachable precisely because `usesProcessCompose` is false when the
+    /// setting is off, which sends `resolvedRunCommand` down this fallback.
+    ///
+    /// It became reachable when this function started naming files with `-f`:
+    /// before that it was `process-compose up -U` relying on discovery, which
+    /// mostly found nothing. Do not narrow this guard to the phase call sites —
+    /// this *is* a call site, and it is the one that bypasses them.
     static func detectProcessCompose(in directory: String, projectDirectory: String) -> DevCommand? {
+        guard ProcessComposeSettings.isEnabled else { return nil }
         guard let config = ProcessComposeConfig.locate(
             worktree: directory, projectDirectory: projectDirectory
         ) else { return nil }

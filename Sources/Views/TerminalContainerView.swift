@@ -1124,6 +1124,14 @@ struct TerminalContainerView: View {
     /// tightening it would mean calling `resolveBinary()` (a filesystem stat)
     /// from this per-render property, which is the cost this comment exists to
     /// avoid.
+    ///
+    /// The `isEnabled` half is now belt-and-braces rather than the load-bearing
+    /// check: `DevCommandResolver.detectProcessCompose` refuses to detect
+    /// anything while the setting is off, so a `.processCompose` source already
+    /// implies it. Kept anyway, because the two are read from different places
+    /// and a reader here should not have to go and confirm that the resolver
+    /// still guards. It cannot *disagree* with the resolver — only be redundant
+    /// with it.
     private var usesProcessCompose: Bool {
         ProcessComposeSettings.isEnabled && resolvedDevCommand?.source == .processCompose
     }

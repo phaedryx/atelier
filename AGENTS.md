@@ -154,6 +154,18 @@ because there is no other setup path left. `ProcessComposeSettings.resolveBinary
 binary: a configured path is used or fails, and never falls back to a search — silently running
 a different binary than the one named is worse than reporting the named one is gone.
 
+The switch is checked in **three** places, and the third one is a security boundary rather than
+a convenience: `PhasePolicy.plan` (so no unattended phase runs), `refreshConfigApproval` (so
+nothing asks for approval it will not use), and `DevCommandResolver.detectProcessCompose` (so
+Start has nothing to run). That last one matters because the Start fallback command carries
+**no `-n`** — it runs every namespace it finds, `bootstrap` and `dispose` included, and it never
+passes through `PhasePolicy`. It is reachable exactly when the switch is off, since
+`usesProcessCompose` is false then and `resolvedRunCommand` drops to
+`resolvedDevCommand?.command`. So detection refuses to detect while the switch is off; without
+that guard, pressing Start on a freshly cloned repository with the integration *disabled* would
+execute its bootstrap and dispose processes with no approval. `Tests/DevCommandTests.swift`
+pins this; the guard is load-bearing and four of those tests fail without it.
+
 **Four namespaces**, driven by `PhaseRunner` and `PhaseExecutor`:
 
 | Namespace | When | Interactive? |
