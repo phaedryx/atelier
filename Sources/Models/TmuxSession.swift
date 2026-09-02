@@ -68,7 +68,15 @@ enum TmuxSession {
         let conf = shellEscape(configPath)
         let escaped = shellEscape(sessionName)
 
-        let envFlags = environmentVars.map { "-e \"\($0.key)=\(doubleQuoteEscape($0.value))\"" }.joined(separator: " ")
+        // Both halves escaped. The key was not, and keys come from
+        // `ports.yaml` — repository content in an ordinary clone — so a name
+        // containing a quote or `$(…)` was an ungated path from a repository
+        // into `sh -c` whenever tmux mode was on. `PortsConfig.validateName`
+        // now restricts names to variable-name characters; this is the second
+        // line of that defence, not a substitute for it.
+        let envFlags = environmentVars
+            .map { "-e \"\(doubleQuoteEscape($0.key))=\(doubleQuoteEscape($0.value))\"" }
+            .joined(separator: " ")
 
         // Build the tmux new-session command
         var tmuxCmd = "\(tmuxPath) -L \(socket) -f \(conf) new-session -A -s \(escaped)"
@@ -103,7 +111,15 @@ enum TmuxSession {
         let escaped = shellEscape(sessionName)
         let logFile = shellEscape(stderrLogPath)
 
-        let envFlags = environmentVars.map { "-e \"\($0.key)=\(doubleQuoteEscape($0.value))\"" }.joined(separator: " ")
+        // Both halves escaped. The key was not, and keys come from
+        // `ports.yaml` — repository content in an ordinary clone — so a name
+        // containing a quote or `$(…)` was an ungated path from a repository
+        // into `sh -c` whenever tmux mode was on. `PortsConfig.validateName`
+        // now restricts names to variable-name characters; this is the second
+        // line of that defence, not a substitute for it.
+        let envFlags = environmentVars
+            .map { "-e \"\(doubleQuoteEscape($0.key))=\(doubleQuoteEscape($0.value))\"" }
+            .joined(separator: " ")
 
         var lines: [String] = []
         lines.append("\(tmuxPath) -L \(socket) start-server 2>>\(logFile) || true")

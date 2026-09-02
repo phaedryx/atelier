@@ -424,6 +424,40 @@ final class DevCommandTests: XCTestCase {
 
     /// Word boundaries: a path or process name containing "up" is not the
     /// subcommand, and must not make an ordinary command look dangerous.
+    /// Verified against process-compose 1.122.0: with no subcommand the root
+    /// command runs the project, and a `bootstrap` process in the named file
+    /// executes. Requiring the word `up` let this straight through.
+    func testABareInvocationWithNoSubcommandIsUnscoped() {
+        XCTAssertTrue(DevCommandResolver.isUnscopedProcessComposeCommand("process-compose -f a.yaml"))
+        XCTAssertTrue(DevCommandResolver.isUnscopedProcessComposeCommand("process-compose"))
+        XCTAssertTrue(
+            DevCommandResolver.isUnscopedProcessComposeCommand("/opt/homebrew/bin/process-compose -U -f a.yaml")
+        )
+    }
+
+    /// Splitting on whitespace and quotes alone read this as the word `up;`.
+    func testShellPunctuationDoesNotHideTheSubcommand() {
+        XCTAssertTrue(DevCommandResolver.isUnscopedProcessComposeCommand("process-compose up; echo done"))
+        XCTAssertTrue(DevCommandResolver.isUnscopedProcessComposeCommand("process-compose up&"))
+        XCTAssertTrue(DevCommandResolver.isUnscopedProcessComposeCommand("(process-compose up)"))
+    }
+
+    /// pflag shorthand: both of these do scope the run.
+    func testAttachedNamespaceShorthandCountsAsScoped() {
+        XCTAssertFalse(DevCommandResolver.isUnscopedProcessComposeCommand("process-compose up -nexecute"))
+        XCTAssertFalse(DevCommandResolver.isUnscopedProcessComposeCommand("process-compose up -n=execute"))
+        XCTAssertFalse(
+            DevCommandResolver.isUnscopedProcessComposeCommand("process-compose up --namespace=execute")
+        )
+    }
+
+    /// A real subcommand is not the root command and does not run the project.
+    func testANonRunningSubcommandIsNotUnscoped() {
+        XCTAssertFalse(DevCommandResolver.isUnscopedProcessComposeCommand("process-compose down"))
+        XCTAssertFalse(DevCommandResolver.isUnscopedProcessComposeCommand("process-compose version"))
+        XCTAssertFalse(DevCommandResolver.isUnscopedProcessComposeCommand("process-compose attach"))
+    }
+
     func testTheShapeCheckDoesNotFireOnLookalikes() {
         XCTAssertFalse(DevCommandResolver.isUnscopedProcessComposeCommand("pnpm dev"))
         XCTAssertFalse(DevCommandResolver.isUnscopedProcessComposeCommand("./bin/upload --all"))

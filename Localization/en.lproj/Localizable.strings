@@ -531,3 +531,5 @@
 "All" = "All";
 "Processes to start" = "Processes to start";
 "At least one process has to start." = "At least one process has to start.";
+"is not a usable variable name; use letters, digits and _, not starting with a digit" = "is not a usable variable name; use letters, digits and _, not starting with a digit";
+"pins port %d, which %@ already pins" = "pins port %d, which %@ already pins";

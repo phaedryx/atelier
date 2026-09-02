@@ -195,4 +195,59 @@ final class PortsConfigTests: XCTestCase {
 
         XCTAssertThrowsError(try PortsConfig.load(from: dir.path))
     }
+
+    /// `ports.yaml` names become environment variable names and reach `sh -c`
+    /// through `TmuxSession.wrapCommand`, which escapes values and not keys.
+    /// The file is repository content in an ordinary clone and has no approval
+    /// gate, so this is the gate.
+    func testANameThatIsNotAUsableVariableNameIsRejected() throws {
+        for name in ["BFF PORT", "BFF\"PORT", "BFF$(id)", "1PORT", "BFF-PORT", "PORT;echo"] {
+            try write("ports:\n  \"\(name)\": { assigned: true }")
+
+            XCTAssertThrowsError(
+                try PortsConfig.load(from: dir.path),
+                "\(name) must be refused"
+            )
+        }
+    }
+
+    func testOrdinaryVariableNamesAreStillAccepted() throws {
+        try write("ports:\n  BFF_PORT: { assigned: true }\n  _PRIVATE2: { fixed: 3005 }")
+
+        let config = try XCTUnwrap(PortsConfig.load(from: dir.path))
+
+        XCTAssertEqual(config.entries.map(\.name), ["BFF_PORT", "_PRIVATE2"])
+    }
+
+    /// Two names pinned to one port cannot both bind; every other
+    /// self-contradiction here is refused, so this one is too.
+    func testTwoNamesPinningTheSamePortAreRejected() throws {
+        try write("ports:\n  A_PORT: { fixed: 3005 }\n  B_PORT: { fixed: 3005 }")
+
+        XCTAssertThrowsError(try PortsConfig.load(from: dir.path)) { error in
+            guard case let .invalidEntry(_, reason) = error as? PortsConfig.LoadError else {
+                return XCTFail("expected invalidEntry, got \(error)")
+            }
+            XCTAssertTrue(reason.contains("3005"), reason)
+        }
+    }
+
+    func testDistinctFixedPortsAreFine() throws {
+        try write("ports:\n  A_PORT: { fixed: 3005 }\n  B_PORT: { fixed: 3006 }")
+
+        XCTAssertNoThrow(try PortsConfig.load(from: dir.path))
+    }
+
+    /// All six, not the three the previous version looped over: removing any
+    /// one from `reservedNames` must fail this.
+    func testEveryNameAtelierSetsIsReserved() throws {
+        for name in [
+            "ATELIER_WORKSTREAM_ID", "ATELIER_PROJECT", "ATELIER_WORKSTREAM",
+            "ATELIER_PROJECT_DIR", "ATELIER_WORKTREE_DIR", "ATELIER_DEFAULT_BRANCH",
+        ] {
+            try write("ports:\n  \(name): { assigned: true }")
+
+            XCTAssertThrowsError(try PortsConfig.load(from: dir.path), "\(name) must be refused")
+        }
+    }
 }

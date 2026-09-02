@@ -74,13 +74,30 @@ enum DevCommandResolver {
     /// namespace is left alone — that is a scoped command, whatever else it
     /// does — and so is anything not invoking process-compose.
     static func isUnscopedProcessComposeCommand(_ text: String) -> Bool {
-        let normalized = text.lowercased()
-        guard normalized.contains("process-compose") else { return false }
-        // Word-boundary checks, so a path like `.../up-tools/` or a process
-        // named `upload` cannot pass for the subcommand or a flag.
-        let words = normalized.split(whereSeparator: { " \t\n'\"".contains($0) }).map(String.init)
-        guard words.contains("up") else { return false }
-        return !words.contains { $0 == "-n" || $0.hasPrefix("--namespace") }
+        // Shell metacharacters separate words too. Splitting on whitespace and
+        // quotes alone left `process-compose up; echo done` reading as the word
+        // `up;`, which is not `up`, so it passed.
+        let separators: Set<Character> = [" ", "\t", "\n", "'", "\"", ";", "&", "|", "(", ")", "<", ">"]
+        let words = text.lowercased().split(whereSeparator: { separators.contains($0) }).map(String.init)
+        guard let binary = words.firstIndex(where: { $0.contains("process-compose") }) else {
+            return false
+        }
+        // A named namespace makes it scoped wherever it appears. `-nexecute`
+        // and `-n=execute` are both valid pflag shorthand, so the prefix
+        // rather than equality.
+        if words.contains(where: { $0.hasPrefix("-n") || $0.hasPrefix("--namespace") }) {
+            return false
+        }
+        // What follows the binary decides whether the project runs at all.
+        //
+        // Requiring the word `up` was wrong, and verified so against
+        // process-compose 1.122.0: `process-compose -f x.yaml` with **no
+        // subcommand** runs the project through the root command, and a
+        // `bootstrap` process in that file executes. So a flag straight after
+        // the binary — or nothing at all — is every bit as unscoped as `up`,
+        // while a real subcommand like `down` is not.
+        guard let next = words.dropFirst(binary + 1).first else { return true }
+        return next == "up" || next.hasPrefix("-")
     }
 
     // MARK: - Resolution

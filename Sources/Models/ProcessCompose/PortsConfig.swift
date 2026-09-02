@@ -74,7 +74,28 @@ struct PortsConfig: Equatable {
         "ATELIER_PROJECT_DIR", "ATELIER_WORKTREE_DIR", "ATELIER_DEFAULT_BRANCH",
     ]
 
+    /// A declared name becomes an environment variable name, and reaches a
+    /// shell as one.
+    ///
+    /// `TmuxSession.wrapCommand` builds `-e "KEY=value"` and hands the result
+    /// to `sh -c`; it escapes the *value* and not the key. `ports.yaml` is read
+    /// from the project directory with no approval gate, and in the ordinary
+    /// clone layout that directory is the work tree — so it is repository
+    /// content. A name containing a quote or `$(…)` was therefore an ungated
+    /// path from a repository into a shell whenever tmux mode was on.
+    ///
+    /// Restricting names to what an environment variable may actually be
+    /// closes that, and also rejects names no shell could export.
     private static func validateName(_ name: String) throws {
+        let valid = !name.isEmpty
+            && name.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") }
+            && !(name.first?.isNumber ?? true)
+        if !valid {
+            throw LoadError.invalidEntry(
+                name: name,
+                reason: NSLocalizedString("is not a usable variable name; use letters, digits and _, not starting with a digit", comment: "")
+            )
+        }
         if reservedNames.contains(name) {
             throw LoadError.invalidEntry(
                 name: name,
@@ -155,6 +176,24 @@ struct PortsConfig: Equatable {
             }
             try validateName(name)
             entries.append(PortEntry(name: name, kind: kind, isBrowser: entry.browser == true))
+        }
+
+        // Two names pinned to one port cannot both bind. Every other
+        // self-contradiction in this file is refused; this one used to parse
+        // and fail later, at bind time, in whichever process lost the race.
+        var seenFixed: [Int: String] = [:]
+        for entry in entries {
+            guard case let .fixed(port) = entry.kind else { continue }
+            if let first = seenFixed[port] {
+                throw LoadError.invalidEntry(
+                    name: entry.name,
+                    reason: String(
+                        format: NSLocalizedString("pins port %d, which %@ already pins", comment: ""),
+                        port, first
+                    )
+                )
+            }
+            seenFixed[port] = entry.name
         }
 
         let browsers = entries.filter(\.isBrowser).map(\.name)
