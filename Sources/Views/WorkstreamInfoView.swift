@@ -11,12 +11,12 @@ struct WorkstreamInfoView: View {
     let projectDirectory: String
     var scriptConfig: ScriptConfig = .empty
     @Binding var scriptsApproved: Bool
-    /// The repository-provided process-compose config, when there is one. Info
-    /// is the permanent tab, so this is the approval route that survives the
+    /// Every repository-provided process-compose file this worktree would load.
+    /// Info is the permanent tab, so this is the approval route that survives the
     /// user closing Environment.
-    var repositoryConfigPath: String?
+    var repositoryConfigFiles: [String] = []
     var configApproved: Bool = false
-    /// No defaults: a call site that passes `repositoryConfigPath` but forgets
+    /// No defaults: a call site that passes `repositoryConfigFiles` but forgets
     /// these would render a Review button that silently does nothing, which is
     /// the whole failure this gate exists to avoid.
     let onReviewConfig: () -> Void
@@ -238,7 +238,7 @@ struct WorkstreamInfoView: View {
                     }
                 }
 
-                if let configPath = repositoryConfigPath {
+                if !repositoryConfigFiles.isEmpty {
                     Section {
                         // Only the unattended phases are gated. Start runs a
                         // command the Environment pane already displays, so it
@@ -263,7 +263,9 @@ struct WorkstreamInfoView: View {
                         HStack {
                             Text("Process Config")
                             Spacer()
-                            Text((configPath as NSString).lastPathComponent)
+                            Text(repositoryConfigFiles
+                                .map { ($0 as NSString).lastPathComponent }
+                                .joined(separator: ", "))
                                 .font(.caption2)
                                 .foregroundStyle(.quaternary)
                         }

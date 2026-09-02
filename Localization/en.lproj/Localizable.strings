@@ -536,3 +536,10 @@
 "Process Config" = "Process Config";
 "Bootstrap runs when a workstream is created and dispose when one is archived, both without asking." = "Bootstrap runs when a workstream is created and dispose when one is archived, both without asking.";
 "Review" = "Review";
+
+/* Unattended phase policy — shared by bootstrap and dispose */
+"The process-compose integration is turned off, so no %@ ran." = "The process-compose integration is turned off, so no %@ ran.";
+"This project has no process-compose.yaml, so no %@ ran." = "This project has no process-compose.yaml, so no %@ ran.";
+"process-compose was not found, so no %@ ran." = "process-compose was not found, so no %@ ran.";
+"This project's process-compose files came with the repository and have not been approved, so no %@ ran." = "This project's process-compose files came with the repository and have not been approved, so no %@ ran.";
+"Approval covers this repository until any of these files changes. Start is never gated by it." = "Approval covers this repository until any of these files changes. Start is never gated by it.";

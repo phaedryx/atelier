@@ -268,4 +268,67 @@ final class ProcessComposeConfigTests: XCTestCase {
 
         XCTAssertFalse(config.namespaceIsConfidentlyEmpty("prepare"))
     }
+
+    // MARK: - What has to be approved
+
+    /// The base config in the worktree is repository content, so it is approved.
+    func testWorktreeConfigRequiresApproval() throws {
+        try write("process-compose.yaml", in: worktree)
+        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+
+        XCTAssertTrue(config.requiresApproval)
+        XCTAssertEqual(config.repositoryProvidedFiles, [worktree.appendingPathComponent("process-compose.yaml").path])
+    }
+
+    /// The first hole this closes. A repository ships a benign base config and
+    /// an override beside it; `locate` records only the base, but
+    /// process-compose's own discovery loads both. Approving the base alone
+    /// would show the user one file while another executed unattended.
+    func testWorktreeOverrideIsPartOfWhatIsApproved() throws {
+        try write("process-compose.yaml", in: worktree)
+        try write("process-compose.override.yaml", in: worktree)
+        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+
+        XCTAssertNil(config.overridePath, "locate does not record a discovered override")
+        XCTAssertTrue(config.requiresApproval)
+        XCTAssertEqual(config.repositoryProvidedFiles, [
+            worktree.appendingPathComponent("process-compose.yaml").path,
+            worktree.appendingPathComponent("process-compose.override.yaml").path,
+        ])
+    }
+
+    /// A config the user placed in the project directory, with nothing in the
+    /// worktree, is theirs: nothing to approve.
+    func testProjectDirectoryConfigAloneRequiresNoApproval() throws {
+        try write("process-compose.yaml", in: project)
+        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+
+        XCTAssertFalse(config.requiresApproval)
+        XCTAssertEqual(config.repositoryProvidedFiles, [])
+    }
+
+    /// The second and worse hole. The user's own config sits in the project
+    /// directory, so `isRepositoryProvided` is false — but `overridePath` points
+    /// into the *worktree* and is named with `-f` explicitly, so repository
+    /// content executes. Gating on `isRepositoryProvided` alone would leave this
+    /// completely ungated.
+    func testWorktreeOverrideBesideAUserConfigStillRequiresApproval() throws {
+        try write("process-compose.yaml", in: project)
+        try write("process-compose.override.yaml", in: worktree)
+        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+
+        XCTAssertFalse(config.isRepositoryProvided)
+        XCTAssertTrue(config.requiresApproval, "a worktree override is repository content whatever the base config is")
+        XCTAssertEqual(config.repositoryProvidedFiles, [worktree.appendingPathComponent("process-compose.override.yaml").path])
+    }
+
+    /// The user's own project-directory file is never in the approved set, so
+    /// editing it does not re-ask. It is theirs, placed by hand outside git.
+    func testTheUsersOwnConfigIsNeverInTheApprovedSet() throws {
+        try write("process-compose.yaml", in: project)
+        try write("process-compose.override.yaml", in: worktree)
+        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+
+        XCTAssertFalse(config.repositoryProvidedFiles.contains(project.appendingPathComponent("process-compose.yaml").path))
+    }
 }

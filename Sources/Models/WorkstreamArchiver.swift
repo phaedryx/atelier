@@ -60,7 +60,7 @@ enum WorkstreamArchiver {
         )
     }
 
-    /// Purges a workstream by running teardown, removing the git worktree from disk,
+    /// Purges a workstream by running its `dispose` phase, removing the git worktree from disk,
     /// deleting the local branch, updating the default branch to latest,
     /// killing tmux sessions, and evicting terminal surfaces from the cache.
     @MainActor
@@ -73,6 +73,13 @@ enum WorkstreamArchiver {
         if let ws = project.workstreams.first(where: { $0.id == workstreamID }) {
             let projectDir = project.directory
             let worktreePath = ws.worktreePath ?? projectDir
+            // Only the real worktree, never the `?? projectDir` fallback above.
+            // A workstream archived before `workstreamWorktreeReady` lands has no
+            // worktree path, and `dispose` now runs arbitrary project-authored
+            // processes — running them against the user's main checkout is a
+            // different and much worse thing than the `teardown` script this
+            // replaced ever risked.
+            let disposePath = ws.worktreePath
             let standardizedPath = URL(fileURLWithPath: worktreePath).standardizedFileURL.path
             let wsName = ws.name
             let projName = project.name
@@ -89,11 +96,13 @@ enum WorkstreamArchiver {
                 }
                 // Before the worktree is removed: `ProcessComposeConfig.locate`
                 // reads the worktree, and dispose runs in it.
-                runDispose(
-                    workstreamID: workstreamID,
-                    worktreePath: worktreePath,
-                    projectDirectory: projectDir
-                )
+                if let disposePath {
+                    runDispose(
+                        workstreamID: workstreamID,
+                        worktreePath: disposePath,
+                        projectDirectory: projectDir
+                    )
+                }
                 GitOperations.removeWorktree(projectPath: projectDir, worktreePath: worktreePath)
                 if let branchName {
                     GitOperations.deleteLocalBranch(at: projectDir, branchName: branchName)
@@ -115,34 +124,44 @@ enum WorkstreamArchiver {
     /// Run the project's `dispose` namespace before the worktree goes away.
     ///
     /// This replaces the `teardown` script: a project now says what archiving
-    /// should clean up in the same file it uses for everything else. The
-    /// preconditions mirror `BootstrapPolicy.plan` — integration on, a config
-    /// located, a binary to run it with, and approval when the config arrived
-    /// with the repository — because dispose is unattended in exactly the way
-    /// bootstrap is.
+    /// should clean up in the same file it uses for everything else.
+    ///
+    /// The preconditions are not restated here. `BootstrapPolicy.plan` owns
+    /// them — integration on, a config located, a binary to run it with, and
+    /// approval of every repository-provided file process-compose will load —
+    /// and dispose is unattended in exactly the way bootstrap is, so a second
+    /// inline copy would be a second security policy with no tests and no way to
+    /// follow a change made to the first.
     ///
     /// Nothing here can stop the archive. Every refusal returns quietly and a
     /// failure is logged and swallowed: a workstream stranded half-archived is
     /// worse than cleanup that did not happen, and the user has already said to
-    /// remove it. `PhaseExecutor` bounds the run at
-    /// `Timeout.userCommand`, so a wedged dispose delays the archive rather than
-    /// blocking it forever.
+    /// remove it. `PhaseExecutor` bounds the run at `Timeout.userCommand`, so a
+    /// wedged dispose delays the archive rather than blocking it forever.
     private static func runDispose(
         workstreamID: UUID,
         worktreePath: String,
         projectDirectory: String
     ) {
-        guard ProcessComposeSettings.isEnabled,
-              let config = ProcessComposeConfig.locate(
-                  worktree: worktreePath, projectDirectory: projectDirectory
-              ),
-              let binary = ProcessComposeSettings.resolveBinary()
-        else { return }
-
-        guard !config.isRepositoryProvided
-            || ScriptTrust.isApproved(configFile: config.path, for: projectDirectory)
-        else {
-            logger.info("Skipping dispose for \(worktreePath, privacy: .public): config not approved")
+        let plan = BootstrapPolicy.plan(
+            phase: .dispose,
+            isEnabled: ProcessComposeSettings.isEnabled,
+            config: ProcessComposeConfig.locate(
+                worktree: worktreePath, projectDirectory: projectDirectory
+            ),
+            binary: ProcessComposeSettings.resolveBinary(),
+            isApproved: {
+                ScriptTrust.isApproved(configFiles: $0.repositoryProvidedFiles, for: projectDirectory)
+            }
+        )
+        let config: ProcessComposeConfig
+        let binary: String
+        switch plan {
+        case let .run(planned, planBinary):
+            config = planned
+            binary = planBinary
+        case let .nothingToDo(message):
+            logger.info("No dispose for \(worktreePath, privacy: .public): \(message, privacy: .public)")
             return
         }
 

@@ -43,9 +43,9 @@ struct EnvironmentTabView: View {
     let showsProcessTable: Bool
     /// The worktree's port plan, so each row can show the port it owns.
     let portsByName: [String: String]
-    /// A repository-provided process-compose config whose unattended phases the
-    /// user has not approved, or nil when there is nothing to ask about.
-    let unapprovedConfigPath: String?
+    /// The repository-provided process-compose files whose unattended phases the
+    /// user has not approved, or empty when there is nothing to ask about.
+    let unapprovedConfigFiles: [String]
     let onReviewConfig: () -> Void
     let onStart: () -> Void
     let onStop: () -> Void
@@ -75,8 +75,8 @@ struct EnvironmentTabView: View {
                 configSourceBanner(source: source)
                 Divider()
             }
-            if let path = unapprovedConfigPath {
-                configApprovalBanner(path: path)
+            if !unapprovedConfigFiles.isEmpty {
+                configApprovalBanner(paths: unapprovedConfigFiles)
                 Divider()
             }
             environmentContent
@@ -379,14 +379,14 @@ struct EnvironmentTabView: View {
     /// dispose at archive — are the ones that need approval; Start runs a
     /// command this pane is already displaying, so it stays available whether or
     /// not the file has been approved.
-    private func configApprovalBanner(path: String) -> some View {
+    private func configApprovalBanner(paths: [String]) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "exclamationmark.shield")
                 .foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 2) {
                 Text(String(
                     format: NSLocalizedString("%@ came with this repository and has not been approved", comment: ""),
-                    (path as NSString).lastPathComponent
+                    paths.map { ($0 as NSString).lastPathComponent }.joined(separator: ", ")
                 ))
                 .font(.system(size: 12, weight: .semibold))
                 Text("Its bootstrap and dispose phases will not run until you review it. Start is unaffected.")

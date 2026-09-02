@@ -48,6 +48,22 @@ actor AsyncSetupService {
     /// Track per-workstream setup state.
     private var states: [UUID: AsyncSetupState] = [:]
 
+    /// Workstreams whose bootstrap is in flight right now.
+    ///
+    /// Not derived from `states`: `setup` publishes `.inProgress` before it
+    /// spawns the background task, so a state-based check could not tell "about
+    /// to start" from "already running".
+    ///
+    /// `runBackgroundSetup` suspends at `withCheckedContinuation`, and an actor
+    /// admits other calls across a suspension. Two concurrent bootstraps for one
+    /// workstream would share `<id>-bootstrap.sock`, and `PhaseExecutor.run`
+    /// shuts that socket down before spawning — so the second run would strand
+    /// the first's control server with no way to reach it, exactly the case
+    /// `PhaseRunner.socketPath` warns about. Reachable from revoke → Review →
+    /// Approve, and from `setupExistingWorktree` firing on
+    /// `workstreamWorktreeReady` while an approval press lands.
+    private var runningBootstraps: Set<UUID> = []
+
     /// Get the current setup state for a workstream.
     func state(for workstreamID: UUID) -> AsyncSetupState {
         states[workstreamID] ?? .idle
@@ -132,16 +148,28 @@ actor AsyncSetupService {
         projectPath: String,
         worktreePath: String
     ) async {
+        // Checked and claimed without an intervening `await`, so two callers
+        // cannot both pass it.
+        guard !runningBootstraps.contains(workstreamID) else {
+            logger.info("Bootstrap for \(worktreePath, privacy: .public) is already running; ignoring the second request")
+            return
+        }
+        runningBootstraps.insert(workstreamID)
+        defer { runningBootstraps.remove(workstreamID) }
+
         await updateState(
             for: workstreamID,
             to: .inProgress(step: NSLocalizedString("Running bootstrap", comment: ""), progress: 0.5)
         )
 
         let plan = BootstrapPolicy.plan(
+            phase: .bootstrap,
             isEnabled: ProcessComposeSettings.isEnabled,
             config: ProcessComposeConfig.locate(worktree: worktreePath, projectDirectory: projectPath),
             binary: ProcessComposeSettings.resolveBinary(),
-            isApproved: { ScriptTrust.isApproved(configFile: $0.path, for: projectPath) }
+            isApproved: {
+                ScriptTrust.isApproved(configFiles: $0.repositoryProvidedFiles, for: projectPath)
+            }
         )
         // Exhaustive on purpose. A nested `guard case` would leave the
         // workstream reporting `.inProgress` forever if a third `Plan` case

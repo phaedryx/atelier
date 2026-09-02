@@ -5,11 +5,22 @@
 import XCTest
 
 final class BootstrapPolicyTests: XCTestCase {
+    /// `requiresApproval` is derived from where the loaded files live, so these
+    /// fixtures are the two shapes that differ: one in a worktree (repository
+    /// content, gated) and one in the project directory with no worktree
+    /// override beside it (the user's own, never gated).
     private let repositoryConfig = ProcessComposeConfig(
         path: "/repo/wt/process-compose.yaml", isRepositoryProvided: true, overridePath: nil
     )
     private let userConfig = ProcessComposeConfig(
         path: "/repo/process-compose.yaml", isRepositoryProvided: false, overridePath: nil
+    )
+    /// The user's own base config with a worktree override beside it. The base
+    /// needs no approval; the override is repository content and does.
+    private let userConfigWithRepositoryOverride = ProcessComposeConfig(
+        path: "/repo/process-compose.yaml",
+        isRepositoryProvided: false,
+        overridePath: "/repo/wt/process-compose.override.yaml"
     )
 
     private func note(_ plan: BootstrapPolicy.Plan) -> String? {
@@ -25,7 +36,7 @@ final class BootstrapPolicyTests: XCTestCase {
     // MARK: - Plan
 
     func testDisabledIntegrationRunsNothing() {
-        let plan = BootstrapPolicy.plan(isEnabled: false, config: userConfig, binary: "/bin/pc", isApproved: approved)
+        let plan = BootstrapPolicy.plan(phase: .bootstrap, isEnabled: false, config: userConfig, binary: "/bin/pc", isApproved: approved)
 
         XCTAssertEqual(note(plan)?.contains("turned off"), true, String(describing: plan))
     }
@@ -33,13 +44,13 @@ final class BootstrapPolicyTests: XCTestCase {
     /// Checked before the config, so a user who has not turned the integration
     /// on is told that rather than being told their project is missing a file.
     func testDisabledIsReportedEvenWithNoConfig() {
-        let plan = BootstrapPolicy.plan(isEnabled: false, config: nil, binary: nil, isApproved: approved)
+        let plan = BootstrapPolicy.plan(phase: .bootstrap, isEnabled: false, config: nil, binary: nil, isApproved: approved)
 
         XCTAssertEqual(note(plan)?.contains("turned off"), true, String(describing: plan))
     }
 
     func testMissingConfigRunsNothing() {
-        let plan = BootstrapPolicy.plan(isEnabled: true, config: nil, binary: "/bin/pc", isApproved: approved)
+        let plan = BootstrapPolicy.plan(phase: .bootstrap, isEnabled: true, config: nil, binary: "/bin/pc", isApproved: approved)
 
         XCTAssertEqual(note(plan)?.contains("no process-compose.yaml"), true, String(describing: plan))
     }
@@ -47,7 +58,7 @@ final class BootstrapPolicyTests: XCTestCase {
     /// A missing binary must never look like a broken worktree — the worktree
     /// exists and works, there was just nothing to run bootstrap with.
     func testMissingBinaryRunsNothing() {
-        let plan = BootstrapPolicy.plan(isEnabled: true, config: userConfig, binary: nil, isApproved: approved)
+        let plan = BootstrapPolicy.plan(phase: .bootstrap, isEnabled: true, config: userConfig, binary: nil, isApproved: approved)
 
         XCTAssertEqual(note(plan)?.contains("was not found"), true, String(describing: plan))
     }
@@ -58,17 +69,17 @@ final class BootstrapPolicyTests: XCTestCase {
     /// until the user has read it.
     func testUnapprovedRepositoryProvidedConfigIsRefused() {
         let plan = BootstrapPolicy.plan(
-            isEnabled: true, config: repositoryConfig, binary: "/bin/pc", isApproved: unapproved
+            phase: .bootstrap, isEnabled: true, config: repositoryConfig, binary: "/bin/pc", isApproved: unapproved
         )
 
-        XCTAssertEqual(note(plan)?.contains("has not been approved"), true, String(describing: plan))
+        XCTAssertEqual(note(plan)?.contains("have not been approved"), true, String(describing: plan))
     }
 
     /// The other half of the gate. A guard that refuses unconditionally would
     /// pass the test above and make the approval pane do nothing.
     func testApprovedRepositoryProvidedConfigRuns() {
         let plan = BootstrapPolicy.plan(
-            isEnabled: true, config: repositoryConfig, binary: "/bin/pc", isApproved: approved
+            phase: .bootstrap, isEnabled: true, config: repositoryConfig, binary: "/bin/pc", isApproved: approved
         )
 
         XCTAssertEqual(plan, .run(config: repositoryConfig, binary: "/bin/pc"))
@@ -79,7 +90,7 @@ final class BootstrapPolicyTests: XCTestCase {
     /// answered "false" for everything would otherwise disable it.
     func testUserPlacedConfigIsNotSubjectToApproval() {
         var asked = false
-        let plan = BootstrapPolicy.plan(isEnabled: true, config: userConfig, binary: "/bin/pc") { _ in
+        let plan = BootstrapPolicy.plan(phase: .bootstrap, isEnabled: true, config: userConfig, binary: "/bin/pc") { _ in
             asked = true
             return false
         }
@@ -88,12 +99,70 @@ final class BootstrapPolicyTests: XCTestCase {
         XCTAssertFalse(asked, "a user-placed config must not be run past the approval store")
     }
 
+    /// A worktree override beside the user's own project-directory config is
+    /// repository content that process-compose names with `-f` and runs. Gating
+    /// on `isRepositoryProvided` alone left this path completely ungated.
+    func testWorktreeOverrideBesideAUserConfigIsGated() {
+        let plan = BootstrapPolicy.plan(
+            phase: .bootstrap, isEnabled: true, config: userConfigWithRepositoryOverride,
+            binary: "/bin/pc", isApproved: unapproved
+        )
+
+        XCTAssertEqual(note(plan)?.contains("have not been approved"), true, String(describing: plan))
+    }
+
+    func testWorktreeOverrideBesideAUserConfigRunsOnceApproved() {
+        let plan = BootstrapPolicy.plan(
+            phase: .bootstrap, isEnabled: true, config: userConfigWithRepositoryOverride,
+            binary: "/bin/pc", isApproved: approved
+        )
+
+        XCTAssertEqual(plan, .run(config: userConfigWithRepositoryOverride, binary: "/bin/pc"))
+    }
+
+    /// `dispose` answers to the same preconditions as `bootstrap` — it is the
+    /// same unattended execution of repository-authored processes — and shares
+    /// this one implementation of them rather than an untestable copy in
+    /// `WorkstreamArchiver`. Only the note's wording differs.
+    func testDisposeIsGatedByTheSamePolicy() {
+        let plan = BootstrapPolicy.plan(
+            phase: .dispose, isEnabled: true, config: repositoryConfig,
+            binary: "/bin/pc", isApproved: unapproved
+        )
+
+        XCTAssertEqual(note(plan)?.contains("have not been approved"), true, String(describing: plan))
+        XCTAssertEqual(note(plan)?.contains("dispose"), true, String(describing: plan))
+    }
+
+    func testApprovedDisposeRuns() {
+        let plan = BootstrapPolicy.plan(
+            phase: .dispose, isEnabled: true, config: repositoryConfig,
+            binary: "/bin/pc", isApproved: approved
+        )
+
+        XCTAssertEqual(plan, .run(config: repositoryConfig, binary: "/bin/pc"))
+    }
+
+    /// The note names the phase that did not run, so a dispose skipped at
+    /// archive is not reported as a bootstrap that did not happen.
+    func testNotesNameThePhase() {
+        let bootstrap = BootstrapPolicy.plan(
+            phase: .bootstrap, isEnabled: false, config: nil, binary: nil, isApproved: approved
+        )
+        let dispose = BootstrapPolicy.plan(
+            phase: .dispose, isEnabled: false, config: nil, binary: nil, isApproved: approved
+        )
+
+        XCTAssertEqual(note(bootstrap)?.contains("bootstrap"), true, String(describing: bootstrap))
+        XCTAssertEqual(note(dispose)?.contains("dispose"), true, String(describing: dispose))
+    }
+
     /// Guard order. A missing binary outranks a missing approval: nothing can
     /// run without the binary whatever the user approves, and saying so is more
     /// actionable than asking for an approval that would change nothing.
     func testMissingBinaryOutranksMissingApproval() {
         let plan = BootstrapPolicy.plan(
-            isEnabled: true, config: repositoryConfig, binary: nil, isApproved: unapproved
+            phase: .bootstrap, isEnabled: true, config: repositoryConfig, binary: nil, isApproved: unapproved
         )
 
         XCTAssertEqual(note(plan)?.contains("was not found"), true, String(describing: plan))
@@ -102,7 +171,7 @@ final class BootstrapPolicyTests: XCTestCase {
     /// A config in the project directory sits outside every worktree and outside
     /// git: the user put it there by hand, so there is nothing to approve.
     func testUserPlacedConfigRuns() {
-        let plan = BootstrapPolicy.plan(isEnabled: true, config: userConfig, binary: "/bin/pc", isApproved: approved)
+        let plan = BootstrapPolicy.plan(phase: .bootstrap, isEnabled: true, config: userConfig, binary: "/bin/pc", isApproved: approved)
 
         XCTAssertEqual(plan, .run(config: userConfig, binary: "/bin/pc"))
     }

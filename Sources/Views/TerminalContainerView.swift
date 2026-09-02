@@ -322,10 +322,14 @@ struct TerminalContainerView: View {
     @State private var defaultBranch = "main"
     @State private var setupGateState: SetupGateState = .notNeeded
     @State private var scriptsApproved = false
-    /// The repository-provided process-compose config this worktree would run
-    /// its unattended phases from, or nil when there is none to approve — the
-    /// integration is off, no config was found, or the config sits in the
-    /// project directory and is the user's own.
+    /// Every repository-provided file process-compose would load here, or empty
+    /// when there is nothing to approve — the integration is off, no config was
+    /// found, or the only config sits in the project directory and is the user's
+    /// own with no worktree override beside it.
+    ///
+    /// A list, not a path: a repository can ship a benign base config plus an
+    /// override that discovery loads, and showing only the base would ask the
+    /// user to approve a file that is not the whole of what runs.
     ///
     /// Resolved with a bare `ProcessComposeConfig.locate`, deliberately not
     /// through `processComposeConfig`: that one is narrowed to the *run*, so it
@@ -333,7 +337,7 @@ struct TerminalContainerView: View {
     /// has an override. Bootstrap and dispose locate unconditionally, so hiding
     /// the approval behind the picker would hide it in exactly the case where
     /// bootstrap still wants to run.
-    @State private var repositoryConfigPath: String?
+    @State private var repositoryConfigFiles: [String] = []
     @State private var configApproved = false
     @State private var isReviewingConfig = false
     @State private var envVarDefinitions: [EnvVarDefinition] = []
@@ -716,7 +720,7 @@ struct TerminalContainerView: View {
                 projectDirectory: projectDirectory,
                 scriptConfig: scriptConfig,
                 scriptsApproved: $scriptsApproved,
-                repositoryConfigPath: repositoryConfigPath,
+                repositoryConfigFiles: repositoryConfigFiles,
                 configApproved: configApproved,
                 onReviewConfig: { isReviewingConfig = true },
                 onRevokeConfig: revokeProcessConfig
@@ -757,7 +761,7 @@ struct TerminalContainerView: View {
                     processTable: processTable,
                     showsProcessTable: usesProcessCompose,
                     portsByName: portPlan.values,
-                    unapprovedConfigPath: configApproved ? nil : repositoryConfigPath,
+                    unapprovedConfigFiles: configApproved ? [] : repositoryConfigFiles,
                     onReviewConfig: { isReviewingConfig = true },
                     onStart: doStartRun,
                     onStop: stopRun,
@@ -990,9 +994,9 @@ struct TerminalContainerView: View {
             // Environment banner and the Info row open it and Environment is a
             // closeable tab.
             .sheet(isPresented: $isReviewingConfig) {
-                if let path = repositoryConfigPath {
+                if !repositoryConfigFiles.isEmpty {
                     ConfigApprovalView(
-                        filePath: path,
+                        filePaths: repositoryConfigFiles,
                         onApprove: approveProcessConfig,
                         onCancel: { isReviewingConfig = false }
                     )
@@ -1742,14 +1746,16 @@ struct TerminalContainerView: View {
               let config = ProcessComposeConfig.locate(
                   worktree: workingDirectory, projectDirectory: projectDirectory
               ),
-              config.isRepositoryProvided
+              config.requiresApproval
         else {
-            repositoryConfigPath = nil
+            repositoryConfigFiles = []
             configApproved = false
             return
         }
-        repositoryConfigPath = config.path
-        configApproved = ScriptTrust.isApproved(configFile: config.path, for: projectDirectory)
+        repositoryConfigFiles = config.repositoryProvidedFiles
+        configApproved = ScriptTrust.isApproved(
+            configFiles: repositoryConfigFiles, for: projectDirectory
+        )
     }
 
     /// Approve the repository's config, then run the bootstrap it was refused.
@@ -1759,8 +1765,8 @@ struct TerminalContainerView: View {
     /// worktree. `setupExistingWorktree` recomputes the plan against the
     /// worktree that already exists, which is what makes this one recoverable.
     private func approveProcessConfig() {
-        guard let path = repositoryConfigPath else { return }
-        ScriptTrust.approve(configFile: path, for: projectDirectory)
+        guard !repositoryConfigFiles.isEmpty else { return }
+        ScriptTrust.approve(configFiles: repositoryConfigFiles, for: projectDirectory)
         isReviewingConfig = false
         refreshConfigApproval()
         // An unreadable file has no fingerprint, so `approve` was a no-op and
@@ -1778,7 +1784,7 @@ struct TerminalContainerView: View {
     }
 
     private func revokeProcessConfig() {
-        ScriptTrust.revokeConfigFile(for: projectDirectory)
+        ScriptTrust.revokeConfigFiles(for: projectDirectory)
         refreshConfigApproval()
     }
 

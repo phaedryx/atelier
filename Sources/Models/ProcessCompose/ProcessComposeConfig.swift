@@ -108,7 +108,7 @@ struct ProcessComposeConfig: Equatable {
     /// `locate` never recorded. Reading only `path` there would miss a
     /// namespace the override declares and report `.empty`, silently skipping
     /// work the user really asked for.
-    private var loadedFiles: [String] {
+    var loadedFiles: [String] {
         guard isRepositoryProvided else {
             return [path] + [overridePath].compactMap { $0 }
         }
@@ -125,6 +125,36 @@ struct ProcessComposeConfig: Equatable {
         return [path] + Self.overrideFileNames
             .map { directory.appendingPathComponent($0).path }
             .filter { FileManager.default.fileExists(atPath: $0) }
+    }
+
+    /// The loaded files that arrived with the repository, and therefore have to
+    /// be approved before an unattended phase runs them.
+    ///
+    /// Not the same as "`path` when `isRepositoryProvided`". Two cases make the
+    /// difference load-bearing:
+    ///
+    /// - A repository-provided base config is left unnamed so process-compose's
+    ///   own discovery runs, and discovery picks up a sibling
+    ///   `process-compose.override.yaml` that `locate` never recorded. That
+    ///   override is repository content that executes, so approving only `path`
+    ///   would show the user a benign file while an unseen sibling ran.
+    /// - A config the *user* placed in the project directory is their own, but
+    ///   `overridePath` beside it points into the **worktree**, which is
+    ///   repository content and is named with `-f` explicitly. The base file
+    ///   needs no approval; the override does.
+    ///
+    /// The user's own project-directory config is deliberately absent from this
+    /// list: it was placed by hand outside git, and re-asking every time they
+    /// edit it is friction with no risk behind it.
+    var repositoryProvidedFiles: [String] {
+        guard isRepositoryProvided else { return [overridePath].compactMap { $0 } }
+        return loadedFiles
+    }
+
+    /// Whether anything process-compose will load here came with the repository.
+    /// The gate for `bootstrap` and `dispose`; `execute` is never gated.
+    var requiresApproval: Bool {
+        !repositoryProvidedFiles.isEmpty
     }
 
     /// Whether the files that will be loaded, taken together, declare

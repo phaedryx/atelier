@@ -43,47 +43,68 @@ enum ScriptTrust {
 
     private static let configFileKey = "atelier.approvedConfigFiles"
 
-    /// Whether a repository-provided process-compose config may run its
-    /// unattended phases — `bootstrap` at worktree creation, `dispose` at
-    /// archive — for this project.
+    /// Whether the repository-provided process-compose files a config will load
+    /// may run their unattended phases — `bootstrap` at worktree creation,
+    /// `dispose` at archive — for this project.
     ///
-    /// Only configs that arrived with the repository are gated. One in the
-    /// project directory was placed there by hand, outside git, and asking about
-    /// the user's own file every time they edit it is friction with no risk
-    /// behind it. `execute` is never gated in either case, because it is a
-    /// deliberate press on a command the pane is already showing.
+    /// Takes the whole list, never a single file. process-compose loads a base
+    /// config *and* whatever override sits beside it, so fingerprinting only the
+    /// base would let a repository ship a benign `process-compose.yaml`, have the
+    /// user approve it, and execute an unseen `process-compose.override.yaml`
+    /// unattended. `ProcessComposeConfig.repositoryProvidedFiles` is the list
+    /// that has to be passed here.
     ///
-    /// A file that cannot be read has no fingerprint and is therefore never
-    /// approved. Failing open here would run something nobody could review.
-    static func isApproved(configFile path: String, for projectDirectory: String) -> Bool {
-        guard let fingerprint = fingerprint(configFile: path) else { return false }
+    /// A config in the project directory was placed there by hand, outside git,
+    /// and contributes nothing to that list: asking about the user's own file
+    /// every time they edit it is friction with no risk behind it. `execute` is
+    /// never gated in either case, because it is a deliberate press on a command
+    /// the pane is already showing.
+    ///
+    /// An empty list is *not* approved. Callers gate on
+    /// `ProcessComposeConfig.requiresApproval`, which is false exactly when the
+    /// list is empty, so the question is never asked; answering "yes" here would
+    /// make a mistaken call site fail open.
+    static func isApproved(configFiles paths: [String], for projectDirectory: String) -> Bool {
+        guard let fingerprint = fingerprint(configFiles: paths) else { return false }
         return configApprovals()[projectDirectory] == fingerprint
     }
 
-    static func approve(configFile path: String, for projectDirectory: String) {
-        guard let fingerprint = fingerprint(configFile: path) else { return }
+    static func approve(configFiles paths: [String], for projectDirectory: String) {
+        guard let fingerprint = fingerprint(configFiles: paths) else { return }
         var current = configApprovals()
         current[projectDirectory] = fingerprint
         saveConfigApprovals(current)
     }
 
-    static func revokeConfigFile(for projectDirectory: String) {
+    static func revokeConfigFiles(for projectDirectory: String) {
         var current = configApprovals()
         guard current.removeValue(forKey: projectDirectory) != nil else { return }
         saveConfigApprovals(current)
     }
 
-    /// Identifies a config file by its name and its whole contents, so an edit
-    /// invalidates the approval. The full path is deliberately *not* hashed: a
-    /// repository-provided config lives in every worktree at a different path,
-    /// and re-approving the same bytes per worktree would train the user to
-    /// click through it. Nil when the file cannot be read.
-    static func fingerprint(configFile path: String) -> String? {
-        guard let data = FileManager.default.contents(atPath: path) else { return nil }
+    /// Identifies a set of config files by each one's name and whole contents,
+    /// in order. An edit to any of them, and the appearance or disappearance of
+    /// any of them, all change the value — so an override added after approval
+    /// asks again.
+    ///
+    /// The full path is deliberately *not* hashed: a repository-provided config
+    /// lives in every worktree at a different path, and re-approving the same
+    /// bytes per worktree would train the user to click through the pane. The
+    /// file *name* is hashed, so the same bytes under a different name are a
+    /// different thing to approve.
+    ///
+    /// Nil for an empty list, and nil if any single file cannot be read. Failing
+    /// open here would run something nobody could review.
+    static func fingerprint(configFiles paths: [String]) -> String? {
+        guard !paths.isEmpty else { return nil }
         var hasher = SHA256()
-        hasher.update(data: Data((path as NSString).lastPathComponent.utf8))
-        hasher.update(data: Data([0x01]))
-        hasher.update(data: data)
+        for path in paths {
+            guard let data = FileManager.default.contents(atPath: path) else { return nil }
+            hasher.update(data: Data((path as NSString).lastPathComponent.utf8))
+            hasher.update(data: Data([0x01]))
+            hasher.update(data: data)
+            hasher.update(data: Data([0x02]))
+        }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 

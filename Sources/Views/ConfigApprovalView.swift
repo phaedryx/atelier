@@ -1,33 +1,37 @@
-// ABOUTME: Approval pane for a process-compose config the repository provides.
-// ABOUTME: Shows the file's contents, because that file is what will execute.
+// ABOUTME: Approval pane for the process-compose files a repository provides.
+// ABOUTME: Shows every file that will execute, in full, because that is what is approved.
 
 import SwiftUI
 
-/// Asks the user to approve the unattended phases of a config that arrived with
+/// Asks the user to approve the unattended phases of the files that arrived with
 /// the repository — `bootstrap` at worktree creation and `dispose` at archive,
 /// neither of which the user is present for.
+///
+/// Takes a *list*, never one file. process-compose loads a base config and
+/// whatever override sits beside it, and a pane that displayed only the base
+/// would show a benign file while an unseen sibling ran. The list is
+/// `ProcessComposeConfig.repositoryProvidedFiles`, and it is exactly what
+/// `ScriptTrust` fingerprints, so what is shown and what is approved cannot
+/// drift apart.
 ///
 /// `execute` is deliberately not covered: it is a deliberate press on a command
 /// the Environment pane is already displaying, so gating it would ask about a
 /// file the user has just chosen to run.
 struct ConfigApprovalView: View {
-    let filePath: String
+    /// The repository-provided files, in the order they are fingerprinted.
+    let filePaths: [String]
     let onApprove: () -> Void
     let onCancel: () -> Void
 
-    /// How much of the config to show. Long enough to read a normal stack
-    /// definition, short enough that the approve button stays on screen.
-    private static let previewLineLimit = 60
-
-    private var fileName: String {
-        (filePath as NSString).lastPathComponent
-    }
-
     /// A file with no fingerprint cannot be approved — `ScriptTrust.approve`
     /// would silently do nothing — so the button is disabled rather than left as
-    /// one that never takes effect. The preview says why.
+    /// one that never takes effect. The previews say which file is unreadable.
     private var isReadable: Bool {
-        ScriptTrust.fingerprint(configFile: filePath) != nil
+        ScriptTrust.fingerprint(configFiles: filePaths) != nil
+    }
+
+    private var fileNames: String {
+        filePaths.map { ($0 as NSString).lastPathComponent }.joined(separator: ", ")
     }
 
     var body: some View {
@@ -44,22 +48,39 @@ struct ConfigApprovalView: View {
                     "%@ came with this repository. Its bootstrap phase runs automatically when a workstream is created, and its dispose phase when one is archived — both without asking. They run on your machine under your user account.",
                     comment: ""
                 ),
-                fileName
+                fileNames
             ))
             .font(.system(size: 12))
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
             .frame(maxWidth: 460)
 
+            // Every file, in full. Truncating the preview would leave a payload
+            // below the cut unreachable but still covered by the button — fine
+            // for a gate on a command already displayed, not for a gate on
+            // unattended execution.
             ScrollView {
-                Text(preview)
-                    .font(.system(size: 11, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(filePaths, id: \.self) { path in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text((path as NSString).lastPathComponent)
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            Text(path)
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                                .textSelection(.enabled)
+                            Text(contents(of: path))
+                                .font(.system(size: 11, design: .monospaced))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(12)
-            .frame(maxWidth: 460, maxHeight: 260)
+            .frame(maxWidth: 520, minHeight: 240)
             .background(Color.primary.opacity(0.05))
             .clipShape(RoundedRectangle(cornerRadius: 6))
 
@@ -70,30 +91,21 @@ struct ConfigApprovalView: View {
                     .disabled(!isReadable)
             }
 
-            Text("Approval covers this repository until the file changes. Start is never gated by it.")
+            Text("Approval covers this repository until any of these files changes. Start is never gated by it.")
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 460)
         }
         .padding(24)
-        .frame(minWidth: 520, minHeight: 520)
+        .frame(minWidth: 580, minHeight: 560)
     }
 
-    /// The config's text, truncated. An unreadable file shows as such rather
-    /// than as an empty box: approving something you cannot see is the one
-    /// outcome this pane exists to prevent.
-    private var preview: String {
-        guard let contents = try? String(contentsOfFile: filePath, encoding: .utf8) else {
-            return NSLocalizedString("Could not read this file.", comment: "")
-        }
-        let lines = contents.components(separatedBy: .newlines)
-        guard lines.count > Self.previewLineLimit else { return contents }
-        return lines.prefix(Self.previewLineLimit).joined(separator: "\n")
-            + "\n…\n"
-            + String(
-                format: NSLocalizedString("(%d more lines)", comment: ""),
-                lines.count - Self.previewLineLimit
-            )
+    /// One file's whole text. An unreadable file shows as such rather than as an
+    /// empty box: approving something you cannot see is the one outcome this
+    /// pane exists to prevent.
+    private func contents(of path: String) -> String {
+        (try? String(contentsOfFile: path, encoding: .utf8))
+            ?? NSLocalizedString("Could not read this file.", comment: "")
     }
 }
