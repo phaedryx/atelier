@@ -20,7 +20,8 @@
 1. If you added/removed files or changed `project.yml`: run `xcodegen generate` first
 2. Build and run: `./scripts/dev.sh br`
 3. If tmux mode was on: `tmux -L atelier kill-server`
-4. If you changed the tmux config: `rm -f ~/Library/Caches/atelier/tmux.conf`
+4. If you changed the tmux config: `rm -f ~/Library/Caches/atelier-debug/tmux.conf`
+   (a debug build; a release build uses `atelier`)
 
 ### When to regenerate the Xcode project
 Run `xcodegen generate` when:
@@ -382,7 +383,11 @@ properties and the same comment.
 
 ### Paths
 - Persistent data: UserDefaults (projects, sidebar state, workspace tabs)
-- Cache: `~/Library/Caches/atelier/` (run-state, tmux.conf)
+- Cache: `~/Library/Caches/<AppConstants.appID>/` — `atelier` for a release
+  build, `atelier-debug` for a debug one, `atelier-tests` under XCTest. Holds
+  run-state, tmux.conf and the process-compose phase sockets. The split is
+  load-bearing: both variants shared one directory, so quitting a debug build
+  swept a release build's live phase servers.
 - Worktrees: beside the repository when the project uses the README's bare-repo layout
   (a `.bare` directory with a `.git` file next to it), so a worktree for `/repos/app` is
   created at `/repos/app/<name>`. Any other layout — an ordinary clone, a plain

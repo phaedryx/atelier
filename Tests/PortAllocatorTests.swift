@@ -17,12 +17,36 @@ final class PortAllocatorTests: XCTestCase {
         XCTAssertNotEqual(PortAllocator.port(for: worktree), PortAllocator.port(for: worktree, salt: "BFF_PORT"))
     }
 
+    /// Literals, not `PortAllocator.rangeStart`/`rangeEnd`. Asserting against
+    /// the constants under test made this pass for any range at all —
+    /// `rangeStart = 80` was green.
+    func testTheRangeIsTheDocumentedOne() {
+        XCTAssertEqual(PortAllocator.rangeStart, 40001)
+        XCTAssertEqual(PortAllocator.rangeEnd, 49999)
+    }
+
     func testPortsStayInRange() {
         for index in 0 ..< 500 {
             let port = PortAllocator.port(for: "/tmp/w\(index)", salt: "SALT_\(index)")
-            XCTAssertGreaterThanOrEqual(port, PortAllocator.rangeStart)
-            XCTAssertLessThanOrEqual(port, PortAllocator.rangeEnd)
+            XCTAssertGreaterThanOrEqual(port, 40001)
+            XCTAssertLessThanOrEqual(port, 49999)
         }
+    }
+
+    /// Golden values, because the doc comment on `port(for:salt:)` says the
+    /// unsalted result "must keep hashing the bare path: changing it would move
+    /// every existing workstream's port" — and nothing pinned it. Any change to
+    /// the DJB2 constants, the seed, or the salt separator moves these.
+    /// Computed independently: DJB2 with seed 5381, multiplier 33, mod 2^64,
+    /// then `40001 + hash % 9999`. Changing the multiplier to 31 sends the
+    /// first case to 40196.
+    func testTheDerivedPortsAreThePinnedOnes() {
+        XCTAssertEqual(PortAllocator.port(for: "/Users/tthorley/repos/app/main"), 43017)
+        XCTAssertEqual(
+            PortAllocator.port(for: "/Users/tthorley/repos/app/main", salt: "BFF_PORT"),
+            42150
+        )
+        XCTAssertEqual(PortAllocator.port(for: "/tmp/w"), 48799)
     }
 
     func testAvailablePortReturnsHashWhenFree() {
