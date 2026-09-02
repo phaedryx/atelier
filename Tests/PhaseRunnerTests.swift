@@ -114,25 +114,65 @@ final class PhaseRunnerTests: XCTestCase {
 
     /// Start is prepare then execute, chained, so prepare's output lands in the
     /// surface the user is already looking at and a failing prepare stops it.
-    func testStartCommandChainsPrepareIntoExecute() {
+    /// A real config (not a synthetic nonexistent path) so this exercises
+    /// genuine "prepare is declared" parsing rather than the fail-open branch
+    /// of `namespaceIsConfidentlyEmpty` — a worktree-style config, so this
+    /// also pins the no-`-f` shape. Passes a selection to check the other
+    /// half of the chain that its sibling in the "namespace-aware" section
+    /// below does not: prepare always runs its whole namespace regardless of
+    /// selection, so "bff" must land exactly once, at the end, on execute.
+    func testStartCommandChainsPrepareIntoExecute() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let config = try writeConfig("""
+          setup:
+            namespace: prepare
+            command: "true"
+          web:
+            namespace: execute
+            command: "true"
+        """, in: dir)
+
         let command = PhaseRunner.startCommand(
-            config: worktreeConfig, binary: binary,
-            workstreamID: workstreamID, selectedProcesses: []
+            config: config, binary: binary,
+            workstreamID: workstreamID, selectedProcesses: ["bff"]
         )
 
         XCTAssertTrue(command.contains("-n prepare && "), command)
-        XCTAssertTrue(command.hasSuffix("-n execute"), command)
+        XCTAssertTrue(command.hasSuffix("-n execute bff"), command)
+        XCTAssertEqual(command.components(separatedBy: "bff").count, 2, "\"bff\" must appear only on execute: \(command)")
     }
 
     /// The whole point of the integration: with a config present and a binary
-    /// available, Start runs process-compose rather than a dev script.
-    func testStartCommandIsUsedWhenAConfigExists() {
+    /// available, Start runs process-compose rather than a dev script. Real
+    /// config content (not a synthetic nonexistent path), so this exercises
+    /// genuine "prepare is declared" parsing rather than the fail-open branch
+    /// of `namespaceIsConfidentlyEmpty` — a project-directory-style config
+    /// (`isRepositoryProvided: false`), so this also pins the `-f` shape and
+    /// process selection together, distinct from the worktree-style sibling
+    /// above.
+    func testStartCommandIsUsedWhenAConfigExists() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = dir.appendingPathComponent("process-compose.yaml")
+        try """
+        processes:
+          setup:
+            namespace: prepare
+            command: "true"
+          bff:
+            namespace: execute
+            command: "true"
+        """.write(to: path, atomically: true, encoding: .utf8)
+        let config = ProcessComposeConfig(path: path.path, isRepositoryProvided: false, overridePath: nil)
+
         let command = PhaseRunner.startCommand(
-            config: projectConfig, binary: binary,
+            config: config, binary: binary,
             workstreamID: workstreamID, selectedProcesses: ["bff"]
         )
 
         XCTAssertTrue(command.contains("-n prepare"), command)
+        XCTAssertTrue(command.contains("-f \(path.path)"), command)
         XCTAssertTrue(command.contains("-n execute"), command)
         XCTAssertTrue(command.hasSuffix("bff"), command)
     }
