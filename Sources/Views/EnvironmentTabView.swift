@@ -33,6 +33,17 @@ struct EnvironmentTabView: View {
     let showsProcessTable: Bool
     /// The worktree's port plan, so each row can show the port it owns.
     let portsByName: [String: String]
+    /// Whether Start may run anything. **Passed in, never re-derived here.**
+    /// This is `RunCommandPlan.canRun` for the same plan `doStartRun` executes,
+    /// so the button's enablement and the run's guard are one decision. They
+    /// used to be two — enabled on `devCommand?.command != nil`, executed on the
+    /// resolved command — and an unresolvable process-compose binary rendered an
+    /// enabled Start that did nothing and explained nothing.
+    let canStart: Bool
+    /// Why Start can do nothing, when the copy below does not already say. The
+    /// states that reach this were all silent: an integration switched off, a
+    /// config that vanished, and a binary the search paths do not cover.
+    let startUnavailableReason: String?
     /// The repository-provided process-compose files whose unattended phases the
     /// user has not approved, or empty when there is nothing to ask about.
     let unapprovedConfigFiles: [String]
@@ -49,7 +60,10 @@ struct EnvironmentTabView: View {
         derivedUUID(from: workstreamID, salt: "env-run-\(runGeneration)")
     }
 
-    /// The short, human-readable command this pane would run.
+    /// What the pane shows under "Dev command". For an override this is the
+    /// command the user typed; for a process-compose config it is the files that
+    /// will be loaded, which is deliberately *not* a runnable string — see
+    /// `RunCommandPlan`.
     private var runCommandPreference: String? {
         devCommand?.command
     }
@@ -90,7 +104,7 @@ struct EnvironmentTabView: View {
                 Text(title)
                     .font(.system(size: 12, weight: .semibold))
 
-                if runCommandPreference != nil, RunLauncher.executableURL() == nil {
+                if canStart, RunLauncher.executableURL() == nil {
                     Text("No port detection")
                         .font(.system(size: 9))
                         .foregroundStyle(.orange)
@@ -130,7 +144,7 @@ struct EnvironmentTabView: View {
                     environmentVars: environmentVars
                 )
                 .id(runID)
-            } else if runCommandPreference != nil {
+            } else if canStart {
                 VStack(spacing: 12) {
                     Button(action: onStart) {
                         HStack(spacing: 6) {
@@ -157,7 +171,7 @@ struct EnvironmentTabView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                scriptInstructions(title: title)
+                scriptInstructions(reason: startUnavailableReason)
             }
         }
     }
@@ -267,28 +281,36 @@ struct EnvironmentTabView: View {
         .background(Color.orange.opacity(0.08))
     }
 
-    /// Shown when no config was located and no command has been set. Names the
-    /// two things that would make Start work: a process-compose.yaml in either
-    /// home, or a per-workstream override.
-    private func scriptInstructions(title _: String) -> some View {
+    /// Shown whenever Start cannot run. Two shapes, one surface: with no
+    /// `reason` it names the two things that would make Start work — a
+    /// process-compose.yaml in either home, or a per-workstream override —
+    /// and with one it says what is actually in the way.
+    ///
+    /// Deliberately not a new pane. Every state that lands here was previously
+    /// silent, and the review that found them was specific that they belong in
+    /// the surface that already renders for "nothing to run".
+    private func scriptInstructions(reason: String?) -> some View {
         VStack(spacing: 12) {
             Image(systemName: "doc.text")
                 .font(.system(size: 28))
                 .foregroundStyle(.tertiary)
-            Text("No dev command found")
+            Text("Nothing to start")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
-            Text("Add a process-compose.yaml to this worktree or the project directory, or set a command with Customize above.")
-                .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 380)
+            Text(reason ?? NSLocalizedString(
+                "Add a process-compose.yaml to this worktree or the project directory, or set a command with Customize above.",
+                comment: ""
+            ))
+            .font(.system(size: 11))
+            .foregroundStyle(.tertiary)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: 380)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var runControlsEnabled: Bool {
-        runCommandPreference != nil
+        canStart
     }
 }
 

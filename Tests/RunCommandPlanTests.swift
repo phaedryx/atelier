@@ -115,4 +115,61 @@ final class RunCommandPlanTests: XCTestCase {
             .nothing
         )
     }
+
+    // MARK: - One decision, not two
+
+    /// `canRun` exists so the Start button's enablement and `doStartRun`'s guard
+    /// read the same value. This pins it to the plans that actually yield a
+    /// command: a `canRun` that drifted from that would put the pane back where
+    /// it was, enabling Start for a plan that runs nothing.
+    func testCanRunIsTrueForExactlyThePlansThatYieldACommand() {
+        XCTAssertTrue(RunCommandPlan.literal("npm run dev").canRun)
+        XCTAssertTrue(RunCommandPlan.phaseScoped(config: config, binary: "/bin/pc").canRun)
+        XCTAssertFalse(RunCommandPlan.nothing.canRun)
+    }
+
+    /// The C2 state in full: integration on, config present, binary
+    /// unresolvable. Start must be *both* disabled and explained — it used to be
+    /// neither, rendering an enabled button that did nothing in silence.
+    func testAnUnresolvableBinaryIsBothRefusedAndExplained() {
+        let devCommand = processComposeCommand()
+
+        XCTAssertFalse(
+            RunCommandPlan.plan(devCommand: devCommand, config: config, binary: nil).canRun
+        )
+        XCTAssertNotNil(RunCommandPlan.unavailableReason(
+            devCommand: devCommand, config: config, binary: nil, isEnabled: true
+        ))
+    }
+
+    func testAMissingConfigIsAlsoExplained() {
+        XCTAssertNotNil(RunCommandPlan.unavailableReason(
+            devCommand: processComposeCommand(), config: nil, binary: "/bin/pc", isEnabled: true
+        ))
+    }
+
+    /// A switched-off integration and a project with no config both arrive as
+    /// `devCommand == nil`, and they want opposite advice — turn the setting on,
+    /// versus write a config. Only the first gets a reason; the second is what
+    /// the pane's own "add a process-compose.yaml" copy already says.
+    func testTheSwitchedOffIntegrationSaysSoRatherThanLookingLikeAMissingConfig() {
+        XCTAssertNotNil(RunCommandPlan.unavailableReason(
+            devCommand: nil, config: nil, binary: nil, isEnabled: false
+        ))
+        XCTAssertNil(RunCommandPlan.unavailableReason(
+            devCommand: nil, config: nil, binary: nil, isEnabled: true
+        ))
+    }
+
+    /// A usable run has nothing to explain, and neither does the user's own
+    /// override — no precondition of theirs can fail.
+    func testAUsableRunAndAnOverrideNeedNoExplanation() {
+        XCTAssertNil(RunCommandPlan.unavailableReason(
+            devCommand: processComposeCommand(), config: config, binary: "/bin/pc", isEnabled: true
+        ))
+        XCTAssertNil(RunCommandPlan.unavailableReason(
+            devCommand: DevCommand(command: "npm run dev", source: .override, sourceDescription: nil),
+            config: nil, binary: nil, isEnabled: true
+        ))
+    }
 }

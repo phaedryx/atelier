@@ -288,6 +288,29 @@ struct TerminalContainerView: View {
     /// Resolved once per change rather than per render: resolving binds a socket
     /// to check whether each port is free.
     @State private var portPlan: PortPlan = .empty
+    /// What Start may run, decided once per change in `refreshDevCommand`.
+    ///
+    /// Stored rather than recomputed because *agreement* is the invariant here,
+    /// not freshness. The Environment pane's Start button is enabled on this
+    /// value and `doStartRun` refuses on this value, so the two cannot describe
+    /// different worlds; a plan that is a moment stale but consistent is
+    /// harmless, while a fresh plan disagreeing with the button is exactly the
+    /// bug — an enabled Start that silently did nothing. Do not turn this back
+    /// into a computed property: `RunCommandPlan.plan` locates the config and
+    /// stats the binary, so reading it from the view body would also put
+    /// filesystem work in every render pass.
+    @State private var runPlan: RunCommandPlan = .nothing
+    /// Why Start can do nothing, when it can do nothing and the pane's own copy
+    /// does not already explain it. Set in the same refresh as `runPlan`.
+    @State private var runUnavailableReason: String?
+    /// The last thing background setup said about this workstream.
+    ///
+    /// `AsyncSetupService` has posted `.asyncSetupStateChanged` since it
+    /// existed, and until now nothing listened — so `.completedWithNote`, the
+    /// state whose whole job is to say *why* no bootstrap ran, was written and
+    /// discarded. It is read here and rendered on the Info tab, which is
+    /// permanent and cannot be closed out from under the message.
+    @State private var setupState: AsyncSetupState = .idle
     @StateObject private var processTable: ProcessTableModel
     init(
         workstreamID: UUID,
@@ -380,15 +403,19 @@ struct TerminalContainerView: View {
     }
 
     /// The located process-compose config, when this workstream's run is a
-    /// process-compose run. Guarded on `usesProcessCompose` rather than
-    /// re-checking `ProcessComposeSettings.isEnabled` directly, so this can
-    /// never disagree with it — including the case where the user has an
-    /// explicit per-workstream override set, which `DevCommandResolver.resolve`
-    /// already prefers over the located config. Not read
-    /// from the view body, so locating the config here does not add filesystem
-    /// work to every render the way changing `usesProcessCompose` itself would.
-    private var processComposeConfig: ProcessComposeConfig? {
-        guard usesProcessCompose else { return nil }
+    /// process-compose run.
+    ///
+    /// Asks the same two questions as `usesProcessCompose` — the integration is
+    /// on, and the resolved dev command came from a config rather than from the
+    /// user's own override, which `DevCommandResolver.resolve` prefers. It takes
+    /// the dev command as a parameter rather than reading `resolvedDevCommand`
+    /// because `refreshDevCommand` needs the config for the resolution it is in
+    /// the middle of storing, not for the previous one.
+    ///
+    /// A function, and called only from `refreshDevCommand`, so locating the
+    /// config never happens in a render pass.
+    private func processComposeConfig(for devCommand: DevCommand?) -> ProcessComposeConfig? {
+        guard ProcessComposeSettings.isEnabled, devCommand?.source == .processCompose else { return nil }
         return ProcessComposeConfig.locate(worktree: workingDirectory, projectDirectory: projectDirectory)
     }
 
@@ -403,18 +430,12 @@ struct TerminalContainerView: View {
     /// be built — no config, or no binary — the answer is nil and Start reports
     /// that, rather than running something unscoped.
     ///
-    /// Not cached: every call site is inside an `.onReceive`/`.onChange`
-    /// closure or an action method (`startRunIfNeeded`, `doStartRun`,
-    /// `restartRun`, `restoreRunState`), so this runs on discrete lifecycle
-    /// events (Start pressed, tmux restore, a rerun request) rather than on
-    /// every SwiftUI render pass. Caching it like `portPlan` would only add
-    /// invalidation to get right, for no measured benefit.
+    /// Reads the stored `runPlan` rather than re-deriving one, so this is nil
+    /// for exactly the plans whose `canRun` is false — which is what the Start
+    /// button's enablement is drawn from. Deriving a second plan here is how
+    /// the button and this guard came to disagree.
     private var resolvedRunCommand: String? {
-        switch RunCommandPlan.plan(
-            devCommand: resolvedDevCommand,
-            config: processComposeConfig,
-            binary: ProcessComposeSettings.resolveBinary()
-        ) {
+        switch runPlan {
         case let .literal(command):
             return command
         case let .phaseScoped(config, binary):
@@ -658,6 +679,7 @@ struct TerminalContainerView: View {
                 projectDirectory: projectDirectory,
                 repositoryConfigFiles: repositoryConfigFiles,
                 configApproved: configApproved,
+                setupState: setupState,
                 onReviewConfig: { isReviewingConfig = true },
                 onRevokeConfig: revokeProcessConfig
             )
@@ -691,6 +713,8 @@ struct TerminalContainerView: View {
                     processTable: processTable,
                     showsProcessTable: usesProcessCompose,
                     portsByName: portPlan.values,
+                    canStart: runPlan.canRun,
+                    startUnavailableReason: runUnavailableReason,
                     unapprovedConfigFiles: configApproved ? [] : repositoryConfigFiles,
                     onReviewConfig: { isReviewingConfig = true },
                     onStart: doStartRun,
@@ -848,6 +872,19 @@ struct TerminalContainerView: View {
             tabBar
             Divider()
             tabContent
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .asyncSetupStateChanged)) { notification in
+            guard let info = notification.userInfo,
+                  info["workstreamID"] as? UUID == workstreamID,
+                  let state = info["state"] as? AsyncSetupState else { return }
+            setupState = state
+        }
+        .task(id: workstreamID) {
+            // Seeded as well as observed: bootstrap for a brand-new workstream
+            // can finish before this view exists, and a note nobody was
+            // listening for is the bug being fixed rather than a smaller
+            // version of it.
+            setupState = await AsyncSetupService.shared.state(for: workstreamID)
         }
         .task(id: workstreamID) {
             try? await Task.sleep(nanoseconds: 50_000_000)
@@ -1258,11 +1295,28 @@ struct TerminalContainerView: View {
         return finalCommand
     }
 
+    /// Re-resolve the dev command *and* the run plan, together.
+    ///
+    /// One function on purpose. The plan is derived from the dev command, and
+    /// every caller that invalidates one invalidates the other, so splitting
+    /// them would give the pane a way to render a button whose plan came from an
+    /// earlier dev command. Both are also the only two inputs the Start button
+    /// reads, so this is the whole of what has to stay in step.
     private func refreshDevCommand() {
-        resolvedDevCommand = DevCommandResolver.resolve(
+        let devCommand = DevCommandResolver.resolve(
             workingDirectory: workingDirectory,
             projectDirectory: projectDirectory,
             override: devCommandOverride
+        )
+        resolvedDevCommand = devCommand
+        let config = processComposeConfig(for: devCommand)
+        let binary = ProcessComposeSettings.resolveBinary()
+        runPlan = RunCommandPlan.plan(devCommand: devCommand, config: config, binary: binary)
+        runUnavailableReason = RunCommandPlan.unavailableReason(
+            devCommand: devCommand,
+            config: config,
+            binary: binary,
+            isEnabled: ProcessComposeSettings.isEnabled
         )
     }
 

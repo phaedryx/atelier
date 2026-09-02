@@ -50,6 +50,65 @@ enum RunCommandPlan: Equatable {
     ///   defeating that function's own documented promise that a
     ///   configured-but-missing path fails rather than letting something else
     ///   stand in for it.
+    /// Whether Start may run anything at all.
+    ///
+    /// The Environment pane's Start button is enabled on exactly this, and
+    /// `doStartRun` refuses on exactly this, because they are the same question
+    /// asked once. They used to be two: the button was enabled on
+    /// `devCommand?.command != nil` while the run guarded the resolved command,
+    /// so an unresolvable binary rendered an enabled button that did nothing and
+    /// said nothing.
+    var canRun: Bool {
+        self != .nothing
+    }
+
+    /// Why Start can do nothing, phrased for the pane, or nil when it can run —
+    /// or when the pane's own copy already explains it.
+    ///
+    /// Kept as a separate function rather than an associated value on
+    /// `.nothing`: the plan is authoritative about *whether* Start may run and
+    /// the tests that pin that invariant compare against a bare `.nothing`.
+    /// This only explains *why*, and both are set together in one refresh so
+    /// they cannot describe different states.
+    ///
+    /// - Parameter isEnabled: whether the integration is switched on. Needed
+    ///   because `DevCommandResolver` detects nothing while it is off, which
+    ///   arrives here as `devCommand == nil` — indistinguishable, without this,
+    ///   from a project that genuinely has no config, and those want opposite
+    ///   advice.
+    static func unavailableReason(
+        devCommand: DevCommand?,
+        config: ProcessComposeConfig?,
+        binary: String?,
+        isEnabled: Bool
+    ) -> String? {
+        guard let devCommand else {
+            guard !isEnabled else { return nil }
+            return NSLocalizedString(
+                "The process-compose integration is turned off, so nothing was detected. Turn it on in Settings, or set a command with Customize.",
+                comment: ""
+            )
+        }
+        switch devCommand.source {
+        case .override:
+            return nil
+        case .processCompose:
+            if config == nil {
+                return NSLocalizedString(
+                    "This project's process-compose.yaml could not be located, so there is nothing to start.",
+                    comment: ""
+                )
+            }
+            if binary == nil {
+                return NSLocalizedString(
+                    "process-compose was not found. Install it, or set its path in Settings, then try again.",
+                    comment: ""
+                )
+            }
+            return nil
+        }
+    }
+
     static func plan(
         devCommand: DevCommand?,
         config: ProcessComposeConfig?,

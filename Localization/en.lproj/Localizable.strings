@@ -464,9 +464,12 @@
 
 /* Runner selection */
 "process-compose" = "process-compose";
-"No dev command found" = "No dev command found";
 "No dev command found. Add a process-compose.yaml, or set a command below." = "No dev command found. Add a process-compose.yaml, or set a command below.";
+"Nothing to start" = "Nothing to start";
 "Add a process-compose.yaml to this worktree or the project directory, or set a command with Customize above." = "Add a process-compose.yaml to this worktree or the project directory, or set a command with Customize above.";
+"The process-compose integration is turned off, so nothing was detected. Turn it on in Settings, or set a command with Customize." = "The process-compose integration is turned off, so nothing was detected. Turn it on in Settings, or set a command with Customize.";
+"This project's process-compose.yaml could not be located, so there is nothing to start." = "This project's process-compose.yaml could not be located, so there is nothing to start.";
+"process-compose was not found. Install it, or set its path in Settings, then try again." = "process-compose was not found. Install it, or set its path in Settings, then try again.";
 
 /* ports.yaml */
 "ports.yaml could not be read: %@" = "ports.yaml could not be read: %@";
@@ -493,6 +496,7 @@
 /* Worktree bootstrap phase */
 "Running bootstrap" = "Running bootstrap";
 "This project declares no bootstrap processes, so nothing ran." = "This project declares no bootstrap processes, so nothing ran.";
+"Bootstrap" = "Bootstrap";
 "Bootstrap failed: %@" = "Bootstrap failed: %@";
 "No shell was available to run the phase." = "No shell was available to run the phase.";
 "The %@ phase did not finish in time." = "The %@ phase did not finish in time.";

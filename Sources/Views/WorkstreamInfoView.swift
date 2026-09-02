@@ -14,6 +14,12 @@ struct WorkstreamInfoView: View {
     /// user closing Environment.
     var repositoryConfigFiles: [String] = []
     var configApproved: Bool = false
+    /// What background setup last reported for this workstream. Info is where
+    /// it belongs: it is the permanent tab, and a `.completedWithNote` — "the
+    /// integration is off, so no bootstrap ran", "process-compose was not
+    /// found" — is a fact about the workstream, not about the run pane. Nothing
+    /// rendered it before, so those notes were written and thrown away.
+    var setupState: AsyncSetupState = .idle
     /// No defaults: a call site that passes `repositoryConfigFiles` but forgets
     /// these would render a Review button that silently does nothing, which is
     /// the whole failure this gate exists to avoid.
@@ -188,6 +194,20 @@ struct WorkstreamInfoView: View {
                     }
                 }
 
+                if let setup = setupSummary {
+                    Section("Setup") {
+                        LabeledContent(setup.label) {
+                            HStack(spacing: 6) {
+                                Image(systemName: setup.icon)
+                                    .foregroundStyle(setup.tint)
+                                Text(setup.detail)
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.trailing)
+                            }
+                        }
+                    }
+                }
+
                 if !repositoryConfigFiles.isEmpty {
                     Section {
                         // Only the unattended phases are gated. Start runs a
@@ -345,6 +365,26 @@ struct WorkstreamInfoView: View {
     /// `AppEnvironment` cache: the description arrives after the disk scan and can change
     /// on a later refresh. Note this widens what a `DocFile` is — no longer strictly a
     /// file on disk, but any Markdown panel the tab row can show.
+    /// One row's worth of what background setup did, or nil when there is
+    /// nothing worth a row.
+    ///
+    /// `.idle` and `.completed` are both silent on purpose: nothing has happened
+    /// yet, or bootstrap did exactly what the project asked and the worktree is
+    /// the evidence. The two that must speak are `.completedWithNote`, whose
+    /// entire content is the reason nothing ran, and `.failed`.
+    private var setupSummary: (label: String, detail: String, icon: String, tint: Color)? {
+        switch setupState {
+        case .idle, .completed:
+            return nil
+        case let .inProgress(step, _):
+            return (NSLocalizedString("Bootstrap", comment: ""), step, "clock", .secondary)
+        case let .completedWithNote(note):
+            return (NSLocalizedString("Bootstrap", comment: ""), note, "info.circle", .secondary)
+        case let .failed(detail):
+            return (NSLocalizedString("Bootstrap", comment: ""), detail, "exclamationmark.triangle", .orange)
+        }
+    }
+
     private var displayedDocs: [DocFile] {
         guard let story = appEnv.shortcutStory(for: workingDirectory),
               let description = story.description,
