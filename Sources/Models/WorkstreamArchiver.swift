@@ -86,6 +86,7 @@ enum WorkstreamArchiver {
             let branchName = GitOperations.currentBranch(at: worktreePath)
             archivingPaths.insert(standardizedPath)
             NotificationCenter.default.post(name: archivingDidStart, object: nil)
+            let composeBinary = ProcessComposeSettings.resolveBinary()
             Task.detached {
                 defer {
                     Task { @MainActor in
@@ -93,27 +94,53 @@ enum WorkstreamArchiver {
                         NotificationCenter.default.post(name: archivingDidComplete, object: nil)
                     }
                 }
-                // Before the worktree is removed: `ProcessComposeConfig.locate`
-                // reads the worktree, and dispose runs in it.
-                if let disposePath {
-                    runDispose(
-                        workstreamID: workstreamID,
-                        projectName: projName,
-                        workstreamName: wsName,
-                        worktreePath: disposePath,
-                        projectDirectory: projectDir
-                    )
+                // A bootstrap for this workstream may still be running: it goes
+                // on in the background behind an already-open terminal, so
+                // "created a workstream, then archived it" overlaps them. Stop
+                // it before dispose runs in the same directory and before
+                // `git worktree remove` deletes that directory underneath it.
+                await AsyncSetupService.shared.cancelBootstrap(
+                    for: workstreamID,
+                    binary: composeBinary,
+                    worktreePath: disposePath ?? worktreePath
+                )
+                // Everything below blocks: dispose is a whole process-compose
+                // phase at up to `Timeout.userCommand`, and each git call waits
+                // on a child. On the cooperative pool that pins a thread for
+                // minutes, so it goes to a utility queue — the same bridge
+                // `AsyncSetupService` uses for bootstrap, and for the same
+                // reason.
+                await withCheckedContinuation { continuation in
+                    DispatchQueue.global(qos: .utility).async {
+                        // Before the worktree is removed:
+                        // `ProcessComposeConfig.locate` reads the worktree, and
+                        // dispose runs in it.
+                        if let disposePath {
+                            runDispose(
+                                workstreamID: workstreamID,
+                                projectName: projName,
+                                workstreamName: wsName,
+                                worktreePath: disposePath,
+                                projectDirectory: projectDir
+                            )
+                        }
+                        GitOperations.removeWorktree(projectPath: projectDir, worktreePath: worktreePath)
+                        if let branchName {
+                            GitOperations.deleteLocalBranch(at: projectDir, branchName: branchName)
+                        }
+                        GitOperations.fetchDefaultBranch(at: projectDir)
+                        if let tmuxPath {
+                            TmuxSession.killWorkstreamSessions(tmuxPath: tmuxPath, project: projName, workstream: wsName)
+                        }
+                        // Clean up the agent launch script for this workstream.
+                        try? FileManager.default.removeItem(atPath: AppConstants.agentScriptPath(for: workstreamID))
+                        continuation.resume()
+                    }
                 }
-                GitOperations.removeWorktree(projectPath: projectDir, worktreePath: worktreePath)
-                if let branchName {
-                    GitOperations.deleteLocalBranch(at: projectDir, branchName: branchName)
-                }
-                GitOperations.fetchDefaultBranch(at: projectDir)
-                if let tmuxPath {
-                    TmuxSession.killWorkstreamSessions(tmuxPath: tmuxPath, project: projName, workstream: wsName)
-                }
-                // Clean up the agent launch script for this workstream.
-                try? FileManager.default.removeItem(atPath: AppConstants.agentScriptPath(for: workstreamID))
+                // The state entry outlives the workstream otherwise: nothing
+                // else called this, so `states` grew by one per archive for the
+                // life of the process.
+                await AsyncSetupService.shared.clearState(for: workstreamID)
             }
         }
         surfaceCache.removeWorkstreamSurfaces(for: workstreamID)

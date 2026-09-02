@@ -131,6 +131,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if let tmuxPath {
             TmuxSession.killAllSessions(tmuxPath: tmuxPath)
         }
+        // `up --keep-project` servers outlive their processes deliberately, so
+        // without this a quit mid-run leaves one per phase holding the
+        // worktree's ports until its own deadline.
+        if let composeBinary = ProcessComposeSettings.resolveBinary() {
+            PhaseExecutor.stopAllServers(binary: composeBinary)
+        }
     }
 
     func applicationShouldTerminate(_: NSApplication) -> NSApplication.TerminateReply {

@@ -204,6 +204,39 @@ actor AsyncSetupService {
     }
 
     /// Remove tracked state for a workstream (cleanup after archiving).
+    /// Stop an in-flight bootstrap for this workstream and wait for it to let go.
+    ///
+    /// Archive has to do this before it removes the worktree. `dispose` and a
+    /// running `bootstrap` in the same directory are already bad — two
+    /// process-compose runs over one project — but `git worktree remove`
+    /// deleting the tree out from under a running `pnpm install` is worse, and
+    /// bootstrap's own server would then hold its ports until its 30-minute
+    /// deadline with nothing left to shut it down.
+    ///
+    /// Shutting the socket down is what makes `PhaseExecutor.run` return: the
+    /// server exits, the spawned `up` follows, and the `defer` in
+    /// `runBackgroundSetup` clears the claim. The poll below reads that claim
+    /// rather than the process, so it observes the real end of the work.
+    func cancelBootstrap(for workstreamID: UUID, binary: String?, worktreePath: String) async {
+        guard runningBootstraps.contains(workstreamID) else { return }
+        logger.info("Archive is waiting for bootstrap of \(worktreePath, privacy: .public)")
+        if let binary {
+            PhaseExecutor.shutDown(
+                binary: binary,
+                socketPath: PhaseRunner.socketPath(for: workstreamID, phase: .bootstrap),
+                workingDirectory: worktreePath
+            )
+        }
+        // Capped, because a bootstrap wedged in a way `down` cannot reach must
+        // not block the archive forever. Proceeding is then the lesser evil:
+        // the user asked for this worktree to go.
+        for _ in 0 ..< 300 {
+            guard runningBootstraps.contains(workstreamID) else { return }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        logger.warning("Bootstrap for \(worktreePath, privacy: .public) did not stop; archiving anyway")
+    }
+
     func clearState(for workstreamID: UUID) {
         states.removeValue(forKey: workstreamID)
     }

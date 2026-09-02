@@ -413,7 +413,7 @@ enum PhaseExecutor {
     /// Called before spawning as well as after, because the state this cleans
     /// up is exactly what a killed run leaves behind. A failure is expected and
     /// unremarkable — most of the time there is nothing listening.
-    private static func shutDown(binary: String, socketPath: String, workingDirectory: String) {
+    static func shutDown(binary: String, socketPath: String, workingDirectory: String) {
         guard FileManager.default.fileExists(atPath: socketPath) else { return }
         _ = ProcessRunner.capture(
             executable: binary,
@@ -422,6 +422,41 @@ enum PhaseExecutor {
             timeout: ProcessRunner.Timeout.local
         )
         try? FileManager.default.removeItem(atPath: socketPath)
+    }
+
+    /// Stop every phase server this user has left listening.
+    ///
+    /// `up --keep-project` outlives its processes on purpose — that is how the
+    /// poll can read a final exit code — so a run that is never shut down
+    /// leaves a server holding the worktree's ports until its deadline. Quit
+    /// used to kill tmux only, so quitting mid-run stranded one per phase.
+    ///
+    /// Bounded and concurrent because this runs as the app is terminating: a
+    /// serial sweep of N sockets at `Timeout.local` each would visibly hang
+    /// quit. Anything still listening after the cap is left to its own
+    /// deadline, which is the situation before this existed.
+    static func stopAllServers(binary: String, timeout: TimeInterval = 3) {
+        let directory = PhaseRunner.socketDirectory
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path) else { return }
+        let sockets = names.filter { $0.hasSuffix(".sock") }.map { directory.appendingPathComponent($0).path }
+        guard !sockets.isEmpty else { return }
+
+        let group = DispatchGroup()
+        let queue = DispatchQueue.global(qos: .userInitiated)
+        for socket in sockets {
+            group.enter()
+            queue.async {
+                defer { group.leave() }
+                // The working directory only has to exist; `down` addresses the
+                // server by socket.
+                shutDown(
+                    binary: binary,
+                    socketPath: socket,
+                    workingDirectory: FileManager.default.temporaryDirectory.path
+                )
+            }
+        }
+        _ = group.wait(timeout: .now() + timeout)
     }
 
     /// Handoff for the spawned command's result, written on one thread and read

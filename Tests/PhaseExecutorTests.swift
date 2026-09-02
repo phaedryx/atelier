@@ -340,4 +340,47 @@ final class PhaseOutcomeReportingTests: XCTestCase {
         }
         XCTAssertTrue(detail.contains("did not finish in time"), detail)
     }
+
+    // MARK: - Quit-time server sweep
+
+    /// `shutDown` deletes the socket path whether or not the `down` succeeded,
+    /// so the files disappearing is the observable proof that the sweep visited
+    /// every one. `/usr/bin/true` stands in for the binary: this asserts the
+    /// iteration, not process-compose's behaviour.
+    func testStopAllServersVisitsEverySocket() throws {
+        PhaseRunner.ensureSocketDirectory()
+        let directory = PhaseRunner.socketDirectory
+        let sockets = (0 ..< 3).map { directory.appendingPathComponent("sweep-\($0).sock") }
+        let ignored = directory.appendingPathComponent("not-a-socket.txt")
+        for url in sockets + [ignored] {
+            try Data("x".utf8).write(to: url)
+        }
+        defer { for url in sockets + [ignored] {
+            try? FileManager.default.removeItem(at: url)
+        } }
+
+        PhaseExecutor.stopAllServers(binary: "/usr/bin/true", timeout: 10)
+
+        for url in sockets {
+            XCTAssertFalse(
+                FileManager.default.fileExists(atPath: url.path),
+                "\(url.lastPathComponent) should have been swept"
+            )
+        }
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: ignored.path),
+            "only .sock paths are servers; other files must be left alone"
+        )
+    }
+
+    func testStopAllServersDoesNothingWithNoSockets() {
+        PhaseRunner.ensureSocketDirectory()
+        let stray = PhaseRunner.socketDirectory.appendingPathComponent("keep.txt")
+        try? Data("x".utf8).write(to: stray)
+        defer { try? FileManager.default.removeItem(at: stray) }
+
+        PhaseExecutor.stopAllServers(binary: "/usr/bin/true", timeout: 1)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: stray.path))
+    }
 }
