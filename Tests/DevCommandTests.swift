@@ -359,4 +359,86 @@ final class DevCommandTests: XCTestCase {
         let data = try JSONSerialization.data(withJSONObject: ["scripts": scripts])
         try data.write(to: tmpDir.appendingPathComponent("package.json"))
     }
+
+    // MARK: - The stored-override corpse of route five
+
+    /// The exact shape `detectProcessCompose` builds. A value like this saved
+    /// before the Customize seeding was fixed would otherwise be rehydrated as
+    /// an `.override` and run literally, past PhasePolicy, on every Start.
+    func testAStoredUnscopedProcessComposeCommandIsIgnored() throws {
+        let dir = try makeWorktreeWithConfig()
+        ProcessComposeSettings.isEnabled = true
+        defer { ProcessComposeSettings.isEnabled = false }
+
+        let resolved = DevCommandResolver.resolve(
+            workingDirectory: dir,
+            projectDirectory: dir,
+            override: "process-compose up -U -f '\(dir)/process-compose.yaml'"
+        )
+
+        XCTAssertEqual(resolved?.source, .processCompose, "must not be honoured as an override")
+    }
+
+    func testAnOverrideThatNamesANamespaceIsHonoured() throws {
+        let dir = try makeWorktreeWithConfig()
+
+        let resolved = DevCommandResolver.resolve(
+            workingDirectory: dir,
+            projectDirectory: dir,
+            override: "process-compose up -n execute -f x.yaml"
+        )
+
+        XCTAssertEqual(resolved?.source, .override)
+    }
+
+    func testAnOrdinaryOverrideIsUntouched() throws {
+        let dir = try makeWorktreeWithConfig()
+
+        let resolved = DevCommandResolver.resolve(
+            workingDirectory: dir,
+            projectDirectory: dir,
+            override: "pnpm dev"
+        )
+
+        XCTAssertEqual(resolved?.command, "pnpm dev")
+        XCTAssertEqual(resolved?.source, .override)
+    }
+
+    func testSavingAnUnscopedProcessComposeCommandIsRefused() {
+        let id = UUID()
+        defer { DevCommandResolver.saveOverride(nil, for: id) }
+
+        DevCommandResolver.saveOverride("process-compose up -U -f a.yaml", for: id)
+
+        XCTAssertNil(DevCommandResolver.savedOverride(for: id))
+    }
+
+    func testSavingAScopedCommandStillWorks() {
+        let id = UUID()
+        defer { DevCommandResolver.saveOverride(nil, for: id) }
+
+        DevCommandResolver.saveOverride("process-compose up -n execute", for: id)
+
+        XCTAssertEqual(DevCommandResolver.savedOverride(for: id), "process-compose up -n execute")
+    }
+
+    /// Word boundaries: a path or process name containing "up" is not the
+    /// subcommand, and must not make an ordinary command look dangerous.
+    func testTheShapeCheckDoesNotFireOnLookalikes() {
+        XCTAssertFalse(DevCommandResolver.isUnscopedProcessComposeCommand("pnpm dev"))
+        XCTAssertFalse(DevCommandResolver.isUnscopedProcessComposeCommand("./bin/upload --all"))
+        XCTAssertFalse(DevCommandResolver.isUnscopedProcessComposeCommand("process-compose down"))
+        XCTAssertFalse(DevCommandResolver.isUnscopedProcessComposeCommand("cd up-tools && process-compose down"))
+        XCTAssertTrue(DevCommandResolver.isUnscopedProcessComposeCommand("process-compose up -U -f a.yaml"))
+        XCTAssertTrue(DevCommandResolver.isUnscopedProcessComposeCommand("PROCESS-COMPOSE UP"))
+    }
+
+    private func makeWorktreeWithConfig() throws -> String {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        try "processes:\n  web:\n    namespace: execute\n    command: \"true\"\n"
+            .write(to: dir.appendingPathComponent("process-compose.yaml"), atomically: true, encoding: .utf8)
+        return dir.path
+    }
 }

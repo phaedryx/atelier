@@ -2,6 +2,9 @@
 // ABOUTME: Precedence: the per-workstream override, then the located process-compose config.
 
 import Foundation
+import OSLog
+
+private let logger = Logger(subsystem: "atelier", category: "dev-command")
 
 /// The command that starts a workstream's dev server, and where it came from.
 struct DevCommand: Equatable {
@@ -41,7 +44,43 @@ enum DevCommandResolver {
             UserDefaults.standard.removeObject(forKey: overrideKey(for: workstreamID))
             return
         }
+        guard !isUnscopedProcessComposeCommand(command) else {
+            logger.warning("Refusing to save an un-'-n'd process-compose command as an override")
+            UserDefaults.standard.removeObject(forKey: overrideKey(for: workstreamID))
+            return
+        }
         UserDefaults.standard.set(command, forKey: overrideKey(for: workstreamID))
+    }
+
+    /// Whether this text is a `process-compose up` with no `-n`.
+    ///
+    /// `.override` is the one unconstrained input in `RunCommandPlan`: it is
+    /// the user's own text and runs literally. That is deliberate, and it is
+    /// also the shape of the fifth bypass — the Environment pane used to seed
+    /// its editable field from the un-`-n`'d display command, and Save turned
+    /// it into exactly such an override. The seeding is gone, but a value
+    /// saved before it was fixed would be rehydrated by `savedOverride` and
+    /// run on every Start forever, because nothing scrubs UserDefaults.
+    ///
+    /// So the check lives on both sides: the writer refuses to store one, and
+    /// `resolve` ignores one already stored. Both together, because either
+    /// alone leaves a hole — the writer cannot reach values already on disk,
+    /// and a reader-only check would keep re-reading a value it will not use.
+    ///
+    /// Matching is on shape, not on equality with the current generated
+    /// string, because the generated string contains absolute paths that move:
+    /// a stored value from another worktree, or from before a project moved,
+    /// is the same hazard and would not compare equal. A command that names a
+    /// namespace is left alone — that is a scoped command, whatever else it
+    /// does — and so is anything not invoking process-compose.
+    static func isUnscopedProcessComposeCommand(_ text: String) -> Bool {
+        let normalized = text.lowercased()
+        guard normalized.contains("process-compose") else { return false }
+        // Word-boundary checks, so a path like `.../up-tools/` or a process
+        // named `upload` cannot pass for the subcommand or a flag.
+        let words = normalized.split(whereSeparator: { " \t\n'\"".contains($0) }).map(String.init)
+        guard words.contains("up") else { return false }
+        return !words.contains { $0 == "-n" || $0.hasPrefix("--namespace") }
     }
 
     // MARK: - Resolution
@@ -61,7 +100,15 @@ enum DevCommandResolver {
         override: String?
     ) -> DevCommand? {
         if let override, !override.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return DevCommand(command: override, source: .override, sourceDescription: nil)
+            // A stored override from before the seeding bug was fixed. Falling
+            // through to detection is the safe answer, not an error: the
+            // project still has a config, and the phase-scoped plan is what it
+            // should have been running all along.
+            if isUnscopedProcessComposeCommand(override) {
+                logger.warning("Ignoring a stored override that runs every namespace")
+            } else {
+                return DevCommand(command: override, source: .override, sourceDescription: nil)
+            }
         }
         return detectProcessCompose(in: workingDirectory, projectDirectory: projectDirectory)
     }
