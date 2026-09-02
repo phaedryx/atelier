@@ -490,6 +490,8 @@ private struct PromptEditorSheet: View {
 private struct IntegrationsSettingsPane: View {
     @AppStorage(ShortcutSettings.buttonEnabledKey) private var shortcutButtonEnabled: Bool = true
     @AppStorage(ShortcutSettings.branchTemplateKey) private var branchTemplate: String = ""
+    @AppStorage(ProcessComposeSettings.enabledKey) private var processComposeEnabled = false
+    @AppStorage(ProcessComposeSettings.binaryPathKey) private var processComposeBinary = ""
 
     private var branchPreviewIsValid: Bool {
         GitOperations.isValidBranchName(ShortcutBranchName.preview(branchTemplate))
@@ -599,6 +601,30 @@ private struct IntegrationsSettingsPane: View {
                         comment: "Shortcut button setting description"
                     )
                 )
+            }
+
+            Section("Process-Compose") {
+                SettingToggle(
+                    "Enable process-compose",
+                    isOn: $processComposeEnabled,
+                    description: NSLocalizedString(
+                        "Run a project's dev stack from its process-compose.yaml, with per-worktree ports from ports.yaml.",
+                        comment: "Process-compose enable setting description"
+                    )
+                )
+
+                if processComposeEnabled {
+                    LabeledContent("Binary") {
+                        HStack(spacing: 6) {
+                            TextField("auto-detect", text: $processComposeBinary)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(size: 11, design: .monospaced))
+                            Text(ProcessComposeSettings.resolveBinary() ?? NSLocalizedString("not found", comment: ""))
+                                .font(.system(size: 10))
+                                .foregroundStyle(ProcessComposeSettings.resolveBinary() == nil ? .orange : .secondary)
+                        }
+                    }
+                }
             }
         }
         .formStyle(.grouped)

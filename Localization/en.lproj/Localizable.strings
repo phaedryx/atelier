@@ -499,3 +499,11 @@
 "Could not reach the process manager: %@" = "Could not reach the process manager: %@";
 "The process manager returned %d." = "The process manager returned %d.";
 "The process manager sent an unreadable response." = "The process manager sent an unreadable response.";
+
+/* Process-compose integration settings */
+"Process-Compose" = "Process-Compose";
+"Enable process-compose" = "Enable process-compose";
+"Run a project's dev stack from its process-compose.yaml, with per-worktree ports from ports.yaml." = "Run a project's dev stack from its process-compose.yaml, with per-worktree ports from ports.yaml.";
+"Binary" = "Binary";
+"auto-detect" = "auto-detect";
+"not found" = "not found";
