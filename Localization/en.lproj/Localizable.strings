@@ -352,6 +352,8 @@
 "Rerun" = "Rerun";
 "Start" = "Start";
 "Stop" = "Stop";
+"Restart" = "Restart";
+"Nothing running." = "Nothing running.";
 
 "Running setup..." = "Running setup...";
 "Setup failed." = "Setup failed.";

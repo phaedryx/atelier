@@ -329,6 +329,7 @@ struct TerminalContainerView: View {
     /// Resolved once per change rather than per render: resolving binds a socket
     /// to check whether each port is free.
     @State private var portPlan: PortPlan = .empty
+    @StateObject private var processTable: ProcessTableModel
     init(
         workstreamID: UUID,
         workingDirectory: String,
@@ -352,6 +353,9 @@ struct TerminalContainerView: View {
         self.model = model
         _scriptConfig = State(initialValue: scriptConfig)
         _portDetector = StateObject(wrappedValue: PortDetector(workstreamID: workstreamID))
+        _processTable = StateObject(wrappedValue: ProcessTableModel(
+            socketPath: PhaseRunner.socketPath(for: workstreamID)
+        ))
 
         let savedOverride = DevCommandResolver.savedOverride(for: workstreamID)
         _devCommandOverride = State(initialValue: savedOverride)
@@ -700,6 +704,9 @@ struct TerminalContainerView: View {
                     devCommandOverride: $devCommandOverride,
                     runStarted: $model.runStarted,
                     runGeneration: $runGeneration,
+                    processTable: processTable,
+                    showsProcessTable: usesProcessCompose,
+                    portsByName: portPlan.values,
                     onStart: doStartRun,
                     onStop: stopRun,
                     onRestart: restartRun
@@ -898,6 +905,7 @@ struct TerminalContainerView: View {
                 startFileTreeWatcherIfNeeded()
             }
             restoreRunState()
+            syncProcessPolling()
         }
         .onDisappear {
             if isActive {
@@ -963,6 +971,10 @@ struct TerminalContainerView: View {
                     runCommandString = buildRunCommand(script: command)
                     preloadRunSurface()
                 }
+                // Driven here rather than from doStartRun/stopRun because a
+                // session restored from tmux sets this directly and never goes
+                // through either of them.
+                syncProcessPolling()
             }
             .onChange(of: portDetector.status) { _, newStatus in
                 // Once the session materializes (atelier-run wrote state), the
@@ -1152,6 +1164,26 @@ struct TerminalContainerView: View {
         browserStartPending = false
         runCommandString = nil
         runGeneration += 1
+    }
+
+    /// Whether this workstream's run is a process-compose run, and so has a
+    /// control socket worth polling. Read off the already-resolved dev command
+    /// rather than re-locating the config, because this is read per render and
+    /// locating stats the filesystem.
+    private var usesProcessCompose: Bool {
+        ProcessComposeSettings.isEnabled && resolvedDevCommand?.source == .processCompose
+    }
+
+    /// Polls the control socket exactly while a process-compose run is up.
+    /// Called from every place `runStarted` can change, including the tmux
+    /// restore path, which sets it without going through `doStartRun`.
+    @MainActor
+    private func syncProcessPolling() {
+        if model.runStarted, usesProcessCompose {
+            processTable.startPolling()
+        } else {
+            processTable.stopPolling()
+        }
     }
 
     private func restartRun() {

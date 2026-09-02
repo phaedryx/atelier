@@ -37,6 +37,12 @@ struct EnvironmentTabView: View {
     @Binding var devCommandOverride: String?
     @Binding var runStarted: Bool
     @Binding var runGeneration: Int
+    /// Live process state from process-compose. Only rendered when the run is a
+    /// process-compose run; otherwise nothing is polling it.
+    @ObservedObject var processTable: ProcessTableModel
+    let showsProcessTable: Bool
+    /// The worktree's port plan, so each row can show the port it owns.
+    let portsByName: [String: String]
     let onStart: () -> Void
     let onStop: () -> Void
     let onRestart: () -> Void
@@ -126,6 +132,10 @@ struct EnvironmentTabView: View {
             Divider()
 
             if runStarted, let runCommand {
+                if showsProcessTable {
+                    ProcessTableView(model: processTable, portsByName: portsByName)
+                    Divider()
+                }
                 SingleTerminalView(
                     surfaceID: runID,
                     workingDirectory: workingDirectory,
