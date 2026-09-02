@@ -21,6 +21,10 @@ final class ProcessComposeConfigTests: XCTestCase {
         super.tearDown()
     }
 
+    private func write(_ name: String, in dir: URL, contents: String) throws {
+        try contents.write(to: dir.appendingPathComponent(name), atomically: true, encoding: .utf8)
+    }
+
     private func write(_ name: String, in dir: URL) throws {
         try "processes:\\n  web:\\n    command: echo hi\\n"
             .write(to: dir.appendingPathComponent(name), atomically: true, encoding: .utf8)
@@ -377,5 +381,51 @@ final class ProcessComposeConfigTests: XCTestCase {
         let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
 
         XCTAssertEqual(config.repositoryProvidedFiles, config.loadedFiles)
+    }
+
+    // MARK: - Declared processes
+
+    func testDeclaredProcessesListsOnlyTheNamedNamespace() throws {
+        try write("process-compose.yaml", in: worktree, contents: """
+        processes:
+          seed:   { namespace: bootstrap, command: "true" }
+          checks: { namespace: prepare,   command: "true" }
+          bff:    { namespace: execute,   command: "true" }
+          api:    { namespace: execute,   command: "true" }
+          orphan: { command: "true" }
+        """)
+        let config = try XCTUnwrap(
+            ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path)
+        )
+
+        XCTAssertEqual(config.declaredProcesses(in: "execute"), ["api", "bff"])
+        XCTAssertEqual(config.declaredProcesses(in: "bootstrap"), ["seed"])
+        XCTAssertEqual(config.declaredProcesses(in: "dispose"), [])
+    }
+
+    /// A process with no `namespace:` belongs to process-compose's default
+    /// namespace, so it must not be offered as an `execute` choice.
+    func testAProcessWithNoNamespaceIsNotInExecute() throws {
+        try write("process-compose.yaml", in: worktree, contents: """
+        processes:
+          orphan: { command: "true" }
+        """)
+        let config = try XCTUnwrap(
+            ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path)
+        )
+
+        XCTAssertEqual(config.declaredProcesses(in: "execute"), [])
+    }
+
+    /// nil, never `[]`. An empty list means "this namespace has no processes"
+    /// and would silently offer no choices; the caller has to be able to tell
+    /// that apart from a file it could not read.
+    func testDeclaredProcessesIsNilWhenTheConfigCannotBeParsed() throws {
+        try write("process-compose.yaml", in: worktree, contents: "processes: [this, is, not, a, mapping]")
+        let config = try XCTUnwrap(
+            ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path)
+        )
+
+        XCTAssertNil(config.declaredProcesses(in: "execute"))
     }
 }

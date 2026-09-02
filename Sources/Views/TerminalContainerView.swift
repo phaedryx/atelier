@@ -452,6 +452,17 @@ struct TerminalContainerView: View {
     /// be built — no config, or no binary — the answer is nil and Start reports
     /// that, rather than running something unscoped.
     ///
+    /// Processes the located config declares in `execute`.
+    ///
+    /// Read off the stored plan's config rather than by locating again, so the
+    /// selection list and the command Start builds cannot disagree about which
+    /// config they mean. Empty when the config is unparseable, which the
+    /// selection list treats as "offer no choices" rather than "no processes".
+    private var declaredExecuteProcesses: [String] {
+        guard case let .phaseScoped(config, _) = runPlan else { return [] }
+        return config.declaredProcesses(in: ProcessComposePhase.execute.namespace) ?? []
+    }
+
     /// Reads the stored `runPlan` rather than re-deriving one, so this is nil
     /// for exactly the plans whose `canRun` is false — which is what the Start
     /// button's enablement is drawn from. Deriving a second plan here is how
@@ -735,6 +746,7 @@ struct TerminalContainerView: View {
                     processTable: processTable,
                     showsProcessTable: usesProcessCompose,
                     portsByName: portPlan.values,
+                    declaredProcesses: declaredExecuteProcesses,
                     canStart: runPlan.canRun,
                     devCommandFiles: devCommandFiles,
                     startUnavailableReason: runUnavailableReason,

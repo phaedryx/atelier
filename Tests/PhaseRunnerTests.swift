@@ -385,4 +385,33 @@ final class PhaseRunnerTests: XCTestCase {
 
         XCTAssertTrue(command.contains("'/repo/my project/process-compose.yaml'"), command)
     }
+
+    /// process-compose reads selected names as trailing arguments, so a
+    /// repository YAML declaring a process called `-n` would otherwise turn
+    /// `up -n execute -n dispose` — re-selecting the namespace this command
+    /// exists to scope, and running the phase `PhasePolicy` gates.
+    func testAProcessNameThatLooksLikeAFlagIsNotPassed() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try """
+        processes:
+          bff:  { namespace: execute, command: "true" }
+          "-n": { namespace: execute, command: "true" }
+        """.write(to: dir.appendingPathComponent("process-compose.yaml"), atomically: true, encoding: .utf8)
+        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: dir.path, projectDirectory: dir.path))
+
+        let command = PhaseRunner.command(
+            phase: .execute,
+            config: config,
+            binary: "/usr/bin/true",
+            workstreamID: UUID(),
+            selectedProcesses: ["bff", "-n", "-f", "--keep-project"]
+        )
+
+        XCTAssertTrue(command.contains("bff"), command)
+        XCTAssertFalse(command.contains("-n dispose"), command)
+        XCTAssertEqual(command.components(separatedBy: "-n ").count - 1, 1, "exactly one -n: \(command)")
+        XCTAssertFalse(command.contains("--keep-project"), command)
+    }
 }

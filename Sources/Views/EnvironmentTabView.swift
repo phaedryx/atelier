@@ -59,6 +59,8 @@ struct EnvironmentTabView: View {
     let showsProcessTable: Bool
     /// The worktree's port plan, so each row can show the port it owns.
     let portsByName: [String: String]
+    /// Processes the config declares in `execute`, for the selection list.
+    let declaredProcesses: [String]
     /// Whether Start may run anything. **Passed in, never re-derived here.**
     /// This is `RunCommandPlan.canRun` for the same plan `doStartRun` executes,
     /// so the button's enablement and the run's guard are one decision. They
@@ -159,7 +161,12 @@ struct EnvironmentTabView: View {
 
             if runStarted, let runCommand {
                 if showsProcessTable {
-                    ProcessTableView(model: processTable, portsByName: portsByName)
+                    ProcessTableView(
+                        model: processTable,
+                        portsByName: portsByName,
+                        workstreamID: workstreamID,
+                        declaredProcesses: declaredProcesses
+                    )
                     Divider()
                 }
                 SingleTerminalView(

@@ -526,3 +526,6 @@
 "fixed: %d is not a port between 1 and 65535" = "fixed: %d is not a port between 1 and 65535";
 "is a name Atelier sets; choose another" = "is a name Atelier sets; choose another";
 "starts with FF_, which Atelier mirrors from ATELIER_*; declare the ATELIER_ name instead" = "starts with FF_, which Atelier mirrors from ATELIER_*; declare the ATELIER_ name instead";
+
+/* Process selection */
+"All" = "All";

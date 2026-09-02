@@ -99,6 +99,35 @@ struct ProcessComposeConfig: Equatable {
         return Set(processes.values.compactMap(\.namespace))
     }
 
+    /// The processes this config declares in a namespace, or nil if any file
+    /// could not be parsed.
+    ///
+    /// The selection UI needs these *before* anything is running, so it cannot
+    /// read the live API: the whole point is choosing what `execute` will
+    /// start. nil is "unknown" for the same reason `declaredNamespaces` uses
+    /// it — a parse failure must never look like "this namespace is empty",
+    /// which here would silently offer no choices at all.
+    ///
+    /// Later files win on name, matching process-compose's own override
+    /// semantics, so a process moved to another namespace by an override file
+    /// is reported under the namespace the override gives it.
+    func declaredProcesses(in namespace: String) -> [String]? {
+        var namespaceByProcess: [String: String] = [:]
+        for file in loadedFiles {
+            guard let text = try? String(contentsOfFile: file, encoding: .utf8),
+                  let decoded = try? YAMLDecoder().decode(NamespaceFile.self, from: text),
+                  let processes = decoded.processes
+            else { return nil }
+            for (name, process) in processes {
+                namespaceByProcess[name] = process.namespace ?? ""
+            }
+        }
+        return namespaceByProcess
+            .filter { $0.value == namespace }
+            .keys
+            .sorted()
+    }
+
     /// What this config says about a namespace. Three answers, not two,
     /// because "we could not tell" has to be actionable: a file Yams cannot
     /// decode but process-compose accepts — a top-level `include`, a

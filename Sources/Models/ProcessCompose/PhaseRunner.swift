@@ -111,7 +111,18 @@ enum PhaseRunner {
         parts += ["-n", phase.namespace]
 
         if phase == .execute, !selectedProcesses.isEmpty {
-            parts += selectedProcesses.map { CommandBuilder.shellQuote($0) }
+            // Shell-quoting protects the shell; it does not protect
+            // process-compose's own flag parser, which reads these as trailing
+            // arguments. A repository YAML may name a process whatever it
+            // likes, and a process called `-n` would make this
+            // `up -n execute -n dispose` — re-selecting the namespace this
+            // command exists to scope. Names that could be read as flags are
+            // dropped rather than passed: process-compose cannot start a
+            // process by a name it would parse as a flag anyway, so nothing
+            // legitimate is lost.
+            parts += selectedProcesses
+                .filter { !$0.hasPrefix("-") }
+                .map { CommandBuilder.shellQuote($0) }
         }
 
         return parts.joined(separator: " ")
