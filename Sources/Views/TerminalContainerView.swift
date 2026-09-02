@@ -1581,6 +1581,17 @@ struct TerminalContainerView: View {
             if !model.hasBrowserTabs { stopRun() }
         case let .editor(id):
             model.editorBridge?.closeModel(modelId: id.uuidString)
+        case .environment:
+            // The Environment tab owns the run the same way the browser tab
+            // owns it: closing it stops the processes rather than leaving them
+            // running with nothing on screen that can see or stop them. The
+            // tab is closable and reopenable, and reopening offers Start
+            // again.
+            //
+            // Guarded on `runStarted` because `stopRun` sets
+            // `runStoppedManually`, which suppresses the tmux restore on next
+            // launch. Closing a tab that was not running must not decide that.
+            if model.runStarted { stopRun() }
         default:
             break
         }
