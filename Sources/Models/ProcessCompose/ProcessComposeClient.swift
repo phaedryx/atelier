@@ -36,7 +36,16 @@ struct ProcessComposeProcess: Decodable, Equatable, Identifiable {
 struct ProcessComposeClient {
     let socketPath: String
 
-    enum ClientError: Error, LocalizedError {
+    /// Bound on a single blocking `read`/`write` over the socket. `processes()`
+    /// runs on the cooperative thread pool and `Task.cancel()` cannot interrupt
+    /// a blocking syscall, so a server that accepts and never answers would
+    /// otherwise pin a pool thread and a file descriptor forever — and Task 8
+    /// polls this once a second, so that leak compounds fast enough to wedge
+    /// every async task in the app within seconds. This is a local unix socket
+    /// with no network hop, so a few seconds is generous; it is not tens.
+    private static let ioTimeout = timeval(tv_sec: 5, tv_usec: 0)
+
+    enum ClientError: Error, Equatable, LocalizedError {
         case notRunning
         case transport(String)
         case http(Int)
@@ -104,6 +113,10 @@ struct ProcessComposeClient {
         guard descriptor >= 0 else { throw ClientError.transport("socket() failed") }
         defer { Darwin.close(descriptor) }
 
+        var timeout = Self.ioTimeout
+        setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
         let pathBytes = Array(socketPath.utf8)
@@ -132,6 +145,12 @@ struct ProcessComposeClient {
             var sent = 0
             while sent < buffer.count {
                 let n = write(descriptor, buffer.baseAddress! + sent, buffer.count - sent)
+                if n < 0 {
+                    if errno == EAGAIN || errno == EWOULDBLOCK {
+                        throw ClientError.transport("write timed out")
+                    }
+                    throw ClientError.transport("write failed")
+                }
                 guard n > 0 else { throw ClientError.transport("write failed") }
                 sent += n
             }
@@ -142,7 +161,12 @@ struct ProcessComposeClient {
         while true {
             let n = read(descriptor, &chunk, chunk.count)
             if n == 0 { break }
-            guard n > 0 else { throw ClientError.transport("read failed") }
+            if n < 0 {
+                if errno == EAGAIN || errno == EWOULDBLOCK {
+                    throw ClientError.transport("read timed out")
+                }
+                throw ClientError.transport("read failed")
+            }
             response.append(contentsOf: chunk[0 ..< n])
         }
 

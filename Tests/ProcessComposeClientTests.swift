@@ -58,4 +58,44 @@ final class ProcessComposeClientTests: XCTestCase {
     func testMalformedResponseThrows() {
         XCTAssertThrowsError(try ProcessComposeClient.decodeProcesses(Data("not json".utf8)))
     }
+
+    func testBodyThrowsWhenNoHeaderBodySeparator() {
+        let response = Data("HTTP/1.1 200 OK\r\nContent-Length: 2".utf8)
+
+        XCTAssertThrowsError(try ProcessComposeClient.body(of: response)) { error in
+            XCTAssertEqual(error as? ProcessComposeClient.ClientError, .malformedResponse)
+        }
+    }
+
+    func testBodyThrowsOnUnparseableStatusLine() {
+        let response = Data("not a status line\r\n\r\n{}".utf8)
+
+        XCTAssertThrowsError(try ProcessComposeClient.body(of: response)) { error in
+            XCTAssertEqual(error as? ProcessComposeClient.ClientError, .malformedResponse)
+        }
+    }
+
+    func testBodyThrowsHTTPErrorOnNon2xxStatus() {
+        let response = Data("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".utf8)
+
+        XCTAssertThrowsError(try ProcessComposeClient.body(of: response)) { error in
+            XCTAssertEqual(error as? ProcessComposeClient.ClientError, .http(404))
+        }
+    }
+
+    func testBodyReturnsBodyOn200() throws {
+        let response = Data("HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\n{\"data\":[]}\n".utf8)
+
+        let body = try ProcessComposeClient.body(of: response)
+
+        XCTAssertEqual(body, Data("{\"data\":[]}\n".utf8))
+    }
+
+    func testBodyReturnsEmptyBodyOn200WithNoContent() throws {
+        let response = Data("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".utf8)
+
+        let body = try ProcessComposeClient.body(of: response)
+
+        XCTAssertTrue(body.isEmpty)
+    }
 }
