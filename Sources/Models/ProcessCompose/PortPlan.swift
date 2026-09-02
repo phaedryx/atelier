@@ -34,7 +34,9 @@ struct PortPlan: Equatable {
             guard case let .fixed(port) = entry.kind else { continue }
             claimed.insert(port)
             values[entry.name] = "\(port)"
-            if entry.isBrowser { browserPort = port }
+            if entry.isBrowser {
+                browserPort = port
+            }
         }
 
         for entry in config.entries {
@@ -47,7 +49,9 @@ struct PortPlan: Equatable {
             )
             claimed.insert(port)
             values[entry.name] = "\(port)"
-            if entry.isBrowser { browserPort = port }
+            if entry.isBrowser {
+                browserPort = port
+            }
         }
 
         return PortPlan(values: values, browserPort: browserPort)

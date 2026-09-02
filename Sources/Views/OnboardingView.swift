@@ -177,7 +177,7 @@ private struct PrerequisiteRow: View {
                     .foregroundStyle(.secondary)
             }
 
-            if optional && !status.isInstalled {
+            if optional, !status.isInstalled {
                 Text("Optional")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
@@ -214,14 +214,22 @@ private struct PrerequisiteRow: View {
     }
 
     private var statusIcon: String {
-        if status.isInstalled { return "checkmark.circle.fill" }
-        if optional { return "minus.circle" }
+        if status.isInstalled {
+            return "checkmark.circle.fill"
+        }
+        if optional {
+            return "minus.circle"
+        }
         return "xmark.circle"
     }
 
     private var statusColor: Color {
-        if status.isInstalled { return .green }
-        if optional { return .secondary }
+        if status.isInstalled {
+            return .green
+        }
+        if optional {
+            return .secondary
+        }
         return .orange
     }
 }

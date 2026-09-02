@@ -39,7 +39,9 @@ enum IPCNames {
             guard !scalars.isEmpty else { continue }
 
             result += String(scalars)
-            if result.count >= limit { break }
+            if result.count >= limit {
+                break
+            }
         }
 
         let cleaned = result.trimmingCharacters(in: .whitespaces)

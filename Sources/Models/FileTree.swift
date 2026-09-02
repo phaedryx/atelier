@@ -69,9 +69,13 @@ struct FileNode: Identifiable {
 
     static func findNode(atPath path: String, in nodes: [FileNode]) -> FileNode? {
         for node in nodes {
-            if node.id == path { return node }
+            if node.id == path {
+                return node
+            }
             if node.isDirectory, let children = node.children, path.hasPrefix(node.id + "/") {
-                if let found = findNode(atPath: path, in: children) { return found }
+                if let found = findNode(atPath: path, in: children) {
+                    return found
+                }
             }
         }
         return nil
@@ -87,17 +91,18 @@ struct FileNode: Identifiable {
         var files: [FileNode] = []
 
         for entry in entries {
-            if entry == ".git" { continue }
+            if entry == ".git" {
+                continue
+            }
 
             let fullPath = (directoryPath as NSString).appendingPathComponent(entry)
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: fullPath, isDirectory: &isDir) else { continue }
 
-            let relativePath: String
-            if rootPath.hasSuffix("/") {
-                relativePath = String(fullPath.dropFirst(rootPath.count))
+            let relativePath = if rootPath.hasSuffix("/") {
+                String(fullPath.dropFirst(rootPath.count))
             } else {
-                relativePath = String(fullPath.dropFirst(rootPath.count + 1))
+                String(fullPath.dropFirst(rootPath.count + 1))
             }
 
             if isDir.boolValue {

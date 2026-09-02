@@ -15,7 +15,6 @@ private let logger = Logger(subsystem: "atelier", category: "opencode-plugin-rem
 /// prompt, and nothing writes that file any more, so it must not be left
 /// behind to inject a snapshot no code can update.
 enum OpencodePluginRemover {
-
     /// First-line marker the installer stamped onto every plugin it wrote.
     /// A file without it is someone else's plugin and is never touched.
     static let marker = "ATELIER_OPENCODE_PLUGIN"

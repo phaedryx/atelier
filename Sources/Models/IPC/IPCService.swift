@@ -11,7 +11,7 @@ actor IPCService {
     static let shared = IPCService()
 
     /// What the app knows about a peer that the store does not.
-    struct PeerContext: Sendable, Equatable {
+    struct PeerContext: Equatable {
         let workstreamID: String?
         let workstreamName: String?
         let projectDirectory: String?
@@ -70,7 +70,7 @@ actor IPCService {
         {
             contexts[renamed.id] = context(from: request.client)
             await store.pin(renamed.id)
-            return .success(id: request.id, .peer(await info(for: renamed)))
+            return await .success(id: request.id, .peer(info(for: renamed)))
         }
 
         let peer = await store.registerPeer(name: name, role: role)
@@ -79,7 +79,7 @@ actor IPCService {
         // runs when that connection closes — so the pin's lifetime is the
         // helper's lifetime.
         await store.pin(peer.id)
-        return .success(id: request.id, .peer(await info(for: peer)))
+        return await .success(id: request.id, .peer(info(for: peer)))
     }
 
     private func listPeers(for request: IPCRequest) async -> IPCResponse {
@@ -175,7 +175,7 @@ actor IPCService {
         guard isVisible(peerID, to: request.client), let peer = await store.peerStatus(id: peerID) else {
             return .failure(id: request.id, IPCError.peerNotFound(peerID).localizedDescription)
         }
-        return .success(id: request.id, .peer(await info(for: peer)))
+        return await .success(id: request.id, .peer(info(for: peer)))
     }
 
     /// Treats any request from a registered peer as proof it is alive.
@@ -284,7 +284,7 @@ actor IPCService {
     }
 
     private func info(for peer: Peer) async -> IPCPeerInfo {
-        info(for: peer, pending: await store.inboxCount(for: peer.id), now: Date())
+        await info(for: peer, pending: store.inboxCount(for: peer.id), now: Date())
     }
 
     private func info(for peer: Peer, pending: Int, now: Date) -> IPCPeerInfo {

@@ -50,13 +50,13 @@ enum RestorableWorkspaceTab: String, Codable {
     func workspaceTab() -> WorkspaceTab {
         switch self {
         case .info:
-            return .info
+            .info
         case .agent:
-            return .agent
+            .agent
         case .changes:
-            return .changes
+            .changes
         case .environment:
-            return .environment
+            .environment
         }
     }
 }
@@ -124,13 +124,13 @@ enum WorkspaceTab: Hashable {
 extension WorkspaceTab {
     var kind: WorkspaceTabKind {
         switch self {
-        case .info: return .info
-        case .agent: return .agent
-        case .changes: return .changes
-        case .environment: return .environment
-        case .terminal: return .terminal
-        case .browser: return .browser
-        case .editor: return .editor
+        case .info: .info
+        case .agent: .agent
+        case .changes: .changes
+        case .environment: .environment
+        case .terminal: .terminal
+        case .browser: .browser
+        case .editor: .editor
         }
     }
 
@@ -139,9 +139,9 @@ extension WorkspaceTab {
     var dragIdentifier: String {
         switch self {
         case let .terminal(id), let .browser(id), let .editor(id):
-            return id.uuidString
+            id.uuidString
         default:
-            return kind.id
+            kind.id
         }
     }
 }
@@ -378,9 +378,9 @@ struct TerminalContainerView: View {
     private var visibleSurfaceIDs: Set<UUID>? {
         switch model.activeTab {
         case .agent:
-            return [claudeID]
-        case let .terminal(id): return [id]
-        case .info, .changes, .environment, .browser, .editor: return []
+            [claudeID]
+        case let .terminal(id): [id]
+        case .info, .changes, .environment, .browser, .editor: []
         }
     }
 
@@ -524,7 +524,9 @@ struct TerminalContainerView: View {
         if appEnv.toolStatus.claudeSupportsSessionName {
             resume.option("--name", workstreamName)
         }
-        if bypassPermissions { resume.flag("--dangerously-skip-permissions") }
+        if bypassPermissions {
+            resume.flag("--dangerously-skip-permissions")
+        }
         if let combinedSystemPrompt {
             resume.option("--append-system-prompt", combinedSystemPrompt)
         }
@@ -537,7 +539,9 @@ struct TerminalContainerView: View {
         if appEnv.toolStatus.claudeSupportsSessionName {
             fresh.option("--name", workstreamName)
         }
-        if bypassPermissions { fresh.flag("--dangerously-skip-permissions") }
+        if bypassPermissions {
+            fresh.flag("--dangerously-skip-permissions")
+        }
         if let combinedSystemPrompt {
             fresh.option("--append-system-prompt", combinedSystemPrompt)
         }
@@ -645,11 +649,16 @@ struct TerminalContainerView: View {
             .fixedSize()
 
             if let pr = branchPR, let url = URL(string: pr.url) {
-                let prColor: Color = pr.state == "MERGED" ? .purple : .green
+                let prColor = pr.status.color
                 Button(action: { NSWorkspace.shared.open(url) }) {
                     HStack(spacing: 4) {
-                        Image(systemName: pr.state == "MERGED" ? "arrow.triangle.merge" : "arrow.triangle.pull")
+                        Image(systemName: pr.status.symbolName)
                             .font(.system(size: 11))
+                        if pr.checks != .none {
+                            Image(systemName: pr.checks.symbolName)
+                                .font(.system(size: 9))
+                                .foregroundStyle(pr.checks.color)
+                        }
                         Text(verbatim: "#\(pr.number)")
                             .font(.system(size: 11, weight: .medium, design: .monospaced))
                     }
@@ -704,9 +713,7 @@ struct TerminalContainerView: View {
         case .info:
             WorkstreamInfoView(
                 workstreamID: workstreamID,
-                workstreamName: workstreamLabel,
                 workingDirectory: workingDirectory,
-                projectName: projectName,
                 projectDirectory: projectDirectory,
                 repositoryConfigFiles: repositoryConfigFiles,
                 configApproved: configApproved,
@@ -835,7 +842,9 @@ struct TerminalContainerView: View {
             .onChange(of: workstreamName) { rebuildClaudeCommand() }
             .onChange(of: appEnv.isDetecting) {
                 rebuildClaudeCommand()
-                if isActive { preloadSurfaces() }
+                if isActive {
+                    preloadSurfaces()
+                }
                 // Tmux mode isn't resolvable until detection finishes; restore
                 // the run session then, not just on the Environment tab's own
                 // appearance, so a live session is picked up even if that tab
@@ -896,7 +905,9 @@ struct TerminalContainerView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .closeTerminal)) { _ in
                 guard isActive else { return }
-                if model.activeTab.isCloseable { closeTab(model.activeTab) }
+                if model.activeTab.isCloseable {
+                    closeTab(model.activeTab)
+                }
             }
     }
 
@@ -1027,7 +1038,9 @@ struct TerminalContainerView: View {
             .onChange(of: portDetector.status) { _, newStatus in
                 // Once the session materializes (atelier-run wrote state), the
                 // waiting overlay is driven by the status itself.
-                if newStatus != .none { browserStartPending = false }
+                if newStatus != .none {
+                    browserStartPending = false
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .switchByNumber)) { notification in
                 guard isActive else { return }
@@ -1139,11 +1152,13 @@ struct TerminalContainerView: View {
     /// (Only `tabLabel`'s browser branch consults this; editor tabs keep their
     /// filename either way.)
     private var useCompactTabs: Bool {
-        model.tabs.filter { $0.kind.staticLabel == nil }.count > Self.compactTabThreshold
+        model.tabs.count(where: { $0.kind.staticLabel == nil }) > Self.compactTabThreshold
     }
 
     private func tabLabel(_ tab: WorkspaceTab) -> String? {
-        if let fixed = tab.kind.staticLabel { return fixed }
+        if let fixed = tab.kind.staticLabel {
+            return fixed
+        }
         switch tab {
         case let .browser(id):
             guard !useCompactTabs else { return nil }
@@ -1189,7 +1204,9 @@ struct TerminalContainerView: View {
         guard resolvedRunCommand != nil else { return }
         guard sessionMode != .waitingForTools, !appEnv.isDetecting else { return }
         guard portDetector.status == .none else { return }
-        if model.runStarted { stopRun() }
+        if model.runStarted {
+            stopRun()
+        }
         doStartRun()
     }
 
@@ -1304,8 +1321,8 @@ struct TerminalContainerView: View {
     private func markBrowserStartPending() {
         browserStartPending = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [self] in
-            guard self.browserStartPending else { return }
-            self.browserStartPending = false
+            guard browserStartPending else { return }
+            browserStartPending = false
         }
     }
 
@@ -1478,11 +1495,10 @@ struct TerminalContainerView: View {
         let gen = refreshGeneration
         let currentTree = fileTree
         DispatchQueue.global(qos: .userInitiated).async {
-            let tree: [FileNode]
-            if currentTree.isEmpty {
-                tree = FileNode.buildShallowTree(rootPath: workingDirectory)
+            let tree: [FileNode] = if currentTree.isEmpty {
+                FileNode.buildShallowTree(rootPath: workingDirectory)
             } else {
-                tree = FileNode.refreshLoadedNodes(in: currentTree, rootPath: workingDirectory)
+                FileNode.refreshLoadedNodes(in: currentTree, rootPath: workingDirectory)
             }
             let statuses = GitOperations.fileStatuses(at: workingDirectory)
             DispatchQueue.main.async {
@@ -1494,7 +1510,9 @@ struct TerminalContainerView: View {
     }
 
     private func expandFileTreeFolder(_ relativePath: String) {
-        if let node = FileNode.findNode(atPath: relativePath, in: fileTree), node.isLoaded { return }
+        if let node = FileNode.findNode(atPath: relativePath, in: fileTree), node.isLoaded {
+            return
+        }
         let gen = refreshGeneration
         let root = workingDirectory
         DispatchQueue.global(qos: .userInitiated).async {
@@ -1610,7 +1628,9 @@ struct TerminalContainerView: View {
             // live tmux run session for the rest of the session — the flag
             // outlives the view on the model, and `restoreRunState` refuses to
             // reattach once it is set.
-            if !model.hasBrowserTabs, model.runStarted { stopRun() }
+            if !model.hasBrowserTabs, model.runStarted {
+                stopRun()
+            }
         case let .editor(id):
             model.editorBridge?.closeModel(modelId: id.uuidString)
         case .environment:
@@ -1623,7 +1643,9 @@ struct TerminalContainerView: View {
             // Guarded on `runStarted` because `stopRun` sets
             // `runStoppedManually`, which suppresses the tmux restore on next
             // launch. Closing a tab that was not running must not decide that.
-            if model.runStarted { stopRun() }
+            if model.runStarted {
+                stopRun()
+            }
         default:
             break
         }
@@ -1802,7 +1824,7 @@ private struct WorkspaceTabButton: View {
     let tab: WorkspaceTab
     let label: String?
     let icon: String
-    var shortcut: String? = nil
+    var shortcut: String?
     let isActive: Bool
     var isDirty: Bool = false
     let onSelect: () -> Void
@@ -1961,20 +1983,24 @@ private struct GitHubActionMenu: View {
     }
 
     private var isRunning: Bool {
-        if case .running = runner.state { return true }
+        if case .running = runner.state {
+            return true
+        }
         return false
     }
 
     private func isRunningAction(_ action: QuickAction) -> Bool {
-        if case let .running(a) = runner.state { return a == action }
+        if case let .running(a) = runner.state {
+            return a == action
+        }
         return false
     }
 
     private func resultState(for action: QuickAction) -> QuickActionState? {
         switch runner.state {
-        case let .succeeded(a) where a == action: return runner.state
-        case let .failed(a) where a == action: return runner.state
-        default: return nil
+        case let .succeeded(a) where a == action: runner.state
+        case let .failed(a) where a == action: runner.state
+        default: nil
         }
     }
 
@@ -2110,8 +2136,8 @@ private enum PrimaryAction: Equatable, Identifiable {
 
     var id: String {
         switch self {
-        case let .quickAction(qa): return qa.id
-        case let .openPR(pr): return "openPR-\(pr.number)"
+        case let .quickAction(qa): qa.id
+        case let .openPR(pr): "openPR-\(pr.number)"
         }
     }
 }
@@ -2442,7 +2468,9 @@ final class TerminalSurfaceCache: ObservableObject {
     }
 
     func webView(for id: UUID) -> WKWebView {
-        if let existing = webViews[id] { return existing }
+        if let existing = webViews[id] {
+            return existing
+        }
         let view = BrowserWebView()
         webViews[id] = view
         return view
@@ -2514,8 +2542,12 @@ final class TerminalSurfaceCache: ObservableObject {
             }
         }
         for id in derivedIDs {
-            if surfaces[id] != nil { removeSurface(for: id) }
-            if webViews[id] != nil { removeWebView(for: id) }
+            if surfaces[id] != nil {
+                removeSurface(for: id)
+            }
+            if webViews[id] != nil {
+                removeWebView(for: id)
+            }
         }
     }
 
@@ -2602,10 +2634,10 @@ final class TerminalSurfaceCache: ObservableObject {
         sendText(to: surfaceID, text: text)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self, whileSafe() else { return }
-            self.sendReturn(to: surfaceID)
+            sendReturn(to: surfaceID)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 guard let self, whileSafe() else { return }
-                self.sendReturn(to: surfaceID)
+                sendReturn(to: surfaceID)
             }
         }
     }

@@ -111,7 +111,11 @@ func processSelectionAfterToggling(
 ) -> [String]? {
     let all = Set(declared)
     var next = current.isEmpty ? all : current
-    if isOn { next.insert(name) } else { next.remove(name) }
+    if isOn {
+        next.insert(name)
+    } else {
+        next.remove(name)
+    }
     guard !next.isEmpty else { return nil }
     return next == all ? [] : next.sorted()
 }

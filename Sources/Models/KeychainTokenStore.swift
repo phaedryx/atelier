@@ -53,7 +53,9 @@ struct KeychainTokenStore {
         let data = Data(trimmed.utf8)
         let attributes = [kSecValueData as String: data]
         let updated = SecItemUpdate(baseQuery as CFDictionary, attributes as CFDictionary)
-        if updated == errSecSuccess { return errSecSuccess }
+        if updated == errSecSuccess {
+            return errSecSuccess
+        }
         // Only "no item yet" justifies falling through to add. Treating every failure as
         // not-found turned a locked keychain into a silent no-op, because the subsequent
         // add came back errSecDuplicateItem and changed nothing.

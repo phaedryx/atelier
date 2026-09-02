@@ -308,13 +308,12 @@ struct EnvironmentTabView: View {
     }
 
     private func sourceTag(for source: DevCommand.Source) -> some View {
-        let text: String
-        switch source {
+        let text: String = switch source {
         case .override:
-            text = NSLocalizedString("Custom", comment: "")
+            NSLocalizedString("Custom", comment: "")
         case .processCompose:
             // The file name, since a repository can carry either spelling.
-            text = devCommand?.sourceDescription ?? "process-compose.yaml"
+            devCommand?.sourceDescription ?? "process-compose.yaml"
         }
         return Text(text)
             .font(.system(size: 9, design: .monospaced))

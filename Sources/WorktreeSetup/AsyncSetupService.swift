@@ -22,12 +22,12 @@ enum AsyncSetupState: Equatable {
 
     static func == (lhs: AsyncSetupState, rhs: AsyncSetupState) -> Bool {
         switch (lhs, rhs) {
-        case (.idle, .idle): return true
-        case (.completed, .completed): return true
-        case let (.inProgress(ls, lp), .inProgress(rs, rp)): return ls == rs && lp == rp
-        case let (.completedWithNote(l), .completedWithNote(r)): return l == r
-        case let (.failed(l), .failed(r)): return l == r
-        default: return false
+        case (.idle, .idle): true
+        case (.completed, .completed): true
+        case let (.inProgress(ls, lp), .inProgress(rs, rp)): ls == rs && lp == rp
+        case let (.completedWithNote(l), .completedWithNote(r)): l == r
+        case let (.failed(l), .failed(r)): l == r
+        default: false
         }
     }
 }

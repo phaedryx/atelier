@@ -56,7 +56,7 @@ final class StoredPromptStoreTests: XCTestCase {
         XCTAssertTrue(reloaded.prompts.isEmpty, "an emptied list must not re-seed the defaults")
     }
 
-    func testAddUpdateRemoveRoundTrip() {
+    func testAddUpdateRemoveRoundTrip() throws {
         let store = StoredPromptStore(defaults: defaults)
         let prompt = StoredPrompt(label: "Lint", text: "Run the linter and fix what it reports.")
         store.add(prompt)
@@ -64,7 +64,7 @@ final class StoredPromptStoreTests: XCTestCase {
         var edited = prompt
         edited.text = "Run the linter."
         store.update(edited)
-        store.remove(id: store.prompts.first!.id)
+        try store.remove(id: XCTUnwrap(store.prompts.first?.id))
 
         let reloaded = StoredPromptStore(defaults: defaults)
         XCTAssertEqual(reloaded.prompt(id: prompt.id)?.text, "Run the linter.")
@@ -96,9 +96,9 @@ final class PromptPaletteCommandTests: XCTestCase {
         XCTAssertTrue(builtIns.allSatisfy { !$0.hasPrefix(storedPromptCommandPrefix) })
     }
 
-    func testEditStoredPromptsCommandDeepLinksToPromptsPane() {
+    func testEditStoredPromptsCommandDeepLinksToPromptsPane() throws {
         let command = defaultPaletteCommands().first { $0.id == "app.editPrompts" }
-        let editPrompts = try! XCTUnwrap(command)
+        let editPrompts = try XCTUnwrap(command)
 
         let posted = expectation(forNotification: .openSettings, object: nil) { note in
             SettingsPane.deepLinkTarget(from: note) == .prompts
@@ -111,11 +111,14 @@ final class PromptPaletteCommandTests: XCTestCase {
         let command = promptPaletteCommands(for: [StoredPrompt(label: "X", text: "y")])[0]
 
         XCTAssertTrue(command.isAvailable(
-            PaletteContext(workstreamActive: true, editorActive: false, agentCanReceivePrompt: true)))
+            PaletteContext(workstreamActive: true, editorActive: false, agentCanReceivePrompt: true)
+        ))
         XCTAssertFalse(command.isAvailable(
-            PaletteContext(workstreamActive: false, editorActive: false, agentCanReceivePrompt: true)))
+            PaletteContext(workstreamActive: false, editorActive: false, agentCanReceivePrompt: true)
+        ))
         XCTAssertFalse(command.isAvailable(
-            PaletteContext(workstreamActive: true, editorActive: false, agentCanReceivePrompt: false)))
+            PaletteContext(workstreamActive: true, editorActive: false, agentCanReceivePrompt: false)
+        ))
     }
 
     func testActionPostsRunStoredPromptWithPromptID() {
@@ -136,10 +139,10 @@ final class CommandRegistrySyncTests: XCTestCase {
         PaletteCommand(id: id, title: id, category: "Test", action: {})
     }
 
-    func testSyncReplacesOnlyThePrefixedCommands() {
-        let registry = CommandRegistry(
+    func testSyncReplacesOnlyThePrefixedCommands() throws {
+        let registry = try CommandRegistry(
             commands: [command(id: "tab.info"), command(id: "prompt.old")],
-            defaults: UserDefaults(suiteName: "CommandRegistrySyncTests")!
+            defaults: XCTUnwrap(UserDefaults(suiteName: "CommandRegistrySyncTests"))
         )
 
         registry.sync(idPrefix: "prompt.", with: [command(id: "prompt.new")])
@@ -150,10 +153,10 @@ final class CommandRegistrySyncTests: XCTestCase {
         XCTAssertFalse(ids.contains("prompt.old"))
     }
 
-    func testSyncWithEmptyListRemovesAllPrefixed() {
-        let registry = CommandRegistry(
+    func testSyncWithEmptyListRemovesAllPrefixed() throws {
+        let registry = try CommandRegistry(
             commands: [command(id: "tab.info"), command(id: "prompt.a"), command(id: "prompt.b")],
-            defaults: UserDefaults(suiteName: "CommandRegistrySyncTests")!
+            defaults: XCTUnwrap(UserDefaults(suiteName: "CommandRegistrySyncTests"))
         )
 
         registry.sync(idPrefix: "prompt.", with: [])
@@ -184,7 +187,6 @@ final class PromptInjectorPolicyTests: XCTestCase {
         XCTAssertFalse(WorkstreamAgentStateTracker.AgentRunState.stalled.turnHasEnded)
         XCTAssertFalse(WorkstreamAgentStateTracker.AgentRunState.needsAttention(.permission).turnHasEnded)
     }
-
 }
 
 /// The nudge shares `turnHasEnded` with the injector now; these pin that the

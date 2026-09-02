@@ -46,8 +46,12 @@ enum PortAllocator {
         let range = rangeEnd - rangeStart + 1
         for offset in 0 ..< range {
             let candidate = rangeStart + ((start - rangeStart + offset) % range)
-            if claimed.contains(candidate) { continue }
-            if isFree(candidate) { return candidate }
+            if claimed.contains(candidate) {
+                continue
+            }
+            if isFree(candidate) {
+                return candidate
+            }
         }
         return start
     }

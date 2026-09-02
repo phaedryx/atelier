@@ -36,7 +36,9 @@ struct FileTreeNode: Identifiable, Equatable {
                 self.path = path
             }
 
-            var isDirectory: Bool { diffFile == nil }
+            var isDirectory: Bool {
+                diffFile == nil
+            }
         }
 
         let root = Builder(name: "", path: "")
@@ -128,7 +130,9 @@ struct ChangesFileTreeSidebar: View {
         // Selection drives the scroll — works for both mouse clicks and keyboard
         // navigation. Skipped when selection is cleared (mode switch / reload).
         .onChange(of: selectedFilePath) { _, newValue in
-            if let newValue { onSelect(newValue) }
+            if let newValue {
+                onSelect(newValue)
+            }
         }
     }
 }
@@ -137,8 +141,8 @@ struct ChangesFileTreeSidebar: View {
 /// children; leaves render a selectable file row with a status badge and counts.
 private struct ChangesFileTreeRow: View {
     let node: FileTreeNode
-    // Directories start expanded so the tree shows files all the way down on
-    // load (no clicking through each level). Users can still collapse manually.
+    /// Directories start expanded so the tree shows files all the way down on
+    /// load (no clicking through each level). Users can still collapse manually.
     @State private var isExpanded = true
 
     var body: some View {
@@ -171,7 +175,9 @@ private struct ChangesFileLeafRow: View {
     /// Brief checkmark confirmation after a copy, cleared by a delayed reset.
     @State private var copied = false
 
-    private var file: DiffFile? { node.diffFile }
+    private var file: DiffFile? {
+        node.diffFile
+    }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -190,7 +196,6 @@ private struct ChangesFileLeafRow: View {
 
     /// GitHub-PR-style copy control: reveals on hover, copies the file's full
     /// relative path, and flashes a checkmark as confirmation.
-    @ViewBuilder
     private var copyButton: some View {
         Group {
             if copied {
@@ -260,20 +265,20 @@ private struct ChangesFileLeafRow: View {
     /// Status badge color matching the diff webview conventions (GitHub palette).
     static func badgeColor(for status: DiffFile.Status) -> Color {
         switch status {
-        case .added: return Color(red: 0.25, green: 0.72, blue: 0.31)
-        case .modified: return Color(red: 0.82, green: 0.60, blue: 0.13)
-        case .deleted: return Color(red: 0.97, green: 0.32, blue: 0.29)
-        case .renamed: return Color(red: 0.35, green: 0.65, blue: 1.0)
+        case .added: Color(red: 0.25, green: 0.72, blue: 0.31)
+        case .modified: Color(red: 0.82, green: 0.60, blue: 0.13)
+        case .deleted: Color(red: 0.97, green: 0.32, blue: 0.29)
+        case .renamed: Color(red: 0.35, green: 0.65, blue: 1.0)
         }
     }
 
     /// Localized accessibility/tooltip label for a status (badge letters stay A/M/D/R).
     static func accessibilityLabel(for status: DiffFile.Status) -> String {
         switch status {
-        case .added: return NSLocalizedString("Added", comment: "Changes sidebar: file status")
-        case .modified: return NSLocalizedString("Modified", comment: "Changes sidebar: file status")
-        case .deleted: return NSLocalizedString("Deleted", comment: "Changes sidebar: file status")
-        case .renamed: return NSLocalizedString("Renamed", comment: "Changes sidebar: file status")
+        case .added: NSLocalizedString("Added", comment: "Changes sidebar: file status")
+        case .modified: NSLocalizedString("Modified", comment: "Changes sidebar: file status")
+        case .deleted: NSLocalizedString("Deleted", comment: "Changes sidebar: file status")
+        case .renamed: NSLocalizedString("Renamed", comment: "Changes sidebar: file status")
         }
     }
 }

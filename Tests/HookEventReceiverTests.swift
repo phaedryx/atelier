@@ -6,7 +6,9 @@ import Darwin
 import XCTest
 
 final class HookEventReceiverTests: XCTestCase {
-    private var receiver: HookEventReceiver { HookEventReceiver.shared }
+    private var receiver: HookEventReceiver {
+        HookEventReceiver.shared
+    }
 
     override func tearDown() {
         receiver.onEvent = nil
@@ -24,7 +26,9 @@ final class HookEventReceiverTests: XCTestCase {
         var port: UInt16?
         while Date() < deadline, port == nil {
             port = receiver.boundPort
-            if port == nil { usleep(20_000) }
+            if port == nil {
+                usleep(20_000)
+            }
         }
         let resolved = try XCTUnwrap(port, "hook receiver did not bind a port")
 

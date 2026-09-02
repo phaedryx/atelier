@@ -165,7 +165,6 @@ struct EditorView: View {
 
     /// Copies the current file's relative path and flashes a checkmark as
     /// confirmation.
-    @ViewBuilder
     private var copyFilePathButton: some View {
         Group {
             if filePathCopied {
@@ -305,7 +304,7 @@ struct EditorView: View {
             // Debug telemetry: makes the query/results state visible so any
             // divergence between what is typed and what is searched is obvious.
             Text("'\(finderQuery)' -> \(finderResults.count) results" +
-                 (finderResults.first.map { " | \($0)" } ?? ""))
+                (finderResults.first.map { " | \($0)" } ?? ""))
                 .font(.system(size: 9))
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
@@ -384,33 +383,33 @@ struct EditorView: View {
     private func installFinderKeyMonitor() {
         guard finderKeyMonitor == nil else { return }
         finderKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard self.isFinderOpen else { return event }
+            guard isFinderOpen else { return event }
             if let chars = event.charactersIgnoringModifiers {
                 switch chars {
                 case "\u{1b}": // Escape
-                    self.closeFileFinder()
+                    closeFileFinder()
                     return nil
                 case "\r", "\n": // Return
-                    self.openSelectedFinderResult()
+                    openSelectedFinderResult()
                     return nil
                 case "\u{F700}", "\u{F701}": // Up / Down arrow
-                    self.moveFinderSelection(chars == "\u{F700}" ? -1 : 1)
+                    moveFinderSelection(chars == "\u{F700}" ? -1 : 1)
                     return nil
                 case "\u{7f}", "\u{08}": // Delete / Backspace
-                    if !self.finderQuery.isEmpty {
-                        self.finderQuery.removeLast()
+                    if !finderQuery.isEmpty {
+                        finderQuery.removeLast()
                     }
                     return nil
                 default:
                     let flags = event.modifierFlags
                     if flags.contains(.command), chars.lowercased() == "v" {
-                        self.appendPasteboardText()
+                        appendPasteboardText()
                         return nil
                     }
                     // Plain printable characters: append and never let them
                     // reach the field editor (which would double-insert).
                     if flags.intersection([.command, .option, .control]).isEmpty, !chars.isEmpty {
-                        self.finderQuery.append(chars)
+                        finderQuery.append(chars)
                         return nil
                     }
                     return event
@@ -435,10 +434,10 @@ struct EditorView: View {
             let scanned = FileFinder.scanFiles(at: root)
             let visible = scanned.filter { !ignored.isIgnored($0.path) }
             DispatchQueue.main.async {
-                self.fileIndex = visible
-                self.isScanningFiles = false
+                fileIndex = visible
+                isScanningFiles = false
                 print("[Atelier] scan done: \(visible.count) files")
-                self.refreshFinderResults()
+                refreshFinderResults()
             }
         }
     }

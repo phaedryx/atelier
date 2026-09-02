@@ -1,13 +1,11 @@
 // ABOUTME: Info panel for a workstream showing metadata and docs.
-// ABOUTME: First tab in the workspace, combining project info with the docs viewer.
+// ABOUTME: First tab in the workspace, split into Local, GitHub, and Shortcut sections.
 
 import SwiftUI
 
 struct WorkstreamInfoView: View {
     let workstreamID: UUID
-    let workstreamName: String
     let workingDirectory: String
-    let projectName: String
     let projectDirectory: String
     /// Every repository-provided process-compose file this worktree would load.
     /// Info is the permanent tab, so this is the approval route that survives the
@@ -29,226 +27,26 @@ struct WorkstreamInfoView: View {
     @EnvironmentObject var appEnv: AppEnvironment
     @AppStorage("atelier.defaultTerminal") private var defaultTerminal: String = ""
     @State private var branchName: String?
+    @State private var isDirty = false
     @State private var copiedBranch = false
     @State private var copiedPath = false
     @State private var docFiles: [DocFile] = []
     @State private var selectedDoc: String?
-    @State private var projectIcon: NSImage?
 
     var body: some View {
         VStack(spacing: 0) {
             Form {
-                // Hero header
-                Section {
-                    VStack(spacing: 4) {
-                        if let icon = projectIcon {
-                            Image(nsImage: icon)
-                                .resizable()
-                                .interpolation(.high)
-                                .frame(width: 48, height: 48)
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                        }
-                        Text(projectName)
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
-                        if let desc = appEnv.taskDescription(for: workingDirectory), !desc.isEmpty {
-                            Text(desc)
-                                .font(.system(size: 22, weight: .bold))
-                                .multilineTextAlignment(.center)
-                            Text(workstreamName)
-                                .font(.system(size: 13, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Text(workstreamName)
-                                .font(.system(size: 22, weight: .bold, design: .monospaced))
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                }
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets())
-
-                Section {
-                    if let branch = branchName {
-                        LabeledContent {
-                            HStack(spacing: 4) {
-                                Text(branch)
-                                    .font(.system(.body, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                                DirectoryActionButton(
-                                    icon: copiedBranch ? "checkmark" : "doc.on.doc",
-                                    color: copiedBranch ? .green : nil,
-                                    tooltip: "Copy branch name"
-                                ) {
-                                    NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString(branch, forType: .string)
-                                    copiedBranch = true
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copiedBranch = false }
-                                }
-                            }
-                        } label: {
-                            Text("Branch")
-                        }
-                    }
-
-                    LabeledContent {
-                        HStack(spacing: 4) {
-                            Text(workingDirectory.abbreviatedPath)
-                                .font(.system(.body, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            DirectoryActionButton(
-                                icon: copiedPath ? "checkmark" : "doc.on.doc",
-                                color: copiedPath ? .green : nil,
-                                tooltip: "Copy path"
-                            ) {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(workingDirectory, forType: .string)
-                                copiedPath = true
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copiedPath = false }
-                            }
-                            DirectoryActionButton(
-                                icon: "terminal",
-                                tooltip: "Open in external terminal"
-                            ) {
-                                openInTerminal(path: workingDirectory)
-                            }
-                            if let githubURL = appEnv.githubURL(for: projectDirectory) {
-                                DirectoryActionButton(
-                                    assetIcon: "github",
-                                    tooltip: "Open on GitHub"
-                                ) {
-                                    NSWorkspace.shared.open(githubURL)
-                                }
-                            }
-                        }
-                    } label: {
-                        Text("Directory")
-                    }
-                }
-
-                if appEnv.ghAvailable, let branch = branchName,
-                   let pr = appEnv.githubPR(for: projectDirectory, branch: branch)
-                {
-                    Section("Pull Request") {
-                        let prColor: Color = pr.state == "MERGED" ? .purple : pr.state == "OPEN" ? .green : .secondary
-                        LabeledContent {
-                            HStack(spacing: 6) {
-                                Image(systemName: pr.state == "MERGED" ? "arrow.triangle.merge" : "arrow.triangle.pull")
-                                    .foregroundStyle(prColor)
-                                Text(verbatim: "#\(pr.number)")
-                                    .font(.system(.body, design: .monospaced))
-                                Text(pr.title)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                        } label: {
-                            Text(pr.state.capitalized)
-                                .foregroundStyle(prColor)
-                        }
-
-                        if pr.state == "MERGED" {
-                            HStack {
-                                Text("This branch has been merged.")
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                Button("Purge") {
-                                    NotificationCenter.default.post(name: .purgeWorkstream, object: workstreamID)
-                                }
-                                .foregroundStyle(.purple)
-                            }
-                        }
-                    }
-                }
-
-                if let story = appEnv.shortcutStory(for: workingDirectory) {
-                    Section("Shortcut") {
-                        LabeledContent {
-                            Text(story.name)
-                                .lineLimit(2)
-                                .multilineTextAlignment(.trailing)
-                        } label: {
-                            Text(verbatim: "sc-\(story.id)")
-                                .font(.system(.body, design: .monospaced))
-                        }
-
-                        if let state = appEnv.shortcutStateName(for: workingDirectory) {
-                            LabeledContent("State") {
-                                Text(state)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-
-                        if let url = URL(string: story.appURL) {
-                            HStack {
-                                Spacer()
-                                Button("Open in Shortcut") {
-                                    NSWorkspace.shared.open(url)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if let setup = setupSummary {
-                    Section("Setup") {
-                        LabeledContent(setup.label) {
-                            HStack(spacing: 6) {
-                                Image(systemName: setup.icon)
-                                    .foregroundStyle(setup.tint)
-                                Text(setup.detail)
-                                    .foregroundStyle(.secondary)
-                                    .multilineTextAlignment(.trailing)
-                            }
-                        }
-                    }
-                }
-
-                if !repositoryConfigFiles.isEmpty {
-                    Section {
-                        // Only the unattended phases are gated. Start is
-                        // attended — a deliberate press, with the output in
-                        // front of the user and Stop to hand — so it is never
-                        // held behind this. Not because the pane shows the
-                        // command Start runs; it does not.
-                        Text("Bootstrap runs when a workstream is created and dispose when one is archived, both without asking.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        LabeledContent("Approval") {
-                            HStack(spacing: 10) {
-                                if configApproved {
-                                    Label("Approved", systemImage: "checkmark.shield")
-                                        .foregroundStyle(.green)
-                                    Button("Revoke") { onRevokeConfig() }
-                                } else {
-                                    Label("Not approved", systemImage: "exclamationmark.shield")
-                                        .foregroundStyle(.orange)
-                                    Button("Review") { onReviewConfig() }
-                                }
-                            }
-                        }
-                    } header: {
-                        HStack {
-                            Text("Process Config")
-                            Spacer()
-                            Text(repositoryConfigFiles
-                                .map { ($0 as NSString).lastPathComponent }
-                                .joined(separator: ", "))
-                                .font(.caption2)
-                                .foregroundStyle(.quaternary)
-                        }
-                    }
-                }
+                localSection
+                githubSection
+                shortcutSection
+                setupSection
+                processConfigSection
             }
             .formStyle(.grouped)
 
             // Markdown content fills remaining space when a doc is selected
             if let selected = selectedDoc,
-               let doc = displayedDocs.first(where: { $0.name == selected })
+               let doc = docFiles.first(where: { $0.name == selected })
             {
                 Divider()
                 MarkdownContentView(markdown: doc.content)
@@ -256,10 +54,10 @@ struct WorkstreamInfoView: View {
             }
 
             // Doc tabs pinned to bottom
-            if !displayedDocs.isEmpty {
+            if !docFiles.isEmpty {
                 Divider()
                 HStack(spacing: 0) {
-                    ForEach(displayedDocs) { doc in
+                    ForEach(docFiles) { doc in
                         DocTabButton(
                             name: doc.name,
                             isActive: selectedDoc == doc.name,
@@ -276,6 +74,231 @@ struct WorkstreamInfoView: View {
         .onAppear { loadInfo() }
     } // body
 
+    // MARK: - Local
+
+    private var localSection: some View {
+        Section("Local") {
+            if let branch = branchName {
+                LabeledContent {
+                    HStack(spacing: 4) {
+                        Text(branch)
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        DirectoryActionButton(
+                            icon: copiedBranch ? "checkmark" : "doc.on.doc",
+                            color: copiedBranch ? .green : nil,
+                            tooltip: "Copy branch name"
+                        ) {
+                            copy(branch, flag: $copiedBranch)
+                        }
+                    }
+                } label: {
+                    Text("Branch")
+                }
+            }
+
+            LabeledContent {
+                HStack(spacing: 4) {
+                    Text(workingDirectory.abbreviatedPath)
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    DirectoryActionButton(
+                        icon: copiedPath ? "checkmark" : "doc.on.doc",
+                        color: copiedPath ? .green : nil,
+                        tooltip: "Copy path"
+                    ) {
+                        copy(workingDirectory, flag: $copiedPath)
+                    }
+                    DirectoryActionButton(
+                        icon: "terminal",
+                        tooltip: "Open in external terminal"
+                    ) {
+                        openInTerminal(path: workingDirectory)
+                    }
+                }
+            } label: {
+                Text("Directory")
+            }
+
+            LabeledContent("Working tree") {
+                Label(
+                    isDirty ? "Uncommitted changes" : "Clean",
+                    systemImage: isDirty ? "circle.fill" : "checkmark.circle"
+                )
+                .foregroundStyle(isDirty ? .orange : .secondary)
+                .font(isDirty ? .system(size: 11) : .body)
+            }
+        }
+    }
+
+    // MARK: - GitHub
+
+    @ViewBuilder
+    private var githubSection: some View {
+        if let githubURL = appEnv.githubURL(for: projectDirectory) {
+            Section("GitHub") {
+                LabeledContent {
+                    HStack(spacing: 4) {
+                        Text(repositoryLabel)
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        DirectoryActionButton(assetIcon: "github", tooltip: "Open on GitHub") {
+                            NSWorkspace.shared.open(githubURL)
+                        }
+                    }
+                } label: {
+                    Text("Repository")
+                }
+
+                pullRequestRows
+            }
+        }
+    }
+
+    /// The PR rows, or the reason there are none.
+    ///
+    /// An absent PR used to hide the whole section, which read the same as a repo with no
+    /// GitHub remote at all. Saying so explicitly costs one row and removes the ambiguity.
+    @ViewBuilder
+    private var pullRequestRows: some View {
+        if !appEnv.ghAvailable {
+            LabeledContent("Pull Request") {
+                Text("gh not installed or not authenticated")
+                    .foregroundStyle(.secondary)
+            }
+        } else if let branch = branchName,
+                  let pr = appEnv.githubPR(for: projectDirectory, branch: branch)
+        {
+            LabeledContent {
+                HStack(spacing: 6) {
+                    Image(systemName: pr.status.symbolName)
+                        .foregroundStyle(pr.status.color)
+                    Text(verbatim: "#\(pr.number)")
+                        .font(.system(.body, design: .monospaced))
+                    Text(pr.title)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    if let url = URL(string: pr.url) {
+                        DirectoryActionButton(assetIcon: "github", tooltip: "Open pull request") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                }
+            } label: {
+                Text(pr.status.label)
+                    .foregroundStyle(pr.status.color)
+            }
+
+            LabeledContent("Checks") {
+                Label {
+                    Text(pr.checks.label)
+                } icon: {
+                    Image(systemName: pr.checks.symbolName)
+                }
+                .foregroundStyle(pr.checks.color)
+            }
+
+            if let decision = pr.reviewDecision {
+                LabeledContent("Review") {
+                    Label {
+                        Text(GitHubReviewDecision.label(decision))
+                    } icon: {
+                        Image(systemName: GitHubReviewDecision.symbolName(decision))
+                    }
+                    .foregroundStyle(GitHubReviewDecision.color(decision))
+                }
+            }
+
+            if pr.status == .merged {
+                HStack {
+                    Text("This branch has been merged.")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Purge") {
+                        NotificationCenter.default.post(name: .purgeWorkstream, object: workstreamID)
+                    }
+                    .foregroundStyle(.purple)
+                }
+            }
+        } else {
+            LabeledContent("Pull Request") {
+                Text("None for this branch")
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var repositoryLabel: String {
+        if let name = appEnv.githubRepo(for: projectDirectory)?.name, !name.isEmpty {
+            return name
+        }
+        guard let url = appEnv.githubURL(for: projectDirectory) else { return "" }
+        return url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+
+    // MARK: - Shortcut
+
+    @ViewBuilder
+    private var shortcutSection: some View {
+        if let story = appEnv.shortcutStory(for: workingDirectory) {
+            Section("Shortcut") {
+                LabeledContent {
+                    Text(story.name)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.trailing)
+                } label: {
+                    Text(verbatim: "sc-\(story.id)")
+                        .font(.system(.body, design: .monospaced))
+                }
+
+                if let type = story.storyType, !type.isEmpty {
+                    LabeledContent("Type") {
+                        Text(type.capitalized)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if let state = appEnv.shortcutStateName(for: workingDirectory) {
+                    LabeledContent("State") {
+                        Text(state)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if let url = URL(string: story.appURL) {
+                    HStack {
+                        Spacer()
+                        Button("Open in Shortcut") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                }
+
+                if let description = story.description,
+                   !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                {
+                    SelfSizingMarkdownView(markdown: description)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                }
+            }
+        }
+    }
+
+    // MARK: - Actions
+
+    private func copy(_ value: String, flag: Binding<Bool>) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+        flag.wrappedValue = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { flag.wrappedValue = false }
+    }
+
     private func openInTerminal(path: String) {
         if !defaultTerminal.isEmpty,
            let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: defaultTerminal)
@@ -288,46 +311,12 @@ struct WorkstreamInfoView: View {
         }
     }
 
-    private nonisolated static let iconPaths = [
-        "icon.svg", "icon.png",
-        ".github/icon.svg", ".github/icon.png",
-        "logo.svg", "logo.png",
-    ]
-
-    private nonisolated static func findProjectIcon(in directory: String) -> NSImage? {
-        let base = URL(fileURLWithPath: directory)
-        for relative in iconPaths {
-            let path = base.appendingPathComponent(relative).path
-            if let image = NSImage(contentsOfFile: path) {
-                return image
-            }
-        }
-        return nil
-    }
-
-    private nonisolated static func findProjectIconPath(in directory: String) -> String? {
-        let base = URL(fileURLWithPath: directory)
-        for relative in iconPaths {
-            let path = base.appendingPathComponent(relative).path
-            if FileManager.default.fileExists(atPath: path) {
-                return path
-            }
-        }
-        return nil
-    }
-
     private func loadInfo() {
         let workingDir = workingDirectory
         let gitHubProjectDir = projectDirectory
         Task.detached {
-            let branch = GitOperations.repoInfo(at: workingDir).branch
-            await updateBranchInfo(branch, projectDirectory: gitHubProjectDir)
-        }
-
-        let projDir = projectDirectory
-        Task.detached {
-            let iconPath = Self.findProjectIconPath(in: projDir)
-            await updateProjectIcon(iconPath: iconPath)
+            let info = GitOperations.repoInfo(at: workingDir)
+            await updateRepoInfo(branch: info.branch, isDirty: info.isDirty, projectDirectory: gitHubProjectDir)
         }
 
         let dir = workingDirectory
@@ -342,18 +331,10 @@ struct WorkstreamInfoView: View {
     }
 
     @MainActor
-    private func updateBranchInfo(_ branch: String?, projectDirectory: String) {
+    private func updateRepoInfo(branch: String?, isDirty: Bool, projectDirectory: String) {
         branchName = branch
+        self.isDirty = isDirty
         appEnv.refreshGitHubInfo(for: projectDirectory, branch: branch)
-    }
-
-    @MainActor
-    private func updateProjectIcon(iconPath: String?) {
-        if let iconPath {
-            projectIcon = NSImage(contentsOfFile: iconPath)
-        } else {
-            projectIcon = nil
-        }
     }
 
     @MainActor
@@ -367,6 +348,66 @@ struct WorkstreamInfoView: View {
     /// `AppEnvironment` cache: the description arrives after the disk scan and can change
     /// on a later refresh. Note this widens what a `DocFile` is — no longer strictly a
     /// file on disk, but any Markdown panel the tab row can show.
+    /// What background setup did, when there is anything worth a row.
+    @ViewBuilder
+    private var setupSection: some View {
+        if let setup = setupSummary {
+            Section("Setup") {
+                LabeledContent(setup.label) {
+                    HStack(spacing: 6) {
+                        Image(systemName: setup.icon)
+                            .foregroundStyle(setup.tint)
+                        Text(setup.detail)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.trailing)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Approval for the repository's own process-compose files. Replaces the
+    /// `.atelier.json` scripts section: the gated phases are now `bootstrap`
+    /// and `dispose`, and approval is keyed on the config files themselves.
+    @ViewBuilder
+    private var processConfigSection: some View {
+        if !repositoryConfigFiles.isEmpty {
+            Section {
+                // Only the unattended phases are gated. Start is
+                // attended — a deliberate press, with the output in
+                // front of the user and Stop to hand — so it is never
+                // held behind this. Not because the pane shows the
+                // command Start runs; it does not.
+                Text("Bootstrap runs when a workstream is created and dispose when one is archived, both without asking.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                LabeledContent("Approval") {
+                    HStack(spacing: 10) {
+                        if configApproved {
+                            Label("Approved", systemImage: "checkmark.shield")
+                                .foregroundStyle(.green)
+                            Button("Revoke") { onRevokeConfig() }
+                        } else {
+                            Label("Not approved", systemImage: "exclamationmark.shield")
+                                .foregroundStyle(.orange)
+                            Button("Review") { onReviewConfig() }
+                        }
+                    }
+                }
+            } header: {
+                HStack {
+                    Text("Process Config")
+                    Spacer()
+                    Text(repositoryConfigFiles
+                        .map { ($0 as NSString).lastPathComponent }
+                        .joined(separator: ", "))
+                        .font(.caption2)
+                        .foregroundStyle(.quaternary)
+                }
+            }
+        }
+    }
+
     /// One row's worth of what background setup did, or nil when there is
     /// nothing worth a row.
     ///
@@ -377,13 +418,13 @@ struct WorkstreamInfoView: View {
     private var setupSummary: (label: String, detail: String, icon: String, tint: Color)? {
         switch setupState {
         case .idle, .completed:
-            return nil
+            nil
         case let .inProgress(step, _):
-            return (NSLocalizedString("Bootstrap", comment: ""), step, "clock", .secondary)
+            (NSLocalizedString("Bootstrap", comment: ""), step, "clock", .secondary)
         case let .completedWithNote(note):
-            return (NSLocalizedString("Bootstrap", comment: ""), note, "info.circle", .secondary)
+            (NSLocalizedString("Bootstrap", comment: ""), note, "info.circle", .secondary)
         case let .failed(detail):
-            return (NSLocalizedString("Bootstrap", comment: ""), detail, "exclamationmark.triangle", .orange)
+            (NSLocalizedString("Bootstrap", comment: ""), detail, "exclamationmark.triangle", .orange)
         }
     }
 
@@ -458,7 +499,7 @@ struct DirectoryRow: View {
 private struct DirectoryActionButton: View {
     var icon: String = ""
     var assetIcon: String?
-    var color: Color? = nil
+    var color: Color?
     let tooltip: String
     let action: () -> Void
 

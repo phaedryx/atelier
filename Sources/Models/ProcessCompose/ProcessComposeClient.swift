@@ -80,13 +80,13 @@ struct ProcessComposeClient: ProcessComposeControlling {
         var errorDescription: String? {
             switch self {
             case .notRunning:
-                return NSLocalizedString("The process manager is not running.", comment: "")
+                NSLocalizedString("The process manager is not running.", comment: "")
             case let .transport(detail):
-                return String(format: NSLocalizedString("Could not reach the process manager: %@", comment: ""), detail)
+                String(format: NSLocalizedString("Could not reach the process manager: %@", comment: ""), detail)
             case let .http(code):
-                return String(format: NSLocalizedString("The process manager returned %d.", comment: ""), code)
+                String(format: NSLocalizedString("The process manager returned %d.", comment: ""), code)
             case .malformedResponse:
-                return NSLocalizedString("The process manager sent an unreadable response.", comment: "")
+                NSLocalizedString("The process manager sent an unreadable response.", comment: "")
             }
         }
     }
@@ -198,7 +198,9 @@ struct ProcessComposeClient: ProcessComposeControlling {
             while sent < buffer.count {
                 let n = write(descriptor, buffer.baseAddress! + sent, buffer.count - sent)
                 if n < 0 {
-                    if errno == EINTR { continue }
+                    if errno == EINTR {
+                        continue
+                    }
                     if errno == EAGAIN || errno == EWOULDBLOCK {
                         throw ClientError.transport("write timed out")
                     }
@@ -217,9 +219,13 @@ struct ProcessComposeClient: ProcessComposeControlling {
                 throw ClientError.transport("response did not finish in time")
             }
             let n = read(descriptor, &chunk, chunk.count)
-            if n == 0 { break }
+            if n == 0 {
+                break
+            }
             if n < 0 {
-                if errno == EINTR { continue }
+                if errno == EINTR {
+                    continue
+                }
                 if errno == EAGAIN || errno == EWOULDBLOCK {
                     throw ClientError.transport("read timed out")
                 }
@@ -302,7 +308,9 @@ struct ProcessComposeClient: ProcessComposeControlling {
                 throw ClientError.malformedResponse
             }
             index = lineEnd.upperBound
-            if size == 0 { return out }
+            if size == 0 {
+                return out
+            }
             guard let end = body.index(index, offsetBy: size, limitedBy: body.endIndex),
                   body.distance(from: index, to: end) == size
             else { throw ClientError.malformedResponse }

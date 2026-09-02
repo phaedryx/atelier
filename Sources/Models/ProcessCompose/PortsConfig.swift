@@ -35,11 +35,11 @@ struct PortsConfig: Equatable {
         var errorDescription: String? {
             switch self {
             case let .malformed(detail):
-                return String(format: NSLocalizedString("ports.yaml could not be read: %@", comment: ""), detail)
+                String(format: NSLocalizedString("ports.yaml could not be read: %@", comment: ""), detail)
             case let .invalidEntry(name, reason):
-                return String(format: NSLocalizedString("ports.yaml: %@ %@", comment: ""), name, reason)
+                String(format: NSLocalizedString("ports.yaml: %@ %@", comment: ""), name, reason)
             case let .multipleBrowserPorts(names):
-                return String(
+                String(
                     format: NSLocalizedString("ports.yaml: only one port may set browser: true (%@)", comment: ""),
                     names.sorted().joined(separator: ", ")
                 )

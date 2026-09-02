@@ -792,12 +792,16 @@ enum BinaryStatus {
     case found(String)
 
     var isInstalled: Bool {
-        if case .found = self { return true }
+        if case .found = self {
+            return true
+        }
         return false
     }
 
     var path: String? {
-        if case let .found(p) = self { return p }
+        if case let .found(p) = self {
+            return p
+        }
         return nil
     }
 }

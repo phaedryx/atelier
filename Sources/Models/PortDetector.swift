@@ -4,7 +4,7 @@
 import Foundation
 
 /// Lifecycle of the atelier-run session for a workstream.
-enum PortStatus: Equatable, Sendable {
+enum PortStatus: Equatable {
     /// No atelier-run session is alive (server not running).
     case none
     /// A session is running but no port has been selected yet.
@@ -24,7 +24,7 @@ final class PortDetector: ObservableObject, @unchecked Sendable {
 
     init(workstreamID: UUID) {
         self.workstreamID = workstreamID
-        self.queue = DispatchQueue(label: "atelier.port-detector.\(workstreamID.uuidString.lowercased())")
+        queue = DispatchQueue(label: "atelier.port-detector.\(workstreamID.uuidString.lowercased())")
         start()
     }
 

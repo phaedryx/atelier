@@ -4,7 +4,7 @@
 import Foundation
 
 /// Which side of the diff a comment anchors to.
-enum DiffSide: String, Sendable {
+enum DiffSide: String {
     /// The base/HEAD side — a deleted line.
     case old
     /// The working side — an added or context line.
@@ -12,15 +12,15 @@ enum DiffSide: String, Sendable {
 }
 
 /// One review comment, anchored to a line (or range) of a file's diff.
-struct ReviewComment: Identifiable, Equatable, Sendable {
+struct ReviewComment: Identifiable, Equatable {
     let id: UUID
-    let filePath: String      // repo-relative, as in DiffFile.relativePath
-    let mode: ChangesMode     // the diff scope it was written in
+    let filePath: String // repo-relative, as in DiffFile.relativePath
+    let mode: ChangesMode // the diff scope it was written in
     let side: DiffSide
-    var line: Int             // 1-based on `side`
-    var endLine: Int?         // nil = single line
-    let lineText: String      // trimmed anchor-line content, for re-anchoring
-    var text: String          // sanitized single line
+    var line: Int // 1-based on `side`
+    var endLine: Int? // nil = single line
+    let lineText: String // trimmed anchor-line content, for re-anchoring
+    var text: String // sanitized single line
     var isOrphaned: Bool = false
 }
 
@@ -118,7 +118,9 @@ final class ChangeAnnotationStore: ObservableObject {
             if let newLine = Self.matchLine(anchor: updated.lineText, near: updated.line, in: lines) {
                 let delta = newLine - updated.line
                 updated.line = newLine
-                if let end = updated.endLine { updated.endLine = end + delta }
+                if let end = updated.endLine {
+                    updated.endLine = end + delta
+                }
                 updated.isOrphaned = false
             } else {
                 updated.isOrphaned = true
@@ -139,11 +141,17 @@ final class ChangeAnnotationStore: ObservableObject {
         func matches(_ candidate: Int) -> Bool {
             candidate >= 1 && candidate <= lines.count && lines[candidate - 1] == anchor
         }
-        if matches(line) { return line }
+        if matches(line) {
+            return line
+        }
         guard window >= 1 else { return nil }
         for distance in 1 ... window {
-            if matches(line - distance) { return line - distance } // earlier wins ties
-            if matches(line + distance) { return line + distance }
+            if matches(line - distance) {
+                return line - distance
+            } // earlier wins ties
+            if matches(line + distance) {
+                return line + distance
+            }
         }
         return nil
     }
@@ -176,10 +184,9 @@ enum ChangeReviewFormatter {
         branch: String?,
         baseBranch: String?
     ) -> String {
-        let scope: String
-        switch mode {
-        case .uncommitted: scope = "uncommitted changes"
-        case .branch: scope = "vs \(baseBranch ?? "base")"
+        let scope = switch mode {
+        case .uncommitted: "uncommitted changes"
+        case .branch: "vs \(baseBranch ?? "base")"
         }
 
         var lines = ["[Code Review] \(branch ?? "worktree") (\(scope))"]
@@ -188,7 +195,9 @@ enum ChangeReviewFormatter {
             lines.append("")
             lines.append(path)
             let sorted = grouped[path]!.sorted { a, b in
-                if a.line != b.line { return a.line < b.line }
+                if a.line != b.line {
+                    return a.line < b.line
+                }
                 return (a.endLine ?? a.line) < (b.endLine ?? b.line)
             }
             for comment in sorted {

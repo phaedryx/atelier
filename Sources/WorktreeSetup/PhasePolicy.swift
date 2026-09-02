@@ -90,13 +90,13 @@ enum PhasePolicy {
     static func state(for outcome: PhaseExecutor.Outcome) -> AsyncSetupState {
         switch outcome {
         case .succeeded:
-            return .completed
+            .completed
         case .skipped:
-            return .completedWithNote(NSLocalizedString(
+            .completedWithNote(NSLocalizedString(
                 "This project declares no bootstrap processes, so nothing ran.", comment: ""
             ))
         case let .failed(detail):
-            return .failed(String(format: NSLocalizedString("Bootstrap failed: %@", comment: ""), detail))
+            .failed(String(format: NSLocalizedString("Bootstrap failed: %@", comment: ""), detail))
         }
     }
 }

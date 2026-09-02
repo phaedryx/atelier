@@ -50,7 +50,8 @@ final class ContextMeterTests: XCTestCase {
         XCTAssertEqual(ContextMeter.severity(fraction: 0.25, usedTokens: threshold + 100_000), 2)
         // One token under -> still orange.
         XCTAssertEqual(
-            ContextMeter.severity(fraction: 0.25, usedTokens: threshold + 100_000 - 1), 1)
+            ContextMeter.severity(fraction: 0.25, usedTokens: threshold + 100_000 - 1), 1
+        )
         // Capacity and quality agree deep in the decay zone.
         XCTAssertEqual(ContextMeter.severity(fraction: 0.9, usedTokens: 400_000), 2)
     }

@@ -21,7 +21,9 @@ final class ProcessComposeSettingsTests: XCTestCase {
     override func tearDown() {
         clearSettings()
         for (key, value) in saved {
-            if let value { UserDefaults.standard.set(value, forKey: key) }
+            if let value {
+                UserDefaults.standard.set(value, forKey: key)
+            }
         }
         saved.removeAll()
         super.tearDown()

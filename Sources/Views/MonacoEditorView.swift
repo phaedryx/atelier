@@ -59,17 +59,17 @@ final class MonacoResourceSchemeHandler: NSObject, WKURLSchemeHandler {
 
     private static func mimeType(for ext: String) -> String {
         switch ext.lowercased() {
-        case "html": return "text/html"
-        case "js", "mjs": return "text/javascript"
-        case "css": return "text/css"
-        case "json": return "application/json"
-        case "wasm": return "application/wasm"
-        case "ttf": return "font/ttf"
-        case "woff": return "font/woff"
-        case "woatelier": return "font/woatelier"
-        case "svg": return "image/svg+xml"
-        case "png": return "image/png"
-        default: return "application/octet-stream"
+        case "html": "text/html"
+        case "js", "mjs": "text/javascript"
+        case "css": "text/css"
+        case "json": "application/json"
+        case "wasm": "application/wasm"
+        case "ttf": "font/ttf"
+        case "woff": "font/woff"
+        case "woatelier": "font/woatelier"
+        case "svg": "image/svg+xml"
+        case "png": "image/png"
+        default: "application/octet-stream"
         }
     }
 }
@@ -132,7 +132,9 @@ final class MonacoEditorBridge {
 
     /// Lazily creates the WKWebView and starts loading Monaco.
     func ensureWebView() -> EditorWebView {
-        if let webView { return webView }
+        if let webView {
+            return webView
+        }
 
         let coord = Coordinator(bridge: self)
         coordinator = coord
@@ -178,7 +180,9 @@ final class MonacoEditorBridge {
                     "text": text,
                     "languageId": languageId,
                 ]
-                if let filePath { args["filePath"] = filePath }
+                if let filePath {
+                    args["filePath"] = filePath
+                }
                 try? await wv.callAsyncJavaScript(
                     "window.editorAPI.openFile(modelId, text, languageId, filePath)",
                     arguments: args,
@@ -239,7 +243,7 @@ final class MonacoEditorBridge {
 
     // MARK: - Ready state
 
-    fileprivate func markReady() {
+    private func markReady() {
         isReady = true
         syncThemeWithAppearance()
         startAppearanceObservation()
@@ -356,7 +360,7 @@ struct MonacoEditorView: NSViewRepresentable {
             ])
             // Force Monaco to relayout after autolayout applies the new frame.
             DispatchQueue.main.async {
-                self.bridge.relayout()
+                bridge.relayout()
             }
         }
     }

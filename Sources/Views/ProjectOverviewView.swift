@@ -85,7 +85,7 @@ struct ProjectOverviewView: View {
                                 }
                             }
                             .alert("Pull failed", isPresented: $showPullError, presenting: pullErrorMessage) { _ in
-                                Button("OK", role: .cancel) { }
+                                Button("OK", role: .cancel) {}
                             } message: { msg in
                                 Text(msg)
                             }
@@ -363,7 +363,11 @@ struct ProjectOverviewView: View {
             "Purge Worktree",
             isPresented: Binding(
                 get: { worktreeToPurge != nil },
-                set: { if !$0 { worktreeToPurge = nil; worktreePurgeWarning = nil } }
+                set: {
+                    if !$0 {
+                        worktreeToPurge = nil; worktreePurgeWarning = nil
+                    }
+                }
             )
         ) {
             Button("Cancel", role: .cancel) {
@@ -387,8 +391,8 @@ struct ProjectOverviewView: View {
     }
 
     private var prunableWorktrees: [WorktreeInfo] {
-        return worktrees.filter { worktree in
-            guard !worktree.isMain && !worktree.isDirty && !worktree.hasBranchCommits else { return false }
+        worktrees.filter { worktree in
+            guard !worktree.isMain, !worktree.isDirty, !worktree.hasBranchCommits else { return false }
             return !workstreamPaths.contains(Self.standardizedPath(worktree.path))
         }
     }
@@ -420,7 +424,7 @@ struct ProjectOverviewView: View {
                 switch result {
                 case .success:
                     appEnv.refreshRepoInfo(for: dir)
-                case .failure(let message):
+                case let .failure(message):
                     pullErrorMessage = message
                     showPullError = true
                 }
@@ -454,9 +458,9 @@ struct ProjectOverviewView: View {
     private func sortedWorkstreams(_ workstreams: [Workstream]) -> [Workstream] {
         switch workstreamSortOrder {
         case .recent:
-            return workstreams.sorted { $0.lastAccessedAt > $1.lastAccessedAt }
+            workstreams.sorted { $0.lastAccessedAt > $1.lastAccessedAt }
         case .alphabetical:
-            return workstreams.sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
+            workstreams.sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
         }
     }
 
@@ -522,7 +526,7 @@ private struct WorktreeInfoRow: View {
     let isWorkstream: Bool
     var isPurging: Bool = false
     let onAdopt: () -> Void
-    var onPurge: (() -> Void)? = nil
+    var onPurge: (() -> Void)?
 
     @EnvironmentObject var appEnv: AppEnvironment
 
@@ -546,15 +550,20 @@ private struct WorktreeInfoRow: View {
                 if !worktree.isMain {
                     HStack(spacing: 8) {
                         if let pr, !isPurging {
-                            let prColor: Color = pr.state == "MERGED" ? .purple : .green
                             Link(destination: URL(string: pr.url)!) {
                                 HStack(spacing: 3) {
-                                    Image(systemName: pr.state == "MERGED" ? "arrow.triangle.merge" : "arrow.triangle.pull")
+                                    Image(systemName: pr.status.symbolName)
                                         .font(.system(size: 10))
                                     Text(verbatim: "#\(pr.number)")
                                         .font(.caption)
                                 }
-                                .foregroundStyle(prColor)
+                                .foregroundStyle(pr.status.color)
+                            }
+                            if pr.checks != .none {
+                                Image(systemName: pr.checks.symbolName)
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(pr.checks.color)
+                                    .help(Text(pr.checks.label))
                             }
                         }
                         if isPurging {
@@ -597,7 +606,7 @@ private struct WorktreeInfoRow: View {
                 Text("main")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            } else if !isWorkstream && !isPurging {
+            } else if !isWorkstream, !isPurging {
                 HStack(spacing: 6) {
                     Button(action: onAdopt) {
                         HStack(spacing: 4) {
@@ -614,7 +623,9 @@ private struct WorktreeInfoRow: View {
                     }
                     .buttonStyle(.plain)
                     if let onPurge {
-                        let isMerged = pr?.state == "MERGED"
+                        // Purge stays merged-only. A closed-unmerged PR now renders honestly
+                        // but does not imply the branch is safe to discard.
+                        let isMerged = pr?.status == .merged
                         Button(action: onPurge) {
                             HStack(spacing: 4) {
                                 Image(systemName: "trash")
@@ -661,8 +672,12 @@ private struct WorkstreamRow: View {
 
     /// The most descriptive label we have for this workstream.
     private var headline: String {
-        if let prTitle { return prTitle }
-        if let taskDescription { return taskDescription }
+        if let prTitle {
+            return prTitle
+        }
+        if let taskDescription {
+            return taskDescription
+        }
         return workstream.label
     }
 
@@ -928,16 +943,16 @@ private struct PRBadge: View {
 
     private var color: Color {
         switch state {
-        case "MERGED": return .purple
-        case "CLOSED": return .red
-        default: return .green
+        case "MERGED": .purple
+        case "CLOSED": .red
+        default: .green
         }
     }
 
     private var icon: String {
         switch state {
-        case "MERGED": return "arrow.triangle.merge"
-        default: return "arrow.triangle.pull"
+        case "MERGED": "arrow.triangle.merge"
+        default: "arrow.triangle.pull"
         }
     }
 

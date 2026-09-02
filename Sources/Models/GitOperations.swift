@@ -62,11 +62,11 @@ struct WorktreeDetail {
 
             var icon: String {
                 switch self {
-                case .modified: return "pencil"
-                case .added: return "plus"
-                case .deleted: return "minus"
-                case .renamed: return "arrow.right"
-                case .untracked: return "questionmark"
+                case .modified: "pencil"
+                case .added: "plus"
+                case .deleted: "minus"
+                case .renamed: "arrow.right"
+                case .untracked: "questionmark"
                 }
             }
         }
@@ -319,14 +319,22 @@ enum GitOperations {
             let statusChar = statusField.prefix(1)
             switch statusChar {
             case "A":
-                if fields.count >= 2 { files.append(DiffFile(relativePath: String(fields[1]), status: .added)) }
+                if fields.count >= 2 {
+                    files.append(DiffFile(relativePath: String(fields[1]), status: .added))
+                }
             case "M":
-                if fields.count >= 2 { files.append(DiffFile(relativePath: String(fields[1]), status: .modified)) }
+                if fields.count >= 2 {
+                    files.append(DiffFile(relativePath: String(fields[1]), status: .modified))
+                }
             case "D":
-                if fields.count >= 2 { files.append(DiffFile(relativePath: String(fields[1]), status: .deleted)) }
+                if fields.count >= 2 {
+                    files.append(DiffFile(relativePath: String(fields[1]), status: .deleted))
+                }
             case "R":
                 // Rename: use the new path (last field).
-                if fields.count >= 3 { files.append(DiffFile(relativePath: String(fields[2]), status: .renamed)) }
+                if fields.count >= 3 {
+                    files.append(DiffFile(relativePath: String(fields[2]), status: .renamed))
+                }
             default:
                 continue
             }
@@ -340,7 +348,7 @@ enum GitOperations {
         guard let output = run(args: ["ls-files", "--others", "--exclude-standard"], in: path) else {
             return
         }
-        let existing = Set(files.map { $0.relativePath })
+        let existing = Set(files.map(\.relativePath))
         for rawLine in output.split(separator: "\n", omittingEmptySubsequences: true) {
             let filePath = String(rawLine)
             guard !filePath.isEmpty, !existing.contains(filePath) else { continue }
@@ -421,7 +429,9 @@ enum GitOperations {
     /// Number of newline-terminated lines in a file (best-effort, 0 on failure).
     private static func lineCount(atPath path: String) -> Int {
         guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { return 0 }
-        if content.isEmpty { return 0 }
+        if content.isEmpty {
+            return 0
+        }
         return content.split(separator: "\n", omittingEmptySubsequences: false).count
             - (content.hasSuffix("\n") ? 1 : 0)
     }
@@ -526,15 +536,14 @@ enum GitOperations {
         // Ask git where the file lives rather than assuming `.git` is a
         // directory — in a worktree, and in the .bare container layout, it is a
         // file pointing elsewhere, and the hardcoded path silently goes nowhere.
-        let excludeURL: URL
-        if let gitPath = run(args: ["rev-parse", "--git-path", "info/exclude"], in: repoPath)?
+        let excludeURL: URL = if let gitPath = run(args: ["rev-parse", "--git-path", "info/exclude"], in: repoPath)?
             .trimmingCharacters(in: .whitespacesAndNewlines), !gitPath.isEmpty
         {
-            excludeURL = gitPath.hasPrefix("/")
+            gitPath.hasPrefix("/")
                 ? URL(fileURLWithPath: gitPath)
                 : URL(fileURLWithPath: repoPath).appendingPathComponent(gitPath).standardized
         } else {
-            excludeURL = URL(fileURLWithPath: repoPath).appendingPathComponent(".git/info/exclude")
+            URL(fileURLWithPath: repoPath).appendingPathComponent(".git/info/exclude")
         }
         let fm = FileManager.default
 
@@ -544,7 +553,9 @@ enum GitOperations {
 
         let existing = (try? String(contentsOf: excludeURL, encoding: .utf8)) ?? ""
         let lines = existing.components(separatedBy: .newlines)
-        if lines.contains(pattern) { return }
+        if lines.contains(pattern) {
+            return
+        }
 
         let entry = existing.hasSuffix("\n") || existing.isEmpty ? pattern + "\n" : "\n" + pattern + "\n"
         if let data = entry.data(using: .utf8), let handle = try? FileHandle(forWritingTo: excludeURL) {
@@ -637,11 +648,11 @@ enum GitOperations {
 
     private static func parseStatus(_ char: Character) -> WorktreeDetail.FileChange.Status {
         switch char {
-        case "M": return .modified
-        case "A": return .added
-        case "D": return .deleted
-        case "R": return .renamed
-        default: return .modified
+        case "M": .modified
+        case "A": .added
+        case "D": .deleted
+        case "R": .renamed
+        default: .modified
         }
     }
 
@@ -777,11 +788,10 @@ enum GitOperations {
             return nil
         }
 
-        let commonURL: URL
-        if commonDir.hasPrefix("/") {
-            commonURL = URL(fileURLWithPath: commonDir)
+        let commonURL = if commonDir.hasPrefix("/") {
+            URL(fileURLWithPath: commonDir)
         } else {
-            commonURL = URL(fileURLWithPath: path).appendingPathComponent(commonDir).standardized
+            URL(fileURLWithPath: path).appendingPathComponent(commonDir).standardized
         }
 
         return commonURL.deletingLastPathComponent().standardizedFileURL.path
@@ -887,7 +897,9 @@ enum GitOperations {
                 current = nil
             }
         }
-        if let current { paths.append(current) }
+        if let current {
+            paths.append(current)
+        }
         return paths
     }
 
@@ -959,7 +971,9 @@ enum GitOperations {
 
             if xy == "!!" {
                 // Ignored — strip trailing slash for directories
-                if filePath.hasSuffix("/") { filePath = String(filePath.dropLast()) }
+                if filePath.hasSuffix("/") {
+                    filePath = String(filePath.dropLast())
+                }
                 result[filePath] = .ignored
             } else if xy == "??" {
                 result[filePath] = .untracked
@@ -1020,15 +1034,14 @@ enum GitOperations {
         guard run(args: ["remote", "get-url", "origin"], in: path) != nil else { return }
 
         // Determine which branch to fetch
-        let branchToFetch: String
-        if let branch {
-            branchToFetch = branch.hasPrefix("origin/") ? String(branch.dropFirst("origin/".count)) : branch
+        let branchToFetch: String = if let branch {
+            branch.hasPrefix("origin/") ? String(branch.dropFirst("origin/".count)) : branch
         } else if let ref = run(args: ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], in: path) {
             // e.g. "origin/main" -> "main"
-            branchToFetch = ref.trimmingCharacters(in: .whitespacesAndNewlines)
+            ref.trimmingCharacters(in: .whitespacesAndNewlines)
                 .replacingOccurrences(of: "origin/", with: "")
         } else {
-            branchToFetch = "main"
+            "main"
         }
 
         // Fetch with timeout — don't block worktree creation
@@ -1069,11 +1082,21 @@ enum GitOperations {
     static func isValidBranchName(_ name: String) -> Bool {
         guard !name.isEmpty else { return false }
         let forbiddenCharacters = CharacterSet(charactersIn: " ~^:?*[\\")
-        if name.rangeOfCharacter(from: forbiddenCharacters) != nil { return false }
-        if name.contains("..") || name.contains("@{") || name.contains("//") { return false }
-        if name.hasPrefix("-") { return false }
-        if name.hasSuffix(".") || name.hasSuffix("/") || name.hasSuffix(".lock") { return false }
-        if name.unicodeScalars.contains(where: { $0.value < 0x20 }) { return false }
+        if name.rangeOfCharacter(from: forbiddenCharacters) != nil {
+            return false
+        }
+        if name.contains("..") || name.contains("@{") || name.contains("//") {
+            return false
+        }
+        if name.hasPrefix("-") {
+            return false
+        }
+        if name.hasSuffix(".") || name.hasSuffix("/") || name.hasSuffix(".lock") {
+            return false
+        }
+        if name.unicodeScalars.contains(where: { $0.value < 0x20 }) {
+            return false
+        }
         return true
     }
 

@@ -1,8 +1,8 @@
 // ABOUTME: Tests for the NSAppearance isDark extension.
 // ABOUTME: Verifies dark appearance detection across standard AppKit appearance names.
 
-import Cocoa
 @testable import Atelier
+import Cocoa
 import XCTest
 
 final class NSAppearanceTests: XCTestCase {

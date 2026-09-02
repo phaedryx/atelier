@@ -15,7 +15,6 @@ private let logger = Logger(subsystem: "atelier", category: "hook-receiver")
 ///
 /// Thread safety: all mutable state is accessed on `self.queue`.
 final class HookEventReceiver: @unchecked Sendable {
-
     static let shared = HookEventReceiver()
 
     /// Called on the main queue with (projectDir, event).
@@ -26,10 +25,12 @@ final class HookEventReceiver: @unchecked Sendable {
     /// The port the listener bound to, once ready. Read this rather than the
     /// port file when you need *this* process's port: the file on disk may
     /// still hold a previous run's number.
-    var boundPort: UInt16? { queue.sync { currentPort } }
+    var boundPort: UInt16? {
+        queue.sync { currentPort }
+    }
+
     private var currentPort: UInt16?
     private var connections: [NWConnection] = []
-
 
     private init() {}
 
@@ -44,14 +45,14 @@ final class HookEventReceiver: @unchecked Sendable {
     func stop() {
         queue.async { [weak self] in
             guard let self else { return }
-            self.listener?.cancel()
-            self.listener = nil
-            self.currentPort = nil
-            for conn in self.connections {
+            listener?.cancel()
+            listener = nil
+            currentPort = nil
+            for conn in connections {
                 conn.cancel()
             }
-            self.connections.removeAll()
-            self.removePortFile()
+            connections.removeAll()
+            removePortFile()
         }
     }
 
@@ -123,24 +124,25 @@ final class HookEventReceiver: @unchecked Sendable {
 
             if isComplete || error != nil {
                 // We have all the data — process it
-                self.processHTTPRequest(accumulated, on: connection)
+                processHTTPRequest(accumulated, on: connection)
                 return
             }
 
             // Check if we have the full HTTP body yet
-            if let headerEnd = self.findHeaderEnd(in: accumulated) {
+            if let headerEnd = findHeaderEnd(in: accumulated) {
                 let headerData = accumulated[..<headerEnd]
                 let bodyStart = headerEnd
-                if let contentLength = self.parseContentLength(from: headerData),
-                   accumulated.count >= bodyStart + contentLength {
+                if let contentLength = parseContentLength(from: headerData),
+                   accumulated.count >= bodyStart + contentLength
+                {
                     // Full request received
-                    self.processHTTPRequest(accumulated, on: connection)
+                    processHTTPRequest(accumulated, on: connection)
                     return
                 }
             }
 
             // Need more data
-            self.receiveData(on: connection, buffer: accumulated)
+            receiveData(on: connection, buffer: accumulated)
         }
     }
 
@@ -149,8 +151,8 @@ final class HookEventReceiver: @unchecked Sendable {
         let bytes = Array(data)
         guard bytes.count >= 4 else { return nil }
         for i in 0 ... (bytes.count - 4) {
-            if bytes[i] == separator[0] && bytes[i + 1] == separator[1]
-                && bytes[i + 2] == separator[2] && bytes[i + 3] == separator[3]
+            if bytes[i] == separator[0], bytes[i + 1] == separator[1],
+               bytes[i + 2] == separator[2], bytes[i + 3] == separator[3]
             {
                 return i + 4
             }
@@ -222,7 +224,7 @@ final class HookEventReceiver: @unchecked Sendable {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 for event in events {
-                    self.onEvent?(projectDir, event)
+                    onEvent?(projectDir, event)
                 }
             }
         }
@@ -294,12 +296,12 @@ final class HookEventReceiver: @unchecked Sendable {
         }
     }
 
-    private func baseHookEvents(hookEventName: String, eventInput: [String: Any], projectDir: String) -> [AgentEvent] {
+    private func baseHookEvents(hookEventName: String, eventInput: [String: Any], projectDir _: String) -> [AgentEvent] {
         switch hookEventName {
         case "PreToolUse":
             let toolName = eventInput["tool_name"] as? String ?? "unknown"
             // Skip internal/meta tools
-            guard !toolName.hasPrefix("mcp__") && toolName != "Skill" && toolName != "ToolSearch" else {
+            guard !toolName.hasPrefix("mcp__"), toolName != "Skill", toolName != "ToolSearch" else {
                 return []
             }
             let aid = agentId(from: eventInput)

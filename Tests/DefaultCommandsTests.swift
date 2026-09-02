@@ -13,29 +13,29 @@ final class DefaultCommandsTests: XCTestCase {
         XCTAssertFalse(commands.isEmpty)
     }
 
-    func testWorkstreamCommandsRequireAnActiveWorkstream() {
+    func testWorkstreamCommandsRequireAnActiveWorkstream() throws {
         let commands = defaultPaletteCommands()
         let noWorkstream = PaletteContext(workstreamActive: false, editorActive: false)
-        let terminal = commands.first { $0.id == "tab.newTerminal" }!
-        let settings = commands.first { $0.id == "app.settings" }!
+        let terminal = try XCTUnwrap(commands.first { $0.id == "tab.newTerminal" })
+        let settings = try XCTUnwrap(commands.first { $0.id == "app.settings" })
 
         XCTAssertFalse(terminal.isAvailable(noWorkstream))
         XCTAssertTrue(settings.isAvailable(noWorkstream))
     }
 
-    func testEditorCommandsRequireAnActiveEditor() {
+    func testEditorCommandsRequireAnActiveEditor() throws {
         let commands = defaultPaletteCommands()
         let workstreamOnly = PaletteContext(workstreamActive: true, editorActive: false)
         let editorToo = PaletteContext(workstreamActive: true, editorActive: true)
-        let findFile = commands.first { $0.id == "editor.findFile" }!
+        let findFile = try XCTUnwrap(commands.first { $0.id == "editor.findFile" })
 
         XCTAssertFalse(findFile.isAvailable(workstreamOnly))
         XCTAssertTrue(findFile.isAvailable(editorToo))
     }
 
-    func testEnvironmentCommandPostsToggleEnvironment() {
+    func testEnvironmentCommandPostsToggleEnvironment() throws {
         let commands = defaultPaletteCommands()
-        let environment = commands.first { $0.id == "tab.environment" }!
+        let environment = try XCTUnwrap(commands.first { $0.id == "tab.environment" })
         let posted = expectation(forNotification: .toggleEnvironment, object: nil)
 
         environment.action()
@@ -43,9 +43,9 @@ final class DefaultCommandsTests: XCTestCase {
         wait(for: [posted], timeout: 1)
     }
 
-    func testNewTerminalCommandPostsToggleTerminal() {
+    func testNewTerminalCommandPostsToggleTerminal() throws {
         let commands = defaultPaletteCommands()
-        let terminal = commands.first { $0.id == "tab.newTerminal" }!
+        let terminal = try XCTUnwrap(commands.first { $0.id == "tab.newTerminal" })
         let posted = expectation(forNotification: .toggleTerminal, object: nil)
 
         terminal.action()

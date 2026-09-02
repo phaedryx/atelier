@@ -347,7 +347,9 @@ private actor StubComposeClient: ProcessComposeControlling {
         if removesSocketOnStop {
             try? FileManager.default.removeItem(atPath: socketPath)
         }
-        if let stopFailure { throw stopFailure }
+        if let stopFailure {
+            throw stopFailure
+        }
     }
 
     func restart(_ name: String) async throws {

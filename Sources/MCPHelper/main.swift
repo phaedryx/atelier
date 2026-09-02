@@ -18,7 +18,9 @@ final class IPCTransport {
     /// Drops the socket and any half-read frame with it. A leftover partial
     /// line would corrupt framing on the next connection.
     func disconnect() {
-        if fd >= 0 { close(fd) }
+        if fd >= 0 {
+            close(fd)
+        }
         fd = -1
         buffer.removeAll()
     }
@@ -272,7 +274,9 @@ final class IPCBridge {
     }
 
     func call(tool: IPCTool, arguments: [String: String]) -> Outcome {
-        if let failure = connect() { return .failed(failure) }
+        if let failure = connect() {
+            return .failed(failure)
+        }
 
         switch attempt(tool: tool, arguments: arguments) {
         case let .ok(payload):
@@ -312,7 +316,9 @@ final class IPCBridge {
     /// Opens the connection if it isn't already up. Returns a message on
     /// failure, nil on success.
     private func connect() -> String? {
-        if endpoint != nil { return nil }
+        if endpoint != nil {
+            return nil
+        }
         guard let resolved = IPCEndpoint.read() else {
             return "Atelier is not running, or agent IPC is disabled in its settings."
         }

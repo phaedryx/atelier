@@ -18,45 +18,45 @@ enum QuickAction: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .commit: return NSLocalizedString("Commit", comment: "")
-        case .push: return NSLocalizedString("Push", comment: "")
-        case .createPR: return NSLocalizedString("Create PR", comment: "")
-        case .closePR: return NSLocalizedString("Close PR", comment: "")
+        case .commit: NSLocalizedString("Commit", comment: "")
+        case .push: NSLocalizedString("Push", comment: "")
+        case .createPR: NSLocalizedString("Create PR", comment: "")
+        case .closePR: NSLocalizedString("Close PR", comment: "")
         }
     }
 
     var icon: String {
         switch self {
-        case .commit: return "checkmark.circle"
-        case .push: return "arrow.up"
-        case .createPR: return "arrow.triangle.pull"
-        case .closePR: return "xmark.circle"
+        case .commit: "checkmark.circle"
+        case .push: "arrow.up"
+        case .createPR: "arrow.triangle.pull"
+        case .closePR: "xmark.circle"
         }
     }
 
     /// Whether this action requires claude -p (vs direct git/gh command).
     var usesLLM: Bool {
         switch self {
-        case .commit, .createPR: return true
-        case .push, .closePR: return false
+        case .commit, .createPR: true
+        case .push, .closePR: false
         }
     }
 
     var requiresGitHubRemote: Bool {
         switch self {
-        case .createPR, .closePR: return true
-        case .commit, .push: return false
+        case .createPR, .closePR: true
+        case .commit, .push: false
         }
     }
 
     var prompt: String? {
         switch self {
         case .commit:
-            return "Stage and commit all changes in the working tree with a good commit message based on the changes. Do not push."
+            "Stage and commit all changes in the working tree with a good commit message based on the changes. Do not push."
         case .createPR:
-            return "Create a pull request for the current changes. Write a clear title and description based on what we've been working on."
+            "Create a pull request for the current changes. Write a clear title and description based on what we've been working on."
         case .push, .closePR:
-            return nil
+            nil
         }
     }
 }

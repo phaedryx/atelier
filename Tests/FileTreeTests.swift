@@ -32,7 +32,7 @@ final class FileTreeTests: XCTestCase {
 
     // MARK: - Nesting
 
-    func testFlatPathsNestCorrectly() {
+    func testFlatPathsNestCorrectly() throws {
         let tree = FileTreeNode.build(from: [
             file("Sources/Models/Git.swift"),
             file("Sources/Views/ChangesView.swift"),
@@ -42,24 +42,24 @@ final class FileTreeTests: XCTestCase {
         // Root: directories first (Sources), then files (README.md).
         XCTAssertEqual(childNames(tree), ["Sources", "README.md"])
 
-        let sources = tree.children!.first { $0.name == "Sources" }!
+        let sources = try XCTUnwrap(tree.children?.first { $0.name == "Sources" })
         XCTAssertTrue(sources.isDirectory)
         XCTAssertNil(sources.diffFile)
         XCTAssertEqual(childNames(sources), ["Models", "Views"])
 
-        let models = sources.children!.first { $0.name == "Models" }!
+        let models = try XCTUnwrap(sources.children?.first { $0.name == "Models" })
         XCTAssertEqual(childNames(models), ["Git.swift"])
-        XCTAssertTrue(models.children!.first!.diffFile != nil)
-        XCTAssertFalse(models.children!.first!.isDirectory)
+        XCTAssertTrue(try XCTUnwrap(models.children?.first?.diffFile) != nil)
+        XCTAssertFalse(try XCTUnwrap(models.children?.first?.isDirectory))
 
-        let views = sources.children!.first { $0.name == "Views" }!
+        let views = try XCTUnwrap(sources.children?.first { $0.name == "Views" })
         XCTAssertEqual(childNames(views), ["ChangesView.swift"])
     }
 
-    func testSingleRootLevelFileIsRootLeaf() {
+    func testSingleRootLevelFileIsRootLeaf() throws {
         let tree = FileTreeNode.build(from: [file("README.md")])
         XCTAssertEqual(tree.children?.count, 1)
-        let leaf = tree.children!.first!
+        let leaf = try XCTUnwrap(tree.children?.first)
         XCTAssertEqual(leaf.name, "README.md")
         XCTAssertFalse(leaf.isDirectory)
         XCTAssertNil(leaf.children)
@@ -82,13 +82,13 @@ final class FileTreeTests: XCTestCase {
         XCTAssertEqual(childNames(tree), ["zeta", "alpha.txt"])
     }
 
-    func testAlphabeticalCaseInsensitive() {
+    func testAlphabeticalCaseInsensitive() throws {
         let tree = FileTreeNode.build(from: [
             file("dir/Banana.txt"),
             file("dir/apple.txt"),
             file("dir/Cherry.txt"),
         ])
-        let dir = tree.children!.first { $0.name == "dir" }!
+        let dir = try XCTUnwrap(tree.children?.first { $0.name == "dir" })
         XCTAssertEqual(childNames(dir), ["apple.txt", "Banana.txt", "Cherry.txt"])
     }
 
@@ -103,15 +103,15 @@ final class FileTreeTests: XCTestCase {
 
     // MARK: - Leaf metadata propagation
 
-    func testStatusAndCountsPropagateToCorrectLeaf() {
+    func testStatusAndCountsPropagateToCorrectLeaf() throws {
         let tree = FileTreeNode.build(from: [
             file("src/added.swift", .added, added: 10, deleted: 0),
             file("src/removed.swift", .deleted, added: 0, deleted: 7),
             file("src/renamed.swift", .renamed, added: 3, deleted: 1),
             file("src/binary.png", .modified, isBinary: true),
         ])
-        let src = tree.children!.first { $0.name == "src" }!
-        let leaves = Dictionary(uniqueKeysWithValues: src.children!.map { ($0.name, $0) })
+        let src = try XCTUnwrap(tree.children?.first { $0.name == "src" })
+        let leaves = try Dictionary(uniqueKeysWithValues: XCTUnwrap(src.children?.map { ($0.name, $0) }))
 
         XCTAssertEqual(leaves["added.swift"]?.diffFile?.status, .added)
         XCTAssertEqual(leaves["added.swift"]?.diffFile?.added, 10)
@@ -127,21 +127,21 @@ final class FileTreeTests: XCTestCase {
         XCTAssertEqual(leaves["binary.png"]?.diffFile?.isBinary, true)
     }
 
-    func testLeafIdIsFullPath() {
+    func testLeafIdIsFullPath() throws {
         let tree = FileTreeNode.build(from: [file("a/b/c.swift")])
-        let a = tree.children!.first!
-        let b = a.children!.first!
-        let c = b.children!.first!
+        let a = try XCTUnwrap(tree.children?.first)
+        let b = try XCTUnwrap(a.children?.first)
+        let c = try XCTUnwrap(b.children?.first)
         XCTAssertEqual(c.id, "a/b/c.swift")
         XCTAssertEqual(b.id, "a/b")
         XCTAssertEqual(a.id, "a")
     }
 
-    func testDirectoryNodesHaveNoDiffFile() {
+    func testDirectoryNodesHaveNoDiffFile() throws {
         let tree = FileTreeNode.build(from: [file("deep/nested/file.txt")])
-        let deep = tree.children!.first!
+        let deep = try XCTUnwrap(tree.children?.first)
         XCTAssertTrue(deep.isDirectory)
         XCTAssertNil(deep.diffFile)
-        XCTAssertNil(deep.children!.first!.diffFile) // "nested" dir
+        XCTAssertNil(deep.children?.first?.diffFile) // "nested" dir
     }
 }

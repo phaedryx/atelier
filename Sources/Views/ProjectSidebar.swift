@@ -114,7 +114,9 @@ struct ProjectSidebar: View {
     private func projectBinding(for id: UUID) -> Binding<Project> {
         Binding(
             get: {
-                if let idx = cachedProjectIndex[id], idx < projects.count { return projects[idx] }
+                if let idx = cachedProjectIndex[id], idx < projects.count {
+                    return projects[idx]
+                }
                 return projects.first(where: { $0.id == id }) ?? Project(name: "", directory: "")
             },
             set: { newValue in
@@ -181,7 +183,7 @@ struct ProjectSidebar: View {
             )
             .tag(SidebarSelection.project(project.id))
 
-            if hasChildren && expandedProjects.contains(project.id) {
+            if hasChildren, expandedProjects.contains(project.id) {
                 let sortedWorkstreamIDs = cachedSortedWorkstreamIDs[project.id] ?? project.workstreams.map(\.id)
                 ForEach(sortedWorkstreamIDs, id: \.self) { workstreamID in
                     if let (pIdx, wIdx) = cachedWorkstreamIndex[workstreamID],
@@ -269,7 +271,11 @@ struct ProjectSidebar: View {
                 "Remove Project",
                 isPresented: Binding(
                     get: { projectToDelete != nil },
-                    set: { if !$0 { projectToDelete = nil } }
+                    set: {
+                        if !$0 {
+                            projectToDelete = nil
+                        }
+                    }
                 )
             ) {
                 Button("Cancel", role: .cancel) { projectToDelete = nil }
@@ -287,7 +293,11 @@ struct ProjectSidebar: View {
                 "Remove Workstream",
                 isPresented: Binding(
                     get: { workstreamToRemove != nil },
-                    set: { if !$0 { workstreamToRemove = nil } }
+                    set: {
+                        if !$0 {
+                            workstreamToRemove = nil
+                        }
+                    }
                 )
             ) {
                 Button("Cancel", role: .cancel) { workstreamToRemove = nil }
@@ -301,7 +311,11 @@ struct ProjectSidebar: View {
                 "Purge Workstream",
                 isPresented: Binding(
                     get: { workstreamToPurge != nil },
-                    set: { if !$0 { workstreamToPurge = nil } }
+                    set: {
+                        if !$0 {
+                            workstreamToPurge = nil
+                        }
+                    }
                 )
             ) {
                 Button("Cancel", role: .cancel) { workstreamToPurge = nil }
@@ -807,7 +821,9 @@ struct ProjectSidebar: View {
             }
         }
         projects.removeAll { $0.id == id }
-        if case let .project(pid) = selection, pid == id { selection = nil }
+        if case let .project(pid) = selection, pid == id {
+            selection = nil
+        }
         if case let .workstream(wsID) = selection,
            !projects.contains(where: { $0.workstreams.contains(where: { $0.id == wsID }) })
         {
@@ -844,7 +860,7 @@ struct ProjectSidebar: View {
         panel.prompt = NSLocalizedString("Select", comment: "")
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
-            self.addProject(name: url.lastPathComponent, directory: url.path)
+            addProject(name: url.lastPathComponent, directory: url.path)
         }
     }
 
@@ -981,11 +997,10 @@ func copyTextToPasteboard(_ text: String) {
 /// Opens a directory in the user's configured terminal, falling back to Apple Terminal.
 func openDirectoryInTerminal(_ directory: String) {
     let terminalBundleID = UserDefaults.standard.string(forKey: "atelier.defaultTerminal") ?? ""
-    let appURL: URL?
-    if !terminalBundleID.isEmpty {
-        appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: terminalBundleID)
+    let appURL: URL? = if !terminalBundleID.isEmpty {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: terminalBundleID)
     } else {
-        appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal")
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal")
     }
     guard let appURL else { return }
     let config = NSWorkspace.OpenConfiguration()
@@ -1138,8 +1153,12 @@ private struct WorkstreamRow: View {
     @State private var isHovering = false
 
     private var headline: String {
-        if let prTitle { return prTitle }
-        if let taskDescription { return taskDescription }
+        if let prTitle {
+            return prTitle
+        }
+        if let taskDescription {
+            return taskDescription
+        }
         return name
     }
 
@@ -1564,7 +1583,11 @@ private struct CloneRepoSheet: View {
                     .focused($focusedField, equals: .remote)
                     .disabled(isCloning)
                     .onChange(of: remote) { _, value in onRemoteChanged(value) }
-                    .onSubmit { if canClone { onClone() } }
+                    .onSubmit {
+                        if canClone {
+                            onClone()
+                        }
+                    }
 
                 TextField("Folder name", text: $directoryName)
                     .textFieldStyle(.roundedBorder)
@@ -1573,9 +1596,15 @@ private struct CloneRepoSheet: View {
                     .onChange(of: directoryName) { _, _ in
                         // Only a change the user typed themselves stops the
                         // field tracking the URL.
-                        if focusedField == .directoryName { onDirectoryNameEdited() }
+                        if focusedField == .directoryName {
+                            onDirectoryNameEdited()
+                        }
                     }
-                    .onSubmit { if canClone { onClone() } }
+                    .onSubmit {
+                        if canClone {
+                            onClone()
+                        }
+                    }
 
                 Text("Cloned as a .bare repository with the default branch checked out beside it.")
                     .font(.system(size: 10))
@@ -1814,7 +1843,11 @@ private struct NewProjectSheet: View {
 
             TextField("Project Name", text: $name)
                 .textFieldStyle(.roundedBorder)
-                .onSubmit { if !name.trimmingCharacters(in: .whitespaces).isEmpty { onAdd() } }
+                .onSubmit {
+                    if !name.trimmingCharacters(in: .whitespaces).isEmpty {
+                        onAdd()
+                    }
+                }
 
             if !error.isEmpty {
                 Text(error)

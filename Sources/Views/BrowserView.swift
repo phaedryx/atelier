@@ -83,7 +83,11 @@ struct BrowserView: View {
                 .accessibilityLabel("Forward")
 
                 Button(action: {
-                    if isLoading { webView.stopLoading() } else { retry() }
+                    if isLoading {
+                        webView.stopLoading()
+                    } else {
+                        retry()
+                    }
                 }) {
                     Image(systemName: isLoading ? "xmark" : "arrow.clockwise")
                         .font(.system(size: 11))

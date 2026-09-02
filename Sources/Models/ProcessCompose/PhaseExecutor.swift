@@ -88,7 +88,9 @@ enum PhaseExecutor {
         // Nothing declared: return without spawning anything. This is the
         // cheap path and also the safe one — `up -n` on a namespace with no
         // processes never exits.
-        if presence == .empty { return .skipped }
+        if presence == .empty {
+            return .skipped
+        }
 
         // `.unknown` means Yams could not decode a file process-compose might
         // still accept. The phase runs, because refusing would silently skip
@@ -214,11 +216,11 @@ enum PhaseExecutor {
         static func == (lhs: PollResult, rhs: PollResult) -> Bool {
             switch (lhs, rhs) {
             case let (.finished(l), .finished(r)):
-                return l.count == r.count && zip(l, r).allSatisfy { $0.name == $1.name && $0.exitCode == $1.exitCode }
+                l.count == r.count && zip(l, r).allSatisfy { $0.name == $1.name && $0.exitCode == $1.exitCode }
             case (.serverGone, .serverGone), (.namespaceEmpty, .namespaceEmpty), (.timedOut, .timedOut):
-                return true
+                true
             default:
-                return false
+                false
             }
         }
     }
@@ -240,13 +242,17 @@ enum PhaseExecutor {
             // failure there is into the slowest.
             if upFinished.wait(timeout: .now()) == .success {
                 upFinished.signal()
-                if !sawServer { return .serverGone }
+                if !sawServer {
+                    return .serverGone
+                }
             }
 
             guard let processes = try? client.processesSync() else {
                 // Before the server is up this is just "not yet"; after it has
                 // answered once, it means the project ended on its own.
-                if sawServer { return .serverGone }
+                if sawServer {
+                    return .serverGone
+                }
                 Thread.sleep(forTimeInterval: pollInterval)
                 continue
             }
@@ -379,7 +385,9 @@ enum PhaseExecutor {
         var iterator = text.makeIterator()
         while let character = iterator.next() {
             guard character == "\u{1B}", let introducer = iterator.next() else {
-                if character != "\u{1B}" { result.append(character) }
+                if character != "\u{1B}" {
+                    result.append(character)
+                }
                 continue
             }
             switch introducer {
@@ -387,7 +395,9 @@ enum PhaseExecutor {
                 // OSC: arbitrary text until BEL, or until a string terminator
                 // (ESC followed by one more byte).
                 while let next = iterator.next() {
-                    if next == "\u{07}" { break }
+                    if next == "\u{07}" {
+                        break
+                    }
                     if next == "\u{1B}" {
                         _ = iterator.next()
                         break

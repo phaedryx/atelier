@@ -79,11 +79,17 @@ enum BareRepoClone {
         guard !trimmed.isEmpty else { return nil }
 
         // https://…, ssh://…, git://…, file://…
-        if trimmed.contains("://") { return trimmed }
+        if trimmed.contains("://") {
+            return trimmed
+        }
 
         // Local paths, including ~-relative ones.
-        if trimmed.hasPrefix("/") || trimmed.hasPrefix(".") { return trimmed }
-        if trimmed.hasPrefix("~") { return (trimmed as NSString).expandingTildeInPath }
+        if trimmed.hasPrefix("/") || trimmed.hasPrefix(".") {
+            return trimmed
+        }
+        if trimmed.hasPrefix("~") {
+            return (trimmed as NSString).expandingTildeInPath
+        }
 
         // scp-style: git@host:owner/repo.git — the colon must come before any slash.
         if let colon = trimmed.firstIndex(of: ":"),
@@ -98,7 +104,9 @@ enum BareRepoClone {
         guard parts.count == 2 else { return nil }
         let owner = String(parts[0])
         var repo = String(parts[1])
-        if repo.hasSuffix(".git") { repo.removeLast(4) }
+        if repo.hasSuffix(".git") {
+            repo.removeLast(4)
+        }
         guard isShorthandComponent(owner), isShorthandComponent(repo) else { return nil }
         return String(format: shorthandTemplate, "\(owner)/\(repo)")
     }
@@ -123,7 +131,9 @@ enum BareRepoClone {
         if let separator = value.lastIndex(where: { $0 == "/" || $0 == ":" }) {
             value = String(value[value.index(after: separator)...])
         }
-        if value.hasSuffix(".git") { value.removeLast(4) }
+        if value.hasSuffix(".git") {
+            value.removeLast(4)
+        }
 
         guard !value.isEmpty, value != ".", value != ".." else { return nil }
         return value
@@ -154,7 +164,9 @@ enum BareRepoClone {
         let path = container.path
         func abort(_ message: String) -> CloneResult {
             try? fm.removeItem(at: container)
-            if cancellation?.cancelled == true { return .cancelled }
+            if cancellation?.cancelled == true {
+                return .cancelled
+            }
             logger.warning("[Atelier] bare clone failed: \(message, privacy: .public)")
             return .failure(message)
         }
@@ -183,7 +195,9 @@ enum BareRepoClone {
         //    A terminated probe looks the same as an empty repo, so rule that
         //    out before calling this a success.
         guard run(["rev-parse", "--verify", "HEAD"], in: path, cancellation: cancellation).ok else {
-            if cancellation?.cancelled == true { return abort("cancelled") }
+            if cancellation?.cancelled == true {
+                return abort("cancelled")
+            }
             return .success(containerPath: path)
         }
 

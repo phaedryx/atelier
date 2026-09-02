@@ -54,7 +54,9 @@ final class MonacoDiffBridge: ObservableObject {
 
     /// Lazily creates the WKWebView and starts loading diff.html.
     func ensureWebView() -> EditorWebView {
-        if let webView { return webView }
+        if let webView {
+            return webView
+        }
 
         let coord = Coordinator(bridge: self)
         coordinator = coord
@@ -351,7 +353,7 @@ struct MonacoDiffView: NSViewRepresentable {
                 webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             ])
             DispatchQueue.main.async {
-                self.bridge.relayout()
+                bridge.relayout()
             }
         }
     }

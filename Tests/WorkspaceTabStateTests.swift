@@ -37,7 +37,11 @@ final class WorkspaceTabSnapshotTests: XCTestCase {
         let defaults = UserDefaults.standard
         let original = defaults.data(forKey: key)
         defer {
-            if let original { defaults.set(original, forKey: key) } else { defaults.removeObject(forKey: key) }
+            if let original {
+                defaults.set(original, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
         }
 
         // A tag written by a future build (or a removed tab kind).

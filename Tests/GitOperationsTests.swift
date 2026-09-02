@@ -522,7 +522,7 @@ final class GitOperationsTests: XCTestCase {
         try "let c = 3\n".write(to: wt.appendingPathComponent("c.swift"), atomically: true, encoding: .utf8)
 
         let files = GitOperations.branchDiffFiles(worktreePath: wt.path, projectPath: projectDir.path)
-        let paths = Set(files.map { $0.relativePath })
+        let paths = Set(files.map(\.relativePath))
         XCTAssertTrue(paths.contains("a.swift"), "committed file missing")
         XCTAssertTrue(paths.contains("b.swift"), "uncommitted edit missing")
         XCTAssertTrue(paths.contains("c.swift"), "untracked file missing (Hardening 1)")
@@ -1056,7 +1056,7 @@ final class GitOperationsTests: XCTestCase {
         GitOperations.addExcludeEntry(at: checkout.path, pattern: ".atelier-state/")
         GitOperations.addExcludeEntry(at: checkout.path, pattern: ".atelier-state/")
 
-        XCTAssertEqual(excludeLines(of: checkout).filter { $0 == ".atelier-state/" }.count, 1)
+        XCTAssertEqual(excludeLines(of: checkout).count(where: { $0 == ".atelier-state/" }), 1)
     }
 
     /// The contents of whichever info/exclude git resolves for `dir`.

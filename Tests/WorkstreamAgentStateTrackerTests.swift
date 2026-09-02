@@ -9,7 +9,9 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
     private let wsID = UUID()
     private let projectDir = "/tmp/atelier-test-worktree"
 
-    private var tracker: WorkstreamAgentStateTracker { WorkstreamAgentStateTracker.shared }
+    private var tracker: WorkstreamAgentStateTracker {
+        WorkstreamAgentStateTracker.shared
+    }
 
     override func setUp() {
         super.setUp()

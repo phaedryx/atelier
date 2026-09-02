@@ -22,8 +22,12 @@ enum FileFinder {
             nameScalars = Array(name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current).unicodeScalars)
             pathScalars = Array(path.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current).unicodeScalars)
             var m: UInt64 = 0
-            for sc in nameScalars { m |= FileFinder.maskBit(for: sc) }
-            for sc in pathScalars { m |= FileFinder.maskBit(for: sc) }
+            for sc in nameScalars {
+                m |= FileFinder.maskBit(for: sc)
+            }
+            for sc in pathScalars {
+                m |= FileFinder.maskBit(for: sc)
+            }
             mask = m
         }
     }
@@ -114,8 +118,12 @@ enum FileFinder {
 
         return best
             .sorted { lhs, rhs in
-                if lhs.score != rhs.score { return lhs.score > rhs.score }
-                if lhs.path.count != rhs.path.count { return lhs.path.count < rhs.path.count }
+                if lhs.score != rhs.score {
+                    return lhs.score > rhs.score
+                }
+                if lhs.path.count != rhs.path.count {
+                    return lhs.path.count < rhs.path.count
+                }
                 return lhs.path.localizedCaseInsensitiveCompare(rhs.path) == .orderedAscending
             }
             .map(\.path)
@@ -168,7 +176,7 @@ enum FileFinder {
                     while i < qCount {
                         let qChar = q[i]
                         let tChar = t[start + i]
-                        if qChar != tChar && !(isSeparator(qChar) && isSeparator(tChar)) {
+                        if qChar != tChar, !(isSeparator(qChar) && isSeparator(tChar)) {
                             start += 1
                             continue outer
                         }
@@ -217,8 +225,8 @@ enum FileFinder {
 
     private static func isSeparator(_ scalar: Unicode.Scalar) -> Bool {
         switch scalar.value {
-        case 0x20, 0x2D, 0x5F, 0x2E, 0x2F: return true // space - _ . /
-        default: return false
+        case 0x20, 0x2D, 0x5F, 0x2E, 0x2F: true // space - _ . /
+        default: false
         }
     }
 
@@ -228,8 +236,8 @@ enum FileFinder {
     private static func maskBit(for scalar: Unicode.Scalar) -> UInt64 {
         let v = scalar.value
         switch v {
-        case 0x61...0x7A: return 1 << UInt64(v - 0x61)
-        case 0x30...0x39: return 1 << (26 + UInt64(v - 0x30))
+        case 0x61 ... 0x7A: return 1 << UInt64(v - 0x61)
+        case 0x30 ... 0x39: return 1 << (26 + UInt64(v - 0x30))
         case 0x20: return 1 << 36
         case 0x2D: return 1 << 37
         case 0x5F: return 1 << 38

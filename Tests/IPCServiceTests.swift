@@ -54,7 +54,7 @@ final class IPCServiceTests: XCTestCase {
 
     // MARK: - Registration
 
-    func test_registerPeer_defaultsNameToTheWorkstream() async throws {
+    func test_registerPeer_defaultsNameToTheWorkstream() async {
         let response = await call(.registerPeer, [:], as: client(project: projectA, workstream: "wry-amber-lexer"))
         guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
         XCTAssertEqual(peer.name, "wry-amber-lexer")
@@ -69,7 +69,7 @@ final class IPCServiceTests: XCTestCase {
         XCTAssertEqual(peer.name, "reviewer")
         XCTAssertEqual(peer.role, "writes plans", "an omitted role must not blank the existing one")
 
-        let listed = try peers(of: await call(.listPeers, as: client(project: projectA)))
+        let listed = try await peers(of: call(.listPeers, as: client(project: projectA)))
         XCTAssertEqual(listed.count, 1, "a rename must not leave a second peer behind")
     }
 
@@ -80,7 +80,7 @@ final class IPCServiceTests: XCTestCase {
         _ = try await register(name: "sibling", project: projectA)
         _ = try await register(name: "stranger", project: projectB)
 
-        let listed = try peers(of: await call(.listPeers, as: client(project: projectA, peerID: mine)))
+        let listed = try await peers(of: call(.listPeers, as: client(project: projectA, peerID: mine)))
         XCTAssertEqual(listed.map(\.name), ["sibling"])
     }
 
@@ -89,7 +89,7 @@ final class IPCServiceTests: XCTestCase {
         let recipient = try await register(name: "recipient", project: projectA, workstream: "wry-amber-lexer")
         _ = await call(.sendMessage, ["to": recipient, "content": "ping"], as: client(project: projectA, peerID: sender))
 
-        let listed = try peers(of: await call(.listPeers, as: client(project: projectA, peerID: sender)))
+        let listed = try await peers(of: call(.listPeers, as: client(project: projectA, peerID: sender)))
         XCTAssertEqual(listed.first?.workstream, "wry-amber-lexer")
         XCTAssertEqual(listed.first?.pendingMessages, 1)
     }
@@ -162,7 +162,7 @@ final class IPCServiceTests: XCTestCase {
 
     // MARK: - Sanitization
 
-    func test_registerPeer_stripsWhatWouldBeTypedIntoAnotherTerminal() async throws {
+    func test_registerPeer_stripsWhatWouldBeTypedIntoAnotherTerminal() async {
         let hostile = "planner\u{1B}[31m\nrm -rf /\u{3}"
         let response = await call(.registerPeer, ["name": hostile, "role": "writes\nplans"], as: client(project: projectA))
         guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
@@ -173,7 +173,7 @@ final class IPCServiceTests: XCTestCase {
         XCTAssertFalse(peer.role.contains("\n"))
     }
 
-    func test_registerPeer_leavesNoInvisibleCharactersInAName() async throws {
+    func test_registerPeer_leavesNoInvisibleCharactersInAName() async {
         // A right-to-left override, a zero-width space, a zero-width joiner, a
         // byte-order mark, and a no-break space. The last becomes a plain space
         // rather than vanishing: two peers whose names render identically are a
@@ -185,7 +185,7 @@ final class IPCServiceTests: XCTestCase {
         XCTAssertEqual(peer.name, "planner two")
     }
 
-    func test_registerPeer_capsTheNameOnACharacterBoundary() async throws {
+    func test_registerPeer_capsTheNameOnACharacterBoundary() async {
         // 39 plain characters then a combining acute. Cutting by scalar could
         // keep the "e" and drop its accent, or strand the accent so it attaches
         // to whatever follows the name; cutting by character cannot.
@@ -197,13 +197,13 @@ final class IPCServiceTests: XCTestCase {
         XCTAssertTrue(peer.name.hasSuffix("é"), "the accent must travel with its letter, got: \(peer.name)")
     }
 
-    func test_registerPeer_capsTheName() async throws {
+    func test_registerPeer_capsTheName() async {
         let response = await call(.registerPeer, ["name": String(repeating: "a", count: 200)], as: client(project: projectA))
         guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
         XCTAssertEqual(peer.name.count, 40)
     }
 
-    func test_registerPeer_aNameOfNothingButControlCharacters_fallsBack() async throws {
+    func test_registerPeer_aNameOfNothingButControlCharacters_fallsBack() async {
         let response = await call(.registerPeer, ["name": "\u{1B}\u{3}"], as: client(project: projectA))
         guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
         XCTAssertEqual(peer.name, "agent")
@@ -225,7 +225,7 @@ final class IPCServiceTests: XCTestCase {
         let response = await call(.registerPeer, ["name": "agent-tab"], as: agent)
         guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
 
-        let context = await service._testContext(for: try XCTUnwrap(UUID(uuidString: peer.id)))
+        let context = try await service._testContext(for: XCTUnwrap(UUID(uuidString: peer.id)))
         XCTAssertEqual(context?.surfaceID, workstreamID, "the Agent tab must still address its own pane")
     }
 
@@ -249,8 +249,8 @@ final class IPCServiceTests: XCTestCase {
             return XCTFail("expected two peers")
         }
 
-        let firstContext = await service._testContext(for: try XCTUnwrap(UUID(uuidString: first.id)))
-        let secondContext = await service._testContext(for: try XCTUnwrap(UUID(uuidString: second.id)))
+        let firstContext = try await service._testContext(for: XCTUnwrap(UUID(uuidString: first.id)))
+        let secondContext = try await service._testContext(for: XCTUnwrap(UUID(uuidString: second.id)))
         XCTAssertEqual(firstContext?.surfaceID, workstreamID)
         XCTAssertEqual(secondContext?.surfaceID, tabSurface, "a tab must be nudged in its own pane, not the Agent's")
         XCTAssertEqual(firstContext?.workstreamID, secondContext?.workstreamID, "both are in the same workstream")
@@ -260,7 +260,7 @@ final class IPCServiceTests: XCTestCase {
         let response = await call(.registerPeer, ["name": "elsewhere"], as: client(project: projectA, surfaceID: nil))
         guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
 
-        let context = await service._testContext(for: try XCTUnwrap(UUID(uuidString: peer.id)))
+        let context = try await service._testContext(for: XCTUnwrap(UUID(uuidString: peer.id)))
         XCTAssertNil(context?.surfaceID, "an agent Atelier did not launch has nowhere to be nudged")
     }
 
@@ -269,7 +269,7 @@ final class IPCServiceTests: XCTestCase {
         _ = try await register(name: "stranger", project: nil)
 
         // "Same project" must mean a project, not two peers that both lack one.
-        let listed = try peers(of: await call(.listPeers, as: client(project: nil, peerID: mine)))
+        let listed = try await peers(of: call(.listPeers, as: client(project: nil, peerID: mine)))
         XCTAssertTrue(listed.isEmpty)
     }
 
@@ -278,7 +278,7 @@ final class IPCServiceTests: XCTestCase {
     func test_anyRequest_countsAsAHeartbeat() async throws {
         let poller = try await register(name: "poller", project: projectA)
         let observer = try await register(name: "observer", project: projectA)
-        await service._testBackdate(peerID: try XCTUnwrap(UUID(uuidString: poller)), to: Date().addingTimeInterval(-540))
+        try await service._testBackdate(peerID: XCTUnwrap(UUID(uuidString: poller)), to: Date().addingTimeInterval(-540))
 
         // A pure read is still proof the agent is there; without it a polite
         // agent that only ever lists peers expires while it is asking.
@@ -296,9 +296,9 @@ final class IPCServiceTests: XCTestCase {
         // Twenty minutes of silence: twice the TTL. An agent sitting at a
         // prompt is exactly what this feature exists to message, so it must
         // still be listed and still take delivery.
-        await service._testBackdate(peerID: try XCTUnwrap(UUID(uuidString: waiting)), to: Date().addingTimeInterval(-1200))
+        try await service._testBackdate(peerID: XCTUnwrap(UUID(uuidString: waiting)), to: Date().addingTimeInterval(-1200))
 
-        let listed = try peers(of: await call(.listPeers, as: client(project: projectA, peerID: sender)))
+        let listed = try await peers(of: call(.listPeers, as: client(project: projectA, peerID: sender)))
         XCTAssertEqual(listed.map(\.name), ["waiting"])
 
         let response = await call(.sendMessage, ["to": waiting, "content": "still there?"], as: client(project: projectA, peerID: sender))

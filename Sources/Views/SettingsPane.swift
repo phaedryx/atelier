@@ -14,28 +14,30 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     /// UserDefaults key remembering the last-selected pane.
     static let storageKey = "atelier.settingsPane"
 
-    var id: String { rawValue }
+    var id: String {
+        rawValue
+    }
 
     var title: String {
         switch self {
-        case .environment: return NSLocalizedString("Environment", comment: "Settings pane")
-        case .general: return NSLocalizedString("General", comment: "Settings pane")
-        case .codingAgent: return NSLocalizedString("Coding Agent", comment: "Settings pane")
-        case .prompts: return NSLocalizedString("Prompts", comment: "Settings pane")
-        case .integrations: return NSLocalizedString("Integrations", comment: "Settings pane")
-        case .advanced: return NSLocalizedString("Advanced", comment: "Settings pane")
+        case .environment: NSLocalizedString("Environment", comment: "Settings pane")
+        case .general: NSLocalizedString("General", comment: "Settings pane")
+        case .codingAgent: NSLocalizedString("Coding Agent", comment: "Settings pane")
+        case .prompts: NSLocalizedString("Prompts", comment: "Settings pane")
+        case .integrations: NSLocalizedString("Integrations", comment: "Settings pane")
+        case .advanced: NSLocalizedString("Advanced", comment: "Settings pane")
         }
     }
 
     /// SF Symbol shown above the tab label in the pane strip.
     var icon: String {
         switch self {
-        case .environment: return "wrench.and.screwdriver"
-        case .general: return "gearshape"
-        case .codingAgent: return "sparkles"
-        case .prompts: return "text.bubble"
-        case .integrations: return "puzzlepiece.extension"
-        case .advanced: return "gearshape.2"
+        case .environment: "wrench.and.screwdriver"
+        case .general: "gearshape"
+        case .codingAgent: "sparkles"
+        case .prompts: "text.bubble"
+        case .integrations: "puzzlepiece.extension"
+        case .advanced: "gearshape.2"
         }
     }
 

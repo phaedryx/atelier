@@ -167,12 +167,12 @@ struct ProcessComposeConfig: Equatable {
     /// so `firstPresent` resolves the same one discovery would have.
     var loadedFiles: [String] {
         guard isRepositoryProvided else {
-            return [path] + [overridePath].compactMap { $0 }
+            return [path] + [overridePath].compactMap(\.self)
         }
         let directory = URL(fileURLWithPath: path).deletingLastPathComponent()
         let override = Self.firstPresent(Self.overrideFileNames, in: directory)
             .map { directory.appendingPathComponent($0).path }
-        return [path] + [override].compactMap { $0 }
+        return [path] + [override].compactMap(\.self)
     }
 
     /// The loaded files that arrived with the repository, and therefore have to
@@ -195,7 +195,7 @@ struct ProcessComposeConfig: Equatable {
     /// list: it was placed by hand outside git, and re-asking every time they
     /// edit it is friction with no risk behind it.
     var repositoryProvidedFiles: [String] {
-        guard isRepositoryProvided else { return [overridePath].compactMap { $0 } }
+        guard isRepositoryProvided else { return [overridePath].compactMap(\.self) }
         return loadedFiles
     }
 
@@ -214,7 +214,9 @@ struct ProcessComposeConfig: Equatable {
                 unknown = true
                 continue
             }
-            if namespaces.contains(namespace) { return .present }
+            if namespaces.contains(namespace) {
+                return .present
+            }
         }
         return unknown ? .unknown : .empty
     }

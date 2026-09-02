@@ -67,8 +67,12 @@ final class ProcessTableModel: ObservableObject {
     private func clear() {
         generation += 1
         refreshChain = nil
-        if !processes.isEmpty { processes = [] }
-        if error != nil { error = nil }
+        if !processes.isEmpty {
+            processes = []
+        }
+        if error != nil {
+            error = nil
+        }
     }
 
     /// Re-reads the process list, never concurrently with another refresh.
@@ -97,13 +101,21 @@ final class ProcessTableModel: ObservableObject {
             // equality check of its own, so an unguarded `error = nil` would
             // invalidate the whole Environment tab at 1Hz even when nothing
             // changed — guarding only `processes` would achieve nothing.
-            if processes != latest { processes = latest }
-            if error != nil { error = nil }
+            if processes != latest {
+                processes = latest
+            }
+            if error != nil {
+                error = nil
+            }
         } catch ProcessComposeClient.ClientError.notRunning {
             // Expected before Start and after Stop; not worth surfacing.
             guard token == generation else { return }
-            if !processes.isEmpty { processes = [] }
-            if error != nil { error = nil }
+            if !processes.isEmpty {
+                processes = []
+            }
+            if error != nil {
+                error = nil
+            }
         } catch {
             guard token == generation else { return }
             // A manager that is gone is not a fault, whatever shape the failure
@@ -114,15 +126,21 @@ final class ProcessTableModel: ObservableObject {
             // suppression on the socket rather than on the error case covers
             // both, and every other way that race can surface.
             guard FileManager.default.fileExists(atPath: socketPath) else {
-                if !processes.isEmpty { processes = [] }
-                if self.error != nil { self.error = nil }
+                if !processes.isEmpty {
+                    processes = []
+                }
+                if self.error != nil {
+                    self.error = nil
+                }
                 return
             }
             logger.debug("poll failed: \(error.localizedDescription, privacy: .public)")
             // Guarded for the same reason as the success path: a manager failing
             // the same way every second must not republish the same message.
             let description = error.localizedDescription
-            if self.error != description { self.error = description }
+            if self.error != description {
+                self.error = description
+            }
         }
     }
 
@@ -164,7 +182,9 @@ final class ProcessTableModel: ObservableObject {
         await refresh()
         guard token == generation else { return }
         guard let failure, FileManager.default.fileExists(atPath: socketPath) else { return }
-        if error != failure { error = failure }
+        if error != failure {
+            error = failure
+        }
     }
 
     // MARK: - Selection
