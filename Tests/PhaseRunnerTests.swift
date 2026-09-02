@@ -18,17 +18,26 @@ final class PhaseRunnerTests: XCTestCase {
 
     /// The socket path must be predictable — a bare `-U` generates one
     /// containing the PID, which Atelier cannot find afterwards.
-    func testSocketPathIsDerivedFromTheWorkstream() {
+    func testSocketPathIsDerivedFromTheWorkstream() throws {
         let path = PhaseRunner.socketPath(for: workstreamID)
+        let otherID = try XCTUnwrap(UUID(uuidString: "550E8400-E29B-41D4-A716-446655440000"))
+        let otherPath = PhaseRunner.socketPath(for: otherID)
 
         XCTAssertTrue(path.hasSuffix(".sock"), path)
         XCTAssertEqual(path, PhaseRunner.socketPath(for: workstreamID))
+        XCTAssertNotEqual(path, otherPath, "different UUIDs must produce different paths")
     }
 
     /// macOS caps a unix socket path at 104 bytes. A full UUID plus a long home
     /// directory can approach that, so the name is shortened deliberately.
     func testSocketPathStaysUnderTheUnixLimit() {
-        XCTAssertLessThan(PhaseRunner.socketPath(for: workstreamID).utf8.count, 104)
+        let path = PhaseRunner.socketPath(for: workstreamID)
+        let fullUUID = workstreamID.uuidString.lowercased()
+        let shortUUID = fullUUID.prefix(8)
+
+        XCTAssertLessThan(path.utf8.count, 104)
+        XCTAssertFalse(path.contains(fullUUID), "full UUID must not appear in path")
+        XCTAssertTrue(path.contains(String(shortUUID)), "first 8 characters must be present")
     }
 
     func testWorktreeConfigPassesNoDashF() {

@@ -84,9 +84,9 @@ final class ProcessComposeConfigTests: XCTestCase {
         XCTAssertNil(config.overridePath, "discovery finds it; naming it would disable discovery")
     }
 
-    /// A plain checkout passes the same path for both. The project-directory
-    /// branch must not re-find the worktree's own config.
-    func testSamePathForBothIsTreatedAsWorktree() throws {
+    /// When worktree and project directory paths are the same (plain checkout),
+    /// the result is marked as repository-provided.
+    func testSamePathForBothResolvesAsRepositoryProvided() throws {
         try write("process-compose.yaml", in: worktree)
 
         let config = try XCTUnwrap(
