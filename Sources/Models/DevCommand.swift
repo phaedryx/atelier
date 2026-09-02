@@ -91,23 +91,38 @@ enum DevCommandResolver {
     /// meant Start could load `compose.yaml` — a name Atelier does not detect —
     /// while bootstrap and dispose ran something else for the same project.
     ///
-    /// **Nothing is detected while the integration is switched off, and that
-    /// guard is a security boundary rather than a tidiness one.** This command
-    /// carries no `-n`, so process-compose runs *every* namespace it finds —
-    /// `bootstrap` and `dispose` included. Those two are the phases
-    /// `PhasePolicy` exists to gate: they execute repository-authored processes
-    /// unattended, and they run only once the user has approved every
-    /// repository-provided file. But this command never goes through
-    /// `PhasePolicy`, so without the guard below, pressing Start on a freshly
-    /// cloned repository with the integration *disabled* would execute its
-    /// bootstrap and dispose processes with no approval and no phase scoping —
-    /// reachable precisely because `usesProcessCompose` is false when the
-    /// setting is off, which sends `resolvedRunCommand` down this fallback.
+    /// **The `command` built here carries no `-n`, so executing it would run
+    /// *every* namespace the config declares — `bootstrap` and `dispose`
+    /// included.** Those two are the phases `PhasePolicy` gates: they run
+    /// repository-authored processes unattended, and only once the user has
+    /// approved every repository-provided file. This string never goes through
+    /// `PhasePolicy`, so it must never reach a shell.
     ///
-    /// It became reachable when this function started naming files with `-f`:
-    /// before that it was `process-compose up -U` relying on discovery, which
-    /// mostly found nothing. Do not narrow this guard to the phase call sites —
-    /// this *is* a call site, and it is the one that bypasses them.
+    /// It no longer does. `RunCommandPlan` maps a `.processCompose` source to
+    /// `.phaseScoped`, and the command Start actually runs is built by
+    /// `PhaseRunner.startCommand`, which is `-n`-scoped. The string below
+    /// survives only as the text the Environment pane displays.
+    ///
+    /// So the `isEnabled` guard is **not** the execution-side boundary any
+    /// more, and previous versions of this comment saying it was were wrong.
+    /// What it does now is decide whether a config is detected at all, which
+    /// is what makes Start unavailable — with a reason — while the integration
+    /// is off. That is worth keeping, but it is availability, not security.
+    ///
+    /// It was the boundary once, and the hole reopened five times: an unhashed
+    /// override file, `compose.yaml` winning discovery, the toggle being off,
+    /// the binary being unresolvable while it was on, and finally the
+    /// Environment pane seeding its editable field from this very string,
+    /// where Save turned it into a `.override` that *is* run literally.
+    ///
+    /// That last route is the one to keep in mind, because `.override` is an
+    /// unconstrained passthrough by design: `RunCommandPlan` cannot tell a
+    /// user's own text from this string. The invariant therefore rests on
+    /// nothing ever seeding an override from a `.processCompose` command — see
+    /// `EnvironmentTabView.devCommandDisplayText`, which is what the pane
+    /// renders instead. Reintroducing a path that executes `command` for a
+    /// `.processCompose` source, or that pre-fills the override field with it,
+    /// reopens the hole for the sixth time.
     static func detectProcessCompose(in directory: String, projectDirectory: String) -> DevCommand? {
         guard ProcessComposeSettings.isEnabled else { return nil }
         guard let config = ProcessComposeConfig.locate(
