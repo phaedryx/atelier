@@ -151,6 +151,8 @@
 "System" = "System";
 "Light" = "Light";
 "Dark" = "Dark";
+"Base branch" = "Base branch";
+"Repository default" = "Repository default";
 
 /* Settings - Coding Agent */
 "Auto-rename branch" = "Auto-rename branch";

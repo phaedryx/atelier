@@ -196,6 +196,7 @@ private struct GeneralSettingsPane: View {
     @AppStorage(EnvSeedSync.defaultsKey) private var copyEnvFiles: Bool = true
     @AppStorage("atelier.confirmQuit") private var confirmQuit: Bool = true
     @AppStorage("atelier.baseDirectory") private var baseDirectory: String = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first ?? ""
+    @AppStorage(BaseBranchSetting.storageKey) private var baseBranch = BaseBranchSetting.main.rawValue
 
     /// Read in `.task` rather than as the `@State` initial value: that
     /// expression runs on every construction of this pane, and
@@ -245,6 +246,12 @@ private struct GeneralSettingsPane: View {
                 }
                 .onChange(of: appearance) { _, newValue in
                     applyAppearance(newValue)
+                }
+
+                Picker("Base branch", selection: $baseBranch) {
+                    ForEach(BaseBranchSetting.allCases) { option in
+                        Text(option.label).tag(option.rawValue)
+                    }
                 }
 
                 SettingToggle(
