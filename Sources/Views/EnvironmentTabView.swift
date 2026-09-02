@@ -33,6 +33,18 @@ func devCommandDisplayText(devCommand: DevCommand?, loadedFiles: [String]) -> St
     }
 }
 
+/// Whether the "Processes to start" list should render.
+///
+/// **Takes no `runStarted`, on purpose.** The list used to live inside
+/// `ProcessTableView`, which only renders once a run exists — so the control
+/// for choosing what to start was unreachable until after starting, the one
+/// moment it is no use. Both call sites go through this, and the absent
+/// parameter is what stops the gate coming back: a version of this that
+/// depended on the run would have to change its own signature to do it.
+func showsProcessSelection(showsProcessTable: Bool, declaredProcesses: [String]) -> Bool {
+    showsProcessTable && !declaredProcesses.isEmpty
+}
+
 /// Wraps a command for a login shell, so it sees the PATH and shell functions
 /// the user's own terminal would. Used when the `atelier-run` launcher is
 /// unavailable and the command has to be run bare.
@@ -161,12 +173,14 @@ struct EnvironmentTabView: View {
 
             if runStarted, let runCommand {
                 if showsProcessTable {
-                    ProcessTableView(
-                        model: processTable,
-                        portsByName: portsByName,
-                        workstreamID: workstreamID,
-                        declaredProcesses: declaredProcesses
-                    )
+                    if showsProcessSelection(showsProcessTable: showsProcessTable, declaredProcesses: declaredProcesses) {
+                        ProcessSelectionView(
+                            workstreamID: workstreamID,
+                            declaredProcesses: declaredProcesses
+                        )
+                        Divider()
+                    }
+                    ProcessTableView(model: processTable, portsByName: portsByName)
                     Divider()
                 }
                 SingleTerminalView(
@@ -178,6 +192,13 @@ struct EnvironmentTabView: View {
                 )
                 .id(runID)
             } else if canStart {
+                if showsProcessSelection(showsProcessTable: showsProcessTable, declaredProcesses: declaredProcesses) {
+                    ProcessSelectionView(
+                        workstreamID: workstreamID,
+                        declaredProcesses: declaredProcesses
+                    )
+                    Divider()
+                }
                 VStack(spacing: 12) {
                     Button(action: onStart) {
                         HStack(spacing: 6) {

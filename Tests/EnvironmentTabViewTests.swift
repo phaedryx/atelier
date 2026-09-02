@@ -98,4 +98,30 @@ final class EnvironmentTabViewTests: XCTestCase {
     func testNoDevCommandDisplaysNothing() {
         XCTAssertNil(devCommandDisplayText(devCommand: nil, loadedFiles: []))
     }
+
+    // MARK: - The selection list must be reachable before Start
+
+    /// The regression this pins: the list lived inside ProcessTableView, which
+    /// renders only under `if runStarted`, so the control for choosing what to
+    /// start appeared only after starting. `showsProcessSelection` takes no
+    /// run state at all, which is the structural half; this is the documented
+    /// half.
+    func testTheSelectionListShowsForAProcessComposeRunThatHasNotStarted() {
+        XCTAssertTrue(
+            showsProcessSelection(showsProcessTable: true, declaredProcesses: ["bff", "api"])
+        )
+    }
+
+    func testTheSelectionListIsHiddenWhenTheRunIsNotProcessCompose() {
+        XCTAssertFalse(
+            showsProcessSelection(showsProcessTable: false, declaredProcesses: ["bff", "api"])
+        )
+    }
+
+    /// An unparseable config yields no declared processes, and an empty list of
+    /// checkboxes is worse than none: it reads as "this project has no
+    /// processes" rather than "Atelier could not read the file".
+    func testTheSelectionListIsHiddenWithNoDeclaredProcesses() {
+        XCTAssertFalse(showsProcessSelection(showsProcessTable: true, declaredProcesses: []))
+    }
 }
