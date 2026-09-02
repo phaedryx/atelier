@@ -509,3 +509,14 @@
 "Binary" = "Binary";
 "auto-detect" = "auto-detect";
 "not found" = "not found";
+
+/* Worktree bootstrap phase */
+"Running bootstrap" = "Running bootstrap";
+"The process-compose integration is turned off, so no bootstrap ran." = "The process-compose integration is turned off, so no bootstrap ran.";
+"This project has no process-compose.yaml, so no bootstrap ran." = "This project has no process-compose.yaml, so no bootstrap ran.";
+"process-compose was not found, so no bootstrap ran." = "process-compose was not found, so no bootstrap ran.";
+"This project declares no bootstrap processes, so nothing ran." = "This project declares no bootstrap processes, so nothing ran.";
+"Bootstrap failed: %@" = "Bootstrap failed: %@";
+"No shell was available to run the phase." = "No shell was available to run the phase.";
+"The %@ phase did not finish in time." = "The %@ phase did not finish in time.";
+"%@ failed." = "%@ failed.";
