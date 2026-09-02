@@ -1,5 +1,5 @@
 // ABOUTME: Tests for WorkstreamEnvironment env var construction.
-// ABOUTME: Validates ATELIER_* vars, default branch, and compatibility aliases for external tools.
+// ABOUTME: Validates ATELIER_* vars, the legacy FF_* mirror, and the project's port declarations.
 
 @testable import Atelier
 import XCTest
@@ -24,8 +24,7 @@ final class WorkstreamEnvironmentTests: XCTestCase {
             projectDirectory: baseParams.3,
             workingDirectory: baseParams.4,
             port: baseParams.5,
-            defaultBranch: "main",
-            scriptSource: nil
+            defaultBranch: "main"
         )
         XCTAssertEqual(vars["ATELIER_WORKSTREAM_ID"], "12345678-1234-1234-1234-123456789abc")
         XCTAssertEqual(vars["ATELIER_PROJECT"], "my-project")
@@ -36,9 +35,13 @@ final class WorkstreamEnvironmentTests: XCTestCase {
         XCTAssertEqual(vars["ATELIER_DEFAULT_BRANCH"], "main")
     }
 
-    // MARK: - Conductor aliases
+    // MARK: - No aliases for other tools
 
-    func testConductorAliases() {
+    /// `CONDUCTOR_*`, `EMDASH_*` and `SUPERSET_*` were emitted when a project's
+    /// scripts had been read from another tool's config file. Those formats are
+    /// no longer read, so nothing is compatible with them and nothing is
+    /// exported for them.
+    func testNoCompatibilityAliasesForOtherTools() {
         let vars = WorkstreamEnvironment.variables(
             workstreamID: baseParams.0,
             projectName: baseParams.1,
@@ -46,87 +49,13 @@ final class WorkstreamEnvironmentTests: XCTestCase {
             projectDirectory: baseParams.3,
             workingDirectory: baseParams.4,
             port: baseParams.5,
-            defaultBranch: "main",
-            scriptSource: "conductor.json"
+            defaultBranch: "main"
         )
-        XCTAssertEqual(vars["CONDUCTOR_WORKSPACE_NAME"], "coral-reef")
-        XCTAssertEqual(vars["CONDUCTOR_ROOT_PATH"], "/Users/test/my-project")
-        XCTAssertEqual(vars["CONDUCTOR_WORKSPACE_PATH"], "/Users/test/.atelier/worktrees/my-project/coral-reef")
-        XCTAssertEqual(vars["CONDUCTOR_PORT"], "42847")
-        XCTAssertEqual(vars["CONDUCTOR_DEFAULT_BRANCH"], "main")
-    }
-
-    // MARK: - Emdash aliases
-
-    func testEmdashAliases() {
-        let vars = WorkstreamEnvironment.variables(
-            workstreamID: baseParams.0,
-            projectName: baseParams.1,
-            workstreamName: baseParams.2,
-            projectDirectory: baseParams.3,
-            workingDirectory: baseParams.4,
-            port: baseParams.5,
-            defaultBranch: "develop",
-            scriptSource: ".emdash.json"
-        )
-        XCTAssertEqual(vars["EMDASH_TASK_ID"], "12345678-1234-1234-1234-123456789abc")
-        XCTAssertEqual(vars["EMDASH_TASK_NAME"], "coral-reef")
-        XCTAssertEqual(vars["EMDASH_TASK_PATH"], "/Users/test/.atelier/worktrees/my-project/coral-reef")
-        XCTAssertEqual(vars["EMDASH_ROOT_PATH"], "/Users/test/my-project")
-        XCTAssertEqual(vars["EMDASH_PORT"], "42847")
-        XCTAssertEqual(vars["EMDASH_DEFAULT_BRANCH"], "develop")
-    }
-
-    // MARK: - Superset aliases
-
-    func testSupersetAliases() {
-        let vars = WorkstreamEnvironment.variables(
-            workstreamID: baseParams.0,
-            projectName: baseParams.1,
-            workstreamName: baseParams.2,
-            projectDirectory: baseParams.3,
-            workingDirectory: baseParams.4,
-            port: baseParams.5,
-            defaultBranch: "main",
-            scriptSource: ".superset/config.json"
-        )
-        XCTAssertEqual(vars["SUPERSET_WORKSPACE_NAME"], "coral-reef")
-        XCTAssertEqual(vars["SUPERSET_ROOT_PATH"], "/Users/test/my-project")
-        XCTAssertEqual(vars["SUPERSET_PORT_BASE"], "42847")
-    }
-
-    // MARK: - No aliases for native config
-
-    func testNoAliasesForAtelierConfig() {
-        let vars = WorkstreamEnvironment.variables(
-            workstreamID: baseParams.0,
-            projectName: baseParams.1,
-            workstreamName: baseParams.2,
-            projectDirectory: baseParams.3,
-            workingDirectory: baseParams.4,
-            port: baseParams.5,
-            defaultBranch: "main",
-            scriptSource: ".atelier.json"
-        )
-        XCTAssertNil(vars["CONDUCTOR_WORKSPACE_NAME"])
-        XCTAssertNil(vars["EMDASH_TASK_NAME"])
-        XCTAssertNil(vars["SUPERSET_WORKSPACE_NAME"])
-    }
-
-    func testNoAliasesForNilSource() {
-        let vars = WorkstreamEnvironment.variables(
-            workstreamID: baseParams.0,
-            projectName: baseParams.1,
-            workstreamName: baseParams.2,
-            projectDirectory: baseParams.3,
-            workingDirectory: baseParams.4,
-            port: baseParams.5,
-            defaultBranch: "main",
-            scriptSource: nil
-        )
-        XCTAssertNil(vars["CONDUCTOR_WORKSPACE_NAME"])
-        XCTAssertNil(vars["EMDASH_TASK_NAME"])
-        XCTAssertNil(vars["SUPERSET_WORKSPACE_NAME"])
+        for key in vars.keys {
+            XCTAssertFalse(key.hasPrefix("CONDUCTOR_"), key)
+            XCTAssertFalse(key.hasPrefix("EMDASH_"), key)
+            XCTAssertFalse(key.hasPrefix("SUPERSET_"), key)
+        }
     }
 
     // MARK: - Legacy FF_* aliases
@@ -139,8 +68,7 @@ final class WorkstreamEnvironmentTests: XCTestCase {
             projectDirectory: baseParams.3,
             workingDirectory: baseParams.4,
             port: baseParams.5,
-            defaultBranch: "main",
-            scriptSource: nil
+            defaultBranch: "main"
         )
         let atelierKeys = vars.keys.filter { $0.hasPrefix("ATELIER_") }
         XCTAssertFalse(atelierKeys.isEmpty)

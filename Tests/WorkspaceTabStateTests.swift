@@ -24,12 +24,11 @@ final class WorkspaceTabSnapshotTests: XCTestCase {
             projectDirectory: "/app",
             workingDirectory: "/app/task",
             port: 3000,
-            defaultBranch: "develop",
-            scriptSource: "conductor.json"
+            defaultBranch: "develop"
         )
 
         XCTAssertEqual(vars["ATELIER_DEFAULT_BRANCH"], "develop")
-        XCTAssertEqual(vars["CONDUCTOR_DEFAULT_BRANCH"], "develop")
+        XCTAssertEqual(vars["FF_DEFAULT_BRANCH"], "develop")
     }
 
     func testUnknownSavedTabDoesNotDiscardOtherWorkstreams() throws {

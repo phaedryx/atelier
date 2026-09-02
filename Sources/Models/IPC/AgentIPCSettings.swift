@@ -5,11 +5,11 @@ import Foundation
 
 /// Reads the agent-IPC settings and keeps `IPCServer` in step with them.
 ///
-/// `ScriptTrust` deliberately isn't involved. Its API fingerprints a
-/// `ScriptConfig` — source file plus setup/run/teardown commands — and the
-/// `CLAUDE.md` invariant it backs is about *repository-provided commands*.
-/// Turning on IPC is neither, so it gets its own switch and its own warning
-/// copy rather than a fabricated config to approve.
+/// `ScriptTrust` deliberately isn't involved. Its API fingerprints the
+/// process-compose files a repository ships, and the `AGENTS.md` invariant it
+/// backs is about *repository-provided commands*. Turning on IPC is neither, so
+/// it gets its own switch and its own warning copy rather than a fabricated
+/// config to approve.
 enum AgentIPCSettings {
     static let enabledKey = "atelier.agentIPC"
     static let nudgeKey = "atelier.agentIPCNudge"

@@ -193,7 +193,6 @@ private struct EnvironmentSettingsPane: View {
 
 private struct GeneralSettingsPane: View {
     @AppStorage("atelier.appearance") private var appearance: String = "system"
-    @AppStorage(EnvSeedSync.defaultsKey) private var copyEnvFiles: Bool = true
     @AppStorage("atelier.confirmQuit") private var confirmQuit: Bool = true
     @AppStorage("atelier.baseDirectory") private var baseDirectory: String = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first ?? ""
     @AppStorage(BaseBranchSetting.storageKey) private var baseBranch = BaseBranchSetting.main.rawValue
@@ -232,12 +231,6 @@ private struct GeneralSettingsPane: View {
                         }
                     }
                 }
-
-                SettingToggle(
-                    "Copy .env files (rsync)",
-                    isOn: $copyEnvFiles,
-                    description: "rsync the project's seed-files directory into new worktrees. Override the location with \"seed\" in .atelier.json."
-                )
 
                 Picker("Theme", selection: $appearance) {
                     Text("System").tag("system")
@@ -719,7 +712,7 @@ private struct AdvancedSettingsPane: View {
                         Text("Detailed logging")
                         if detailedLogging {
                             HStack(spacing: 0) {
-                                Text("Log setup, run, and teardown script output to files for debugging. ")
+                                Text("Log the agent and run commands, and their output, to files for debugging. ")
                                     .foregroundStyle(.secondary)
                                 Button("Open Logs Directory") {
                                     let url = LaunchLogger.logsDirectoryURL
@@ -731,7 +724,7 @@ private struct AdvancedSettingsPane: View {
                             }
                             .font(.caption)
                         } else {
-                            Text("Log setup, run, and teardown script output to files for debugging.")
+                            Text("Log the agent and run commands, and their output, to files for debugging.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }

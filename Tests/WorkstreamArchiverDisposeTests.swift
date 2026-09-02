@@ -4,9 +4,9 @@
 @testable import Atelier
 import XCTest
 
-/// `BootstrapPolicyTests` covers what the policy decides. This covers that
+/// `PhasePolicyTests` covers what the policy decides. This covers that
 /// `WorkstreamArchiver` actually asks it — an archiver that stopped calling
-/// `BootstrapPolicy.plan` altogether would otherwise pass every dispose test in
+/// `PhasePolicy.plan` altogether would otherwise pass every dispose test in
 /// the suite.
 final class WorkstreamArchiverDisposeTests: XCTestCase {
     private var project: URL!
@@ -53,7 +53,7 @@ final class WorkstreamArchiverDisposeTests: XCTestCase {
         XCTAssertEqual(ProcessComposeSettings.resolveBinary(), "/bin/ls")
     }
 
-    private func note(_ plan: BootstrapPolicy.Plan) -> String? {
+    private func note(_ plan: PhasePolicy.Plan) -> String? {
         guard case let .nothingToDo(message) = plan else { return nil }
         return message
     }

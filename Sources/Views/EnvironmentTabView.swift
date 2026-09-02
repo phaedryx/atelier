@@ -7,33 +7,23 @@ func shouldRestoreRunSession(useTmux: Bool, hasRunScript: Bool, hasExistingRunSe
     useTmux && hasRunScript && hasExistingRunSession && !wasStoppedManually
 }
 
-func scriptCommand(script: String, role: String, shell: String = CommandBuilder.userShell) -> String {
-    let inner: String
-    if role == "setup" {
-        inner = "\(script); printf '\\nSetup completed in this terminal.\\n'"
-    } else {
-        inner = script
-    }
-    return "\(shell) -lic \(CommandBuilder.shellQuote(inner, forShell: shell))"
+/// Wraps a command for a login shell, so it sees the PATH and shell functions
+/// the user's own terminal would. Used when the `atelier-run` launcher is
+/// unavailable and the command has to be run bare.
+func scriptCommand(script: String, shell: String = CommandBuilder.userShell) -> String {
+    "\(shell) -lic \(CommandBuilder.shellQuote(script, forShell: shell))"
 }
 
 struct EnvironmentTabView: View {
     let workstreamID: UUID
     let workingDirectory: String
-    let projectDirectory: String
-    let scriptConfig: ScriptConfig
     let useTmux: Bool
     let environmentVars: [String: String]
     /// Final assembled run command (atelier-run + tmux wrap), set once the session starts.
     let runCommand: String?
-    /// The resolved dev command: the user's override, or a detected runner.
+    /// The resolved dev command: the user's override, or the located
+    /// process-compose config.
     let devCommand: DevCommand?
-    /// Every runner detected in the worktree. A picker appears past one.
-    let runnerCandidates: [DevCommand]
-    let onSelectRunner: (DevCommand.Source) -> Void
-    @Binding var envVarDefinitions: [EnvVarDefinition]
-    /// What the definitions above evaluate to in this worktree.
-    let resolvedEnvVars: [String: String]
     @Binding var devCommandOverride: String?
     @Binding var runStarted: Bool
     @Binding var runGeneration: Int
@@ -54,7 +44,6 @@ struct EnvironmentTabView: View {
     @EnvironmentObject var surfaceCache: TerminalSurfaceCache
     @State private var isCustomizingDevCommand = false
     @State private var devCommandEditText = ""
-    @State private var isShowingEnvVars = false
 
     private var runID: UUID {
         derivedUUID(from: workstreamID, salt: "env-run-\(runGeneration)")
@@ -67,14 +56,6 @@ struct EnvironmentTabView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if let error = scriptConfig.loadError {
-                configErrorBanner(error: error)
-                Divider()
-            }
-            if let source = scriptConfig.source, source != ".atelier.json" {
-                configSourceBanner(source: source)
-                Divider()
-            }
             if !unapprovedConfigFiles.isEmpty {
                 configApprovalBanner(paths: unapprovedConfigFiles)
                 Divider()
@@ -136,9 +117,6 @@ struct EnvironmentTabView: View {
             devCommandSection
             Divider()
 
-            envVarSection
-            Divider()
-
             if runStarted, let runCommand {
                 if showsProcessTable {
                     ProcessTableView(model: processTable, portsByName: portsByName)
@@ -184,108 +162,14 @@ struct EnvironmentTabView: View {
         }
     }
 
-    /// The environment variables this project injects, collapsed by default so
-    /// the run pane keeps its space when nobody is editing them.
-    ///
-    /// Hand-rolled rather than a `DisclosureGroup`: that renders its own label
-    /// and only its triangle reliably toggles, so the header read as clickable
-    /// and mostly was not. A plain button with an explicit chevron makes the
-    /// whole header the target. `Add` sits beside it rather than inside the
-    /// editor, so the section carries one title instead of two.
-    private var envVarSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
-                Button {
-                    isShowingEnvVars.toggle()
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .rotationEffect(.degrees(isShowingEnvVars ? 90 : 0))
-                        Text("Environment Variables")
-                            .font(.system(size: 12, weight: .semibold))
-                        if !envVarDefinitions.isEmpty {
-                            Text("\(envVarDefinitions.count)")
-                                .font(.system(size: 9, design: .monospaced))
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1)
-                                .background(Color.primary.opacity(0.06))
-                                .clipShape(Capsule())
-                                .foregroundStyle(.tertiary)
-                        }
-                        Spacer()
-                    }
-                    // Without this the gaps between the label's pieces are not
-                    // part of the button, so the header toggles only where there
-                    // happens to be a glyph.
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-
-                if isShowingEnvVars {
-                    Button("Add") { envVarDefinitions.append(EnvVarDefinition(name: "")) }
-                        .buttonStyle(.borderless)
-                        .font(.system(size: 11))
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-
-            if isShowingEnvVars {
-                EnvVarsEditor(definitions: $envVarDefinitions, resolved: resolvedEnvVars)
-            }
-        }
-    }
-
-    /// Lets the user pick which detected runner starts the stack. Only shown
-    /// when the worktree offers a real choice — a lone candidate is not a
-    /// decision, and a config `run` script or a custom command has already
-    /// settled the question.
-    /// The candidate the picker should read as selected, or nil when the picker
-    /// has nothing coherent to show: a custom command outranks both runners, so
-    /// the picker would be inert *and* have no matching tag to highlight.
-    private var pickedRunner: DevCommand.Source? {
-        guard runnerCandidates.count > 1, let source = devCommand?.source,
-              runnerCandidates.contains(where: { $0.source == source })
-        else { return nil }
-        return source
-    }
-
-    @ViewBuilder
-    private var runnerPicker: some View {
-        if let picked = pickedRunner {
-            Picker("", selection: Binding(
-                get: { picked },
-                set: { onSelectRunner($0) }
-            )) {
-                ForEach(runnerCandidates, id: \.source) { candidate in
-                    Text(runnerLabel(for: candidate)).tag(candidate.source)
-                }
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .controlSize(.small)
-            .fixedSize()
-        }
-    }
-
-    private func runnerLabel(for candidate: DevCommand) -> String {
-        switch candidate.source {
-        case .processCompose: return NSLocalizedString("process-compose", comment: "")
-        case .packageJSON, .override: return candidate.command
-        }
-    }
-
-    /// Shows the effective dev command (detected runner or the user's
-    /// per-workstream override) and lets the user customize it.
+    /// Shows the effective dev command — the located process-compose config, or
+    /// the user's per-workstream override — and lets the user change it.
     private var devCommandSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("Dev command")
                     .font(.system(size: 12, weight: .semibold))
                 Spacer()
-                runnerPicker
                 Button(isCustomizingDevCommand ? "Cancel" : "Customize") {
                     if isCustomizingDevCommand {
                         isCustomizingDevCommand = false
@@ -308,7 +192,7 @@ struct EnvironmentTabView: View {
                     sourceTag(for: devCommand.source)
                 }
             } else {
-                Text("No dev command found. Add a dev script to package.json or set one below.")
+                Text("No dev command found. Add a process-compose.yaml, or set a command below.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
@@ -346,8 +230,6 @@ struct EnvironmentTabView: View {
         case .processCompose:
             // The file name, since a repository can carry either spelling.
             text = devCommand?.sourceDescription ?? "process-compose.yaml"
-        case .packageJSON:
-            text = NSLocalizedString("From package.json", comment: "")
         }
         return Text(text)
             .font(.system(size: 9, design: .monospaced))
@@ -356,23 +238,6 @@ struct EnvironmentTabView: View {
             .background(Color.primary.opacity(0.06))
             .clipShape(Capsule())
             .foregroundStyle(.tertiary)
-    }
-
-    private func configErrorBanner(error: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.yellow)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Failed to load .atelier.json")
-                    .font(.system(size: 12, weight: .semibold))
-                Text(error)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-        }
-        .padding(10)
-        .background(Color.yellow.opacity(0.08))
     }
 
     /// A banner, not a gate. The unattended phases — bootstrap at creation,
@@ -402,22 +267,9 @@ struct EnvironmentTabView: View {
         .background(Color.orange.opacity(0.08))
     }
 
-    private func configSourceBanner(source: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "info.circle")
-                .foregroundStyle(.blue)
-            Text(String(format: NSLocalizedString("Using scripts from %@", comment: ""), source))
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-            Spacer()
-        }
-        .padding(10)
-        .background(Color.blue.opacity(0.05))
-    }
-
-    /// Shown when nothing was detected and no command has been set. Names the
-    /// two things that would make Start work rather than a config key, because
-    /// detection is now the only path in.
+    /// Shown when no config was located and no command has been set. Names the
+    /// two things that would make Start work: a process-compose.yaml in either
+    /// home, or a per-workstream override.
     private func scriptInstructions(title _: String) -> some View {
         VStack(spacing: 12) {
             Image(systemName: "doc.text")
@@ -426,7 +278,7 @@ struct EnvironmentTabView: View {
             Text("No dev command found")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
-            Text("Add a process-compose.yaml to this worktree or the project directory, or a dev script to package.json. Or set a command with Customize above.")
+            Text("Add a process-compose.yaml to this worktree or the project directory, or set a command with Customize above.")
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)

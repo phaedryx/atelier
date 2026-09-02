@@ -517,23 +517,8 @@ enum GitOperations {
         }
 
         addExcludeEntry(at: projectPath, pattern: ".atelier-state/")
-        // The seed directory holds .env files at the repo root; without this it
-        // shows up untracked in every `git status`, one `git add -A` from being committed.
-        addExcludeEntry(at: projectPath, pattern: WorktreeSetupConfig.defaultSeedDirectory + "/")
 
         return worktreeDir.path
-    }
-
-    /// Exclude a project's configured seed directory from git, so a custom
-    /// `"seed"` path is hidden the same way the default one is. A seed outside
-    /// the project directory needs no exclude and is skipped.
-    static func excludeSeedDirectory(_ seedDirectory: String, inProject projectPath: String) {
-        let project = URL(fileURLWithPath: projectPath).standardizedFileURL.path
-        let seed = URL(fileURLWithPath: seedDirectory).standardizedFileURL.path
-        guard seed.hasPrefix(project + "/") else { return }
-        let relative = String(seed.dropFirst(project.count + 1))
-        guard !relative.isEmpty else { return }
-        addExcludeEntry(at: projectPath, pattern: relative + "/")
     }
 
     /// Append a pattern to the repo's info/exclude if not already present.

@@ -37,7 +37,6 @@ enum WorkstreamArchiver {
         surfaceCache.removeWorkstreamSurfaces(for: workstreamID)
         IPCConfig.remove(for: workstreamID)
         LaunchLogger.removeLog(for: workstreamID)
-        SetupStateStore.remove(for: workstreamID)
         project.workstreams.removeAll { $0.id == workstreamID }
     }
 
@@ -117,7 +116,6 @@ enum WorkstreamArchiver {
         }
         surfaceCache.removeWorkstreamSurfaces(for: workstreamID)
         LaunchLogger.removeLog(for: workstreamID)
-        SetupStateStore.remove(for: workstreamID)
         project.workstreams.removeAll { $0.id == workstreamID }
     }
 
@@ -126,7 +124,7 @@ enum WorkstreamArchiver {
     /// This replaces the `teardown` script: a project now says what archiving
     /// should clean up in the same file it uses for everything else.
     ///
-    /// The preconditions are not restated here. `BootstrapPolicy.plan` owns
+    /// The preconditions are not restated here. `PhasePolicy.plan` owns
     /// them — integration on, a config located, a binary to run it with, and
     /// approval of every repository-provided file process-compose will load —
     /// and dispose is unattended in exactly the way bootstrap is, so a second
@@ -141,12 +139,12 @@ enum WorkstreamArchiver {
     /// What archiving would run, and why it would not.
     ///
     /// Split out from `runDispose` and left internal so the wiring is
-    /// observable: a `runDispose` that stopped consulting `BootstrapPolicy`
+    /// observable: a `runDispose` that stopped consulting `PhasePolicy`
     /// altogether would still pass every test of the policy itself. This is the
     /// seam a test can hold, since `runDispose` proper spawns process-compose
     /// and `purge` destroys a worktree.
-    static func disposePlan(worktreePath: String, projectDirectory: String) -> BootstrapPolicy.Plan {
-        BootstrapPolicy.plan(
+    static func disposePlan(worktreePath: String, projectDirectory: String) -> PhasePolicy.Plan {
+        PhasePolicy.plan(
             phase: .dispose,
             isEnabled: ProcessComposeSettings.isEnabled,
             config: ProcessComposeConfig.locate(

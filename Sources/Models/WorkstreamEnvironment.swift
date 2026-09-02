@@ -1,12 +1,15 @@
 // ABOUTME: Builds environment variables injected into workstream terminals.
-// ABOUTME: Centralizes ATELIER_* vars, legacy FF_* aliases, and compatibility aliases for external tools.
+// ABOUTME: Centralizes ATELIER_* vars, legacy FF_* aliases, and the project's own port declarations.
 
 import Foundation
 
 enum WorkstreamEnvironment {
     /// Build the environment variables for a workstream's terminal sessions.
-    /// When `scriptSource` matches an external tool's config file, compatibility
-    /// aliases are added so scripts written for that tool work without modification.
+    ///
+    /// There used to be a `scriptSource` parameter that added `CONDUCTOR_*`,
+    /// `EMDASH_*` and `SUPERSET_*` aliases when the project's scripts had been
+    /// read from another tool's config file. Those config formats are no longer
+    /// read at all, so the aliases had nothing left to be compatible with.
     static func variables(
         workstreamID: UUID,
         projectName: String,
@@ -15,7 +18,6 @@ enum WorkstreamEnvironment {
         workingDirectory: String,
         port: Int,
         defaultBranch: String = "main",
-        scriptSource: String? = nil,
         portPlan: PortPlan = .empty
     ) -> [String: String] {
         let id = workstreamID.uuidString.lowercased()
@@ -31,28 +33,6 @@ enum WorkstreamEnvironment {
             "ATELIER_DEFAULT_BRANCH": defaultBranch,
         ]
 
-        switch scriptSource {
-        case "conductor.json":
-            vars["CONDUCTOR_WORKSPACE_NAME"] = workstreamName
-            vars["CONDUCTOR_ROOT_PATH"] = projectDirectory
-            vars["CONDUCTOR_WORKSPACE_PATH"] = workingDirectory
-            vars["CONDUCTOR_PORT"] = portString
-            vars["CONDUCTOR_DEFAULT_BRANCH"] = defaultBranch
-        case ".emdash.json":
-            vars["EMDASH_TASK_ID"] = id
-            vars["EMDASH_TASK_NAME"] = workstreamName
-            vars["EMDASH_TASK_PATH"] = workingDirectory
-            vars["EMDASH_ROOT_PATH"] = projectDirectory
-            vars["EMDASH_PORT"] = portString
-            vars["EMDASH_DEFAULT_BRANCH"] = defaultBranch
-        case ".superset/config.json":
-            vars["SUPERSET_WORKSPACE_NAME"] = workstreamName
-            vars["SUPERSET_ROOT_PATH"] = projectDirectory
-            vars["SUPERSET_PORT_BASE"] = portString
-        default:
-            break
-        }
-
         // Before the FF_ mirror, so a project's own declarations win over
         // Atelier's defaults: a project that wants ATELIER_PORT to mean
         // something specific may say so. These reach every surface, not just
@@ -61,8 +41,7 @@ enum WorkstreamEnvironment {
         vars.merge(portPlan.values) { _, declared in declared }
 
         // Run scripts that read FF_* live in the user's own repositories, where a
-        // rename here cannot reach them. Export both spellings, the same way the
-        // CONDUCTOR_/EMDASH_/SUPERSET_ aliases above cover other tools' scripts.
+        // rename here cannot reach them, so both spellings are exported.
         // Runs last, over the final ATELIER_* values (including any portPlan
         // override), so FF_* never lags behind a project's own declaration.
         for (key, value) in Array(vars) {

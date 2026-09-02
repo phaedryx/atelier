@@ -1,5 +1,5 @@
 // ABOUTME: Which branch new worktrees are cut from, as an app-wide setting.
-// ABOUTME: Replaces .atelier.json's base_branch, which went with ScriptConfig.
+// ABOUTME: Replaces .atelier.json's base_branch, which went with the .atelier.json reader.
 
 import Foundation
 

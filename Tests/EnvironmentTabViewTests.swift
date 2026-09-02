@@ -16,27 +16,8 @@ final class EnvironmentTabViewTests: XCTestCase {
         XCTAssertFalse(shouldRestoreRunSession(useTmux: true, hasRunScript: true, hasExistingRunSession: true, wasStoppedManually: true))
     }
 
-    func testSetupScriptAppendsCompletionMessage() {
-        let command = scriptCommand(script: "./.hooks/atelier-setup.sh", role: "setup", shell: "/bin/zsh")
-
-        XCTAssertTrue(command.contains("./.hooks/atelier-setup.sh"))
-        XCTAssertTrue(command.contains("Setup completed in this terminal."))
-    }
-
-    func testRunScriptDoesNotAppendCompletionMessage() {
-        let command = scriptCommand(script: "just local", role: "run", shell: "/bin/zsh")
-
-        XCTAssertFalse(command.contains("Setup completed"))
-    }
-
-    func testSetupScriptWrapsInLoginShell() {
-        let command = scriptCommand(script: "setup.sh", role: "setup", shell: "/bin/zsh")
-
-        XCTAssertTrue(command.hasPrefix("/bin/zsh -lic "))
-    }
-
     func testRunScriptWrapsInLoginShell() {
-        let command = scriptCommand(script: "just local", role: "run", shell: "/bin/zsh")
+        let command = scriptCommand(script: "just local", shell: "/bin/zsh")
 
         XCTAssertTrue(command.hasPrefix("/bin/zsh -lic "))
         XCTAssertTrue(command.contains("just local"))

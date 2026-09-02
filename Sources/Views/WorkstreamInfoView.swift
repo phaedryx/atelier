@@ -9,8 +9,6 @@ struct WorkstreamInfoView: View {
     let workingDirectory: String
     let projectName: String
     let projectDirectory: String
-    var scriptConfig: ScriptConfig = .empty
-    @Binding var scriptsApproved: Bool
     /// Every repository-provided process-compose file this worktree would load.
     /// Info is the permanent tab, so this is the approval route that survives the
     /// user closing Environment.
@@ -185,54 +183,6 @@ struct WorkstreamInfoView: View {
                                 Button("Open in Shortcut") {
                                     NSWorkspace.shared.open(url)
                                 }
-                            }
-                        }
-                    }
-                }
-
-                if scriptConfig.hasAnyScript {
-                    Section {
-                        if let setup = scriptConfig.setup {
-                            LabeledContent("Setup") {
-                                Text(setup)
-                                    .font(.system(.body, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        if let teardown = scriptConfig.teardown {
-                            LabeledContent("Teardown") {
-                                Text(teardown)
-                                    .font(.system(.body, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        LabeledContent("Approval") {
-                            HStack(spacing: 10) {
-                                if scriptsApproved {
-                                    Label("Approved", systemImage: "checkmark.shield")
-                                        .foregroundStyle(.green)
-                                    Button("Revoke") {
-                                        ScriptTrust.revoke(for: projectDirectory)
-                                        scriptsApproved = false
-                                    }
-                                } else {
-                                    Label("Not approved", systemImage: "exclamationmark.shield")
-                                        .foregroundStyle(.orange)
-                                    Button("Approve") {
-                                        ScriptTrust.approve(scriptConfig, for: projectDirectory)
-                                        scriptsApproved = true
-                                    }
-                                }
-                            }
-                        }
-                    } header: {
-                        HStack {
-                            Text("Scripts")
-                            Spacer()
-                            if let source = scriptConfig.source {
-                                Text(source)
-                                    .font(.caption2)
-                                    .foregroundStyle(.quaternary)
                             }
                         }
                     }

@@ -1,7 +1,7 @@
 # Terminal Spawning Architecture
 
 How Atelier spawns terminals, delivers commands to Ghostty, and manages
-the coding agent, setup scripts, and run scripts in both tmux and non-tmux modes.
+the coding agent and the run session in both tmux and non-tmux modes.
 
 ## How Ghostty Receives a Command
 
@@ -43,19 +43,13 @@ prevent session inheritance from a parent tmux.
 - `--dangerously-skip-permissions` if bypass flag is set
 - `CommandBuilder.withFallback()` provides graceful fallback from resume to fresh
 
-### 2. Setup Script
+### 2. Run Session
 
-Loaded from `.atelier.json` via `ScriptConfig.load()`. Wrapped as:
-
-```
-shell -lic 'setup-command; printf "\nSetup completed in this terminal.\n"'
-```
-
-Preloaded before the UI is visible via `preloadSurfaces()`.
-
-### 3. Run Script
-
-Also from `.atelier.json`. Only starts when the user clicks "Start".
+`DevCommandResolver` resolves it — the per-workstream override, else the
+`process-compose.yaml` located for the worktree — and it only starts when the
+user clicks "Start". A project's `bootstrap` and `prepare` phases run headless
+through `PhaseExecutor` rather than in a surface; see the process-compose section
+of `AGENTS.md`.
 
 If the atelier-run launcher is available, the command is wrapped as:
 
@@ -99,7 +93,7 @@ Key details:
 
 ## Full Wrapping Chain
 
-Worst case for a run script with tmux (3 layers):
+Worst case for the run session with tmux (3 layers):
 
 ```
 User clicks "Start"
@@ -132,10 +126,10 @@ surfaces auto-respawn on close; terminal tabs close and remove themselves.
    generates name, creates `Workstream` model.
 2. `ContentView` sets selection to the new workstream, renders
    `TerminalContainerView`.
-3. `TerminalContainerView.onAppear` loads `ScriptConfig`, builds the claude
-   command, computes env vars, restores or initializes tabs.
-4. `preloadSurfaces()` creates `TerminalView` instances for agent and setup
-   (if configured) before the UI is visible.
+3. `TerminalContainerView.onAppear` builds the claude command, resolves the dev
+   command and the port plan, computes env vars, restores or initializes tabs.
+4. `preloadSurfaces()` creates the agent's `TerminalView` before the UI is
+   visible.
 5. `SingleTerminalView` (NSViewControllerRepresentable bridge) adds the
    `TerminalView` as a subview, constrains it to fill, and optionally makes
    it first responder.
@@ -151,8 +145,9 @@ surfaces auto-respawn on close; terminal tabs close and remove themselves.
 | `Sources/Views/Workspace/TerminalContainerView.swift` | Tab management, surface cache, command building |
 | `Sources/Models/CommandBuilder.swift` | Shell command escaping and construction |
 | `Sources/Models/TmuxSession.swift` | Tmux session naming, command wrapping, config |
-| `Sources/Models/ScriptConfig.swift` | Loads setup/run/teardown from .atelier.json |
-| `Sources/Views/Workspace/EnvironmentTabView.swift` | UI for setup/run scripts, launch logic |
+| `Sources/Models/DevCommand.swift` | Resolves the dev command (override, else process-compose) |
+| `Sources/Models/ProcessCompose/PhaseRunner.swift` | Builds the process-compose command for each phase |
+| `Sources/Views/Workspace/EnvironmentTabView.swift` | UI for the run pane, launch logic |
 | `Sources/Models/RunLauncher.swift` | atelier-run binary discovery and command wrapping |
 | `Sources/Launcher/main.swift` | Port monitor implementation |
 | `Sources/Models/WorkstreamEnvironment.swift` | Environment variable injection |

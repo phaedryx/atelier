@@ -1,51 +1,17 @@
-// ABOUTME: Records which repository-provided commands and config files the user has approved.
-// ABOUTME: Approval is bound to the content, so an edited config has to be approved again.
+// ABOUTME: Records which repository-provided process-compose files the user has approved.
+// ABOUTME: Approval is bound to the contents, so an edited config has to be approved again.
 
 import CryptoKit
 import Foundation
 
 enum ScriptTrust {
-    private static let userDefaultsKey = "atelier.approvedScripts"
-
-    /// Identifies the executable content of a config. Any change to a command,
-    /// to the role a command sits in, or to the file it was read from produces a
-    /// different value.
-    static func fingerprint(_ config: ScriptConfig) -> String {
-        let canonical = [
-            config.source ?? "",
-            config.setup ?? "",
-            config.teardown ?? "",
-        ].joined(separator: "\u{1}")
-        let digest = SHA256.hash(data: Data(canonical.utf8))
-        return digest.map { String(format: "%02x", $0) }.joined()
-    }
-
-    /// Whether the commands in this config may run for this project.
-    /// A config that carries no commands has nothing to approve.
-    static func isApproved(_ config: ScriptConfig, for projectDirectory: String) -> Bool {
-        guard config.hasAnyScript else { return true }
-        return approvals()[projectDirectory] == fingerprint(config)
-    }
-
-    static func approve(_ config: ScriptConfig, for projectDirectory: String) {
-        var current = approvals()
-        current[projectDirectory] = fingerprint(config)
-        save(current)
-    }
-
-    static func revoke(for projectDirectory: String) {
-        var current = approvals()
-        guard current.removeValue(forKey: projectDirectory) != nil else { return }
-        save(current)
-    }
-
-    // MARK: - Config files
-
     private static let configFileKey = "atelier.approvedConfigFiles"
 
     /// Whether the repository-provided process-compose files a config will load
     /// may run their unattended phases — `bootstrap` at worktree creation,
-    /// `dispose` at archive — for this project.
+    /// `dispose` at archive — for this project. These are the only gated
+    /// phases: `execute` runs a command the Environment pane is already
+    /// displaying, on a deliberate press, and is never held behind approval.
     ///
     /// Takes the whole list, never a single file. process-compose loads a base
     /// config *and* whatever override sits beside it, so fingerprinting only the
@@ -56,9 +22,8 @@ enum ScriptTrust {
     ///
     /// A config in the project directory was placed there by hand, outside git,
     /// and contributes nothing to that list: asking about the user's own file
-    /// every time they edit it is friction with no risk behind it. `execute` is
-    /// never gated in either case, because it is a deliberate press on a command
-    /// the pane is already showing.
+    /// every time they edit it is friction with no risk behind it. Location is
+    /// what decides, not content.
     ///
     /// An empty list is *not* approved. Callers gate on
     /// `ProcessComposeConfig.requiresApproval`, which is false exactly when the
@@ -118,19 +83,5 @@ enum ScriptTrust {
     private static func saveConfigApprovals(_ approvals: [String: String]) {
         guard let data = try? JSONEncoder().encode(approvals) else { return }
         UserDefaults.standard.set(data, forKey: configFileKey)
-    }
-
-    // MARK: - Storage
-
-    private static func approvals() -> [String: String] {
-        guard let data = UserDefaults.standard.data(forKey: userDefaultsKey),
-              let decoded = try? JSONDecoder().decode([String: String].self, from: data)
-        else { return [:] }
-        return decoded
-    }
-
-    private static func save(_ approvals: [String: String]) {
-        guard let data = try? JSONEncoder().encode(approvals) else { return }
-        UserDefaults.standard.set(data, forKey: userDefaultsKey)
     }
 }

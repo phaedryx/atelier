@@ -4,7 +4,7 @@
 @testable import Atelier
 import XCTest
 
-final class BootstrapPolicyTests: XCTestCase {
+final class PhasePolicyTests: XCTestCase {
     /// `requiresApproval` is derived from where the loaded files live, so these
     /// fixtures are the two shapes that differ: one in a worktree (repository
     /// content, gated) and one in the project directory with no worktree
@@ -23,7 +23,7 @@ final class BootstrapPolicyTests: XCTestCase {
         overridePath: "/repo/wt/process-compose.override.yaml"
     )
 
-    private func note(_ plan: BootstrapPolicy.Plan) -> String? {
+    private func note(_ plan: PhasePolicy.Plan) -> String? {
         guard case let .nothingToDo(message) = plan else { return nil }
         return message
     }
@@ -36,7 +36,7 @@ final class BootstrapPolicyTests: XCTestCase {
     // MARK: - Plan
 
     func testDisabledIntegrationRunsNothing() {
-        let plan = BootstrapPolicy.plan(phase: .bootstrap, isEnabled: false, config: userConfig, binary: "/bin/pc", isApproved: approved)
+        let plan = PhasePolicy.plan(phase: .bootstrap, isEnabled: false, config: userConfig, binary: "/bin/pc", isApproved: approved)
 
         XCTAssertEqual(note(plan)?.contains("turned off"), true, String(describing: plan))
     }
@@ -44,13 +44,13 @@ final class BootstrapPolicyTests: XCTestCase {
     /// Checked before the config, so a user who has not turned the integration
     /// on is told that rather than being told their project is missing a file.
     func testDisabledIsReportedEvenWithNoConfig() {
-        let plan = BootstrapPolicy.plan(phase: .bootstrap, isEnabled: false, config: nil, binary: nil, isApproved: approved)
+        let plan = PhasePolicy.plan(phase: .bootstrap, isEnabled: false, config: nil, binary: nil, isApproved: approved)
 
         XCTAssertEqual(note(plan)?.contains("turned off"), true, String(describing: plan))
     }
 
     func testMissingConfigRunsNothing() {
-        let plan = BootstrapPolicy.plan(phase: .bootstrap, isEnabled: true, config: nil, binary: "/bin/pc", isApproved: approved)
+        let plan = PhasePolicy.plan(phase: .bootstrap, isEnabled: true, config: nil, binary: "/bin/pc", isApproved: approved)
 
         XCTAssertEqual(note(plan)?.contains("no process-compose.yaml"), true, String(describing: plan))
     }
@@ -58,7 +58,7 @@ final class BootstrapPolicyTests: XCTestCase {
     /// A missing binary must never look like a broken worktree — the worktree
     /// exists and works, there was just nothing to run bootstrap with.
     func testMissingBinaryRunsNothing() {
-        let plan = BootstrapPolicy.plan(phase: .bootstrap, isEnabled: true, config: userConfig, binary: nil, isApproved: approved)
+        let plan = PhasePolicy.plan(phase: .bootstrap, isEnabled: true, config: userConfig, binary: nil, isApproved: approved)
 
         XCTAssertEqual(note(plan)?.contains("was not found"), true, String(describing: plan))
     }
@@ -68,7 +68,7 @@ final class BootstrapPolicyTests: XCTestCase {
     /// Cloning a repository and creating a workstream must not execute its YAML
     /// until the user has read it.
     func testUnapprovedRepositoryProvidedConfigIsRefused() {
-        let plan = BootstrapPolicy.plan(
+        let plan = PhasePolicy.plan(
             phase: .bootstrap, isEnabled: true, config: repositoryConfig, binary: "/bin/pc", isApproved: unapproved
         )
 
@@ -78,7 +78,7 @@ final class BootstrapPolicyTests: XCTestCase {
     /// The other half of the gate. A guard that refuses unconditionally would
     /// pass the test above and make the approval pane do nothing.
     func testApprovedRepositoryProvidedConfigRuns() {
-        let plan = BootstrapPolicy.plan(
+        let plan = PhasePolicy.plan(
             phase: .bootstrap, isEnabled: true, config: repositoryConfig, binary: "/bin/pc", isApproved: approved
         )
 
@@ -90,7 +90,7 @@ final class BootstrapPolicyTests: XCTestCase {
     /// answered "false" for everything would otherwise disable it.
     func testUserPlacedConfigIsNotSubjectToApproval() {
         var asked = false
-        let plan = BootstrapPolicy.plan(phase: .bootstrap, isEnabled: true, config: userConfig, binary: "/bin/pc") { _ in
+        let plan = PhasePolicy.plan(phase: .bootstrap, isEnabled: true, config: userConfig, binary: "/bin/pc") { _ in
             asked = true
             return false
         }
@@ -103,7 +103,7 @@ final class BootstrapPolicyTests: XCTestCase {
     /// repository content that process-compose names with `-f` and runs. Gating
     /// on `isRepositoryProvided` alone left this path completely ungated.
     func testWorktreeOverrideBesideAUserConfigIsGated() {
-        let plan = BootstrapPolicy.plan(
+        let plan = PhasePolicy.plan(
             phase: .bootstrap, isEnabled: true, config: userConfigWithRepositoryOverride,
             binary: "/bin/pc", isApproved: unapproved
         )
@@ -112,7 +112,7 @@ final class BootstrapPolicyTests: XCTestCase {
     }
 
     func testWorktreeOverrideBesideAUserConfigRunsOnceApproved() {
-        let plan = BootstrapPolicy.plan(
+        let plan = PhasePolicy.plan(
             phase: .bootstrap, isEnabled: true, config: userConfigWithRepositoryOverride,
             binary: "/bin/pc", isApproved: approved
         )
@@ -125,7 +125,7 @@ final class BootstrapPolicyTests: XCTestCase {
     /// this one implementation of them rather than an untestable copy in
     /// `WorkstreamArchiver`. Only the note's wording differs.
     func testDisposeIsGatedByTheSamePolicy() {
-        let plan = BootstrapPolicy.plan(
+        let plan = PhasePolicy.plan(
             phase: .dispose, isEnabled: true, config: repositoryConfig,
             binary: "/bin/pc", isApproved: unapproved
         )
@@ -135,7 +135,7 @@ final class BootstrapPolicyTests: XCTestCase {
     }
 
     func testApprovedDisposeRuns() {
-        let plan = BootstrapPolicy.plan(
+        let plan = PhasePolicy.plan(
             phase: .dispose, isEnabled: true, config: repositoryConfig,
             binary: "/bin/pc", isApproved: approved
         )
@@ -146,10 +146,10 @@ final class BootstrapPolicyTests: XCTestCase {
     /// The note names the phase that did not run, so a dispose skipped at
     /// archive is not reported as a bootstrap that did not happen.
     func testNotesNameThePhase() {
-        let bootstrap = BootstrapPolicy.plan(
+        let bootstrap = PhasePolicy.plan(
             phase: .bootstrap, isEnabled: false, config: nil, binary: nil, isApproved: approved
         )
-        let dispose = BootstrapPolicy.plan(
+        let dispose = PhasePolicy.plan(
             phase: .dispose, isEnabled: false, config: nil, binary: nil, isApproved: approved
         )
 
@@ -161,7 +161,7 @@ final class BootstrapPolicyTests: XCTestCase {
     /// run without the binary whatever the user approves, and saying so is more
     /// actionable than asking for an approval that would change nothing.
     func testMissingBinaryOutranksMissingApproval() {
-        let plan = BootstrapPolicy.plan(
+        let plan = PhasePolicy.plan(
             phase: .bootstrap, isEnabled: true, config: repositoryConfig, binary: nil, isApproved: unapproved
         )
 
@@ -171,7 +171,7 @@ final class BootstrapPolicyTests: XCTestCase {
     /// A config in the project directory sits outside every worktree and outside
     /// git: the user put it there by hand, so there is nothing to approve.
     func testUserPlacedConfigRuns() {
-        let plan = BootstrapPolicy.plan(phase: .bootstrap, isEnabled: true, config: userConfig, binary: "/bin/pc", isApproved: approved)
+        let plan = PhasePolicy.plan(phase: .bootstrap, isEnabled: true, config: userConfig, binary: "/bin/pc", isApproved: approved)
 
         XCTAssertEqual(plan, .run(config: userConfig, binary: "/bin/pc"))
     }
@@ -179,14 +179,14 @@ final class BootstrapPolicyTests: XCTestCase {
     // MARK: - Reporting
 
     func testSuccessCompletes() {
-        XCTAssertEqual(BootstrapPolicy.state(for: .succeeded), .completed)
+        XCTAssertEqual(PhasePolicy.state(for: .succeeded), .completed)
     }
 
     /// "Nothing ran" is neither success nor failure: reporting `.completed`
     /// would claim work that never happened, and `.failed` would claim a broken
     /// worktree.
     func testSkippedIsANoteNotASuccessAndNotAFailure() {
-        let state = BootstrapPolicy.state(for: .skipped)
+        let state = PhasePolicy.state(for: .skipped)
 
         guard case let .completedWithNote(message) = state else {
             return XCTFail("expected a note, got \(state)")
@@ -196,7 +196,7 @@ final class BootstrapPolicyTests: XCTestCase {
     }
 
     func testFailureCarriesTheDetail() {
-        let state = BootstrapPolicy.state(for: .failed("installer exited with code 3."))
+        let state = PhasePolicy.state(for: .failed("installer exited with code 3."))
 
         guard case let .failed(message) = state else {
             return XCTFail("expected a failure, got \(state)")

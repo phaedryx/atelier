@@ -101,11 +101,12 @@ carries the `-dev` marker.
 ### Key directories
 - `Sources/Models/` - Data models, git operations, tmux, name generator, app constants
 - `Sources/Models/IPC/` - Agent-to-agent messaging (server, store, protocol, nudges)
+- `Sources/Models/ProcessCompose/` - The process-compose integration (config location, phases, ports, the process table)
 - `Sources/Terminal/` - Ghostty integration (TerminalApp singleton, TerminalView NSView)
 - `Sources/Views/` - SwiftUI views (sidebar, settings, project overview, workspace, browser, editor)
 - `Sources/Palette/` - Command palette (registry, default commands, fuzzy matcher)
 - `Sources/PixelAgents/` - Claude Code hook receiver, router, and installer; transcript context
-- `Sources/WorktreeSetup/` - Background worktree setup (seed rsync, symlinks, dependency install)
+- `Sources/WorktreeSetup/` - Background worktree setup (the `bootstrap` phase, and the policy that gates it)
 - `Sources/Launcher/` - `atelier-run` helper binary (port detection)
 - `Sources/MCPHelper/` - `atelier-mcp` helper binary (IPC bridge for agents)
 - `Localization/en.lproj/` - Localizable.strings and InfoPlist.strings (English only)
@@ -136,119 +137,117 @@ carries the `-dev` marker.
   anything hung off it must stay cheap and no-op when the branch has not changed.
 - **Tool detection** runs at startup in `AppEnvironment.refresh()`
 - **Sidebar state** (selection, expanded sections) stored in UserDefaults (`atelier.selection`, `atelier.expandedProjects`)
+- **Process-compose approval** stored in UserDefaults (`atelier.approvedConfigFiles`), keyed by project directory against a SHA-256 of every repository-provided file the config will load
 
 ### Workstream lifecycle
-1. Creating a workstream: generates name, runs `git worktree add`; background setup then rsyncs the seed directory (if enabled)
+1. Creating a workstream: generates name, runs `git worktree add`; `AsyncSetupService` then runs the project's `bootstrap` namespace in the background
 2. Workspace view: only Info (Cmd+I) and Agent (Cmd+Return) are permanent; Changes and Environment open by default but close, reopen, and reorder like terminals/browsers, which are added on demand
 3. Tmux mode: wraps Coding Agent only in `tmux new-session -A` on socket `-L atelier`
 4. Terminal tabs: close on shell exit (Ctrl+D). Agent respawns.
-5. Archiving: runs teardown script, then `git worktree remove` + `tmux kill-session`
+5. Archiving: runs the project's `dispose` namespace, then `git worktree remove` + `tmux kill-session`
 
-### Worktree seeding
-A new worktree gets its uncommitted files from a **seed directory** — `seed-files` in the
-project directory by default, overridden with `"seed"` in `.atelier.json`:
-```json
-{ "seed": "config/secrets" }
+### The process-compose integration
+Everything a project asks Atelier to run lives in one **`process-compose.yaml`**, read by
+[process-compose](https://f1bonacc1.github.io/process-compose/). `atelier.processCompose.enabled`
+gates the whole integration and **defaults off**; with it off, a worktree gets no setup at all,
+because there is no other setup path left. `ProcessComposeSettings.resolveBinary()` finds the
+binary: a configured path is used or fails, and never falls back to a search — silently running
+a different binary than the one named is worse than reporting the named one is gone.
+
+**Four namespaces**, driven by `PhaseRunner` and `PhaseExecutor`:
+
+| Namespace | When | Interactive? |
+|-----------|------|--------------|
+| `bootstrap` | once, in the background, at worktree creation (`AsyncSetupService`) | no |
+| `prepare` | to completion before each Start, chained `&&` ahead of `execute` | no |
+| `execute` | the long-lived stack, attached to a terminal surface and a process table | yes |
+| `dispose` | once, at archive (`WorkstreamArchiver.runDispose`) | no |
+
+`prepare` is chained only when the config actually declares a process for it:
+process-compose does not exit when told to run an empty namespace, it idles forever, so an
+unconditional `up -n prepare` would hang Start for every config that has not adopted it.
+`execute` is never conditional — skipping it would make Start silently do nothing.
+
+Three facts about this are load-bearing and easy to lose:
+
+1. **`$$`, not `$`, inside a `command:`.** process-compose runs the whole command body through
+   envsubst before the shell sees it, and envsubst eats `${VAR}` *and* bare `$VAR`. A shell
+   variable in a command body must be written `$$VAR`. A backslash does not escape it.
+2. **Every file is named with `-f`, always** (`PhaseRunner.command`, `DevCommandResolver.detectProcessCompose`).
+   That turns process-compose's own discovery *off*, which is the point: the set of files
+   `ScriptTrust` fingerprints, `ConfigApprovalView` displays, and process-compose executes is
+   then one set. Do not reintroduce discovery. Leaving a worktree config unnamed so discovery
+   could pick up its sibling override made the approval gate a *mirror* of discovery's rules,
+   and a mirror can be stepped around — discovery also loads `compose.yaml`, a name Atelier
+   deliberately does not detect, so a repository could ship a benign `process-compose.yaml` to
+   be approved and a `compose.yaml` to be run. Verified against v1.122.0.
+3. **Approval is gated by the config's *location*, not its content.** A config in the worktree
+   arrived with the repository and requires approval before `bootstrap` or `dispose` runs; a
+   config in the project directory was placed there by hand, outside git, and is never asked
+   about. `execute` is never gated in either case — it is a deliberate press on a command the
+   Environment tab is already displaying.
+
+`ProcessComposeConfig.locate` looks in the **worktree first, then the project directory**, and
+records `loadedFiles` (base plus the one override process-compose prefers) and
+`repositoryProvidedFiles` (the subset needing approval). The project directory is the better
+home in the bare-repo layout: it sits outside every worktree, so git cannot see it, no ignore
+rule is needed, and one file serves every worktree. A config in the worktree still wins,
+because a worktree carrying its own is saying something deliberate. Either way process-compose
+runs with the *worktree* as cwd and resolves a relative `working_dir` against its own cwd, so
+`working_dir: apps/api` lands inside the worktree from either home.
+
+`-u <path>` names the control socket explicitly. `-U` alone generates a path containing
+process-compose's PID, which Atelier cannot predict and so cannot connect to. The headless
+phases get namespace-suffixed paths, because a `bootstrap` still running when the user presses
+Start would otherwise rebind `execute`'s socket and strand the first server.
+
+**The one gate.** `PhasePolicy.plan` answers the four preconditions — integration on, a config
+located, a binary to run it with, and approval of every repository-provided file — for both
+unattended phases. It is deliberately the *only* copy: a second, inlined set in
+`WorkstreamArchiver` could not be tested and would not follow a change made here. Any new
+unattended execution path for repository-provided commands must go through it.
+
+### ports.yaml
+A **`ports.yaml`** in the project directory declares the port variables Atelier supplies, so
+two worktrees of one project can run the same stack at once:
+
+```yaml
+ports:
+  WEB_PORT: { assigned: true, browser: true }
+  API_PORT: { assigned: true }
+  OAUTH_PORT: { fixed: 4000 }
 ```
-`AsyncSetupService` runs this in background setup, after the worktree exists and the terminal
-is already up. `EnvSeedSync.sync` rsyncs the seed's *contents* into the worktree, so nested
-layouts like `apps/api/.env` land in the right place, symlinks arrive as real files, and
-anything already in the worktree wins.
 
-The default used to be `.atelier-seed`. When the default is in play and `seed-files` does not
-exist, `WorktreeSetupConfig.seedDirectory` falls back to `.atelier-seed` if that does —
-nothing in a repository records which name a project was set up under, so a bare rename would
-have silently stopped seeding working projects. An explicit `"seed"` is never second-guessed.
+`PortsConfig` parses it and `PortPlan.resolve` turns it into numbers for one worktree. An
+`assigned` port starts from `PortAllocator.port(for:salt:)` — the same DJB2 hash that produces
+`ATELIER_PORT`, salted with the variable's name — then walks forward past anything already
+claimed in this pass or already bound. Deterministic-first matters: a port that changed every
+run would break bookmarks, OAuth redirect URIs, and CORS allowlists. The probe only covers the
+common case; nothing can close the window between checking a port and a child binding it. A
+`fixed` port is that number everywhere, for values registered off the machine.
 
-A relative `seed` resolves against the project directory; an absolute or `~`-rooted one is
-taken as written. A `seed` that is empty, resolves to the project directory itself, or escapes
-it via `..` falls back to the default — the sync copies a whole tree, so pointing it at the repo
-root would pour the repo into every worktree. The resolved seed is added to `.git/info/exclude`,
-since it holds secrets that must never be committed. No seed directory means nothing is copied.
+At most one entry may set `browser: true`; that port is what the embedded browser opens, and it
+wins over detection — Atelier assigned it, so there is nothing to infer. Entries are sorted by
+name before allocation, so an assigned port does not move because a YAML key was reordered.
+`assigned: false` is an error rather than a no-op, because it reads like it means something.
 
-`atelier.copyEnvFiles` gates the whole step. It does **not** inherit the older
-`atelier.symlinkEnv`: that key gated only the symlinks, while env files were copied
-unconditionally alongside them, so carrying a `false` across would have disabled copying for
-people who never asked for it.
+Every declared name reaches **every** terminal surface via `WorkstreamEnvironment.variables`,
+not just the run pane — a port visible only to the run pane is invisible to a test run in a
+terminal tab. Declarations merge *over* Atelier's own variables, so a project that wants
+`ATELIER_PORT` to mean something specific may say so, and the legacy `FF_*` mirror is built
+last so it never lags behind.
 
-**rsync flag compatibility is load-bearing.** The invocation is
-`-rlpt --omit-dir-times --copy-links --ignore-existing`, and every flag must be accepted by
-*both* the rsync 2.6.9 that ships with the minimum supported macOS (14) and the openrsync that
-replaced it in macOS 15. `--out-format` (rsync 3.0+) and `--chmod` (missing from openrsync) each
-fail on one side, so the copied count is derived from the filesystem rather than rsync's output,
-and directory modes are restored in Swift rather than via `--chmod`. Do not add flags here
-without checking both.
-
-### Dev command and runners
+### Dev command resolution
 `DevCommandResolver` picks what the Environment tab's Start button runs, in order: the
-per-workstream override the user typed, then the best runner detected for the worktree.
-Detection finds `process-compose.yaml` / `process-compose.yml` and a `dev` script in
-`package.json`, in that order. When both are present the Environment tab
-shows a picker; the choice is stored per project in `atelier.devRunner.<projectDirectory>`.
+**per-workstream override** the user typed (stored at `atelier.devCommand.<workstreamID>`),
+then the located process-compose config. The override is the escape hatch for a project with no
+config, and it is the only reason `DevCommand.Source` still has two cases.
 
-A process-compose config is looked for in the **worktree first, then the project directory**.
-The project directory is the better home in the bare-repo layout: it sits outside every
-worktree, so git cannot see it (no ignore rule needed) and one file serves every worktree
-instead of each growing a copy that drifts — `EnvSeedSync`'s `--ignore-existing` would never
-update those copies. A config in the worktree still wins, because a worktree carrying its own
-is saying something deliberate.
-
-process-compose always runs with the *worktree* as cwd, and resolves a relative `working_dir`
-against its own cwd rather than against the config's location, so `working_dir: apps/api` lands
-inside the worktree from either home.
-
-Three details of the invocation are load-bearing:
-
-- `-U` puts the control API on a unix socket instead of TCP :8080, so it does not add a
-  listening port for `atelier-run` to mistake for the app's.
-- A worktree config is run with **no `-f`**, because passing one turns off process-compose's own
-  discovery — which is what auto-loads a sibling `process-compose.override.yaml`.
-- A project-directory config must be named with `-f`, which costs that discovery, so a
-  worktree-level override is passed with a second `-f` — but only when it exists, since
-  process-compose treats a missing `-f` file as fatal.
-
-Starting a dev command is **not** gated. `ScriptTrust` covers `setup` and `teardown`, which run
-without the user watching — setup fires during worktree creation and teardown during archiving —
-but Start is a deliberate press on a command the pane is already showing, and neither detected
-runner has an approval story worth the interstitial: the `package.json` path never had one, and
-gating only process-compose would have been inconsistent for no gain. If dev commands are ever
-gated again, gate both.
-
-### Project environment variables
-A project can define variables that are exported into its run command, edited in the
-Environment tab and stored per project under `atelier.projectEnvVars`. A definition is either a
-literal — with `${NAME}` references to other definitions expanded — or a **computed port**.
-
-Definitions are per project and values are per workstream: `BFF_PORT` is defined once, and each
-worktree receives its own number. A computed port starts from `PortAllocator.port(for:salt:)`,
-the same DJB2 hash that produces `ATELIER_PORT` but salted with the variable's name, then walks
-forward past any port already claimed in this pass or already bound. Deterministic-first matters
-— a port that changed every run would break bookmarks, OAuth redirect URIs, and CORS
-allowlists — and the probe only covers the common case; nothing can close the window between
-checking a port and a child binding it.
-
-Resolution runs on appear and after an edit, never inside a view update, because probing binds
-a socket. Project definitions merge over Atelier's own variables, so a project that wants
-`ATELIER_PORT` to mean something specific can say so.
-
-### Script configuration
-Scripts are loaded from `.atelier.json` in the project directory:
-```json
-{ "setup": "cmd", "teardown": "cmd" }
-```
-
-There is deliberately no `run` key: what Start runs comes from detection or the user's own
-override (see **Dev command and runners**). A config that still carries `run` loads fine — the
-key is ignored.
-Falls back to `.emdash.json`, `conductor.json`, or `.superset/config.json` if not found.
-When using a fallback config, compatibility env vars are injected (e.g. `CONDUCTOR_*`, `EMDASH_*`, `SUPERSET_*`).
-
-These commands come from the repository, so neither runs until the user approves them.
-`ScriptTrust` stores approval per project directory against a SHA-256 fingerprint of the
-commands and their source file, so an edited config has to be approved again. The gate covers
-`setup` (`SetupGateState.resolve`) and `teardown` (`ScriptConfig.runTeardown`) — the two that
-run unattended. Any new *unattended* execution path for repository-provided commands must check
-`ScriptTrust.isApproved` first.
+There used to be a third source — a `dev` script in the repository's package.json — and a
+picker to choose between it and process-compose. Both are gone. A `dev` script is
+near-universal and almost always starts a subset of the stack, so it was a plausible-looking
+wrong answer a project could not opt out of; the override covers the case it stood in for,
+explicitly.
 
 ### Port detection
 Run scripts are wrapped in the `atelier-run` launcher binary (bundled at `Contents/Helpers/atelier-run`).

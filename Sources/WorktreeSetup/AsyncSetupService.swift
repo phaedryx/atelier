@@ -50,9 +50,9 @@ actor AsyncSetupService {
 
     /// Workstreams whose bootstrap is in flight right now.
     ///
-    /// Not derived from `states`: `setup` publishes `.inProgress` before it
-    /// spawns the background task, so a state-based check could not tell "about
-    /// to start" from "already running".
+    /// Not derived from `states`: a caller publishes `.inProgress` before the
+    /// background work starts, so a state-based check could not tell "about to
+    /// start" from "already running".
     ///
     /// `runBackgroundSetup` suspends at `withCheckedContinuation`, and an actor
     /// admits other calls across a suspension. Two concurrent bootstraps for one
@@ -69,70 +69,12 @@ actor AsyncSetupService {
         states[workstreamID] ?? .idle
     }
 
-    /// Run the full async setup for a new vibe workstream.
-    ///
-    /// This method:
-    /// 1. Creates the git worktree (blocking — must complete before anything else)
-    /// 2. Returns the worktree path immediately so the caller can launch Claude Code
-    /// 3. Kicks off the project's `bootstrap` phase in the background
-    ///
-    /// - Parameters:
-    ///   - workstreamID: The UUID of the workstream being set up
-    ///   - projectPath: Path to the main project/repo root
-    ///   - projectName: Name of the project
-    ///   - workstreamName: Name for the new workstream/branch
-    /// - Returns: The worktree path if worktree creation succeeded, nil otherwise.
-    func setup(
-        workstreamID: UUID,
-        projectPath: String,
-        projectName: String,
-        workstreamName: String
-    ) async -> String? {
-        // Step 1: Create worktree (must complete first)
-        await updateState(for: workstreamID, to: .inProgress(step: "Creating worktree", progress: 0.1))
-
-        let worktreePath: String? = await withCheckedContinuation { continuation in
-            // Run git worktree add on a background thread since it's a blocking Process call
-            DispatchQueue.global(qos: .userInitiated).async {
-                let path = GitOperations.createWorktree(
-                    projectPath: projectPath,
-                    projectName: projectName,
-                    workstreamName: workstreamName
-                )
-                continuation.resume(returning: path)
-            }
-        }
-
-        guard let worktreePath else {
-            logger.warning("Failed to create worktree for \(workstreamName, privacy: .public)")
-            await updateState(for: workstreamID, to: .failed("Failed to create git worktree"))
-            return nil
-        }
-
-        logger.info("Worktree created at \(worktreePath, privacy: .public), starting background setup")
-
-        // Step 2: Terminal launch happens in the caller — we just report progress.
-        await updateState(for: workstreamID, to: .inProgress(step: "Terminal ready", progress: 0.2))
-
-        // Step 3: Bootstrap — fire and forget from the caller's perspective.
-        // The caller gets the worktree path back immediately.
-        Task {
-            await runBackgroundSetup(
-                workstreamID: workstreamID,
-                projectPath: projectPath,
-                worktreePath: worktreePath
-            )
-        }
-
-        return worktreePath
-    }
-
     /// Run the bootstrap phase after worktree creation.
     ///
     /// This used to be a fixed sequence Atelier invented on the project's
-    /// behalf — copy the seed directory, create symlinks, link Claude
-    /// settings, install dependencies, run post-setup commands — with a
-    /// hard-coded notion of what a worktree needs. It is now one step: run
+    /// behalf — rsync a seed directory, create symlinks, link Claude settings,
+    /// install dependencies, run post-setup commands — with a hard-coded
+    /// notion of what a worktree needs. It is now one step: run
     /// whatever the project declares in the `bootstrap` namespace of its own
     /// `process-compose.yaml`. A project that declares nothing gets nothing,
     /// which is the point.
@@ -141,7 +83,7 @@ actor AsyncSetupService {
     /// by the time this runs, and every way of having no bootstrap to run —
     /// integration off, no config, no binary, config not approved, no
     /// `bootstrap` processes — reports `.completedWithNote` rather than
-    /// `.failed`. `BootstrapPolicy` owns both of those decisions; this method
+    /// `.failed`. `PhasePolicy` owns both of those decisions; this method
     /// is only the plumbing between them.
     private func runBackgroundSetup(
         workstreamID: UUID,
@@ -162,7 +104,7 @@ actor AsyncSetupService {
             to: .inProgress(step: NSLocalizedString("Running bootstrap", comment: ""), progress: 0.5)
         )
 
-        let plan = BootstrapPolicy.plan(
+        let plan = PhasePolicy.plan(
             phase: .bootstrap,
             isEnabled: ProcessComposeSettings.isEnabled,
             config: ProcessComposeConfig.locate(worktree: worktreePath, projectDirectory: projectPath),
@@ -201,7 +143,7 @@ actor AsyncSetupService {
             }
         }
 
-        let state = BootstrapPolicy.state(for: outcome)
+        let state = PhasePolicy.state(for: outcome)
         await updateState(for: workstreamID, to: state)
         logger.info("Bootstrap for \(worktreePath, privacy: .public) finished: \(String(describing: state), privacy: .public)")
     }
@@ -238,22 +180,6 @@ actor AsyncSetupService {
             projectPath: projectPath,
             worktreePath: worktreePath
         )
-    }
-
-    /// Log a pointed warning when a project still keeps `.env` files at its root
-    /// but has no seed directory. Before the seed model those files were found by
-    /// a recursive scan and copied automatically; now they are simply not copied,
-    /// and without this the only symptom is a worktree that quietly has no env.
-    private func warnIfProjectHasUnseededEnvFiles(projectPath: String, seedDirectory: String) {
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: projectPath)) ?? []
-        let envFiles = names.filter { $0.hasPrefix(".env") }
-        guard !envFiles.isEmpty else { return }
-        logger.warning("""
-        Project \(projectPath, privacy: .public) has env file(s) \
-        \(envFiles.joined(separator: ", "), privacy: .public) but no seed directory at \
-        \(seedDirectory, privacy: .public). New worktrees will not receive them — move them into \
-        the seed directory, or set "seed" in .atelier.json.
-        """)
     }
 
     /// Remove tracked state for a workstream (cleanup after archiving).

@@ -10,10 +10,10 @@ import Foundation
 /// actually be got wrong.
 ///
 /// `plan` is shared by `bootstrap` and `dispose`; `state` is bootstrap's alone,
-/// because only bootstrap reports into `AsyncSetupState`. The type keeps its
-/// name because that is still where the weight is, and because the suite
-/// covering it is named for it.
-enum BootstrapPolicy {
+/// because only bootstrap reports into `AsyncSetupState`. The name is
+/// phase-neutral for that reason: naming it for bootstrap invited a second,
+/// inlined copy of the gate in `WorkstreamArchiver` for dispose.
+enum PhasePolicy {
     /// What to do before running anything.
     enum Plan: Equatable {
         case run(config: ProcessComposeConfig, binary: String)
@@ -62,13 +62,12 @@ enum BootstrapPolicy {
             ), name))
         }
         // Fail closed. These phases execute processes that arrived with the
-        // repository, unattended — the exact thing `ScriptTrust` gates for
-        // `setup`, `run`, and `teardown`. So they run only once the user has
-        // approved the contents of every repository-provided file
-        // process-compose will load, which is not the same as the config
+        // repository, unattended and with nobody watching. So they run only
+        // once the user has approved the contents of every repository-provided
+        // file process-compose will load, which is not the same as the config
         // `locate` recorded: see `repositoryProvidedFiles`. A config the user
         // placed in the project directory contributes nothing to that list and
-        // needs no approval.
+        // needs no approval — location is what decides, not content.
         //
         // This is the only gate. Adding a second one in `AsyncSetupService` or
         // `WorkstreamArchiver` would sit behind this guard and never be reached.

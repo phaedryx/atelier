@@ -89,6 +89,10 @@ on app termination to prevent orphaned sessions.
 
 ## 4. ScriptConfig error surfacing
 
+> **Moot.** `ScriptConfig` and `.atelier.json` no longer exist; a project's
+> commands come from its `process-compose.yaml`. The equivalent concern lives on
+> in `PortsConfig`, which throws typed `LoadError`s rather than swallowing them.
+
 **Current behavior:** `try?` everywhere. Malformed `.atelier.json` silently
 produces empty config. User thinks scripts aren't configured.
 
@@ -155,7 +159,7 @@ duplicates or lose the surface permanently.
 |--------|--------|--------|----------|
 | Surface creation failure recovery | Medium | Critical | P0 |
 | Surface health check | Medium | Critical | P0 |
-| ScriptConfig error surfacing | Small | High | P1 |
+| ScriptConfig error surfacing | — | — | moot (see §4) |
 | Respawn race condition | Small | High | P1 |
 | Tmux error reporting | Small | High | P1 |
 | atelier-run launcher validation | Small | Medium | P2 |
