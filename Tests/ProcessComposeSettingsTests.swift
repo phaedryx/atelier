@@ -5,10 +5,31 @@
 import XCTest
 
 final class ProcessComposeSettingsTests: XCTestCase {
+    /// These keys live in the app's own defaults domain, and the test host *is*
+    /// the app — so a test that simply cleared them would silently turn the
+    /// feature off (or on) for whoever ran the suite. Save and put back.
+    private var saved: [String: Any?] = [:]
+
+    override func setUp() {
+        super.setUp()
+        for key in [ProcessComposeSettings.enabledKey, ProcessComposeSettings.binaryPathKey] {
+            saved[key] = UserDefaults.standard.object(forKey: key)
+        }
+        clearSettings()
+    }
+
     override func tearDown() {
-        ProcessComposeSettings.binaryPath = ""
-        ProcessComposeSettings.isEnabled = false
+        clearSettings()
+        for (key, value) in saved {
+            if let value { UserDefaults.standard.set(value, forKey: key) }
+        }
+        saved.removeAll()
         super.tearDown()
+    }
+
+    private func clearSettings() {
+        UserDefaults.standard.removeObject(forKey: ProcessComposeSettings.enabledKey)
+        UserDefaults.standard.removeObject(forKey: ProcessComposeSettings.binaryPathKey)
     }
 
     func testDisabledByDefault() {
@@ -38,10 +59,17 @@ final class ProcessComposeSettingsTests: XCTestCase {
         XCTAssertNil(ProcessComposeSettings.resolveBinary())
     }
 
+    /// A whitespace-only configured path must be treated the same as no configured
+    /// path at all — both fall through to searchPaths. Asserting equality with the
+    /// blank-path result (rather than just "isn't the literal whitespace string")
+    /// is what actually pins the trim-then-search behavior: an untrimmed lookup
+    /// would fail isExecutableFile on "   " and return nil, while "" still
+    /// searches — so the two would disagree if .trimmingCharacters were removed.
     func testBlankPathFallsBackToSearch() {
         ProcessComposeSettings.binaryPath = "   "
-        // Either a real install is found, or nothing is. Both are valid; the
-        // assertion is that a blank path does not resolve to the blank string.
-        XCTAssertNotEqual(ProcessComposeSettings.resolveBinary(), "   ")
+        let whitespaceResult = ProcessComposeSettings.resolveBinary()
+        ProcessComposeSettings.binaryPath = ""
+        let emptyResult = ProcessComposeSettings.resolveBinary()
+        XCTAssertEqual(whitespaceResult, emptyResult)
     }
 }
