@@ -1616,9 +1616,17 @@ struct TerminalContainerView: View {
         let id = workstreamID
         let project = projectDirectory
         let worktree = workingDirectory
+        // Copied out for the same reason as the paths above: capturing a
+        // stored property would capture the whole view into the Task.
+        let capturedProjectName = projectName
+        let capturedWorkstreamName = workstreamName
         Task {
             await AsyncSetupService.shared.setupExistingWorktree(
-                workstreamID: id, projectPath: project, worktreePath: worktree
+                workstreamID: id,
+                projectName: capturedProjectName,
+                workstreamName: capturedWorkstreamName,
+                projectPath: project,
+                worktreePath: worktree
             )
         }
     }

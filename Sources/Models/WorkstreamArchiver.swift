@@ -98,6 +98,8 @@ enum WorkstreamArchiver {
                 if let disposePath {
                     runDispose(
                         workstreamID: workstreamID,
+                        projectName: projName,
+                        workstreamName: wsName,
                         worktreePath: disposePath,
                         projectDirectory: projectDir
                     )
@@ -159,6 +161,8 @@ enum WorkstreamArchiver {
 
     private static func runDispose(
         workstreamID: UUID,
+        projectName: String,
+        workstreamName: String,
         worktreePath: String,
         projectDirectory: String
     ) {
@@ -174,12 +178,25 @@ enum WorkstreamArchiver {
             return
         }
 
+        // The same variables `prepare` and `execute` see. A `dispose` process
+        // that has to reach the project directory or a declared port cannot do
+        // it from the app's own environment; see `PhaseEnvironment`.
+        let environment = PhaseEnvironment.variables(
+            workstreamID: workstreamID,
+            projectName: projectName,
+            workstreamName: workstreamName,
+            projectDirectory: projectDirectory,
+            worktreePath: worktreePath,
+            defaultBranch: GitOperations.defaultBranch(at: projectDirectory)
+        )
+
         let outcome = PhaseExecutor.run(
             phase: .dispose,
             config: config,
             binary: binary,
             workstreamID: workstreamID,
             workingDirectory: worktreePath,
+            environment: environment,
             timeout: ProcessRunner.Timeout.userCommand
         )
         if case let .failed(detail) = outcome {

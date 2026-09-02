@@ -37,18 +37,56 @@ final class PhaseExecutorTests: XCTestCase {
         return ProcessComposeConfig(path: path.path, isRepositoryProvided: true, overridePath: nil)
     }
 
-    private func runBootstrap(_ config: ProcessComposeConfig) -> PhaseExecutor.Outcome {
+    private func runBootstrap(
+        _ config: ProcessComposeConfig,
+        environment: [String: String] = [:]
+    ) -> PhaseExecutor.Outcome {
         PhaseExecutor.run(
             phase: .bootstrap,
             config: config,
             binary: binary,
             workstreamID: workstreamID,
             workingDirectory: dir.path,
+            environment: environment,
             // Deliberately short. Every config here finishes in seconds, and
             // the production deadline (`Timeout.install`, half an hour) would
             // wedge the suite if one of them ever did not.
             timeout: 60
         )
+    }
+
+    /// C1, end to end: the phase's own processes must be able to read the
+    /// workstream's variables. They could not — `PhaseExecutor` built the child
+    /// environment from `ProcessInfo` plus a `PATH` override, so `bootstrap`
+    /// and `dispose` saw no `ATELIER_*` and nothing from `ports.yaml`, while
+    /// `prepare` and `execute` in a Ghostty surface saw all of it.
+    ///
+    /// Written with `$$`, not `$`: process-compose runs a command body through
+    /// envsubst before the shell sees it, so a single `$` would be substituted
+    /// away at config load and the shell would receive an empty string. That is
+    /// the failure this test would otherwise have reported as "no environment".
+    func testBootstrapProcessesSeeTheWorkstreamEnvironment() throws {
+        let config = try writeConfig("""
+        version: "0.5"
+        processes:
+          record:
+            namespace: bootstrap
+            command: sh -c 'echo "$$ATELIER_WORKTREE_DIR" > seen-dir.txt; echo "$$BFF_PORT" > seen-port.txt'
+            availability: { restart: "no" }
+        """)
+
+        XCTAssertEqual(
+            runBootstrap(config, environment: [
+                "ATELIER_WORKTREE_DIR": dir.path,
+                "BFF_PORT": "41476",
+            ]),
+            .succeeded
+        )
+
+        let seenDir = try String(contentsOf: dir.appendingPathComponent("seen-dir.txt"), encoding: .utf8)
+        let seenPort = try String(contentsOf: dir.appendingPathComponent("seen-port.txt"), encoding: .utf8)
+        XCTAssertEqual(seenDir.trimmingCharacters(in: .whitespacesAndNewlines), dir.path)
+        XCTAssertEqual(seenPort.trimmingCharacters(in: .whitespacesAndNewlines), "41476")
     }
 
     /// Succeeding is not just an exit code: the processes must actually have run

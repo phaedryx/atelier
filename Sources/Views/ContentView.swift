@@ -483,9 +483,16 @@ struct ContentView: View {
                     logger.warning("[Atelier] workstreamWorktreeReady: updated \(workstreamID, privacy: .public) with path \(worktreePath, privacy: .public)")
                     // Run the project's `bootstrap` namespace in the background.
                     let projectPath = projects[pi].directory
+                    // Names, not just paths: bootstrap runs with the same
+                    // `ATELIER_PROJECT` / `ATELIER_WORKSTREAM` the workstream's
+                    // terminals get, and only the project model knows them.
+                    let projectName = projects[pi].name
+                    let workstreamName = projects[pi].workstreams[wi].name
                     Task {
                         await AsyncSetupService.shared.setupExistingWorktree(
                             workstreamID: workstreamID,
+                            projectName: projectName,
+                            workstreamName: workstreamName,
                             projectPath: projectPath,
                             worktreePath: worktreePath
                         )

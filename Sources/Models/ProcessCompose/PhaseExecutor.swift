@@ -60,6 +60,11 @@ enum PhaseExecutor {
 
     /// Run one namespace to completion.
     ///
+    /// - Parameter environment: the workstream's own variables — `ATELIER_*`
+    ///   and everything `ports.yaml` declares. No default value: a call site
+    ///   that omitted them would run the project's own YAML under an
+    ///   environment the interactive phases of the same file never see, which
+    ///   is the bug `PhaseEnvironment` exists to close.
     /// - Parameter timeout: how long the processes themselves get. It bounds
     ///   the spawned command and the poll loop, and nothing else. Both
     ///   `shutDown` calls sit outside it — the pre-spawn one before the clock
@@ -76,6 +81,7 @@ enum PhaseExecutor {
         binary: String,
         workstreamID: UUID,
         workingDirectory: String,
+        environment: [String: String],
         timeout: TimeInterval
     ) -> Outcome {
         let presence = config.namespacePresence(phase.namespace)
@@ -113,12 +119,10 @@ enum PhaseExecutor {
         // PATH is injected instead, so the phase's own processes still find
         // tools installed by version managers — a GUI app inherits only
         // launchd's minimal PATH.
-        var environment: [String: String]?
-        if let resolvedPath = CommandLineTools.loginShellPath(shell: CommandBuilder.userShell) {
-            var env = ProcessInfo.processInfo.environment
-            env["PATH"] = resolvedPath
-            environment = env
-        }
+        let childEnv = childEnvironment(
+            workstreamEnvironment: environment,
+            loginPath: CommandLineTools.loginShellPath(shell: CommandBuilder.userShell)
+        )
 
         // `capture` on its own thread rather than a bare `Process`: with
         // `--keep-project` the child only exits once it is told to, so the
@@ -131,7 +135,7 @@ enum PhaseExecutor {
             captured.store(ProcessRunner.capture(
                 executable: shellPath,
                 arguments: ["-c", command],
-                environment: environment,
+                environment: childEnv,
                 currentDirectory: URL(fileURLWithPath: workingDirectory),
                 timeout: budget
             ))
@@ -153,6 +157,35 @@ enum PhaseExecutor {
         }
 
         return outcome(for: phase, poll: poll, output: captured.take())
+    }
+
+    // MARK: - Environment
+
+    /// The child's environment, in three layers: the app's own, then the
+    /// workstream's variables, then the login `PATH`.
+    ///
+    /// The order is the whole content. The workstream's variables go *over* the
+    /// inherited ones, so a `ports.yaml` that declares `ATELIER_PORT` means what
+    /// the project says rather than what the app happened to launch with. `PATH`
+    /// goes last and unconditionally, because it is the one variable the
+    /// workstream layer must not be able to set: a phase whose PATH came from a
+    /// declaration would resolve tools from somewhere the user never chose, and
+    /// nothing in `WorkstreamEnvironment` produces a `PATH` for it to have meant.
+    ///
+    /// Internal, and taking its base environment as a parameter, so the layering
+    /// can be tested without spawning anything or reading the host's real
+    /// environment.
+    static func childEnvironment(
+        workstreamEnvironment: [String: String],
+        loginPath: String?,
+        baseEnvironment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [String: String] {
+        var environment = baseEnvironment
+        environment.merge(workstreamEnvironment) { _, workstream in workstream }
+        if let loginPath {
+            environment["PATH"] = loginPath
+        }
+        return environment
     }
 
     // MARK: - Polling

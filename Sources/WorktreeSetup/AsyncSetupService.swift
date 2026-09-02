@@ -87,6 +87,8 @@ actor AsyncSetupService {
     /// is only the plumbing between them.
     private func runBackgroundSetup(
         workstreamID: UUID,
+        projectName: String,
+        workstreamName: String,
         projectPath: String,
         worktreePath: String
     ) async {
@@ -129,15 +131,30 @@ actor AsyncSetupService {
         }
 
         // `PhaseExecutor.run` blocks its thread for as long as bootstrap takes,
-        // so it must not run on the actor.
+        // so it must not run on the actor. The environment is assembled inside
+        // the same hop for the same reason: it reads `ports.yaml` and asks git
+        // for the default branch, neither of which the actor should wait on.
         let outcome: PhaseExecutor.Outcome = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
+                // Built here rather than inside `PhaseExecutor` so the phase
+                // layer stays free of the project model. Without it bootstrap
+                // would run with none of the `ATELIER_*` or `ports.yaml`
+                // variables the same file's `prepare` and `execute` phases see.
+                let environment = PhaseEnvironment.variables(
+                    workstreamID: workstreamID,
+                    projectName: projectName,
+                    workstreamName: workstreamName,
+                    projectDirectory: projectPath,
+                    worktreePath: worktreePath,
+                    defaultBranch: GitOperations.defaultBranch(at: projectPath)
+                )
                 continuation.resume(returning: PhaseExecutor.run(
                     phase: .bootstrap,
                     config: config,
                     binary: binary,
                     workstreamID: workstreamID,
                     workingDirectory: worktreePath,
+                    environment: environment,
                     timeout: ProcessRunner.Timeout.install
                 ))
             }
@@ -171,12 +188,16 @@ actor AsyncSetupService {
     /// what makes the second case work at all.
     func setupExistingWorktree(
         workstreamID: UUID,
+        projectName: String,
+        workstreamName: String,
         projectPath: String,
         worktreePath: String
     ) async {
         await updateState(for: workstreamID, to: .inProgress(step: "Setting up workspace", progress: 0.2))
         await runBackgroundSetup(
             workstreamID: workstreamID,
+            projectName: projectName,
+            workstreamName: workstreamName,
             projectPath: projectPath,
             worktreePath: worktreePath
         )
