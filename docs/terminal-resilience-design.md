@@ -91,7 +91,7 @@ on app termination to prevent orphaned sessions.
 
 > **Moot.** `ScriptConfig` and `.atelier.json` no longer exist; a project's
 > commands come from its `process-compose.yaml`. The equivalent concern lives on
-> in `PortsConfig`, which throws typed `LoadError`s rather than swallowing them.
+> in `ProcessCompose.PortsConfig`, which throws typed `LoadError`s rather than swallowing them.
 
 **Current behavior:** `try?` everywhere. Malformed `.atelier.json` silently
 produces empty config. User thinks scripts aren't configured.

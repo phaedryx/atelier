@@ -11,14 +11,14 @@ listed in the roster; everything it does is visible on the row itself.
 Claude Code fires **hooks** at lifecycle events (tool use, session stop,
 subagent spawn). A shell script bundled in the app forwards these events to a
 local HTTP listener in the Swift app, which routes them to the workstream's
-roster in `WorkstreamAgentStateTracker`.
+roster in `Workstream.AgentStateTracker`.
 
 ```
 Claude Code hooks (settings.json)
   → atelier-hook (shell script, reads stdin JSON + CLAUDE_PROJECT_DIR env var)
   → curl POST http://127.0.0.1:{port}/hook
   → HookEventReceiver (NWListener, Swift)
-  → AtelierApp.onEvent → HookEventRouter (fan-out) + WorkstreamAgentStateTracker.handle
+  → AtelierApp.onEvent → HookEventRouter (fan-out) + Workstream.AgentStateTracker.handle
   → Sidebar: status line on the workstream row + WorkstreamAgentRosterView cards
 ```
 
@@ -54,7 +54,7 @@ exist (app not running), the script exits silently.
 There is a **single** HTTP listener shared across all workstreams.
 `AtelierApp` feeds every event through two consumers:
 
-1. `WorkstreamAgentStateTracker.handle(projectDir:event:)` — resolves the
+1. `Workstream.AgentStateTracker.handle(projectDir:event:)` — resolves the
    payload's `project_dir` to a workstream UUID via `workstreamLookup`
    (rebuilt by `ContentView` whenever the project list changes) and updates
    that workstream's roster.
@@ -64,7 +64,7 @@ There is a **single** HTTP listener shared across all workstreams.
 Unknown `project_dir`s (Claude sessions outside tracked worktrees) are ignored.
 
 Path normalization resolves symlinks and standardizes the path
-(`WorkstreamAgentStateTracker.normalize`) so hook payloads and stored
+(`Workstream.AgentStateTracker.normalize`) so hook payloads and stored
 worktree paths match.
 
 ## Key files
@@ -97,7 +97,7 @@ word (`WorkstreamRow.statusMeta`). One color drives both:
 | `.needsAttention(.justFinished)` | Green · "Done" | `Stop` on an unselected workstream; cleared by `markSeen` when selected |
 
 Whether an idle workstream counts as "live" comes from
-`WorkstreamAgentStateTracker.liveSessionIDs` — an in-memory set of
+`Workstream.AgentStateTracker.liveSessionIDs` — an in-memory set of
 workstreams that saw any agent event this app launch. It is deliberately
 not persisted: a workstream nobody touched today renders dormant regardless
 of past sessions.
@@ -145,7 +145,7 @@ ID contains `[1m]` or `-1m` (case-insensitive, e.g.
 
 The main session's meter shows on the workstream row itself (visible while
 the main agent is working or stalled), reading the transcript-derived figure
-(`WorkstreamAgentStateTracker.mainContextUsage(for:)`). Subagent roster cards
+(`Workstream.AgentStateTracker.mainContextUsage(for:)`). Subagent roster cards
 carry no meter — Claude Code hooks report no per-run token figures. The meter
 itself is a 40×3pt bar plus a percentage: green below 60%, orange below 85%,
 red at 85% or more (`ContextMeter`).
