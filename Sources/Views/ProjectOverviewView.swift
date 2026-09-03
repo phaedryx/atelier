@@ -12,19 +12,19 @@ struct ProjectOverviewView: View {
 
     @EnvironmentObject var appEnv: AppEnvironment
     @AppStorage("atelier.workstreamSortOrder") private var workstreamSortOrder: ProjectSortOrder = .recent
-    @State private var worktrees: [WorktreeInfo] = []
+    @State private var worktrees: [Worktree.Info] = []
     @State private var showingPruneConfirm = false
     @State private var isPruning = false
     @State private var purgingPaths: Set<String> = []
-    @State private var worktreeToPurge: WorktreeInfo?
+    @State private var worktreeToPurge: Worktree.Info?
     @State private var worktreePurgeWarning: String?
 
     @AppStorage("atelier.defaultTerminal") private var defaultTerminal: String = ""
     @State private var docFiles: [DocFile] = []
     @State private var selectedDoc: String?
-    @State private var selectedWorktreeForDetail: WorktreeInfo?
+    @State private var selectedWorktreeForDetail: Worktree.Info?
     @State private var showRepoChanges = false
-    @State private var repoDetail: WorktreeDetail?
+    @State private var repoDetail: Worktree.Detail?
     @State private var isPulling = false
     @State private var pullErrorMessage: String?
     @State private var showPullError = false
@@ -390,7 +390,7 @@ struct ProjectOverviewView: View {
         Set(project.workstreams.compactMap(\.worktreePath).map(Self.standardizedPath))
     }
 
-    private var prunableWorktrees: [WorktreeInfo] {
+    private var prunableWorktrees: [Worktree.Info] {
         worktrees.filter { worktree in
             guard !worktree.isMain, !worktree.isDirty, !worktree.hasBranchCommits else { return false }
             return !workstreamPaths.contains(Self.standardizedPath(worktree.path))
@@ -432,7 +432,7 @@ struct ProjectOverviewView: View {
         }
     }
 
-    private func adoptWorktree(_ worktree: WorktreeInfo) {
+    private func adoptWorktree(_ worktree: Worktree.Info) {
         let name = worktree.branch ?? worktree.path.components(separatedBy: "/").last ?? "workstream"
         let workstream = Workstream(name: name, worktreePath: worktree.path)
         NotificationCenter.default.post(
@@ -472,7 +472,7 @@ struct ProjectOverviewView: View {
         }
     }
 
-    private func confirmPurgeWorktree(_ worktree: WorktreeInfo) {
+    private func confirmPurgeWorktree(_ worktree: Worktree.Info) {
         worktreePurgeWarning = WorkstreamArchiver.orphanPurgeWarning(at: worktree.path)
         worktreeToPurge = worktree
     }
@@ -495,7 +495,7 @@ struct ProjectOverviewView: View {
     }
 
     @MainActor
-    private func updateWorktrees(_ worktrees: [WorktreeInfo]) {
+    private func updateWorktrees(_ worktrees: [Worktree.Info]) {
         self.worktrees = worktrees
     }
 
@@ -521,7 +521,7 @@ struct ProjectOverviewView: View {
 }
 
 private struct WorktreeInfoRow: View {
-    let worktree: WorktreeInfo
+    let worktree: Worktree.Info
     let projectDirectory: String
     let isWorkstream: Bool
     var isPurging: Bool = false
@@ -815,7 +815,7 @@ private struct RepoStatusBadge: View {
 }
 
 private struct RepoChangesPopover: View {
-    let detail: WorktreeDetail?
+    let detail: Worktree.Detail?
     let directory: String
     let onDiscarded: () -> Void
 
@@ -874,7 +874,7 @@ private struct RepoChangesPopover: View {
 }
 
 private struct FileChangeRow: View {
-    let change: WorktreeDetail.FileChange
+    let change: Worktree.Detail.FileChange
     let directory: String
 
     @State private var isHovering = false

@@ -98,7 +98,7 @@ struct ContentView: View {
     @State private var showCommandPalette = false
     /// Watches each worktree's git dir so `git branch -m` lands in the sidebar
     /// immediately. Built once here and reconciled by `syncHeadWatcher`.
-    @State private var headWatcher: WorktreeHeadWatcher?
+    @State private var headWatcher: Worktree.HeadWatcher?
     @AppStorage("atelier.editorTabActive") private var editorTabActive: Bool = false
 
     private var paletteContext: PaletteContext {
@@ -632,7 +632,7 @@ struct ContentView: View {
     /// runs and remains the backstop for anything the vnode watch misses.
     private func startHeadWatcher() {
         guard headWatcher == nil else { return }
-        let watcher = WorktreeHeadWatcher { worktreePath in
+        let watcher = Worktree.HeadWatcher { worktreePath in
             Task { @MainActor in
                 await appEnvironment.refreshBranchName(for: worktreePath)
                 // Runs whether or not that published anything: the 15s poll

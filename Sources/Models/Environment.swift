@@ -6,11 +6,13 @@ import SwiftUI
 
 private let logger = Logger(subsystem: "atelier", category: "environment")
 
-struct WorktreeState {
-    var hasUncommittedChanges: Bool = false
-    var hasUnpushedCommits: Bool = false
-    var hasBranchCommits: Bool = false
-    var hasRemote: Bool = false
+extension Worktree {
+    struct State {
+        var hasUncommittedChanges: Bool = false
+        var hasUnpushedCommits: Bool = false
+        var hasBranchCommits: Bool = false
+        var hasRemote: Bool = false
+    }
 }
 
 @MainActor
@@ -36,7 +38,7 @@ final class AppEnvironment: ObservableObject {
     private var gitRepoCache: [String: Bool] = [:]
 
     /// Working tree state cache per worktree path
-    private var worktreeStateCache: [String: WorktreeState] = [:]
+    private var worktreeStateCache: [String: Worktree.State] = [:]
 
     /// Active port cache per workstream ID
     private var activePortCache: Set<UUID> = []
@@ -169,7 +171,7 @@ final class AppEnvironment: ObservableObject {
     /// Re-read the branch for a single worktree and publish it if it changed.
     ///
     /// Deliberately narrow: this runs off a filesystem event from
-    /// `WorktreeHeadWatcher`, which fires on any git activity in the worktree,
+    /// `Worktree.HeadWatcher`, which fires on any git activity in the worktree,
     /// so it must stay one `git rev-parse` for one path — not the full
     /// `refreshPathValidity` sweep, which is roughly nine subprocesses per
     /// worktree across every project.
@@ -316,8 +318,8 @@ final class AppEnvironment: ObservableObject {
         return nil
     }
 
-    func worktreeState(for path: String) -> WorktreeState {
-        worktreeStateCache[path] ?? WorktreeState()
+    func worktreeState(for path: String) -> Worktree.State {
+        worktreeStateCache[path] ?? Worktree.State()
     }
 
     private var worktreeStateTimestamps: [String: Date] = [:]
@@ -338,7 +340,7 @@ final class AppEnvironment: ObservableObject {
         let path = worktreePath
         let projectDir = projectDirectory
         Task.detached {
-            let state = WorktreeState(
+            let state = Worktree.State(
                 hasUncommittedChanges: Git.Operations.hasUncommittedChanges(at: path),
                 hasUnpushedCommits: Git.Operations.hasUnpushedCommits(at: path),
                 hasBranchCommits: Git.Operations.hasBranchCommits(at: path, projectPath: projectDir),
@@ -348,7 +350,7 @@ final class AppEnvironment: ObservableObject {
         }
     }
 
-    private func deferWorktreeStateUpdate(_ state: WorktreeState, for path: String) {
+    private func deferWorktreeStateUpdate(_ state: Worktree.State, for path: String) {
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 50_000_000)
             self.commitChanges {
@@ -446,12 +448,12 @@ final class AppEnvironment: ObservableObject {
             }
 
             // Compute worktree state in parallel
-            let worktreeStates: [String: WorktreeState] = await withTaskGroup(
-                of: (String, WorktreeState).self
+            let worktreeStates: [String: Worktree.State] = await withTaskGroup(
+                of: (String, Worktree.State).self
             ) { group in
                 for (path, projectDir) in worktreeToProject {
                     group.addTask {
-                        let state = WorktreeState(
+                        let state = Worktree.State(
                             hasUncommittedChanges: Git.Operations.hasUncommittedChanges(at: path),
                             hasUnpushedCommits: Git.Operations.hasUnpushedCommits(at: path),
                             hasBranchCommits: Git.Operations.hasBranchCommits(at: path, projectPath: projectDir),
@@ -460,7 +462,7 @@ final class AppEnvironment: ObservableObject {
                         return (path, state)
                     }
                 }
-                var collected: [String: WorktreeState] = [:]
+                var collected: [String: Worktree.State] = [:]
                 for await (path, state) in group {
                     collected[path] = state
                 }

@@ -9,6 +9,13 @@ private let logger = Logger(subsystem: "atelier", category: "git")
 /// Git plumbing: running git, and the shapes it returns.
 enum Git {}
 
+/// A git worktree as this app models it: what it is, what changed in it,
+/// and how its HEAD is watched.
+///
+/// Top-level rather than nested in `Git`: `Git.Worktree.Info` is three
+/// levels at the call site, which costs more than the prefix it removes.
+enum Worktree {}
+
 extension Git {
     struct RepoInfo {
         let isRepo: Bool
@@ -19,20 +26,22 @@ extension Git {
     }
 }
 
-struct WorktreeInfo: Identifiable {
-    let path: String
-    let branch: String?
-    let isDirty: Bool
-    let isMain: Bool
-    let hasUnpushedCommits: Bool
-    let hasBranchCommits: Bool
+extension Worktree {
+    struct Info: Identifiable {
+        let path: String
+        let branch: String?
+        let isDirty: Bool
+        let isMain: Bool
+        let hasUnpushedCommits: Bool
+        let hasBranchCommits: Bool
 
-    var id: String {
-        path
-    }
+        var id: String {
+            path
+        }
 
-    var standardizedPath: String {
-        URL(fileURLWithPath: path).standardizedFileURL.path
+        var standardizedPath: String {
+            URL(fileURLWithPath: path).standardizedFileURL.path
+        }
     }
 }
 
@@ -56,46 +65,48 @@ struct ProjectLocation: Equatable {
     }
 }
 
-struct WorktreeDetail {
-    struct FileChange: Identifiable {
-        enum Status: String {
-            case modified = "M"
-            case added = "A"
-            case deleted = "D"
-            case renamed = "R"
-            case untracked = "??"
+extension Worktree {
+    struct Detail {
+        struct FileChange: Identifiable {
+            enum Status: String {
+                case modified = "M"
+                case added = "A"
+                case deleted = "D"
+                case renamed = "R"
+                case untracked = "??"
 
-            var icon: String {
-                switch self {
-                case .modified: "pencil"
-                case .added: "plus"
-                case .deleted: "minus"
-                case .renamed: "arrow.right"
-                case .untracked: "questionmark"
+                var icon: String {
+                    switch self {
+                    case .modified: "pencil"
+                    case .added: "plus"
+                    case .deleted: "minus"
+                    case .renamed: "arrow.right"
+                    case .untracked: "questionmark"
+                    }
                 }
+            }
+
+            let status: Status
+            let path: String
+            let isStaged: Bool
+
+            var id: String {
+                "\(isStaged ? "S" : "U")\(path)"
             }
         }
 
-        let status: Status
-        let path: String
-        let isStaged: Bool
+        struct UnmergedCommit: Identifiable {
+            let hash: String
+            let message: String
 
-        var id: String {
-            "\(isStaged ? "S" : "U")\(path)"
+            var id: String {
+                hash
+            }
         }
+
+        let changes: [FileChange]
+        let unmergedCommits: [UnmergedCommit]
     }
-
-    struct UnmergedCommit: Identifiable {
-        let hash: String
-        let message: String
-
-        var id: String {
-            hash
-        }
-    }
-
-    let changes: [FileChange]
-    let unmergedCommits: [UnmergedCommit]
 }
 
 extension Git {
@@ -596,8 +607,8 @@ extension Git {
         }
 
         /// Get detailed changes and unmerged commits for a worktree.
-        static func worktreeDetail(at worktreePath: String, mainRepoPath: String) -> WorktreeDetail {
-            var changes: [WorktreeDetail.FileChange] = []
+        static func worktreeDetail(at worktreePath: String, mainRepoPath: String) -> Worktree.Detail {
+            var changes: [Worktree.Detail.FileChange] = []
 
             if let status = run(args: ["status", "--porcelain"], in: worktreePath) {
                 for line in status.components(separatedBy: "\n") where !line.isEmpty {
@@ -623,7 +634,7 @@ extension Git {
                 }
             }
 
-            var commits: [WorktreeDetail.UnmergedCommit] = []
+            var commits: [Worktree.Detail.UnmergedCommit] = []
             let baseBranch = defaultBranch(at: mainRepoPath)
             if let log = run(args: ["log", "\(baseBranch)..HEAD", "--oneline"], in: worktreePath) {
                 for line in log.components(separatedBy: "\n") where !line.isEmpty {
@@ -633,7 +644,7 @@ extension Git {
                 }
             }
 
-            return WorktreeDetail(changes: changes, unmergedCommits: commits)
+            return Worktree.Detail(changes: changes, unmergedCommits: commits)
         }
 
         /// Force-remove a git worktree by path, discarding uncommitted changes.
@@ -654,7 +665,7 @@ extension Git {
             _ = runOnWholeTree(args: ["clean", "-fd"], in: path)
         }
 
-        private static func parseStatus(_ char: Character) -> WorktreeDetail.FileChange.Status {
+        private static func parseStatus(_ char: Character) -> Worktree.Detail.FileChange.Status {
             switch char {
             case "M": .modified
             case "A": .added
@@ -710,14 +721,14 @@ extension Git {
         }
 
         /// List existing worktrees for a project with branch and dirty status.
-        static func listWorktreesWithInfo(at projectPath: String) -> [WorktreeInfo] {
+        static func listWorktreesWithInfo(at projectPath: String) -> [Worktree.Info] {
             guard let output = run(args: ["worktree", "list", "--porcelain"], in: projectPath) else {
                 return []
             }
 
             let mainPath = URL(fileURLWithPath: projectPath).standardizedFileURL.path
 
-            var results: [WorktreeInfo] = []
+            var results: [Worktree.Info] = []
             var currentPath: String?
             var currentBranch: String?
             var currentIsBare = false
@@ -731,7 +742,7 @@ extension Git {
                 let dirty = !isMain && hasUncommittedChanges(at: path)
                 let unpushed = !isMain && hasUnpushedCommits(at: path)
                 let branchCommits = !isMain && hasBranchCommits(at: path, projectPath: projectPath)
-                results.append(WorktreeInfo(path: path, branch: currentBranch, isDirty: dirty, isMain: isMain, hasUnpushedCommits: unpushed, hasBranchCommits: branchCommits))
+                results.append(Worktree.Info(path: path, branch: currentBranch, isDirty: dirty, isMain: isMain, hasUnpushedCommits: unpushed, hasBranchCommits: branchCommits))
             }
 
             for line in output.components(separatedBy: "\n") {

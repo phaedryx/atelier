@@ -1916,7 +1916,7 @@ private struct GitHubActionMenu: View {
     let workingDirectory: String
     let branchName: String?
     let bypassPermissions: Bool
-    let worktreeState: WorktreeState
+    let worktreeState: Worktree.State
     let hasGitHubRemote: Bool
     let branchPR: GitHub.PR?
 

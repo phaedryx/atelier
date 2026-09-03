@@ -4,13 +4,13 @@
 import SwiftUI
 
 struct WorktreeDetailSheet: View {
-    let worktree: WorktreeInfo
+    let worktree: Worktree.Info
     let projectDirectory: String
     let defaultTerminal: String
     let onForceRemove: () -> Void
 
     @Environment(\.dismiss) private var dismiss
-    @State private var detail: WorktreeDetail?
+    @State private var detail: Worktree.Detail?
     @State private var isLoading = true
     @State private var showForceRemoveConfirm = false
     @State private var showDiscardConfirm = false
@@ -180,7 +180,7 @@ struct WorktreeDetailSheet: View {
 }
 
 private struct FileChangeButton: View {
-    let change: WorktreeDetail.FileChange
+    let change: Worktree.Detail.FileChange
     let directory: String
 
     @State private var isHovering = false
