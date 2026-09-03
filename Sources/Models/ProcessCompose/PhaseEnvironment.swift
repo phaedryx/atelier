@@ -9,7 +9,7 @@ private let logger = Logger(subsystem: "atelier", category: "phase-environment")
 /// The `ATELIER_*` and `ports.yaml` variables `bootstrap` and `dispose` see.
 ///
 /// `prepare` and `execute` run in a Ghostty surface, which is handed
-/// `WorkstreamEnvironment.variables` when it is created. The unattended phases
+/// `Workstream.Environment.variables` when it is created. The unattended phases
 /// spawn through `PhaseExecutor` instead, and until this existed they inherited
 /// nothing but the app's own environment — so the same
 /// `process-compose.yaml` ran under two different environments depending on
@@ -40,7 +40,7 @@ enum PhaseEnvironment {
         worktreePath: String,
         defaultBranch: String
     ) -> [String: String] {
-        WorkstreamEnvironment.variables(
+        Workstream.Environment.variables(
             workstreamID: workstreamID,
             projectName: projectName,
             workstreamName: workstreamName,

@@ -178,7 +178,7 @@ struct AtelierApp: App {
         HookEventReceiver.shared.onEvent = { projectDir, event in
             HookEventRouter.shared.route(projectDir: projectDir, event: event)
             MainActor.assumeIsolated {
-                WorkstreamAgentStateTracker.shared.handle(projectDir: projectDir, event: event)
+                Workstream.AgentStateTracker.shared.handle(projectDir: projectDir, event: event)
             }
         }
         HookEventReceiver.shared.start()

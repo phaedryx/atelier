@@ -739,10 +739,10 @@ struct ProjectSidebar: View {
 
     @EnvironmentObject private var surfaceCache: TerminalSurfaceCache
     @EnvironmentObject private var appEnv: AppEnvironment
-    @EnvironmentObject private var agentStateTracker: WorkstreamAgentStateTracker
+    @EnvironmentObject private var agentStateTracker: Workstream.AgentStateTracker
 
     private func confirmPurge(_ workstream: Workstream) {
-        purgeWarningMessage = WorkstreamArchiver.purgeWarning(for: workstream)
+        purgeWarningMessage = Workstream.Archiver.purgeWarning(for: workstream)
         workstreamToPurge = workstream.id
     }
 
@@ -787,7 +787,7 @@ struct ProjectSidebar: View {
         guard let wsID = workstreamToRemove,
               let pi = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
         let projectID = projects[pi].id
-        WorkstreamArchiver.remove(wsID, in: &projects[pi], surfaceCache: surfaceCache, tmuxPath: appEnv.toolStatus.tmux.path)
+        Workstream.Archiver.remove(wsID, in: &projects[pi], surfaceCache: surfaceCache, tmuxPath: appEnv.toolStatus.tmux.path)
         agentStateTracker.clear(workstreamID: wsID)
         rebuildIndices()
         if case let .workstream(id) = selection, id == wsID {
@@ -801,7 +801,7 @@ struct ProjectSidebar: View {
         guard let wsID = workstreamToPurge,
               let pi = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
         let projectID = projects[pi].id
-        WorkstreamArchiver.purge(wsID, in: &projects[pi], surfaceCache: surfaceCache, tmuxPath: appEnv.toolStatus.tmux.path)
+        Workstream.Archiver.purge(wsID, in: &projects[pi], surfaceCache: surfaceCache, tmuxPath: appEnv.toolStatus.tmux.path)
         agentStateTracker.clear(workstreamID: wsID)
         rebuildIndices()
         if case let .workstream(id) = selection, id == wsID {
@@ -1131,10 +1131,10 @@ private struct WorkstreamRow: View {
     var branchName: String?
     var worktreePath: String?
     let isPathValid: Bool
-    var agentState: WorkstreamAgentStateTracker.AgentRunState = .idle
+    var agentState: Workstream.AgentStateTracker.AgentRunState = .idle
     var hasLiveSession: Bool = false
     var mainActivity: String?
-    var mainContextUsage: WorkstreamAgentStateTracker.ContextUsage?
+    var mainContextUsage: Workstream.AgentStateTracker.ContextUsage?
     /// When this workstream's main run was first seen this launch; drives
     /// the status line's ticking elapsed time.
     var startedAt: Date?

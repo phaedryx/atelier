@@ -5,7 +5,7 @@
 import XCTest
 
 /// `PhasePolicyTests` covers what the policy decides. This covers that
-/// `WorkstreamArchiver` actually asks it — an archiver that stopped calling
+/// `Workstream.Archiver` actually asks it — an archiver that stopped calling
 /// `PhasePolicy.plan` altogether would otherwise pass every dispose test in
 /// the suite.
 final class WorkstreamArchiverDisposeTests: XCTestCase {
@@ -71,7 +71,7 @@ final class WorkstreamArchiverDisposeTests: XCTestCase {
     func testDisposeAsksThePolicy() {
         ProcessComposeSettings.isEnabled = false
 
-        let plan = WorkstreamArchiver.disposePlan(
+        let plan = Workstream.Archiver.disposePlan(
             worktreePath: worktree.path, projectDirectory: project.path
         )
 
@@ -82,7 +82,7 @@ final class WorkstreamArchiverDisposeTests: XCTestCase {
     func testDisposeIsRefusedForAnUnapprovedRepositoryConfig() throws {
         _ = try writeConfig(in: worktree)
 
-        let plan = WorkstreamArchiver.disposePlan(
+        let plan = Workstream.Archiver.disposePlan(
             worktreePath: worktree.path, projectDirectory: project.path
         )
 
@@ -100,7 +100,7 @@ final class WorkstreamArchiverDisposeTests: XCTestCase {
         XCTAssertEqual(config.repositoryProvidedFiles, [path])
         ScriptTrust.approve(configFiles: config.repositoryProvidedFiles, for: project.path)
 
-        let plan = WorkstreamArchiver.disposePlan(
+        let plan = Workstream.Archiver.disposePlan(
             worktreePath: worktree.path, projectDirectory: project.path
         )
 
@@ -117,7 +117,7 @@ final class WorkstreamArchiverDisposeTests: XCTestCase {
         _ = try writeConfig(in: project)
         _ = try writeConfig(in: worktree, named: "process-compose.override.yml")
 
-        let plan = WorkstreamArchiver.disposePlan(
+        let plan = Workstream.Archiver.disposePlan(
             worktreePath: worktree.path, projectDirectory: project.path
         )
 
@@ -127,7 +127,7 @@ final class WorkstreamArchiverDisposeTests: XCTestCase {
     func testDisposeNeedsNoApprovalForTheUsersOwnConfig() throws {
         let path = try writeConfig(in: project)
 
-        let plan = WorkstreamArchiver.disposePlan(
+        let plan = Workstream.Archiver.disposePlan(
             worktreePath: worktree.path, projectDirectory: project.path
         )
 

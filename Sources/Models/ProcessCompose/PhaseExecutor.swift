@@ -172,7 +172,7 @@ enum PhaseExecutor {
     /// goes last and unconditionally, because it is the one variable the
     /// workstream layer must not be able to set: a phase whose PATH came from a
     /// declaration would resolve tools from somewhere the user never chose, and
-    /// nothing in `WorkstreamEnvironment` produces a `PATH` for it to have meant.
+    /// nothing in `Workstream.Environment` produces a `PATH` for it to have meant.
     ///
     /// Internal, and taking its base environment as a parameter, so the layering
     /// can be tested without spawning anything or reading the host's real

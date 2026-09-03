@@ -9,7 +9,7 @@ final class AgentNudgeTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_000_000)
 
     private func shouldNudge(
-        state: WorkstreamAgentStateTracker.AgentRunState,
+        state: Workstream.AgentStateTracker.AgentRunState,
         hasSurface: Bool = true,
         nudgeEnabled: Bool = true,
         lastNudge: Date? = nil
@@ -66,7 +66,7 @@ final class AgentNudgeTests: XCTestCase {
     }
 
     func test_releasingAPeer_clearsTheSurfaceItOccupied() async {
-        let tracker = WorkstreamAgentStateTracker.shared
+        let tracker = Workstream.AgentStateTracker.shared
         tracker.resetForTesting()
         defer { tracker.resetForTesting() }
 

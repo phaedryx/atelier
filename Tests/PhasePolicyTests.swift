@@ -123,7 +123,7 @@ final class PhasePolicyTests: XCTestCase {
     /// `dispose` answers to the same preconditions as `bootstrap` — it is the
     /// same unattended execution of repository-authored processes — and shares
     /// this one implementation of them rather than an untestable copy in
-    /// `WorkstreamArchiver`. Only the note's wording differs.
+    /// `Workstream.Archiver`. Only the note's wording differs.
     func testDisposeIsGatedByTheSamePolicy() {
         let plan = PhasePolicy.plan(
             phase: .dispose, isEnabled: true, config: repositoryConfig,

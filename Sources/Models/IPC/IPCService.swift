@@ -211,7 +211,7 @@ extension IPC {
             // afterwards would type into a pane whose agent has gone.
             if let surfaceID = context?.surfaceID {
                 await MainActor.run {
-                    WorkstreamAgentStateTracker.shared.clear(surfaceID: surfaceID)
+                    Workstream.AgentStateTracker.shared.clear(surfaceID: surfaceID)
                 }
             }
         }

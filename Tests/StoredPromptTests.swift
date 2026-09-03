@@ -181,11 +181,11 @@ final class PromptInjectorPolicyTests: XCTestCase {
     /// Both typing paths classify through this one property; the nil policy is
     /// what differs between them (injector allows, nudge refuses).
     func testTurnHasEndedPartitionsTheStates() {
-        XCTAssertTrue(WorkstreamAgentStateTracker.AgentRunState.idle.turnHasEnded)
-        XCTAssertTrue(WorkstreamAgentStateTracker.AgentRunState.needsAttention(.justFinished).turnHasEnded)
-        XCTAssertFalse(WorkstreamAgentStateTracker.AgentRunState.working.turnHasEnded)
-        XCTAssertFalse(WorkstreamAgentStateTracker.AgentRunState.stalled.turnHasEnded)
-        XCTAssertFalse(WorkstreamAgentStateTracker.AgentRunState.needsAttention(.permission).turnHasEnded)
+        XCTAssertTrue(Workstream.AgentStateTracker.AgentRunState.idle.turnHasEnded)
+        XCTAssertTrue(Workstream.AgentStateTracker.AgentRunState.needsAttention(.justFinished).turnHasEnded)
+        XCTAssertFalse(Workstream.AgentStateTracker.AgentRunState.working.turnHasEnded)
+        XCTAssertFalse(Workstream.AgentStateTracker.AgentRunState.stalled.turnHasEnded)
+        XCTAssertFalse(Workstream.AgentStateTracker.AgentRunState.needsAttention(.permission).turnHasEnded)
     }
 }
 

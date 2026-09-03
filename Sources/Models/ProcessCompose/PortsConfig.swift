@@ -61,7 +61,7 @@ struct PortsConfig: Equatable {
 
     /// Names Atelier owns. A declaration may not take one of these.
     ///
-    /// `WorkstreamEnvironment` merges declarations *over* the `ATELIER_*` set
+    /// `Workstream.Environment` merges declarations *over* the `ATELIER_*` set
     /// so a project can redefine `ATELIER_PORT`, which is deliberate and
     /// documented. The same merge let any other `ATELIER_*` name through: a
     /// declaration called `ATELIER_WORKTREE_DIR` replaced a filesystem path

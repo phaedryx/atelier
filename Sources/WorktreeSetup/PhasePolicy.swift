@@ -12,7 +12,7 @@ import Foundation
 /// `plan` is shared by `bootstrap` and `dispose`; `state` is bootstrap's alone,
 /// because only bootstrap reports into `AsyncSetupState`. The name is
 /// phase-neutral for that reason: naming it for bootstrap invited a second,
-/// inlined copy of the gate in `WorkstreamArchiver` for dispose.
+/// inlined copy of the gate in `Workstream.Archiver` for dispose.
 enum PhasePolicy {
     /// What to do before running anything.
     enum Plan: Equatable {
@@ -27,7 +27,7 @@ enum PhasePolicy {
     /// Shared by `bootstrap` at worktree creation and `dispose` at archive.
     /// Both run repository-authored processes with nobody watching, so both
     /// answer to the same four preconditions and there is deliberately only one
-    /// copy of them: a second, inlined set in `WorkstreamArchiver` could not be
+    /// copy of them: a second, inlined set in `Workstream.Archiver` could not be
     /// tested and would not follow a change made here.
     ///
     /// - Parameter phase: named only so the note can say which phase did not
@@ -70,7 +70,7 @@ enum PhasePolicy {
         // needs no approval — location is what decides, not content.
         //
         // This is the only gate. Adding a second one in `AsyncSetupService` or
-        // `WorkstreamArchiver` would sit behind this guard and never be reached.
+        // `Workstream.Archiver` would sit behind this guard and never be reached.
         //
         // Ordered after the binary check on purpose: when process-compose is
         // missing, nothing can run whatever the user approves, and saying so is

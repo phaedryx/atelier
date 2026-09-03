@@ -17,7 +17,7 @@ import SwiftUI
 /// Renders as a flexible track filling the available width with a
 /// "12.3k · 6%" label trailing.
 struct ContextMeter: View {
-    let usage: WorkstreamAgentStateTracker.ContextUsage
+    let usage: Workstream.AgentStateTracker.ContextUsage
 
     private var fraction: Double {
         min(max(usage.fraction, 0), 1)

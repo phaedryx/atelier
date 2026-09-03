@@ -87,7 +87,7 @@ struct ContentView: View {
     @StateObject private var surfaceCache = TerminalSurfaceCache()
     @StateObject private var appEnvironment = AppEnvironment()
     @StateObject private var usageStore = UsageStore()
-    @ObservedObject private var agentStateTracker = WorkstreamAgentStateTracker.shared
+    @ObservedObject private var agentStateTracker = Workstream.AgentStateTracker.shared
     @State private var saveWork: DispatchWorkItem?
     @State private var workstreamToRemove: UUID?
     @State private var workstreamToPurge: UUID?
@@ -579,7 +579,7 @@ struct ContentView: View {
     }
 
     /// Rebuilds the projectDir → workstream-UUID lookup used by the agent
-    /// state tracker. Paths are normalized via `WorkstreamAgentStateTracker.normalize`
+    /// state tracker. Paths are normalized via `Workstream.AgentStateTracker.normalize`
     /// (resolves symlinks) so hook payloads match regardless of how Claude
     /// reports the path on macOS.
     private func refreshAgentStateLookup(projects: [Project]) {
@@ -587,11 +587,11 @@ struct ContentView: View {
         for project in projects {
             for ws in project.workstreams {
                 guard let path = ws.worktreePath else { continue }
-                index[WorkstreamAgentStateTracker.normalize(path)] = ws.id
+                index[Workstream.AgentStateTracker.normalize(path)] = ws.id
             }
         }
         agentStateTracker.workstreamLookup = { projectDir in
-            index[WorkstreamAgentStateTracker.normalize(projectDir)]
+            index[Workstream.AgentStateTracker.normalize(projectDir)]
         }
     }
 
@@ -735,14 +735,14 @@ struct ContentView: View {
 
     private func confirmPurge(_ wsID: UUID) {
         let ws = projects.flatMap(\.workstreams).first(where: { $0.id == wsID })
-        purgeWarningMessage = ws.flatMap { WorkstreamArchiver.purgeWarning(for: $0) }
+        purgeWarningMessage = ws.flatMap { Workstream.Archiver.purgeWarning(for: $0) }
         workstreamToPurge = wsID
     }
 
     private func performRemove() {
         guard let wsID = workstreamToRemove,
               let projectIndex = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
-        WorkstreamArchiver.remove(wsID, in: &projects[projectIndex], surfaceCache: surfaceCache, tmuxPath: appEnvironment.toolStatus.tmux.path)
+        Workstream.Archiver.remove(wsID, in: &projects[projectIndex], surfaceCache: surfaceCache, tmuxPath: appEnvironment.toolStatus.tmux.path)
         agentStateTracker.clear(workstreamID: wsID)
         ProjectStore.save(projects)
         syncHeadWatcher(projects: projects)
@@ -753,7 +753,7 @@ struct ContentView: View {
         guard let wsID = workstreamToPurge,
               let projectIndex = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
         let projectID = projects[projectIndex].id
-        WorkstreamArchiver.purge(wsID, in: &projects[projectIndex], surfaceCache: surfaceCache, tmuxPath: appEnvironment.toolStatus.tmux.path)
+        Workstream.Archiver.purge(wsID, in: &projects[projectIndex], surfaceCache: surfaceCache, tmuxPath: appEnvironment.toolStatus.tmux.path)
         agentStateTracker.clear(workstreamID: wsID)
         ProjectStore.save(projects)
         // Before anything else touches the deleted worktree: purge removes the

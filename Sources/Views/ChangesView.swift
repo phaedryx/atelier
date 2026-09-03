@@ -441,7 +441,7 @@ struct ChangesView: View {
     /// Why `surfaceID` cannot be typed into right now, or nil when it can be.
     private func submitBlocker(for surfaceID: UUID, cache: TerminalSurfaceCache) -> SubmitBlocker? {
         guard cache.hasLiveSurface(surfaceID) else { return .noAgent }
-        let state = WorkstreamAgentStateTracker.shared.state(forSurface: surfaceID)
+        let state = Workstream.AgentStateTracker.shared.state(forSurface: surfaceID)
         return PromptInjector.canInject(state: state) ? nil : .busy
     }
 

@@ -317,7 +317,7 @@ struct ProjectOverviewView: View {
         .onAppear {
             appEnv.refreshRepoInfo(for: project.directory)
             appEnv.refreshGitHubInfo(for: project.directory)
-            purgingPaths = WorkstreamArchiver.archivingPaths
+            purgingPaths = Workstream.Archiver.archivingPaths
             refreshWorktrees()
             loadDocFiles()
         }
@@ -327,16 +327,16 @@ struct ProjectOverviewView: View {
             worktrees = []
             docFiles = []
             selectedDoc = nil
-            purgingPaths = WorkstreamArchiver.archivingPaths
+            purgingPaths = Workstream.Archiver.archivingPaths
             refreshWorktrees()
             loadDocFiles()
         }
-        .onReceive(NotificationCenter.default.publisher(for: WorkstreamArchiver.archivingDidComplete)) { _ in
-            purgingPaths = WorkstreamArchiver.archivingPaths
+        .onReceive(NotificationCenter.default.publisher(for: Workstream.Archiver.archivingDidComplete)) { _ in
+            purgingPaths = Workstream.Archiver.archivingPaths
             refreshWorktrees()
         }
-        .onReceive(NotificationCenter.default.publisher(for: WorkstreamArchiver.archivingDidStart)) { _ in
-            purgingPaths = WorkstreamArchiver.archivingPaths
+        .onReceive(NotificationCenter.default.publisher(for: Workstream.Archiver.archivingDidStart)) { _ in
+            purgingPaths = Workstream.Archiver.archivingPaths
             refreshWorktrees()
         }
         .popover(item: $selectedWorktreeForDetail, arrowEdge: .trailing) { wt in
@@ -473,13 +473,13 @@ struct ProjectOverviewView: View {
     }
 
     private func confirmPurgeWorktree(_ worktree: Worktree.Info) {
-        worktreePurgeWarning = WorkstreamArchiver.orphanPurgeWarning(at: worktree.path)
+        worktreePurgeWarning = Workstream.Archiver.orphanPurgeWarning(at: worktree.path)
         worktreeToPurge = worktree
     }
 
     private func performPurgeWorktree() {
         guard let wt = worktreeToPurge else { return }
-        WorkstreamArchiver.purgeOrphanWorktree(projectDirectory: project.directory, worktreePath: wt.path)
+        Workstream.Archiver.purgeOrphanWorktree(projectDirectory: project.directory, worktreePath: wt.path)
         worktreeToPurge = nil
         worktreePurgeWarning = nil
     }

@@ -1,5 +1,5 @@
 // ABOUTME: Event types the hook receiver produces from Claude Code hook payloads.
-// ABOUTME: Consumed by WorkstreamAgentStateTracker to drive the sidebar roster.
+// ABOUTME: Consumed by Workstream.AgentStateTracker to drive the sidebar roster.
 
 import Foundation
 

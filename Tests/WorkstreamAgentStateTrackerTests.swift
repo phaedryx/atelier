@@ -9,8 +9,8 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
     private let wsID = UUID()
     private let projectDir = "/tmp/atelier-test-worktree"
 
-    private var tracker: WorkstreamAgentStateTracker {
-        WorkstreamAgentStateTracker.shared
+    private var tracker: Workstream.AgentStateTracker {
+        Workstream.AgentStateTracker.shared
     }
 
     override func setUp() {
@@ -26,10 +26,10 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
     /// Routes an event through the tracker, installing the lookup mapping on first use.
     private func handle(_ event: AgentEvent) {
         if tracker.workstreamLookup == nil {
-            let expected = WorkstreamAgentStateTracker.normalize(projectDir)
+            let expected = Workstream.AgentStateTracker.normalize(projectDir)
             let mapped = wsID
             tracker.workstreamLookup = { dir in
-                WorkstreamAgentStateTracker.normalize(dir) == expected ? mapped : nil
+                Workstream.AgentStateTracker.normalize(dir) == expected ? mapped : nil
             }
         }
         tracker.handle(projectDir: projectDir, event: event)
@@ -155,7 +155,7 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
 
     func testStaleRunSweepsToStalled() {
         handle(.waiting(agentId: "main"))
-        backdateMainRun(secondsAgo: WorkstreamAgentStateTracker.stallThreshold + 10)
+        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.stallThreshold + 10)
 
         tracker.sweepForStalls(now: Date())
         XCTAssertEqual(tracker.runs(for: wsID)[0].state, .stalled)
@@ -175,7 +175,7 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         tracker.currentSelection = wsID
         handle(.waiting(agentId: "main"))
         handle(.status(agentId: "main", status: "permissionRequired"))
-        backdateMainRun(secondsAgo: WorkstreamAgentStateTracker.stallThreshold + 10)
+        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.stallThreshold + 10)
 
         tracker.sweepForStalls(now: Date())
         // Waiting on the user is not stalling.
@@ -184,7 +184,7 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
 
     func testToolStartUnstallsRunAndRow() {
         handle(.waiting(agentId: "main"))
-        backdateMainRun(secondsAgo: WorkstreamAgentStateTracker.stallThreshold + 10)
+        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.stallThreshold + 10)
         tracker.sweepForStalls(now: Date())
         XCTAssertEqual(tracker.state(for: wsID), .stalled)
 
@@ -199,7 +199,7 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
     func testFreshSubagentKeepsRowWorkingWhenMainGoesQuiet() {
         handle(.waiting(agentId: "main"))
         handle(.created(agentId: "ses_build", name: "build"))
-        backdateMainRun(secondsAgo: WorkstreamAgentStateTracker.stallThreshold + 10)
+        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.stallThreshold + 10)
 
         tracker.sweepForStalls(now: Date())
         XCTAssertEqual(tracker.runs(for: wsID).first { $0.isMain }?.state, .stalled)
@@ -209,7 +209,7 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         tracker._backdateRun(
             agentId: "ses_build",
             workstreamID: wsID,
-            lastEventAt: Date().addingTimeInterval(-(WorkstreamAgentStateTracker.stallThreshold + 10))
+            lastEventAt: Date().addingTimeInterval(-(Workstream.AgentStateTracker.stallThreshold + 10))
         )
         tracker.sweepForStalls(now: Date())
         XCTAssertEqual(tracker.state(for: wsID), .stalled)

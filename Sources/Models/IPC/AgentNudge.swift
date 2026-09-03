@@ -10,7 +10,7 @@ private let logger = Logger(subsystem: "atelier", category: "ipc-nudge")
 ///
 /// The mailbox is the contract; this is a courtesy. It fires only when the
 /// recipient's turn has actually ended — Claude Code's own `Stop` hook says so,
-/// via `WorkstreamAgentStateTracker` — and only into a surface Atelier itself
+/// via `Workstream.AgentStateTracker` — and only into a surface Atelier itself
 /// launched, which is the only way it has an address to type into. When it
 /// doesn't fire, the message still sits in the inbox, which is why the tool
 /// descriptions tell agents to check at natural boundaries.
@@ -46,7 +46,7 @@ final class AgentNudge {
     /// ended its turn, and typing into any of those lands text in the middle of
     /// someone's work.
     static func shouldNudge(
-        state: WorkstreamAgentStateTracker.AgentRunState,
+        state: Workstream.AgentStateTracker.AgentRunState,
         hasSurface: Bool,
         nudgeEnabled: Bool,
         lastNudge: Date?,
@@ -73,8 +73,8 @@ final class AgentNudge {
     /// Agent tab reports per-surface anyway and the fallback bought nothing but
     /// that hole. A pane with no evidence is simply not interrupted.
     static func resolveState(
-        surfaceState: WorkstreamAgentStateTracker.AgentRunState?
-    ) -> WorkstreamAgentStateTracker.AgentRunState? {
+        surfaceState: Workstream.AgentStateTracker.AgentRunState?
+    ) -> Workstream.AgentStateTracker.AgentRunState? {
         surfaceState
     }
 
@@ -90,7 +90,7 @@ final class AgentNudge {
     /// agent prompt rather than a shell. Closing the window entirely would take
     /// a lock across two isolation domains, which this is not worth.
     func nudge(surfaceID: UUID, senderName: String, waiting: Int, now: Date = Date()) {
-        let tracker = WorkstreamAgentStateTracker.shared
+        let tracker = Workstream.AgentStateTracker.shared
         guard let state = Self.resolveState(surfaceState: tracker.state(forSurface: surfaceID)) else {
             record("skipped — nothing has reported a turn state for this pane", surfaceID: surfaceID)
             return
@@ -158,7 +158,7 @@ final class AgentNudge {
     /// needs positive evidence, unlike `PromptInjector`'s user-invoked path.
     private static func stillIdle(surfaceID: UUID) -> Bool {
         guard let state = resolveState(
-            surfaceState: WorkstreamAgentStateTracker.shared.state(forSurface: surfaceID)
+            surfaceState: Workstream.AgentStateTracker.shared.state(forSurface: surfaceID)
         ) else { return false }
         return state.turnHasEnded
     }

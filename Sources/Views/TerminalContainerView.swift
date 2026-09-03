@@ -197,7 +197,7 @@ func workspaceEnvironmentVariables(
     defaultBranch: String,
     portPlan: PortPlan = .empty
 ) -> [String: String] {
-    WorkstreamEnvironment.variables(
+    Workstream.Environment.variables(
         workstreamID: workstreamID,
         projectName: projectName,
         workstreamName: workstreamName,

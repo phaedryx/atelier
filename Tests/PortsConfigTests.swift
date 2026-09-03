@@ -165,7 +165,7 @@ final class PortsConfigTests: XCTestCase {
         }
     }
 
-    /// `WorkstreamEnvironment` merges declarations over the `ATELIER_*` set, so
+    /// `Workstream.Environment` merges declarations over the `ATELIER_*` set, so
     /// without this a declaration could replace a path with a port number in
     /// every namespace, and the `FF_*` mirror would carry the wrong value too.
     func testADeclarationCannotShadowAPathAtelierSets() throws {
