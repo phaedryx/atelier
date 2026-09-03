@@ -60,6 +60,31 @@ extension Workstream {
             )
         }
 
+        /// The worktree `purge` is allowed to destroy, or nil when there is none.
+        ///
+        /// Deliberately not `Workstream.workingDirectory(projectDirectory:)`. That
+        /// falls back to the project directory, which is the right answer for
+        /// opening a terminal and the wrong one for everything `purge` does: a
+        /// workstream archived before `workstreamWorktreeReady` lands has no
+        /// worktree path, and the fallback handed the user's main checkout to
+        /// `Git.Operations.removeWorktree` (which deletes the path it is given),
+        /// to `deleteLocalBranch` (with whatever branch that checkout was on), and
+        /// to `dispose` (which runs project-authored processes).
+        ///
+        /// A path that names the project directory under a different spelling is
+        /// refused for the same reason, so the check cannot be defeated by a
+        /// trailing slash or a symlink the two paths disagree about.
+        static func destroyableWorktreePath(for workstream: Workstream, projectDirectory: String) -> String? {
+            guard let path = workstream.worktreePath,
+                  !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return nil }
+
+            let resolved = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+            let project = URL(fileURLWithPath: projectDirectory)
+                .standardizedFileURL.resolvingSymlinksInPath().path
+            return resolved == project ? nil : path
+        }
+
         /// Purges a workstream by running its `dispose` phase, removing the git worktree from disk,
         /// deleting the local branch, updating the default branch to latest,
         /// killing tmux sessions, and evicting terminal surfaces from the cache.
@@ -72,19 +97,18 @@ extension Workstream {
         ) {
             if let ws = project.workstreams.first(where: { $0.id == workstreamID }) {
                 let projectDir = project.directory
-                let worktreePath = ws.worktreePath ?? projectDir
-                // Only the real worktree, never the `?? projectDir` fallback above.
-                // A workstream archived before `workstreamWorktreeReady` lands has no
-                // worktree path, and `dispose` now runs arbitrary project-authored
-                // processes — running them against the user's main checkout is a
-                // different and much worse thing than the `teardown` script this
-                // replaced ever risked.
-                let disposePath = ws.worktreePath
-                let standardizedPath = URL(fileURLWithPath: worktreePath).standardizedFileURL.path
+                // Everything destructive below is scoped to this, and it is nil for a
+                // workstream whose worktree does not exist yet. See
+                // `destroyableWorktreePath`: the `?? projectDir` fallback that used to
+                // stand here reached `removeWorktree`, `deleteLocalBranch` and
+                // `dispose` — none of which had any business touching the user's main
+                // checkout.
+                let worktreePath = destroyableWorktreePath(for: ws, projectDirectory: projectDir)
+                let standardizedPath = URL(fileURLWithPath: worktreePath ?? projectDir).standardizedFileURL.path
                 let wsName = ws.name
                 let projName = project.name
                 // Capture the branch name before the worktree is removed
-                let branchName = Git.Operations.currentBranch(at: worktreePath)
+                let branchName = worktreePath.flatMap { Git.Operations.currentBranch(at: $0) }
                 archivingPaths.insert(standardizedPath)
                 NotificationCenter.default.post(name: archivingDidStart, object: nil)
                 let composeBinary = ProcessCompose.Settings.resolveBinary()
@@ -112,7 +136,7 @@ extension Workstream {
                     await AsyncSetupService.shared.cancelBootstrap(
                         for: workstreamID,
                         binary: composeBinary,
-                        worktreePath: disposePath ?? worktreePath
+                        worktreePath: worktreePath ?? projectDir
                     )
                     // Everything below blocks: dispose is a whole process-compose
                     // phase at up to `Timeout.userCommand`, and each git call waits
@@ -122,21 +146,21 @@ extension Workstream {
                     // reason.
                     await withCheckedContinuation { continuation in
                         DispatchQueue.global(qos: .utility).async {
-                            // Before the worktree is removed:
-                            // `ProcessCompose.Config.locate` reads the worktree, and
-                            // dispose runs in it.
-                            if let disposePath {
+                            if let worktreePath {
+                                // Before the worktree is removed:
+                                // `ProcessCompose.Config.locate` reads the worktree, and
+                                // dispose runs in it.
                                 runDispose(
                                     workstreamID: workstreamID,
                                     projectName: projName,
                                     workstreamName: wsName,
-                                    worktreePath: disposePath,
+                                    worktreePath: worktreePath,
                                     projectDirectory: projectDir
                                 )
-                            }
-                            Git.Operations.removeWorktree(projectPath: projectDir, worktreePath: worktreePath)
-                            if let branchName {
-                                Git.Operations.deleteLocalBranch(at: projectDir, branchName: branchName)
+                                Git.Operations.removeWorktree(projectPath: projectDir, worktreePath: worktreePath)
+                                if let branchName {
+                                    Git.Operations.deleteLocalBranch(at: projectDir, branchName: branchName)
+                                }
                             }
                             Git.Operations.fetchDefaultBranch(at: projectDir)
                             if let tmuxPath {

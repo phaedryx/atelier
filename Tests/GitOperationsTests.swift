@@ -1083,10 +1083,144 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertEqual(worktrees.first?.isMain, true)
     }
 
+    // MARK: - removeWorktree
+
+    /// `removeWorktree` deletes whatever path it is handed, whether or not git
+    /// agreed to remove it. Handing it the project directory — which
+    /// `Workstream.Archiver.purge` did for any workstream with no worktree path —
+    /// therefore erased the user's checkout.
+    func testRemoveWorktreeRefusesToDeleteTheMainRepository() throws {
+        let repoDir = tempDir.appendingPathComponent("main-repo")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-q"], in: repoDir)
+        let file = repoDir.appendingPathComponent("keep-me.txt")
+        try "important".write(to: file, atomically: true, encoding: .utf8)
+
+        Git.Operations.removeWorktree(projectPath: repoDir.path, worktreePath: repoDir.path)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: repoDir.path), "the main checkout must survive")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path), "its contents must survive")
+    }
+
+    /// The same guard has to hold when the two paths differ only by a trailing
+    /// slash or a `.` segment, since callers pass unstandardized user paths.
+    func testRemoveWorktreeRefusesTheMainRepositoryUnderAnUnstandardizedPath() throws {
+        let repoDir = tempDir.appendingPathComponent("main-repo")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-q"], in: repoDir)
+
+        Git.Operations.removeWorktree(projectPath: repoDir.path, worktreePath: repoDir.path + "/./")
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: repoDir.path))
+    }
+
+    /// Comparing the two spellings textually is not enough. A stored worktree path
+    /// and a picked project directory can reach the same place through different
+    /// symlinks — on macOS `/tmp` and `/var` are themselves symlinks — and
+    /// `removeItem` follows a symlinked *parent* straight to the real directory.
+    func testRemoveWorktreeRefusesTheMainRepositoryReachedThroughASymlinkedParent() throws {
+        let realParent = tempDir.appendingPathComponent("real")
+        let repoDir = realParent.appendingPathComponent("main-repo")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-q"], in: repoDir)
+        let linkedParent = tempDir.appendingPathComponent("linked")
+        try FileManager.default.createSymbolicLink(at: linkedParent, withDestinationURL: realParent)
+
+        Git.Operations.removeWorktree(
+            projectPath: repoDir.path,
+            worktreePath: linkedParent.appendingPathComponent("main-repo").path
+        )
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: repoDir.path), "the main checkout must survive")
+    }
+
+    /// The guard must not cost the feature: a real linked worktree still goes.
+    func testRemoveWorktreeRemovesALinkedWorktree() throws {
+        let container = try makeBareContainer(named: "bare-project")
+        let checkout = container.appendingPathComponent("main")
+        git(["worktree", "add", "-q", "feature", "-b", "feature"], in: checkout)
+        let feature = checkout.appendingPathComponent("feature")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: feature.path), "precondition")
+
+        Git.Operations.removeWorktree(projectPath: checkout.path, worktreePath: feature.path)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: feature.path))
+    }
+
+    /// `purgeOrphanWorktree` depends on the filesystem fallback: git has already
+    /// forgotten the worktree, so `git worktree remove` fails and the directory
+    /// is only cleaned up because `removeWorktree` deletes it anyway.
+    func testRemoveWorktreeStillDeletesADirectoryGitHasForgotten() throws {
+        let container = try makeBareContainer(named: "bare-project")
+        let checkout = container.appendingPathComponent("main")
+        let orphan = checkout.appendingPathComponent("orphan")
+        try FileManager.default.createDirectory(at: orphan, withIntermediateDirectories: true)
+
+        Git.Operations.removeWorktree(projectPath: checkout.path, worktreePath: orphan.path)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: orphan.path))
+    }
+
+    // MARK: - updateDefaultBranch
+
+    /// `update-ref` moved the local branch onto origin's tip unconditionally, so
+    /// commits that had not been pushed became unreachable with no warning.
+    func testUpdateDefaultBranchKeepsCommitsOriginDoesNotHave() throws {
+        let (origin, clone) = try makeOriginAndClone()
+
+        try "local work".write(to: clone.appendingPathComponent("local.txt"), atomically: true, encoding: .utf8)
+        git(["add", "."], in: clone)
+        git(["commit", "-q", "-m", "unpushed"], in: clone)
+        let localHead = gitOutput(["rev-parse", "refs/heads/main"], in: clone)
+        XCTAssertNotEqual(localHead, gitOutput(["rev-parse", "refs/heads/main"], in: origin), "precondition")
+
+        Git.Operations.updateDefaultBranch(at: clone.path)
+
+        XCTAssertEqual(
+            gitOutput(["rev-parse", "refs/heads/main"], in: clone),
+            localHead,
+            "the branch must not be moved off commits origin does not have"
+        )
+    }
+
+    /// The fast-forward case is the whole point of the function and must survive
+    /// the guard.
+    func testUpdateDefaultBranchFastForwardsWhenTheLocalBranchIsBehind() throws {
+        let (origin, clone) = try makeOriginAndClone()
+
+        try "more".write(to: origin.appendingPathComponent("second.txt"), atomically: true, encoding: .utf8)
+        git(["add", "."], in: origin)
+        git(["commit", "-q", "-m", "second"], in: origin)
+        let originHead = gitOutput(["rev-parse", "refs/heads/main"], in: origin)
+
+        Git.Operations.updateDefaultBranch(at: clone.path)
+
+        XCTAssertEqual(gitOutput(["rev-parse", "refs/heads/main"], in: clone), originHead)
+    }
+
     // MARK: - Helpers
 
     private func standardized(_ path: String) -> String {
         URL(fileURLWithPath: path).standardizedFileURL.path
+    }
+
+    /// A non-bare "origin" repository on `main` plus a clone of it, so the
+    /// fetch/update path in `updateDefaultBranch` has something real to talk to.
+    private func makeOriginAndClone() throws -> (origin: URL, clone: URL) {
+        let origin = tempDir.appendingPathComponent("origin")
+        try FileManager.default.createDirectory(at: origin, withIntermediateDirectories: true)
+        git(["init", "-q", "-b", "main"], in: origin)
+        git(["config", "user.email", "test@example.com"], in: origin)
+        git(["config", "user.name", "Test"], in: origin)
+        try "one".write(to: origin.appendingPathComponent("first.txt"), atomically: true, encoding: .utf8)
+        git(["add", "."], in: origin)
+        git(["commit", "-q", "-m", "first"], in: origin)
+
+        let clone = tempDir.appendingPathComponent("clone")
+        git(["clone", "-q", origin.path, clone.path], in: tempDir)
+        git(["config", "user.email", "test@example.com"], in: clone)
+        git(["config", "user.name", "Test"], in: clone)
+        return (origin, clone)
     }
 
     /// Builds the README's layout: `<container>/{.bare, .git, main}` with HEAD

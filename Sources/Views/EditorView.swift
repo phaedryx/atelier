@@ -549,12 +549,45 @@ struct EditorView: View {
 
         do {
             try content.write(to: url, atomically: true, encoding: .utf8)
+            // The editor now edits the file it was just saved to. Without this,
+            // `currentFilePath` still names the file Save As was invoked *from*,
+            // and the next ⌘S writes this content back over it — the one file the
+            // user was deliberately leaving alone.
+            let saved = Self.editedPath(forFileSavedTo: url, workingDirectory: workingDirectory)
+            currentFilePath = saved
+            onFileChanged?(saved)
+            if saved != nil {
+                bridge.openFile(
+                    modelId: modelId,
+                    text: content,
+                    languageId: Self.monacoLanguageId(for: url.lastPathComponent),
+                    filePath: url.path
+                )
+            }
             bridge.markClean(modelId: modelId)
             isDirtyState = false
 
         } catch {
             loadError = error.localizedDescription
         }
+    }
+
+    /// The editor-relative path for a file Save As just wrote, or nil when it
+    /// landed outside the working directory.
+    ///
+    /// `currentFilePath` is resolved against `workingDirectory` by everything
+    /// that reads it, so a file outside has no representation here. Nil detaches
+    /// the editor, which makes `saveFile` a no-op — the honest outcome, and far
+    /// better than keeping a path that now names a different file. The comparison
+    /// standardizes both sides and appends a separator so `…/project-backup` is
+    /// not read as a child of `…/project`.
+    static func editedPath(forFileSavedTo url: URL, workingDirectory: String) -> String? {
+        let root = URL(fileURLWithPath: workingDirectory).standardizedFileURL.path
+        let saved = url.standardizedFileURL.path
+        let boundary = root.hasSuffix("/") ? root : root + "/"
+        guard saved.hasPrefix(boundary) else { return nil }
+        let relative = String(saved.dropFirst(boundary.count))
+        return relative.isEmpty ? nil : relative
     }
 
     // MARK: - Language Detection

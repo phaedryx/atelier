@@ -589,8 +589,32 @@ extension Git {
         }
 
         /// Remove a git worktree.
+        ///
+        /// The directory goes whether or not git agreed to drop it: an orphan —
+        /// one git has already forgotten — is only ever cleaned up by that
+        /// fallback, and `purgeOrphanWorktree` depends on it. So `worktreePath` is
+        /// a destructive argument rather than a hint, and it is checked before
+        /// anything runs. `Workstream.Archiver.purge` used to pass the project
+        /// directory for a workstream that had no worktree path yet, and this
+        /// deleted the user's checkout: git refuses to remove a main working tree,
+        /// but the `removeItem` below never asked.
+        ///
+        /// Symlinks are resolved before the two are compared, because the same
+        /// directory reaches here under different spellings — a stored worktree
+        /// path and a picked project directory need not agree on `/tmp` vs
+        /// `/private/tmp`, and `removeItem` follows a symlinked parent to the real
+        /// directory.
         static func removeWorktree(projectPath: String, worktreePath: String) {
-            let worktreeDir = URL(fileURLWithPath: worktreePath)
+            let worktreeDir = URL(fileURLWithPath: worktreePath).standardizedFileURL
+            let resolvedWorktree = worktreeDir.resolvingSymlinksInPath().path
+            let resolvedProject = URL(fileURLWithPath: projectPath)
+                .standardizedFileURL.resolvingSymlinksInPath().path
+            guard resolvedWorktree != resolvedProject else {
+                logger.error(
+                    "[Atelier] Refusing to remove \(resolvedProject, privacy: .public): that is the project directory, not a worktree of it"
+                )
+                return
+            }
 
             _ = runOnWholeTree(args: ["worktree", "remove", "--force", worktreePath], in: projectPath)
 
@@ -959,8 +983,22 @@ extension Git {
                 return
             }
 
-            // Move the local ref to match origin
-            guard run(args: ["update-ref", "refs/heads/\(branch)", "refs/remotes/origin/\(branch)"], in: path) != nil else {
+            // Move the local ref to match origin — but only when that is a
+            // fast-forward. `update-ref` does not care what it is overwriting, so
+            // pointing the branch at origin's tip while the local branch holds
+            // commits origin has never seen makes them unreachable: no warning, no
+            // conflict, and nothing in the UI that would send the user looking in
+            // the reflog. `merge-base --is-ancestor` exits non-zero — and `run`
+            // returns nil — exactly when that would happen.
+            let localRef = "refs/heads/\(branch)"
+            let originRef = "refs/remotes/origin/\(branch)"
+            guard run(args: ["merge-base", "--is-ancestor", localRef, originRef], in: path) != nil else {
+                logger.info(
+                    "[Atelier] \(branch, privacy: .public) has commits origin does not, leaving it where it is"
+                )
+                return
+            }
+            guard run(args: ["update-ref", localRef, originRef], in: path) != nil else {
                 return
             }
 

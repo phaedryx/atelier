@@ -49,9 +49,15 @@ final class StoredPromptStore: ObservableObject {
         ]
     }
 
+    /// Element-wise, and the seed list only when the key is genuinely absent.
+    ///
+    /// Falling back to the seeds on a *failed* read is what made this
+    /// destructive: the user was handed two prompts they never wrote, and the
+    /// first `add`/`update`/`remove` saved those over the ones they had.
+    /// `LossyStore` keeps whatever it could not read under a second key, so a
+    /// partial read costs the records that could not be parsed and nothing else.
     static func load(from defaults: UserDefaults) -> [StoredPrompt] {
-        guard let data = defaults.data(forKey: storageKey) else { return defaultPrompts() }
-        return (try? JSONDecoder().decode([StoredPrompt].self, from: data)) ?? defaultPrompts()
+        LossyStore.loadArray(StoredPrompt.self, forKey: storageKey, from: defaults) ?? defaultPrompts()
     }
 
     func prompt(id: UUID) -> StoredPrompt? {

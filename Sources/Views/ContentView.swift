@@ -769,11 +769,12 @@ struct ContentView: View {
 enum ProjectStore {
     private static let userDefaultsKey = "atelier.projects"
 
+    /// Element-wise, because `save` below writes straight back over this key: a
+    /// read that discarded the whole list over one unreadable project turned the
+    /// user's next edit into a permanent deletion of all of them. See
+    /// `LossyStore`.
     static func load(defaults: UserDefaults = .standard) -> [Project] {
-        guard let data = defaults.data(forKey: userDefaultsKey),
-              let projects = try? JSONDecoder().decode([Project].self, from: data)
-        else { return [] }
-        return projects
+        LossyStore.loadArray(Project.self, forKey: userDefaultsKey, from: defaults) ?? []
     }
 
     static func save(_ projects: [Project], defaults: UserDefaults = .standard) {

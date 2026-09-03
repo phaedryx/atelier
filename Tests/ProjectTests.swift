@@ -195,6 +195,86 @@ final class ProjectTests: XCTestCase {
         XCTAssertEqual(loaded.first?.workstreams.map(\.name), ["dev", "main"])
     }
 
+    // MARK: - One unreadable record must not take the rest with it
+
+    /// The whole `[Project]` array went through a single `try?`, so any element
+    /// the current shape could not read discarded every element — and the next
+    /// save wrote the empty list back over the blob.
+    func testProjectStoreKeepsTheProjectsItCanReadWhenOneIsUnreadable() {
+        let good = UUID()
+        let json = """
+        [{
+          "id": "\(good.uuidString)",
+          "name": "good",
+          "directory": "/good",
+          "lastAccessedAt": 0,
+          "workstreams": []
+        },
+        {
+          "name": "no id, no directory, not a project"
+        }]
+        """
+        testDefaults.set(Data(json.utf8), forKey: "atelier.projects")
+
+        let loaded = ProjectStore.load(defaults: testDefaults)
+
+        XCTAssertEqual(loaded.map(\.name), ["good"])
+        XCTAssertEqual(loaded.first?.id, good)
+    }
+
+    /// A workstream is nested inside a project, so one that cannot be decoded
+    /// used to take its project — and therefore every other project — with it.
+    func testProjectStoreKeepsAProjectWhenOneOfItsWorkstreamsIsUnreadable() {
+        let json = """
+        [{
+          "id": "\(UUID().uuidString)",
+          "name": "one",
+          "directory": "/one",
+          "lastAccessedAt": 0,
+          "workstreams": [
+            {
+              "id": "\(UUID().uuidString)",
+              "name": "dev",
+              "bypassPermissions": false,
+              "lastAccessedAt": 0
+            },
+            { "name": "no id, not a workstream" }
+          ]
+        }]
+        """
+        testDefaults.set(Data(json.utf8), forKey: "atelier.projects")
+
+        let loaded = ProjectStore.load(defaults: testDefaults)
+
+        XCTAssertEqual(loaded.count, 1, "the project must survive its unreadable workstream")
+        XCTAssertEqual(loaded.first?.workstreams.map(\.name), ["dev"])
+    }
+
+    /// Dropping what cannot be read is only safe if what was dropped is still
+    /// somewhere: the next `save` overwrites the blob, and without this the
+    /// bytes are gone for good.
+    func testProjectStoreKeepsTheOriginalBlobWhenItCouldNotBeReadInFull() {
+        let json = """
+        [{ "name": "not a project" }]
+        """
+        testDefaults.set(Data(json.utf8), forKey: "atelier.projects")
+
+        _ = ProjectStore.load(defaults: testDefaults)
+        ProjectStore.save([Project(name: "new", directory: "/new")], defaults: testDefaults)
+
+        let kept = testDefaults.data(forKey: "atelier.projects" + LossyStore.unreadableKeySuffix)
+        XCTAssertEqual(kept.map { String(decoding: $0, as: UTF8.self) }, json)
+    }
+
+    /// A blob that reads cleanly must not leave a copy behind.
+    func testProjectStoreKeepsNoBlobWhenEverythingReads() {
+        ProjectStore.save([Project(name: "one", directory: "/one")], defaults: testDefaults)
+
+        _ = ProjectStore.load(defaults: testDefaults)
+
+        XCTAssertNil(testDefaults.data(forKey: "atelier.projects" + LossyStore.unreadableKeySuffix))
+    }
+
     // MARK: - Inline rename
 
     func testApplyRenameSetsDisplayNameOverride() {
