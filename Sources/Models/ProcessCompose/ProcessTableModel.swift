@@ -28,7 +28,7 @@ final class ProcessTableModel: ObservableObject {
     /// previous run's rows.
     private var generation = 0
 
-    /// Matches PortDetector's cadence. The API also offers a push stream, which
+    /// Matches Port.Detector's cadence. The API also offers a push stream, which
     /// is the later optimisation once this is proven.
     private static let pollInterval = Duration.seconds(1)
 

@@ -271,7 +271,7 @@ struct TerminalContainerView: View {
     @State private var fileFinderRequest = 0
     @State private var cachedClaudeCommand: String?
     @State private var draggedCustomTab: WorkspaceTab?
-    @StateObject private var portDetector: PortDetector
+    @StateObject private var portDetector: Port.Detector
     @State private var browserStartPending = false
     @State private var devCommandOverride: String?
     @State private var resolvedDevCommand: DevCommand?
@@ -352,7 +352,7 @@ struct TerminalContainerView: View {
         self.bypassPermissions = bypassPermissions
         self.isActive = isActive
         self.model = model
-        _portDetector = StateObject(wrappedValue: PortDetector(workstreamID: workstreamID))
+        _portDetector = StateObject(wrappedValue: Port.Detector(workstreamID: workstreamID))
         _processTable = StateObject(wrappedValue: ProcessTableModel(
             socketPath: PhaseRunner.socketPath(for: workstreamID)
         ))
@@ -397,7 +397,7 @@ struct TerminalContainerView: View {
     }
 
     private var workstreamPort: Int {
-        PortAllocator.port(for: workingDirectory)
+        Port.Allocator.port(for: workingDirectory)
     }
 
     /// A declared `browser: true` port wins over detection: Atelier assigned it,

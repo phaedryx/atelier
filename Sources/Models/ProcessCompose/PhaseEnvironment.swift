@@ -21,7 +21,7 @@ private let logger = Logger(subsystem: "atelier", category: "phase-environment")
 ///
 /// The port plan is resolved here rather than passed in, because neither call
 /// site — worktree creation and archive — has one of its own to hand over.
-/// `PortAllocator` is deterministic per worktree and per variable name, so a
+/// `Port.Allocator` is deterministic per worktree and per variable name, so a
 /// plan resolved here lands on the same numbers Start does, modulo the liveness
 /// probe: both walk forward past a port that happens to be bound at the moment
 /// they look, and what is bound differs between worktree creation and Start.
@@ -46,7 +46,7 @@ enum PhaseEnvironment {
             workstreamName: workstreamName,
             projectDirectory: projectDirectory,
             workingDirectory: worktreePath,
-            port: PortAllocator.port(for: worktreePath),
+            port: Port.Allocator.port(for: worktreePath),
             defaultBranch: defaultBranch,
             portPlan: portPlan(projectDirectory: projectDirectory, worktreePath: worktreePath)
         )

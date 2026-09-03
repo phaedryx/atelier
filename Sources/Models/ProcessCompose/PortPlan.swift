@@ -24,7 +24,7 @@ struct PortPlan: Equatable {
     static func resolve(
         _ config: PortsConfig,
         workingDirectory: String,
-        isFree: (Int) -> Bool = PortAllocator.isPortFree
+        isFree: (Int) -> Bool = Port.Allocator.isPortFree
     ) -> PortPlan {
         var values: [String: String] = [:]
         var claimed: Set<Int> = []
@@ -41,7 +41,7 @@ struct PortPlan: Equatable {
 
         for entry in config.entries {
             guard entry.kind == .assigned else { continue }
-            let port = PortAllocator.availablePort(
+            let port = Port.Allocator.availablePort(
                 for: workingDirectory,
                 salt: entry.name,
                 claimed: claimed,

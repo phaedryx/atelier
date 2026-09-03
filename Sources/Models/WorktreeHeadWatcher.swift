@@ -14,7 +14,7 @@ private let logger = Logger(subsystem: "atelier", category: "head-watcher")
 /// replace HEAD through a lockfile — write `HEAD.lock`, rename it over `HEAD` —
 /// which swaps the inode out from under any descriptor opened on the old file.
 /// A watch on the directory survives that, and costs one descriptor per worktree
-/// instead of two (compare `PortDetector`, which watches a single fixed file and
+/// instead of two (compare `Port.Detector`, which watches a single fixed file and
 /// therefore has to reattach when it is replaced).
 ///
 /// **The callback is a hint, not a diff.** That directory is noisy: ordinary git

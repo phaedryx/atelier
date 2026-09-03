@@ -19,7 +19,7 @@ final class PortPlanTests: XCTestCase {
             isFree: allFree
         )
 
-        XCTAssertEqual(plan.values["BFF_PORT"], "\(PortAllocator.port(for: worktree, salt: "BFF_PORT"))")
+        XCTAssertEqual(plan.values["BFF_PORT"], "\(Port.Allocator.port(for: worktree, salt: "BFF_PORT"))")
     }
 
     func testFixedPortIsUsedVerbatim() {
@@ -35,7 +35,7 @@ final class PortPlanTests: XCTestCase {
     /// A fixed port is reserved before anything is assigned, so an assigned
     /// port can never land on it — even when the hash says it should.
     func testAssignedPortNeverCollidesWithAFixedOne() {
-        let hashed = PortAllocator.port(for: worktree, salt: "BFF_PORT")
+        let hashed = Port.Allocator.port(for: worktree, salt: "BFF_PORT")
 
         let plan = PortPlan.resolve(
             config([
@@ -71,7 +71,7 @@ final class PortPlanTests: XCTestCase {
     }
 
     func testAssignedPortSkipsPortsInUse() {
-        let hashed = PortAllocator.port(for: worktree, salt: "BFF_PORT")
+        let hashed = Port.Allocator.port(for: worktree, salt: "BFF_PORT")
 
         let plan = PortPlan.resolve(
             config([PortEntry(name: "BFF_PORT", kind: .assigned, isBrowser: false)]),
