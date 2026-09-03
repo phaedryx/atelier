@@ -86,7 +86,7 @@ struct ContentView: View {
 
     @StateObject private var surfaceCache = TerminalSurfaceCache()
     @StateObject private var appEnvironment = AppEnvironment()
-    @StateObject private var usageStore = UsageStore()
+    @StateObject private var usageStore = Usage.Store()
     @ObservedObject private var agentStateTracker = Workstream.AgentStateTracker.shared
     @State private var saveWork: DispatchWorkItem?
     @State private var workstreamToRemove: UUID?
@@ -787,7 +787,7 @@ enum ProjectStore {
 /// over its time limit.
 private struct UsagePolling: ViewModifier {
     @Environment(\.scenePhase) private var scenePhase
-    let store: UsageStore
+    let store: Usage.Store
 
     /// Whether any window is actually on screen. Injectable for tests.
     ///
@@ -798,7 +798,7 @@ private struct UsagePolling: ViewModifier {
     /// "nobody can see the meter" from "the meter just isn't frontmost".
     var isOnScreen: () -> Bool = { NSApp.windows.contains(where: \.isVisible) }
 
-    /// Matches `UsageStore`'s own throttle, so a tick that lands early is a
+    /// Matches `Usage.Store`'s own throttle, so a tick that lands early is a
     /// cheap no-op rather than a spawned process.
     private static let interval: TimeInterval = 300
 
