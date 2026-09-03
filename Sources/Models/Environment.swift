@@ -204,15 +204,15 @@ final class AppEnvironment: ObservableObject {
     /// Fetched story per worktree path. Keyed by path, not story id, because
     /// `WorkstreamInfoView` receives `workingDirectory` but never the `Workstream`
     /// itself — the same reason `taskDescriptionCache` is keyed this way.
-    private var shortcutStoryCache: [String: ShortcutStory] = [:]
+    private var shortcutStoryCache: [String: Shortcut.Story] = [:]
     /// Worktree path to story id, populated from the project list, which is the only
     /// place that knows the mapping.
     private var shortcutStoryIDs: [String: Int] = [:]
     /// Workflow states are shared across all stories and change rarely, so they are
     /// fetched once per launch rather than per story.
-    private var shortcutWorkflows: [ShortcutWorkflow] = []
+    private var shortcutWorkflows: [Shortcut.Workflow] = []
 
-    func shortcutStory(for worktreePath: String?) -> ShortcutStory? {
+    func shortcutStory(for worktreePath: String?) -> Shortcut.Story? {
         guard let worktreePath else { return nil }
         return shortcutStoryCache[worktreePath]
     }
@@ -230,9 +230,9 @@ final class AppEnvironment: ObservableObject {
     /// in hand — but the worktree path, which is how the cache is keyed, is only known once
     /// `git worktree add` finishes. Staging keeps that first fetch instead of discarding it
     /// and round-tripping again when the info tab opens.
-    private var shortcutStoryStaging: [Int: ShortcutStory] = [:]
+    private var shortcutStoryStaging: [Int: Shortcut.Story] = [:]
 
-    func stageShortcutStory(_ story: ShortcutStory) {
+    func stageShortcutStory(_ story: Shortcut.Story) {
         shortcutStoryStaging[story.id] = story
     }
 
@@ -276,7 +276,7 @@ final class AppEnvironment: ObservableObject {
 
         if shortcutWorkflows.isEmpty {
             do {
-                let workflows = try await ShortcutClient().workflows()
+                let workflows = try await Shortcut.Client().workflows()
                 commitChanges { shortcutWorkflows = workflows }
             } catch {
                 // Only costs the state name; the story itself still renders.
@@ -285,7 +285,7 @@ final class AppEnvironment: ObservableObject {
         }
 
         do {
-            let story = try await ShortcutClient().story(id: storyID)
+            let story = try await Shortcut.Client().story(id: storyID)
             guard shortcutStoryCache[worktreePath] != story else { return }
             commitChanges { shortcutStoryCache[worktreePath] = story }
         } catch {

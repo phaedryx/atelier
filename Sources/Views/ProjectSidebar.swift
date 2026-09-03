@@ -64,17 +64,17 @@ struct ProjectSidebar: View {
     @State private var pendingWorkstreamProjectID: UUID?
     @State private var pendingWorkstreamBypass: Bool?
 
-    @AppStorage(ShortcutSettings.buttonEnabledKey) private var shortcutButtonEnabled: Bool = true
-    @AppStorage(ShortcutSettings.branchTemplateKey) private var branchTemplate: String = ""
+    @AppStorage(Shortcut.Settings.buttonEnabledKey) private var shortcutButtonEnabled: Bool = true
+    @AppStorage(Shortcut.Settings.branchTemplateKey) private var branchTemplate: String = ""
     /// Keychain presence is not observable, so this is seeded at init and refreshed
-    /// whenever Settings posts `ShortcutSettings.tokenChanged`. It can still go stale if
+    /// whenever Settings posts `Shortcut.Settings.tokenChanged`. It can still go stale if
     /// the item is removed outside the app; that surfaces as a `.noToken` error in the
     /// dialog rather than a hidden button.
     @State private var hasShortcutToken = KeychainTokenStore().hasToken
     @State private var showingShortcutStory = false
     @State private var shortcutStoryInput = ""
     @State private var shortcutError = ""
-    /// Set from the `ShortcutError` case, so the Settings link never depends on message wording.
+    /// Set from the `Shortcut.Error` case, so the Settings link never depends on message wording.
     @State private var shortcutErrorNeedsToken = false
     @State private var shortcutFetching = false
     /// Held so Cancel can actually stop it. Without this the fetch completes after the
@@ -173,7 +173,7 @@ struct ProjectSidebar: View {
                 onAdd: { logger.warning("[Atelier] onAdd button tapped for project \(project.name, privacy: .public)"); addWorkstream(for: project.id) },
                 onAddWithPermissions: { addWorkstream(for: project.id, bypassPermissions: true) },
                 onAddWithoutPermissions: { addWorkstream(for: project.id, bypassPermissions: false) },
-                showShortcutButton: ShortcutSettings.shouldShowButton(
+                showShortcutButton: Shortcut.Settings.shouldShowButton(
                     isGitRepo: appEnv.isGitRepo(project.directory),
                     toggleEnabled: shortcutButtonEnabled,
                     hasToken: hasShortcutToken
@@ -433,7 +433,7 @@ struct ProjectSidebar: View {
                     }
                 )
             }
-            .onReceive(NotificationCenter.default.publisher(for: ShortcutSettings.tokenChanged)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: Shortcut.Settings.tokenChanged)) { _ in
                 hasShortcutToken = KeychainTokenStore().hasToken
             }
             .onReceive(NotificationCenter.default.publisher(for: .addProject)) { _ in
@@ -568,7 +568,7 @@ struct ProjectSidebar: View {
         // leave the Settings link showing next to an unrelated validation message.
         shortcutErrorNeedsToken = false
 
-        guard let storyID = ShortcutStoryID.parse(shortcutStoryInput) else {
+        guard let storyID = Shortcut.StoryID.parse(shortcutStoryInput) else {
             shortcutError = NSLocalizedString(
                 "Enter a story id.",
                 comment: "Shortcut story input validation error"
@@ -584,14 +584,14 @@ struct ProjectSidebar: View {
 
         shortcutFetchTask = Task {
             do {
-                let story = try await ShortcutClient().story(id: storyID)
+                let story = try await Shortcut.Client().story(id: storyID)
                 // The sheet may have been cancelled while the request was in flight; the
                 // 15s timeout makes that window wide on a slow network. Creating a
                 // workstream after the user dismissed the dialog is the worst outcome here.
                 guard !Task.isCancelled, pendingWorkstreamProjectID == projectID else { return }
                 shortcutFetching = false
 
-                let name = ShortcutBranchName.render(branchTemplate, story: story)
+                let name = Shortcut.BranchName.render(branchTemplate, story: story)
                 guard GitOperations.isValidBranchName(name) else {
                     shortcutError = NSLocalizedString(
                         "Shortcut suggested a branch name git will not accept.",
@@ -629,7 +629,7 @@ struct ProjectSidebar: View {
                     bypass: bypass,
                     shortcutStoryID: story.id
                 )
-            } catch let error as ShortcutError {
+            } catch let error as Shortcut.Error {
                 guard !Task.isCancelled, pendingWorkstreamProjectID == projectID else { return }
                 shortcutFetching = false
                 shortcutError = error.message

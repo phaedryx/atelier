@@ -3,30 +3,32 @@
 
 import Foundation
 
-enum ShortcutStoryID {
-    private static let urlMarker = "/story/"
-    private static let prefix = "sc-"
+extension Shortcut {
+    enum StoryID {
+        private static let urlMarker = "/story/"
+        private static let prefix = "sc-"
 
-    /// Returns the story id, or nil when the input is not one.
-    ///
-    /// Nil is the signal the dialog uses to reject input, so this must stay strict:
-    /// an ordinary branch name like `release-2` has to come back nil rather than
-    /// being coerced into an id.
-    static func parse(_ input: String) -> Int? {
-        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        /// Returns the story id, or nil when the input is not one.
+        ///
+        /// Nil is the signal the dialog uses to reject input, so this must stay strict:
+        /// an ordinary branch name like `release-2` has to come back nil rather than
+        /// being coerced into an id.
+        static func parse(_ input: String) -> Int? {
+            let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
 
-        let candidate: String = if let marker = trimmed.range(of: urlMarker) {
-            // A pasted URL usually carries a trailing slug: .../story/17411/some-title
-            String(trimmed[marker.upperBound...].prefix { $0.isNumber })
-        } else if trimmed.count > prefix.count, trimmed.prefix(prefix.count).lowercased() == prefix {
-            String(trimmed.dropFirst(prefix.count))
-        } else {
-            trimmed
+            let candidate: String = if let marker = trimmed.range(of: urlMarker) {
+                // A pasted URL usually carries a trailing slug: .../story/17411/some-title
+                String(trimmed[marker.upperBound...].prefix { $0.isNumber })
+            } else if trimmed.count > prefix.count, trimmed.prefix(prefix.count).lowercased() == prefix {
+                String(trimmed.dropFirst(prefix.count))
+            } else {
+                trimmed
+            }
+
+            // Public ids are positive, so 0 and negatives are malformed input rather than ids.
+            guard let id = Int(candidate), id > 0 else { return nil }
+            return id
         }
-
-        // Public ids are positive, so 0 and negatives are malformed input rather than ids.
-        guard let id = Int(candidate), id > 0 else { return nil }
-        return id
     }
 }

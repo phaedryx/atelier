@@ -488,18 +488,18 @@ private struct PromptEditorSheet: View {
 /// Named for the category, not the vendor: a second integration becomes another
 /// `Section` here rather than a seventh pane.
 private struct IntegrationsSettingsPane: View {
-    @AppStorage(ShortcutSettings.buttonEnabledKey) private var shortcutButtonEnabled: Bool = true
-    @AppStorage(ShortcutSettings.branchTemplateKey) private var branchTemplate: String = ""
+    @AppStorage(Shortcut.Settings.buttonEnabledKey) private var shortcutButtonEnabled: Bool = true
+    @AppStorage(Shortcut.Settings.branchTemplateKey) private var branchTemplate: String = ""
     @AppStorage(ProcessComposeSettings.enabledKey) private var processComposeEnabled = false
     @AppStorage(ProcessComposeSettings.binaryPathKey) private var processComposeBinary = ""
 
     private var branchPreviewIsValid: Bool {
-        GitOperations.isValidBranchName(ShortcutBranchName.preview(branchTemplate))
+        GitOperations.isValidBranchName(Shortcut.BranchName.preview(branchTemplate))
     }
 
     /// Unknown variables joined for display, or nil when the pattern is clean.
     private var branchTemplateUnknownVariables: String? {
-        let unknown = ShortcutBranchName.unknownVariables(in: branchTemplate)
+        let unknown = Shortcut.BranchName.unknownVariables(in: branchTemplate)
         guard !unknown.isEmpty else { return nil }
         return unknown.map { "${\($0)}" }.joined(separator: ", ")
     }
@@ -566,13 +566,13 @@ private struct IntegrationsSettingsPane: View {
                     // Rendered against a sample story, so the pattern's effect is visible
                     // without having to create a workstream to find out.
                     LabeledContent("Preview") {
-                        Text(ShortcutBranchName.preview(branchTemplate))
+                        Text(Shortcut.BranchName.preview(branchTemplate))
                             .font(.system(.body, design: .monospaced))
                             .foregroundStyle(branchPreviewIsValid ? Color.secondary : Color.red)
                             .textSelection(.enabled)
                     }
 
-                    Text("Leave blank to use the branch name Shortcut suggests. Variables: \(ShortcutBranchName.variables.map { "${\($0)}" }.joined(separator: ", ")) — for example \(ShortcutBranchName.examplePattern). SLUG is the first six words of the title; SLUG_FULL is all of them.")
+                    Text("Leave blank to use the branch name Shortcut suggests. Variables: \(Shortcut.BranchName.variables.map { "${\($0)}" }.joined(separator: ", ")) — for example \(Shortcut.BranchName.examplePattern). SLUG is the first six words of the title; SLUG_FULL is all of them.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
@@ -642,7 +642,7 @@ private struct IntegrationsSettingsPane: View {
         // assuming what landed.
         savedToken = store.read() ?? ""
         // Keychain presence is not observable, so the sidebar is told explicitly.
-        NotificationCenter.default.post(name: ShortcutSettings.tokenChanged, object: nil)
+        NotificationCenter.default.post(name: Shortcut.Settings.tokenChanged, object: nil)
 
         guard status == errSecSuccess else {
             // A silent failure here strands the user: the button never appears and the
@@ -666,14 +666,14 @@ private struct IntegrationsSettingsPane: View {
         testResult = nil
         Task {
             do {
-                let member = try await ShortcutClient(token: { candidate }).currentMember()
+                let member = try await Shortcut.Client(token: { candidate }).currentMember()
                 // Only commit a token that actually authenticated — and only report success
                 // if committing it worked. Reporting "Connected as …" after a failed write
                 // is the worst of both: the token authenticated, nothing was stored, and the
                 // sidebar button never appears.
                 let status = store.write(candidate)
                 savedToken = store.read() ?? ""
-                NotificationCenter.default.post(name: ShortcutSettings.tokenChanged, object: nil)
+                NotificationCenter.default.post(name: Shortcut.Settings.tokenChanged, object: nil)
                 guard status == errSecSuccess else {
                     testResult = .failure(String(
                         format: NSLocalizedString("Could not save to the Keychain (error %d).", comment: "Keychain write failure"),
@@ -687,7 +687,7 @@ private struct IntegrationsSettingsPane: View {
                     member.name,
                     member.workspaceName
                 ))
-            } catch let error as ShortcutError {
+            } catch let error as Shortcut.Error {
                 testResult = .failure(error.message)
             } catch {
                 testResult = .failure(error.localizedDescription)

@@ -10,7 +10,7 @@ final class ShortcutBranchNameTests: XCTestCase {
         name: String = "Org Import run card reads as nothing happened on an unchanged re-upload",
         type: String = "bug",
         branchName: String = "tadthorley/sc-17411/org-import-run-card-reads-as-nothing-happened"
-    ) -> ShortcutStory {
+    ) -> Shortcut.Story {
         let json = """
         {
           "id": \(id),
@@ -22,7 +22,7 @@ final class ShortcutBranchNameTests: XCTestCase {
           "workflow_state_id": 500000030
         }
         """
-        return try! JSONDecoder().decode(ShortcutStory.self, from: Data(json.utf8))
+        return try! JSONDecoder().decode(Shortcut.Story.self, from: Data(json.utf8))
     }
 
     private func jsonString(_ value: String) -> String {
@@ -32,13 +32,13 @@ final class ShortcutBranchNameTests: XCTestCase {
     // MARK: - The template the justfile uses
 
     func testReproducesTheJustfileConvention() {
-        let name = ShortcutBranchName.render("tad@sc-${STORY_ID}-${SLUG}", story: story())
+        let name = Shortcut.BranchName.render("tad@sc-${STORY_ID}-${SLUG}", story: story())
         XCTAssertEqual(name, "tad@sc-17411-org-import-run-card-reads-as")
     }
 
     func testJustfileConventionHasNoSlashes() {
         // The point of the @ form: no slashes means the worktree directory keeps this name.
-        let name = ShortcutBranchName.render("tad@sc-${STORY_ID}-${SLUG}", story: story())
+        let name = Shortcut.BranchName.render("tad@sc-${STORY_ID}-${SLUG}", story: story())
         XCTAssertFalse(name.contains("/"))
     }
 
@@ -46,11 +46,11 @@ final class ShortcutBranchNameTests: XCTestCase {
 
     func testEmptyTemplateUsesShortcutsOwnSuggestion() {
         XCTAssertEqual(
-            ShortcutBranchName.render("", story: story()),
+            Shortcut.BranchName.render("", story: story()),
             "tadthorley/sc-17411/org-import-run-card-reads-as-nothing-happened"
         )
         XCTAssertEqual(
-            ShortcutBranchName.render("   ", story: story()),
+            Shortcut.BranchName.render("   ", story: story()),
             "tadthorley/sc-17411/org-import-run-card-reads-as-nothing-happened"
         )
     }
@@ -58,21 +58,21 @@ final class ShortcutBranchNameTests: XCTestCase {
     // MARK: - Variables
 
     func testStoryIDSubstitution() {
-        XCTAssertEqual(ShortcutBranchName.render("sc-${STORY_ID}", story: story(id: 42)), "sc-42")
+        XCTAssertEqual(Shortcut.BranchName.render("sc-${STORY_ID}", story: story(id: 42)), "sc-42")
     }
 
     func testSlugIsTitleTruncatedToSixWords() {
-        let name = ShortcutBranchName.render("${SLUG}", story: story(id: 1, name: "one two three four five six seven eight"))
+        let name = Shortcut.BranchName.render("${SLUG}", story: story(id: 1, name: "one two three four five six seven eight"))
         XCTAssertEqual(name, "one-two-three-four-five-six")
     }
 
     func testSlugFullKeepsTheWholeTitle() {
-        let name = ShortcutBranchName.render("${SLUG_FULL}", story: story(id: 1, name: "one two three four five six seven eight"))
+        let name = Shortcut.BranchName.render("${SLUG_FULL}", story: story(id: 1, name: "one two three four five six seven eight"))
         XCTAssertEqual(name, "one-two-three-four-five-six-seven-eight")
     }
 
     func testSlugCollapsesPunctuation() {
-        let name = ShortcutBranchName.render(
+        let name = Shortcut.BranchName.render(
             "${SLUG}",
             story: story(id: 3, name: "Add Actionable convention: fields[include]/fields[only]")
         )
@@ -84,15 +84,15 @@ final class ShortcutBranchNameTests: XCTestCase {
     func testMentionComesFromShortcutsSuggestedName() {
         // Shortcut leads its suggestion with the member's mention name, which is the only
         // place to learn it without a second API call.
-        XCTAssertEqual(ShortcutBranchName.render("${MENTION}", story: story()), "tadthorley")
+        XCTAssertEqual(Shortcut.BranchName.render("${MENTION}", story: story()), "tadthorley")
     }
 
     func testTypeSubstitution() {
-        XCTAssertEqual(ShortcutBranchName.render("${TYPE}/sc-${STORY_ID}", story: story(type: "feature")), "feature/sc-17411")
+        XCTAssertEqual(Shortcut.BranchName.render("${TYPE}/sc-${STORY_ID}", story: story(type: "feature")), "feature/sc-17411")
     }
 
     func testAVariableMayAppearMoreThanOnce() {
-        XCTAssertEqual(ShortcutBranchName.render("${STORY_ID}-${STORY_ID}", story: story(id: 7)), "7-7")
+        XCTAssertEqual(Shortcut.BranchName.render("${STORY_ID}-${STORY_ID}", story: story(id: 7)), "7-7")
     }
 
     // MARK: - Robustness
@@ -100,22 +100,22 @@ final class ShortcutBranchNameTests: XCTestCase {
     func testUnknownVariableIsLeftAloneRatherThanBlanked() {
         // Silently dropping it would produce a plausible-looking wrong branch; leaving it
         // visible means the Settings preview shows the typo.
-        XCTAssertEqual(ShortcutBranchName.render("x-${NOPE}", story: story()), "x-${NOPE}")
+        XCTAssertEqual(Shortcut.BranchName.render("x-${NOPE}", story: story()), "x-${NOPE}")
     }
 
     func testTemplateWithNoVariablesIsUsedLiterally() {
-        XCTAssertEqual(ShortcutBranchName.render("fixed-branch", story: story()), "fixed-branch")
+        XCTAssertEqual(Shortcut.BranchName.render("fixed-branch", story: story()), "fixed-branch")
     }
 
     func testEmptySlugDoesNotLeaveATrailingSeparator() {
-        let name = ShortcutBranchName.render("tad@sc-${STORY_ID}-${SLUG}", story: story(id: 9, name: "!!! ???"))
+        let name = Shortcut.BranchName.render("tad@sc-${STORY_ID}-${SLUG}", story: story(id: 9, name: "!!! ???"))
         XCTAssertEqual(name, "tad@sc-9", "a title with no usable characters must not leave a dangling dash")
     }
 
     func testRenderedNamesAreValidGitBranchNames() {
         let awkward = story(id: 4, name: "  ...Leading dots & --dashes-- everywhere...  ")
         for template in ["tad@sc-${STORY_ID}-${SLUG}", "${MENTION}/sc-${STORY_ID}/${SLUG}", "", "${TYPE}/${SLUG_FULL}"] {
-            let name = ShortcutBranchName.render(template, story: awkward)
+            let name = Shortcut.BranchName.render(template, story: awkward)
             XCTAssertTrue(GitOperations.isValidBranchName(name), "template \(template) produced invalid branch: \(name)")
         }
     }
@@ -123,30 +123,30 @@ final class ShortcutBranchNameTests: XCTestCase {
     // MARK: - Unknown variable detection
 
     func testKnownVariablesReportNothingUnknown() {
-        XCTAssertEqual(ShortcutBranchName.unknownVariables(in: "tad@sc-${STORY_ID}-${SLUG}"), [])
-        XCTAssertEqual(ShortcutBranchName.unknownVariables(in: "${MENTION}/${TYPE}/${SLUG_FULL}"), [])
+        XCTAssertEqual(Shortcut.BranchName.unknownVariables(in: "tad@sc-${STORY_ID}-${SLUG}"), [])
+        XCTAssertEqual(Shortcut.BranchName.unknownVariables(in: "${MENTION}/${TYPE}/${SLUG_FULL}"), [])
     }
 
     func testUnknownVariableIsReported() {
         // Settings warns on this. A typo renders literally and is a *valid* git branch name,
         // so validation alone would never catch it.
-        XCTAssertEqual(ShortcutBranchName.unknownVariables(in: "x-${NOPE}"), ["NOPE"])
+        XCTAssertEqual(Shortcut.BranchName.unknownVariables(in: "x-${NOPE}"), ["NOPE"])
     }
 
     func testEveryUnknownVariableIsReportedInOrder() {
-        XCTAssertEqual(ShortcutBranchName.unknownVariables(in: "${AAA}-${SLUG}-${BBB}"), ["AAA", "BBB"])
+        XCTAssertEqual(Shortcut.BranchName.unknownVariables(in: "${AAA}-${SLUG}-${BBB}"), ["AAA", "BBB"])
     }
 
     func testTemplateWithoutVariablesReportsNothing() {
-        XCTAssertEqual(ShortcutBranchName.unknownVariables(in: "fixed-branch"), [])
-        XCTAssertEqual(ShortcutBranchName.unknownVariables(in: ""), [])
+        XCTAssertEqual(Shortcut.BranchName.unknownVariables(in: "fixed-branch"), [])
+        XCTAssertEqual(Shortcut.BranchName.unknownVariables(in: ""), [])
     }
 
     func testLoneDollarOrBraceIsNotTreatedAsAVariable() {
-        XCTAssertEqual(ShortcutBranchName.unknownVariables(in: "cost-$5-{x}"), [])
+        XCTAssertEqual(Shortcut.BranchName.unknownVariables(in: "cost-$5-{x}"), [])
     }
 
     func testStorageKeyIsStable() {
-        XCTAssertEqual(ShortcutSettings.branchTemplateKey, "atelier.shortcutBranchTemplate")
+        XCTAssertEqual(Shortcut.Settings.branchTemplateKey, "atelier.shortcutBranchTemplate")
     }
 }

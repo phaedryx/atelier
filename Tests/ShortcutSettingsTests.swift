@@ -6,25 +6,25 @@ import XCTest
 
 final class ShortcutSettingsTests: XCTestCase {
     func testShownWhenRepoAndTokenAndToggleOn() {
-        XCTAssertTrue(ShortcutSettings.shouldShowButton(isGitRepo: true, toggleEnabled: true, hasToken: true))
+        XCTAssertTrue(Shortcut.Settings.shouldShowButton(isGitRepo: true, toggleEnabled: true, hasToken: true))
     }
 
     func testHiddenWhenToggleOffDespiteValidToken() {
         // The toggle exists so someone with a working key can still hide the button.
-        XCTAssertFalse(ShortcutSettings.shouldShowButton(isGitRepo: true, toggleEnabled: false, hasToken: true))
+        XCTAssertFalse(Shortcut.Settings.shouldShowButton(isGitRepo: true, toggleEnabled: false, hasToken: true))
     }
 
     func testHiddenWhenNoTokenDespiteToggleOn() {
-        XCTAssertFalse(ShortcutSettings.shouldShowButton(isGitRepo: true, toggleEnabled: true, hasToken: false))
+        XCTAssertFalse(Shortcut.Settings.shouldShowButton(isGitRepo: true, toggleEnabled: true, hasToken: false))
     }
 
     func testHiddenOutsideAGitRepo() {
         // Matches the existing gate on the "+" button: a non-repo cannot take a worktree.
-        XCTAssertFalse(ShortcutSettings.shouldShowButton(isGitRepo: false, toggleEnabled: true, hasToken: true))
+        XCTAssertFalse(Shortcut.Settings.shouldShowButton(isGitRepo: false, toggleEnabled: true, hasToken: true))
     }
 
     func testKeyNamesAreStable() {
         // Persisted in UserDefaults; renaming silently resets the user's choice.
-        XCTAssertEqual(ShortcutSettings.buttonEnabledKey, "atelier.shortcutButtonEnabled")
+        XCTAssertEqual(Shortcut.Settings.buttonEnabledKey, "atelier.shortcutButtonEnabled")
     }
 }

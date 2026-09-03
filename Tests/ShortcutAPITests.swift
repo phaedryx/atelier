@@ -1,4 +1,4 @@
-// ABOUTME: Tests decoding of Shortcut API payloads and mapping of HTTP status to ShortcutError.
+// ABOUTME: Tests decoding of Shortcut API payloads and mapping of HTTP status to Shortcut.Error.
 // ABOUTME: Fixtures are trimmed from real responses for story sc-17411 in the Sixfifty workspace.
 
 @testable import Atelier
@@ -21,7 +21,7 @@ final class ShortcutAPITests: XCTestCase {
     """
 
     func testDecodesStory() throws {
-        let story = try JSONDecoder().decode(ShortcutStory.self, from: Data(storyJSON.utf8))
+        let story = try JSONDecoder().decode(Shortcut.Story.self, from: Data(storyJSON.utf8))
         XCTAssertEqual(story.id, 17411)
         XCTAssertEqual(story.name, "Org Import run card reads as nothing happened on an unchanged re-upload")
         XCTAssertEqual(story.branchName, "tadthorley/sc-17411/org-import-run-card-reads-as-nothing-happened")
@@ -41,7 +41,7 @@ final class ShortcutAPITests: XCTestCase {
           "workflow_state_id": 5
         }
         """
-        let story = try JSONDecoder().decode(ShortcutStory.self, from: Data(json.utf8))
+        let story = try JSONDecoder().decode(Shortcut.Story.self, from: Data(json.utf8))
         XCTAssertNil(story.description)
         XCTAssertEqual(story.branchName, "someone/sc-1/no-body")
     }
@@ -70,13 +70,13 @@ final class ShortcutAPITests: XCTestCase {
     """
 
     func testResolvesStateNameAcrossWorkflows() throws {
-        let workflows = try JSONDecoder().decode([ShortcutWorkflow].self, from: Data(workflowsJSON.utf8))
+        let workflows = try JSONDecoder().decode([Shortcut.Workflow].self, from: Data(workflowsJSON.utf8))
         XCTAssertEqual(workflows.stateName(for: 500000030), "In Progress")
         XCTAssertEqual(workflows.stateName(for: 500001691), "Started", "must search every workflow, not just the first")
     }
 
     func testUnknownStateIDResolvesToNil() throws {
-        let workflows = try JSONDecoder().decode([ShortcutWorkflow].self, from: Data(workflowsJSON.utf8))
+        let workflows = try JSONDecoder().decode([Shortcut.Workflow].self, from: Data(workflowsJSON.utf8))
         XCTAssertNil(workflows.stateName(for: 999))
     }
 
@@ -91,7 +91,7 @@ final class ShortcutAPITests: XCTestCase {
           "workspace2": { "name": "Sixfifty", "url_slug": "sixfifty" }
         }
         """
-        let member = try JSONDecoder().decode(ShortcutMember.self, from: Data(json.utf8))
+        let member = try JSONDecoder().decode(Shortcut.Member.self, from: Data(json.utf8))
         XCTAssertEqual(member.name, "Tad Thorley")
         XCTAssertEqual(member.mentionName, "tadthorley")
         XCTAssertEqual(member.workspaceName, "Sixfifty")
@@ -100,21 +100,21 @@ final class ShortcutAPITests: XCTestCase {
     // MARK: - Error mapping
 
     func testSuccessStatusMapsToNoError() {
-        XCTAssertNil(ShortcutError.forStatus(200))
-        XCTAssertNil(ShortcutError.forStatus(201))
+        XCTAssertNil(Shortcut.Error.forStatus(200))
+        XCTAssertNil(Shortcut.Error.forStatus(201))
     }
 
     func testUnauthorizedStatusMaps() {
-        XCTAssertEqual(ShortcutError.forStatus(401), .unauthorized)
-        XCTAssertEqual(ShortcutError.forStatus(403), .unauthorized)
+        XCTAssertEqual(Shortcut.Error.forStatus(401), .unauthorized)
+        XCTAssertEqual(Shortcut.Error.forStatus(403), .unauthorized)
     }
 
     func testNotFoundStatusMaps() {
-        XCTAssertEqual(ShortcutError.forStatus(404), .notFound)
+        XCTAssertEqual(Shortcut.Error.forStatus(404), .notFound)
     }
 
     func testOtherFailureStatusesCarryTheCode() {
-        XCTAssertEqual(ShortcutError.forStatus(500), .http(500))
-        XCTAssertEqual(ShortcutError.forStatus(429), .http(429))
+        XCTAssertEqual(Shortcut.Error.forStatus(500), .http(500))
+        XCTAssertEqual(Shortcut.Error.forStatus(429), .http(429))
     }
 }
