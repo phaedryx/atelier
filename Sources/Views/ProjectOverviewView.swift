@@ -11,7 +11,7 @@ struct ProjectOverviewView: View {
     let onProjectChanged: () -> Void
 
     @EnvironmentObject var appEnv: AppEnvironment
-    @AppStorage("atelier.workstreamSortOrder") private var workstreamSortOrder: ProjectSortOrder = .recent
+    @AppStorage("atelier.workstreamSortOrder") private var workstreamSortOrder: Project.SortOrder = .recent
     @State private var worktrees: [Worktree.Info] = []
     @State private var showingPruneConfirm = false
     @State private var isPruning = false
@@ -228,7 +228,7 @@ struct ProjectOverviewView: View {
                         Spacer()
                         if project.workstreams.count > 1 {
                             Picker("", selection: $workstreamSortOrder) {
-                                ForEach(ProjectSortOrder.allCases, id: \.self) { order in
+                                ForEach(Project.SortOrder.allCases, id: \.self) { order in
                                     Text(order.rawValue).tag(order)
                                 }
                             }

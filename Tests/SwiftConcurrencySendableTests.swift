@@ -8,7 +8,7 @@ final class SwiftConcurrencySendableTests: XCTestCase {
     func testCoreModelsAreSendable() {
         assertSendable(Project(name: "project", directory: "/tmp/project"))
         assertSendable(Workstream(name: "workstream"))
-        assertSendable(ProjectSortOrder.recent)
+        assertSendable(Project.SortOrder.recent)
         assertSendable(Git.RepoInfo(isRepo: true, branch: "main", remoteURL: nil, commitCount: 1, isDirty: false))
         assertSendable(Worktree.Info(path: "/tmp/project", branch: "main", isDirty: false, isMain: true, hasUnpushedCommits: false, hasBranchCommits: false))
         assertSendable(GitHub.RepoInfo(name: "repo", url: "https://example.com", description: nil, stars: 1, forks: 2, openIssues: 3))

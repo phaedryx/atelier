@@ -50,18 +50,20 @@ extension Worktree {
 /// These differ in the `.bare` container layout, where the directory the user
 /// points at (`<container>`) is a bare repository with no work tree: the project
 /// lives in the default branch's checkout, but keeps the container's name.
-struct ProjectLocation: Equatable {
-    let directory: String
-    let name: String
-    /// The `.bare` container this checkout sits in, when the path resolved
-    /// forward out of one. Projects saved before that resolution existed point
-    /// at the container, so callers can match them without re-running git.
-    let containerDirectory: String?
+extension Project {
+    struct Location: Equatable {
+        let directory: String
+        let name: String
+        /// The `.bare` container this checkout sits in, when the path resolved
+        /// forward out of one. Projects saved before that resolution existed point
+        /// at the container, so callers can match them without re-running git.
+        let containerDirectory: String?
 
-    init(directory: String, name: String, containerDirectory: String? = nil) {
-        self.directory = directory
-        self.name = name
-        self.containerDirectory = containerDirectory
+        init(directory: String, name: String, containerDirectory: String? = nil) {
+            self.directory = directory
+            self.name = name
+            self.containerDirectory = containerDirectory
+        }
     }
 }
 
@@ -823,18 +825,18 @@ extension Git {
         /// container has no work tree of its own (`git status` there fails outright
         /// and HEAD reads as the parked `root` branch), so it resolves *forward* to
         /// its default checkout instead, while keeping the container's name.
-        static func projectLocation(for path: String) -> ProjectLocation {
+        static func projectLocation(for path: String) -> Project.Location {
             let container = mainRepositoryPath(for: path) ?? path
 
             guard isBareRepository(at: container) else {
-                return ProjectLocation(directory: container, name: URL(fileURLWithPath: container).lastPathComponent)
+                return Project.Location(directory: container, name: URL(fileURLWithPath: container).lastPathComponent)
             }
 
             let name = URL(fileURLWithPath: container).lastPathComponent
             guard let checkout = defaultCheckoutPath(in: container) else {
-                return ProjectLocation(directory: container, name: name)
+                return Project.Location(directory: container, name: name)
             }
-            return ProjectLocation(directory: checkout, name: name, containerDirectory: container)
+            return Project.Location(directory: checkout, name: name, containerDirectory: container)
         }
 
         /// True when `path` resolves to a bare repository — the `.bare` container

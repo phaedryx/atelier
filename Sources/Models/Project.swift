@@ -84,7 +84,9 @@ struct Project: Identifiable, Hashable, Codable {
     }
 }
 
-enum ProjectSortOrder: String, CaseIterable {
-    case recent = "Recent"
-    case alphabetical = "A-Z"
+extension Project {
+    enum SortOrder: String, CaseIterable {
+        case recent = "Recent"
+        case alphabetical = "A-Z"
+    }
 }
