@@ -9,7 +9,7 @@ import Foundation
 ///
 /// Declared here rather than in a file of its own because `AtelierRun`
 /// compiles only AppConstants.swift, FilePersistence.swift, and this file
-/// (`project.yml:171-186`).
+/// (`project.yml:179-181`).
 enum RunState {}
 
 extension RunState {

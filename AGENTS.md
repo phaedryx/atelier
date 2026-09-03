@@ -108,7 +108,14 @@ carries the `-dev` marker.
   `Port`, `Usage`, `QuickAction`, `DevCommand`, `ProcessCompose`. Each is
   declared once, in the file owning most of its members; every other file
   extends it. For `IPC` and `RunState` that host file is fixed by the helper
-  targets, which compile individual model files by path (`project.yml:171-201`).
+  targets, which compile individual model files by path (`project.yml:179-181`
+  and `198-200`). `Port` is deliberately partial: it covers `Port.Allocator`,
+  `Port.Detector`, and `Port.Status` — the port mechanism itself.
+  `RunState.PortSelection` and `RunState.PortSelectionTracker` stay under
+  `RunState` because they are declared in `RunState.swift`, one of the three
+  model files `AtelierRun` compiles; moving them would force `enum Port` to be
+  declared there too. `ProcessCompose.PortPlan`, `.PortEntry`, and
+  `.PortsConfig` are that subsystem's config schema and follow its directory.
   Types that do not cluster stay top-level — do not invent a `Core` bucket for
   them. `ProcessRunner` and `AppEnvironment` stay top-level permanently:
   `Process` and `Environment` would collide with Foundation and SwiftUI.

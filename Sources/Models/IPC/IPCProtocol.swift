@@ -7,7 +7,7 @@ import Foundation
 /// settings that gate it.
 ///
 /// Declared here rather than in a file of its own because `AtelierMCP`
-/// compiles only this file out of `Models/IPC/` (`project.yml:190-201`); a
+/// compiles only this file out of `Models/IPC/` (`project.yml:198-200`); a
 /// namespace declared anywhere else in this directory would not exist for
 /// the `atelier-mcp` binary.
 enum IPC {}

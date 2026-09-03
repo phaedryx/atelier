@@ -1,5 +1,5 @@
 // ABOUTME: DTOs and error type for the Shortcut REST API.
-// ABOUTME: Decoding and status mapping live here; the transport lives in Shortcut.Client.
+// ABOUTME: Decoding and status mapping live here; the transport lives in ShortcutClient.swift.
 
 import Foundation
 
