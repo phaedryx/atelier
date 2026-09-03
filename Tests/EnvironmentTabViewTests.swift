@@ -42,7 +42,7 @@ final class EnvironmentTabViewTests: XCTestCase {
         )
     }
 
-    /// The pane shows which files are in play, which is what `RunCommandPlan`
+    /// The pane shows which files are in play, which is what `ProcessCompose.RunCommandPlan`
     /// says the display is *for* — not a command.
     func testAProcessComposeSourceIsShownAsItsFiles() {
         let display = devCommandDisplayText(

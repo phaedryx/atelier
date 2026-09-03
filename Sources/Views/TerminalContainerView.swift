@@ -195,7 +195,7 @@ func workspaceEnvironmentVariables(
     workingDirectory: String,
     port: Int,
     defaultBranch: String,
-    portPlan: PortPlan = .empty
+    portPlan: ProcessCompose.PortPlan = .empty
 ) -> [String: String] {
     Workstream.Environment.variables(
         workstreamID: workstreamID,
@@ -259,8 +259,8 @@ struct TerminalContainerView: View {
     /// path in Settings" is advice the user follows, and Start has to become
     /// enabled when they do. `@AppStorage` watches UserDefaults process-wide, so
     /// a write from the other window lands here.
-    @AppStorage(ProcessComposeSettings.enabledKey) private var processComposeEnabled: Bool = false
-    @AppStorage(ProcessComposeSettings.binaryPathKey) private var processComposeBinaryPath: String = ""
+    @AppStorage(ProcessCompose.Settings.enabledKey) private var processComposeEnabled: Bool = false
+    @AppStorage(ProcessCompose.Settings.binaryPathKey) private var processComposeBinaryPath: String = ""
     @AppStorage("atelier.editorTabActive") private var editorTabActive: Bool = false
     @AppStorage("atelier.editorFileDirty") private var editorFileDirty: Bool = false
     @State private var fileTree: [FileNode] = []
@@ -285,7 +285,7 @@ struct TerminalContainerView: View {
     /// override that discovery loads, and showing only the base would ask the
     /// user to approve a file that is not the whole of what runs.
     ///
-    /// Resolved with a bare `ProcessComposeConfig.locate`, deliberately not
+    /// Resolved with a bare `ProcessCompose.Config.locate`, deliberately not
     /// through `processComposeConfig`: that one is narrowed to the *run*, so it
     /// disappears when the user has a per-workstream override. Bootstrap and
     /// dispose locate unconditionally, so hanging the approval off the run's
@@ -296,7 +296,7 @@ struct TerminalContainerView: View {
     @State private var isReviewingConfig = false
     /// Resolved once per change rather than per render: resolving binds a socket
     /// to check whether each port is free.
-    @State private var portPlan: PortPlan = .empty
+    @State private var portPlan: ProcessCompose.PortPlan = .empty
     /// What Start may run, decided once per change in `refreshDevCommand`.
     ///
     /// Stored rather than recomputed because *agreement* is the invariant here,
@@ -305,7 +305,7 @@ struct TerminalContainerView: View {
     /// different worlds; a plan that is a moment stale but consistent is
     /// harmless, while a fresh plan disagreeing with the button is exactly the
     /// bug — an enabled Start that silently did nothing. Do not turn this back
-    /// into a computed property: `RunCommandPlan.plan` locates the config and
+    /// into a computed property: `ProcessCompose.RunCommandPlan.plan` locates the config and
     /// stats the binary, so reading it from the view body would also put
     /// filesystem work in every render pass.
     ///
@@ -316,7 +316,7 @@ struct TerminalContainerView: View {
     /// message tells the user to go and change them, so a plan that did not
     /// notice would leave Start disabled after they had done exactly what it
     /// asked. Do not drop them when adding another input here.
-    @State private var runPlan: RunCommandPlan = .nothing
+    @State private var runPlan: ProcessCompose.RunCommandPlan = .nothing
     /// Every file the run's config will load, for the pane to show in place of a
     /// command string. Set in the same refresh as `runPlan`.
     @State private var devCommandFiles: [String] = []
@@ -331,7 +331,7 @@ struct TerminalContainerView: View {
     /// discarded. It is read here and rendered on the Info tab, which is
     /// permanent and cannot be closed out from under the message.
     @State private var setupState: AsyncSetupState = .idle
-    @StateObject private var processTable: ProcessTableModel
+    @StateObject private var processTable: ProcessCompose.TableModel
     init(
         workstreamID: UUID,
         workingDirectory: String,
@@ -353,8 +353,8 @@ struct TerminalContainerView: View {
         self.isActive = isActive
         self.model = model
         _portDetector = StateObject(wrappedValue: Port.Detector(workstreamID: workstreamID))
-        _processTable = StateObject(wrappedValue: ProcessTableModel(
-            socketPath: PhaseRunner.socketPath(for: workstreamID)
+        _processTable = StateObject(wrappedValue: ProcessCompose.TableModel(
+            socketPath: ProcessCompose.PhaseRunner.socketPath(for: workstreamID)
         ))
 
         let savedOverride = DevCommand.Resolver.savedOverride(for: workstreamID)
@@ -434,15 +434,15 @@ struct TerminalContainerView: View {
     ///
     /// A function, and called only from `refreshDevCommand`, so locating the
     /// config never happens in a render pass.
-    private func processComposeConfig(for devCommand: DevCommand?) -> ProcessComposeConfig? {
-        guard ProcessComposeSettings.isEnabled, devCommand?.source == .processCompose else { return nil }
-        return ProcessComposeConfig.locate(worktree: workingDirectory, projectDirectory: projectDirectory)
+    private func processComposeConfig(for devCommand: DevCommand?) -> ProcessCompose.Config? {
+        guard ProcessCompose.Settings.isEnabled, devCommand?.source == .processCompose else { return nil }
+        return ProcessCompose.Config.locate(worktree: workingDirectory, projectDirectory: projectDirectory)
     }
 
     /// The command that starts the dev server: process-compose's chained
     /// `prepare && execute`, or the user's own per-workstream override.
     ///
-    /// The decision itself lives in `RunCommandPlan.plan`, which is where the
+    /// The decision itself lives in `ProcessCompose.RunCommandPlan.plan`, which is where the
     /// reasoning is. The short version: this must never fall back to
     /// `resolvedDevCommand?.command` for a `.processCompose` source, because
     /// that string carries no `-n` and would run `bootstrap` and `dispose`
@@ -458,7 +458,7 @@ struct TerminalContainerView: View {
     /// selection list treats as "offer no choices" rather than "no processes".
     private var declaredExecuteProcesses: [String] {
         guard case let .phaseScoped(config, _) = runPlan else { return [] }
-        return config.declaredProcesses(in: ProcessComposePhase.execute.namespace) ?? []
+        return config.declaredProcesses(in: ProcessCompose.Phase.execute.namespace) ?? []
     }
 
     /// Reads the stored `runPlan` rather than re-deriving one, so this is nil
@@ -470,12 +470,12 @@ struct TerminalContainerView: View {
         case let .literal(command):
             return command
         case let .phaseScoped(config, binary):
-            PhaseRunner.ensureSocketDirectory()
-            return PhaseRunner.startCommand(
+            ProcessCompose.PhaseRunner.ensureSocketDirectory()
+            return ProcessCompose.PhaseRunner.startCommand(
                 config: config,
                 binary: binary,
                 workstreamID: workstreamID,
-                selectedProcesses: ProcessTableModel.selected(for: workstreamID)
+                selectedProcesses: ProcessCompose.TableModel.selected(for: workstreamID)
             )
         case .nothing:
             return nil
@@ -1274,7 +1274,7 @@ struct TerminalContainerView: View {
     /// approval — and `scriptCommand` wrapped it in `$SHELL -lic`, so PATH
     /// resolved the very binary `resolveBinary` had just failed to find.
     /// Reasoning about the process table hid that for a whole review round.
-    /// `RunCommandPlan` now holds the invariant structurally; this property is
+    /// `ProcessCompose.RunCommandPlan` now holds the invariant structurally; this property is
     /// only about whether there is a socket worth polling.
     ///
     /// The `isEnabled` half is belt-and-braces rather than the load-bearing
@@ -1285,7 +1285,7 @@ struct TerminalContainerView: View {
     /// still guards. It cannot *disagree* with the resolver — only be redundant
     /// with it.
     private var usesProcessCompose: Bool {
-        ProcessComposeSettings.isEnabled && resolvedDevCommand?.source == .processCompose
+        ProcessCompose.Settings.isEnabled && resolvedDevCommand?.source == .processCompose
     }
 
     /// Polls the control socket exactly while a process-compose run is up.
@@ -1401,14 +1401,14 @@ struct TerminalContainerView: View {
         )
         resolvedDevCommand = devCommand
         let config = processComposeConfig(for: devCommand)
-        let binary = ProcessComposeSettings.resolveBinary()
+        let binary = ProcessCompose.Settings.resolveBinary()
         devCommandFiles = config?.loadedFiles ?? []
-        runPlan = RunCommandPlan.plan(devCommand: devCommand, config: config, binary: binary)
-        runUnavailableReason = RunCommandPlan.unavailableReason(
+        runPlan = ProcessCompose.RunCommandPlan.plan(devCommand: devCommand, config: config, binary: binary)
+        runUnavailableReason = ProcessCompose.RunCommandPlan.unavailableReason(
             devCommand: devCommand,
             config: config,
             binary: binary,
-            isEnabled: ProcessComposeSettings.isEnabled
+            isEnabled: ProcessCompose.Settings.isEnabled
         )
     }
 
@@ -1417,11 +1417,11 @@ struct TerminalContainerView: View {
     /// in Task 8; nothing here should throw into a view update.
     private func refreshPortPlan() {
         do {
-            guard let config = try PortsConfig.load(from: projectDirectory) else {
+            guard let config = try ProcessCompose.PortsConfig.load(from: projectDirectory) else {
                 portPlan = .empty
                 return
             }
-            portPlan = PortPlan.resolve(config, workingDirectory: workingDirectory)
+            portPlan = ProcessCompose.PortPlan.resolve(config, workingDirectory: workingDirectory)
         } catch {
             logger.warning("ports.yaml: \(error.localizedDescription, privacy: .public)")
             portPlan = .empty
@@ -1752,8 +1752,8 @@ struct TerminalContainerView: View {
     /// whether it is approved. Called on appear and after an approval, not from
     /// the view body: it stats the worktree and hashes a file.
     private func refreshConfigApproval() {
-        guard ProcessComposeSettings.isEnabled,
-              let config = ProcessComposeConfig.locate(
+        guard ProcessCompose.Settings.isEnabled,
+              let config = ProcessCompose.Config.locate(
                   worktree: workingDirectory, projectDirectory: projectDirectory
               ),
               config.requiresApproval

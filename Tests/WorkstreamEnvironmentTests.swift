@@ -88,7 +88,7 @@ final class WorkstreamEnvironmentTests: XCTestCase {
             projectDirectory: "/repo",
             workingDirectory: "/repo/ws",
             port: 40001,
-            portPlan: PortPlan(values: ["BFF_PORT": "41476"], browserPort: 41476)
+            portPlan: ProcessCompose.PortPlan(values: ["BFF_PORT": "41476"], browserPort: 41476)
         )
 
         XCTAssertEqual(vars["BFF_PORT"], "41476")
@@ -104,7 +104,7 @@ final class WorkstreamEnvironmentTests: XCTestCase {
             projectDirectory: "/repo",
             workingDirectory: "/repo/ws",
             port: 40001,
-            portPlan: PortPlan(values: ["ATELIER_PORT": "50000"], browserPort: nil)
+            portPlan: ProcessCompose.PortPlan(values: ["ATELIER_PORT": "50000"], browserPort: nil)
         )
 
         XCTAssertEqual(vars["ATELIER_PORT"], "50000")
@@ -120,7 +120,7 @@ final class WorkstreamEnvironmentTests: XCTestCase {
             projectDirectory: "/repo",
             workingDirectory: "/repo/ws",
             port: 40001,
-            portPlan: PortPlan(values: ["ATELIER_PORT": "50000"], browserPort: nil)
+            portPlan: ProcessCompose.PortPlan(values: ["ATELIER_PORT": "50000"], browserPort: nil)
         )
 
         XCTAssertEqual(vars["FF_PORT"], "50000")

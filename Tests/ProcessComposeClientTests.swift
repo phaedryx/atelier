@@ -19,7 +19,7 @@ final class ProcessComposeClientTests: XCTestCase {
     """.data(using: .utf8)!
 
     func testDecodesProcesses() throws {
-        let processes = try ProcessComposeClient.decodeProcesses(sample)
+        let processes = try ProcessCompose.Client.decodeProcesses(sample)
 
         XCTAssertEqual(processes.count, 2)
         let worker = try XCTUnwrap(processes.first { $0.name == "worker" })
@@ -31,7 +31,7 @@ final class ProcessComposeClientTests: XCTestCase {
     }
 
     func testDecodesReadinessAndExitCode() throws {
-        let processes = try ProcessComposeClient.decodeProcesses(sample)
+        let processes = try ProcessCompose.Client.decodeProcesses(sample)
 
         let web = try XCTUnwrap(processes.first { $0.name == "web" })
         XCTAssertTrue(web.hasReadyProbe)
@@ -48,45 +48,45 @@ final class ProcessComposeClientTests: XCTestCase {
         "some_future_field":{"nested":true}}]}
         """.data(using: .utf8)!
 
-        XCTAssertEqual(try ProcessComposeClient.decodeProcesses(withExtra).count, 1)
+        XCTAssertEqual(try ProcessCompose.Client.decodeProcesses(withExtra).count, 1)
     }
 
     func testEmptyDataDecodesToNoProcesses() throws {
-        XCTAssertTrue(try ProcessComposeClient.decodeProcesses(XCTUnwrap(#"{"data":[]}"#.data(using: .utf8))).isEmpty)
+        XCTAssertTrue(try ProcessCompose.Client.decodeProcesses(XCTUnwrap(#"{"data":[]}"#.data(using: .utf8))).isEmpty)
     }
 
     func testMalformedResponseThrows() {
-        XCTAssertThrowsError(try ProcessComposeClient.decodeProcesses(Data("not json".utf8)))
+        XCTAssertThrowsError(try ProcessCompose.Client.decodeProcesses(Data("not json".utf8)))
     }
 
     func testBodyThrowsWhenNoHeaderBodySeparator() {
         let response = Data("HTTP/1.1 200 OK\r\nContent-Length: 2".utf8)
 
-        XCTAssertThrowsError(try ProcessComposeClient.body(of: response)) { error in
-            XCTAssertEqual(error as? ProcessComposeClient.ClientError, .malformedResponse)
+        XCTAssertThrowsError(try ProcessCompose.Client.body(of: response)) { error in
+            XCTAssertEqual(error as? ProcessCompose.Client.ClientError, .malformedResponse)
         }
     }
 
     func testBodyThrowsOnUnparseableStatusLine() {
         let response = Data("not a status line\r\n\r\n{}".utf8)
 
-        XCTAssertThrowsError(try ProcessComposeClient.body(of: response)) { error in
-            XCTAssertEqual(error as? ProcessComposeClient.ClientError, .malformedResponse)
+        XCTAssertThrowsError(try ProcessCompose.Client.body(of: response)) { error in
+            XCTAssertEqual(error as? ProcessCompose.Client.ClientError, .malformedResponse)
         }
     }
 
     func testBodyThrowsHTTPErrorOnNon2xxStatus() {
         let response = Data("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".utf8)
 
-        XCTAssertThrowsError(try ProcessComposeClient.body(of: response)) { error in
-            XCTAssertEqual(error as? ProcessComposeClient.ClientError, .http(404))
+        XCTAssertThrowsError(try ProcessCompose.Client.body(of: response)) { error in
+            XCTAssertEqual(error as? ProcessCompose.Client.ClientError, .http(404))
         }
     }
 
     func testBodyReturnsBodyOn200() throws {
         let response = Data("HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\n{\"data\":[]}\n".utf8)
 
-        let body = try ProcessComposeClient.body(of: response)
+        let body = try ProcessCompose.Client.body(of: response)
 
         XCTAssertEqual(body, Data("{\"data\":[]}\n".utf8))
     }
@@ -94,7 +94,7 @@ final class ProcessComposeClientTests: XCTestCase {
     func testBodyReturnsEmptyBodyOn200WithNoContent() throws {
         let response = Data("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".utf8)
 
-        let body = try ProcessComposeClient.body(of: response)
+        let body = try ProcessCompose.Client.body(of: response)
 
         XCTAssertTrue(body.isEmpty)
     }
@@ -147,8 +147,8 @@ final class ProcessComposeClientTests: XCTestCase {
         let payload = "{\"data\":[" + (0 ..< 6).map { record("svc\($0)") }.joined(separator: ",") + "]}"
         XCTAssertGreaterThan(payload.utf8.count, 2048, "must exceed Go's buffer or it would not chunk")
 
-        let body = try ProcessComposeClient.body(of: chunkedResponse(payload))
-        let processes = try ProcessComposeClient.decodeProcesses(body)
+        let body = try ProcessCompose.Client.body(of: chunkedResponse(payload))
+        let processes = try ProcessCompose.Client.decodeProcesses(body)
 
         XCTAssertEqual(processes.count, 6)
         XCTAssertEqual(processes.map(\.name).sorted(), (0 ..< 6).map { "svc\($0)" }.sorted())
@@ -159,8 +159,8 @@ final class ProcessComposeClientTests: XCTestCase {
     func testABodySpanningManyChunksIsReassembledInOrder() throws {
         let payload = "{\"data\":[" + (0 ..< 20).map { record("svc\($0)") }.joined(separator: ",") + "]}"
 
-        let body = try ProcessComposeClient.body(of: chunkedResponse(payload, chunkSize: 64))
-        let processes = try ProcessComposeClient.decodeProcesses(body)
+        let body = try ProcessCompose.Client.body(of: chunkedResponse(payload, chunkSize: 64))
+        let processes = try ProcessCompose.Client.decodeProcesses(body)
 
         XCTAssertEqual(processes.count, 20)
         XCTAssertEqual(String(decoding: body, as: UTF8.self), payload)
@@ -169,7 +169,7 @@ final class ProcessComposeClientTests: XCTestCase {
     func testAnIdentityBodyIsReturnedUnchanged() throws {
         let response = Data("HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\n{\"data\":[]}".utf8)
 
-        let body = try ProcessComposeClient.body(of: response)
+        let body = try ProcessCompose.Client.body(of: response)
 
         XCTAssertEqual(String(decoding: body, as: UTF8.self), "{\"data\":[]}")
     }
@@ -178,7 +178,7 @@ final class ProcessComposeClientTests: XCTestCase {
         var response = Data("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".utf8)
         response.append(Data("5;name=value\r\nhello\r\n0\r\n\r\n".utf8))
 
-        let body = try ProcessComposeClient.body(of: response)
+        let body = try ProcessCompose.Client.body(of: response)
 
         XCTAssertEqual(String(decoding: body, as: UTF8.self), "hello")
     }
@@ -187,15 +187,15 @@ final class ProcessComposeClientTests: XCTestCase {
         var response = Data("HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked\r\n\r\n".utf8)
         response.append(Data("2\r\nhi\r\n0\r\n\r\n".utf8))
 
-        XCTAssertEqual(try String(decoding: ProcessComposeClient.body(of: response), as: UTF8.self), "hi")
+        XCTAssertEqual(try String(decoding: ProcessCompose.Client.body(of: response), as: UTF8.self), "hi")
     }
 
     func testAChunkSizeLargerThanThePayloadIsMalformed() {
         var response = Data("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".utf8)
         response.append(Data("ff\r\nshort\r\n0\r\n\r\n".utf8))
 
-        XCTAssertThrowsError(try ProcessComposeClient.body(of: response)) { error in
-            XCTAssertEqual(error as? ProcessComposeClient.ClientError, .malformedResponse)
+        XCTAssertThrowsError(try ProcessCompose.Client.body(of: response)) { error in
+            XCTAssertEqual(error as? ProcessCompose.Client.ClientError, .malformedResponse)
         }
     }
 
@@ -203,16 +203,16 @@ final class ProcessComposeClientTests: XCTestCase {
         var response = Data("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".utf8)
         response.append(Data("zz\r\npayload\r\n0\r\n\r\n".utf8))
 
-        XCTAssertThrowsError(try ProcessComposeClient.body(of: response)) { error in
-            XCTAssertEqual(error as? ProcessComposeClient.ClientError, .malformedResponse)
+        XCTAssertThrowsError(try ProcessCompose.Client.body(of: response)) { error in
+            XCTAssertEqual(error as? ProcessCompose.Client.ClientError, .malformedResponse)
         }
     }
 
     /// `isChunked` must not fire on a header that merely mentions the word,
     /// or every identity response would be run through the de-chunker.
     func testIsChunkedIgnoresUnrelatedHeaders() {
-        XCTAssertFalse(ProcessComposeClient.isChunked("HTTP/1.1 200 OK\r\nX-Note: chunked is off"))
-        XCTAssertFalse(ProcessComposeClient.isChunked("HTTP/1.1 200 OK\r\nContent-Length: 3"))
-        XCTAssertTrue(ProcessComposeClient.isChunked("HTTP/1.1 200 OK\r\ntransfer-encoding:  CHUNKED "))
+        XCTAssertFalse(ProcessCompose.Client.isChunked("HTTP/1.1 200 OK\r\nX-Note: chunked is off"))
+        XCTAssertFalse(ProcessCompose.Client.isChunked("HTTP/1.1 200 OK\r\nContent-Length: 3"))
+        XCTAssertTrue(ProcessCompose.Client.isChunked("HTTP/1.1 200 OK\r\ntransfer-encoding:  CHUNKED "))
     }
 }

@@ -16,7 +16,7 @@ import Foundation
 enum PhasePolicy {
     /// What to do before running anything.
     enum Plan: Equatable {
-        case run(config: ProcessComposeConfig, binary: String)
+        case run(config: ProcessCompose.Config, binary: String)
         /// There is no phase to run, and this says why. The worktree still
         /// exists and is usable in every one of these cases.
         case nothingToDo(String)
@@ -39,11 +39,11 @@ enum PhasePolicy {
     ///   call site has to state its policy, because the one that forgets is the
     ///   one that runs a repository's YAML unattended.
     static func plan(
-        phase: ProcessComposePhase,
+        phase: ProcessCompose.Phase,
         isEnabled: Bool,
-        config: ProcessComposeConfig?,
+        config: ProcessCompose.Config?,
         binary: String?,
-        isApproved: (ProcessComposeConfig) -> Bool
+        isApproved: (ProcessCompose.Config) -> Bool
     ) -> Plan {
         let name = phase.namespace
         guard isEnabled else {
@@ -87,7 +87,7 @@ enum PhasePolicy {
     /// How a finished phase is reported. `.skipped` is deliberately neither a
     /// success, which would claim work that never happened, nor a failure,
     /// which would claim a broken worktree.
-    static func state(for outcome: PhaseExecutor.Outcome) -> AsyncSetupState {
+    static func state(for outcome: ProcessCompose.PhaseExecutor.Outcome) -> AsyncSetupState {
         switch outcome {
         case .succeeded:
             .completed

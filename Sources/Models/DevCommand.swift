@@ -55,7 +55,7 @@ extension DevCommand {
 
         /// Whether this text is a `process-compose up` with no `-n`.
         ///
-        /// `.override` is the one unconstrained input in `RunCommandPlan`: it is
+        /// `.override` is the one unconstrained input in `ProcessCompose.RunCommandPlan`: it is
         /// the user's own text and runs literally. That is deliberate, and it is
         /// also the shape of the fifth bypass — the Environment pane used to seed
         /// its editable field from the un-`-n`'d display command, and Save turned
@@ -163,9 +163,9 @@ extension DevCommand {
         /// approved every repository-provided file. This string never goes through
         /// `PhasePolicy`, so it must never reach a shell.
         ///
-        /// It no longer does. `RunCommandPlan` maps a `.processCompose` source to
+        /// It no longer does. `ProcessCompose.RunCommandPlan` maps a `.processCompose` source to
         /// `.phaseScoped`, and the command Start actually runs is built by
-        /// `PhaseRunner.startCommand`, which is `-n`-scoped. The string below
+        /// `ProcessCompose.PhaseRunner.startCommand`, which is `-n`-scoped. The string below
         /// survives only as the text the Environment pane displays.
         ///
         /// So the `isEnabled` guard is **not** the execution-side boundary any
@@ -181,7 +181,7 @@ extension DevCommand {
         /// where Save turned it into a `.override` that *is* run literally.
         ///
         /// That last route is the one to keep in mind, because `.override` is an
-        /// unconstrained passthrough by design: `RunCommandPlan` cannot tell a
+        /// unconstrained passthrough by design: `ProcessCompose.RunCommandPlan` cannot tell a
         /// user's own text from this string. The invariant therefore rests on
         /// nothing ever seeding an override from a `.processCompose` command — see
         /// `EnvironmentTabView.devCommandDisplayText`, which is what the pane
@@ -189,8 +189,8 @@ extension DevCommand {
         /// `.processCompose` source, or that pre-fills the override field with it,
         /// reopens the hole for the sixth time.
         static func detectProcessCompose(in directory: String, projectDirectory: String) -> DevCommand? {
-            guard ProcessComposeSettings.isEnabled else { return nil }
-            guard let config = ProcessComposeConfig.locate(
+            guard ProcessCompose.Settings.isEnabled else { return nil }
+            guard let config = ProcessCompose.Config.locate(
                 worktree: directory, projectDirectory: projectDirectory
             ) else { return nil }
 

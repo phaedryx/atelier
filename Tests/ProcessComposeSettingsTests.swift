@@ -12,7 +12,7 @@ final class ProcessComposeSettingsTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        for key in [ProcessComposeSettings.enabledKey, ProcessComposeSettings.binaryPathKey] {
+        for key in [ProcessCompose.Settings.enabledKey, ProcessCompose.Settings.binaryPathKey] {
             saved[key] = UserDefaults.standard.object(forKey: key)
         }
         clearSettings()
@@ -30,8 +30,8 @@ final class ProcessComposeSettingsTests: XCTestCase {
     }
 
     private func clearSettings() {
-        UserDefaults.standard.removeObject(forKey: ProcessComposeSettings.enabledKey)
-        UserDefaults.standard.removeObject(forKey: ProcessComposeSettings.binaryPathKey)
+        UserDefaults.standard.removeObject(forKey: ProcessCompose.Settings.enabledKey)
+        UserDefaults.standard.removeObject(forKey: ProcessCompose.Settings.binaryPathKey)
     }
 
     /// Reads the *default*, which means clearing the key rather than writing
@@ -43,12 +43,12 @@ final class ProcessComposeSettingsTests: XCTestCase {
     func testDisabledByDefault() {
         clearSettings()
 
-        XCTAssertFalse(ProcessComposeSettings.isEnabled)
+        XCTAssertFalse(ProcessCompose.Settings.isEnabled)
     }
 
     func testEnabledRoundTrips() {
-        ProcessComposeSettings.isEnabled = true
-        XCTAssertTrue(ProcessComposeSettings.isEnabled)
+        ProcessCompose.Settings.isEnabled = true
+        XCTAssertTrue(ProcessCompose.Settings.isEnabled)
     }
 
     func testConfiguredBinaryWins() {
@@ -57,15 +57,15 @@ final class ProcessComposeSettingsTests: XCTestCase {
         // brief named /usr/local/bin/process-compose, which does not exist on this
         // machine (or reliably in CI), so the original test asserted filesystem
         // state rather than behavior.
-        ProcessComposeSettings.binaryPath = "/bin/ls"
-        XCTAssertEqual(ProcessComposeSettings.resolveBinary(), "/bin/ls")
+        ProcessCompose.Settings.binaryPath = "/bin/ls"
+        XCTAssertEqual(ProcessCompose.Settings.resolveBinary(), "/bin/ls")
     }
 
     /// A path the user typed that no longer exists must not silently fall back
     /// to a different binary — that would run something they did not choose.
     func testConfiguredButMissingBinaryResolvesToNil() {
-        ProcessComposeSettings.binaryPath = "/nonexistent/process-compose"
-        XCTAssertNil(ProcessComposeSettings.resolveBinary())
+        ProcessCompose.Settings.binaryPath = "/nonexistent/process-compose"
+        XCTAssertNil(ProcessCompose.Settings.resolveBinary())
     }
 
     /// The configured path is trimmed before it is used, so a path the user
@@ -90,14 +90,14 @@ final class ProcessComposeSettingsTests: XCTestCase {
     /// process-compose installed, and pinning it would mean adding a
     /// search-paths injection point to production for one test.
     func testAPaddedConfiguredPathIsTrimmedRatherThanTreatedAsMissing() {
-        ProcessComposeSettings.binaryPath = "  /bin/ls  "
-        XCTAssertEqual(ProcessComposeSettings.resolveBinary(), "/bin/ls")
+        ProcessCompose.Settings.binaryPath = "  /bin/ls  "
+        XCTAssertEqual(ProcessCompose.Settings.resolveBinary(), "/bin/ls")
     }
 
     /// A whitespace-only path is not a configured path: it must not be handed to
     /// `isExecutableFile` as-is, and it must never resolve to itself.
     func testAWhitespaceOnlyPathIsNeverReturned() {
-        ProcessComposeSettings.binaryPath = "   "
-        XCTAssertNotEqual(ProcessComposeSettings.resolveBinary(), "   ")
+        ProcessCompose.Settings.binaryPath = "   "
+        XCTAssertNotEqual(ProcessCompose.Settings.resolveBinary(), "   ")
     }
 }

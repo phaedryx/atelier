@@ -8,13 +8,13 @@ final class PortPlanTests: XCTestCase {
     private let worktree = "/tmp/atelier-test/worktree-a"
     private let allFree: (Int) -> Bool = { _ in true }
 
-    private func config(_ entries: [PortEntry]) -> PortsConfig {
-        PortsConfig(entries: entries)
+    private func config(_ entries: [ProcessCompose.PortEntry]) -> ProcessCompose.PortsConfig {
+        ProcessCompose.PortsConfig(entries: entries)
     }
 
     func testAssignedPortMatchesSaltedHash() {
-        let plan = PortPlan.resolve(
-            config([PortEntry(name: "BFF_PORT", kind: .assigned, isBrowser: false)]),
+        let plan = ProcessCompose.PortPlan.resolve(
+            config([ProcessCompose.PortEntry(name: "BFF_PORT", kind: .assigned, isBrowser: false)]),
             workingDirectory: worktree,
             isFree: allFree
         )
@@ -23,8 +23,8 @@ final class PortPlanTests: XCTestCase {
     }
 
     func testFixedPortIsUsedVerbatim() {
-        let plan = PortPlan.resolve(
-            config([PortEntry(name: "RAILS_PORT", kind: .fixed(3005), isBrowser: false)]),
+        let plan = ProcessCompose.PortPlan.resolve(
+            config([ProcessCompose.PortEntry(name: "RAILS_PORT", kind: .fixed(3005), isBrowser: false)]),
             workingDirectory: worktree,
             isFree: allFree
         )
@@ -37,10 +37,10 @@ final class PortPlanTests: XCTestCase {
     func testAssignedPortNeverCollidesWithAFixedOne() {
         let hashed = Port.Allocator.port(for: worktree, salt: "BFF_PORT")
 
-        let plan = PortPlan.resolve(
+        let plan = ProcessCompose.PortPlan.resolve(
             config([
-                PortEntry(name: "BFF_PORT", kind: .assigned, isBrowser: false),
-                PortEntry(name: "PINNED", kind: .fixed(hashed), isBrowser: false),
+                ProcessCompose.PortEntry(name: "BFF_PORT", kind: .assigned, isBrowser: false),
+                ProcessCompose.PortEntry(name: "PINNED", kind: .fixed(hashed), isBrowser: false),
             ]),
             workingDirectory: worktree,
             isFree: allFree
@@ -51,10 +51,10 @@ final class PortPlanTests: XCTestCase {
     }
 
     func testAssignedPortsDifferPerWorktree() {
-        let entries = [PortEntry(name: "BFF_PORT", kind: .assigned, isBrowser: false)]
+        let entries = [ProcessCompose.PortEntry(name: "BFF_PORT", kind: .assigned, isBrowser: false)]
 
-        let a = PortPlan.resolve(config(entries), workingDirectory: worktree, isFree: allFree)
-        let b = PortPlan.resolve(config(entries), workingDirectory: "/tmp/atelier-test/worktree-b", isFree: allFree)
+        let a = ProcessCompose.PortPlan.resolve(config(entries), workingDirectory: worktree, isFree: allFree)
+        let b = ProcessCompose.PortPlan.resolve(config(entries), workingDirectory: "/tmp/atelier-test/worktree-b", isFree: allFree)
 
         XCTAssertNotEqual(a.values["BFF_PORT"], b.values["BFF_PORT"])
     }
@@ -62,10 +62,10 @@ final class PortPlanTests: XCTestCase {
     /// The same worktree must produce the same number every run, or a bookmark
     /// or OAuth redirect saved against it breaks on the next start.
     func testAssignedPortIsStableAcrossResolutions() {
-        let entries = [PortEntry(name: "BFF_PORT", kind: .assigned, isBrowser: false)]
+        let entries = [ProcessCompose.PortEntry(name: "BFF_PORT", kind: .assigned, isBrowser: false)]
 
-        let first = PortPlan.resolve(config(entries), workingDirectory: worktree, isFree: allFree)
-        let second = PortPlan.resolve(config(entries), workingDirectory: worktree, isFree: allFree)
+        let first = ProcessCompose.PortPlan.resolve(config(entries), workingDirectory: worktree, isFree: allFree)
+        let second = ProcessCompose.PortPlan.resolve(config(entries), workingDirectory: worktree, isFree: allFree)
 
         XCTAssertEqual(first.values["BFF_PORT"], second.values["BFF_PORT"])
     }
@@ -73,8 +73,8 @@ final class PortPlanTests: XCTestCase {
     func testAssignedPortSkipsPortsInUse() {
         let hashed = Port.Allocator.port(for: worktree, salt: "BFF_PORT")
 
-        let plan = PortPlan.resolve(
-            config([PortEntry(name: "BFF_PORT", kind: .assigned, isBrowser: false)]),
+        let plan = ProcessCompose.PortPlan.resolve(
+            config([ProcessCompose.PortEntry(name: "BFF_PORT", kind: .assigned, isBrowser: false)]),
             workingDirectory: worktree,
             isFree: { $0 != hashed }
         )
@@ -83,18 +83,18 @@ final class PortPlanTests: XCTestCase {
     }
 
     func testAssignedPortsNeverCollideWithEachOther() {
-        let entries = (1 ... 20).map { PortEntry(name: "PORT_\($0)", kind: .assigned, isBrowser: false) }
+        let entries = (1 ... 20).map { ProcessCompose.PortEntry(name: "PORT_\($0)", kind: .assigned, isBrowser: false) }
 
-        let plan = PortPlan.resolve(config(entries), workingDirectory: worktree, isFree: allFree)
+        let plan = ProcessCompose.PortPlan.resolve(config(entries), workingDirectory: worktree, isFree: allFree)
 
         XCTAssertEqual(Set(plan.values.values).count, entries.count)
     }
 
     func testBrowserPortIsReported() {
-        let plan = PortPlan.resolve(
+        let plan = ProcessCompose.PortPlan.resolve(
             config([
-                PortEntry(name: "BFF_PORT", kind: .assigned, isBrowser: true),
-                PortEntry(name: "VITE_PORT", kind: .assigned, isBrowser: false),
+                ProcessCompose.PortEntry(name: "BFF_PORT", kind: .assigned, isBrowser: true),
+                ProcessCompose.PortEntry(name: "VITE_PORT", kind: .assigned, isBrowser: false),
             ]),
             workingDirectory: worktree,
             isFree: allFree
@@ -104,8 +104,8 @@ final class PortPlanTests: XCTestCase {
     }
 
     func testNoBrowserPortWhenNoneDeclared() {
-        let plan = PortPlan.resolve(
-            config([PortEntry(name: "BFF_PORT", kind: .assigned, isBrowser: false)]),
+        let plan = ProcessCompose.PortPlan.resolve(
+            config([ProcessCompose.PortEntry(name: "BFF_PORT", kind: .assigned, isBrowser: false)]),
             workingDirectory: worktree,
             isFree: allFree
         )

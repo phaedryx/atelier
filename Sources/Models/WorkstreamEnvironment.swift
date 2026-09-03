@@ -19,7 +19,7 @@ extension Workstream {
             workingDirectory: String,
             port: Int,
             defaultBranch: String = "main",
-            portPlan: PortPlan = .empty
+            portPlan: ProcessCompose.PortPlan = .empty
         ) -> [String: String] {
             let id = workstreamID.uuidString.lowercased()
             let portString = "\(port)"

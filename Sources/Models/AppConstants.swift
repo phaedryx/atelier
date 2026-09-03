@@ -63,7 +63,7 @@ enum AppConstants {
         // identifiers but shared this directory, so the two could run side by
         // side over one set of phase sockets and run-state files — and quitting
         // one swept the other's live process-compose servers, mid-run, via
-        // `PhaseExecutor.stopAllServers`.
+        // `ProcessCompose.PhaseExecutor.stopAllServers`.
         let dirName = isRunningXCTest()
             ? "atelier-tests"
             : appID

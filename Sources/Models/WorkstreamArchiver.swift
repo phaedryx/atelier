@@ -87,7 +87,7 @@ extension Workstream {
                 let branchName = Git.Operations.currentBranch(at: worktreePath)
                 archivingPaths.insert(standardizedPath)
                 NotificationCenter.default.post(name: archivingDidStart, object: nil)
-                let composeBinary = ProcessComposeSettings.resolveBinary()
+                let composeBinary = ProcessCompose.Settings.resolveBinary()
                 Task.detached {
                     defer {
                         Task { @MainActor in
@@ -123,7 +123,7 @@ extension Workstream {
                     await withCheckedContinuation { continuation in
                         DispatchQueue.global(qos: .utility).async {
                             // Before the worktree is removed:
-                            // `ProcessComposeConfig.locate` reads the worktree, and
+                            // `ProcessCompose.Config.locate` reads the worktree, and
                             // dispose runs in it.
                             if let disposePath {
                                 runDispose(
@@ -173,7 +173,7 @@ extension Workstream {
         /// Nothing here can stop the archive. Every refusal returns quietly and a
         /// failure is logged and swallowed: a workstream stranded half-archived is
         /// worse than cleanup that did not happen, and the user has already said to
-        /// remove it. `PhaseExecutor` bounds the run at `Timeout.userCommand`, so a
+        /// remove it. `ProcessCompose.PhaseExecutor` bounds the run at `Timeout.userCommand`, so a
         /// wedged dispose delays the archive rather than blocking it forever.
         /// What archiving would run, and why it would not.
         ///
@@ -185,11 +185,11 @@ extension Workstream {
         static func disposePlan(worktreePath: String, projectDirectory: String) -> PhasePolicy.Plan {
             PhasePolicy.plan(
                 phase: .dispose,
-                isEnabled: ProcessComposeSettings.isEnabled,
-                config: ProcessComposeConfig.locate(
+                isEnabled: ProcessCompose.Settings.isEnabled,
+                config: ProcessCompose.Config.locate(
                     worktree: worktreePath, projectDirectory: projectDirectory
                 ),
-                binary: ProcessComposeSettings.resolveBinary(),
+                binary: ProcessCompose.Settings.resolveBinary(),
                 isApproved: {
                     ScriptTrust.isApproved(configFiles: $0.repositoryProvidedFiles, for: projectDirectory)
                 }
@@ -204,7 +204,7 @@ extension Workstream {
             projectDirectory: String
         ) {
             let plan = disposePlan(worktreePath: worktreePath, projectDirectory: projectDirectory)
-            let config: ProcessComposeConfig
+            let config: ProcessCompose.Config
             let binary: String
             switch plan {
             case let .run(planned, planBinary):
@@ -217,8 +217,8 @@ extension Workstream {
 
             // The same variables `prepare` and `execute` see. A `dispose` process
             // that has to reach the project directory or a declared port cannot do
-            // it from the app's own environment; see `PhaseEnvironment`.
-            let environment = PhaseEnvironment.variables(
+            // it from the app's own environment; see `ProcessCompose.PhaseEnvironment`.
+            let environment = ProcessCompose.PhaseEnvironment.variables(
                 workstreamID: workstreamID,
                 projectName: projectName,
                 workstreamName: workstreamName,
@@ -227,7 +227,7 @@ extension Workstream {
                 defaultBranch: Git.Operations.defaultBranch(at: projectDirectory)
             )
 
-            let outcome = PhaseExecutor.run(
+            let outcome = ProcessCompose.PhaseExecutor.run(
                 phase: .dispose,
                 config: config,
                 binary: binary,

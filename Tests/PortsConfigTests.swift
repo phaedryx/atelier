@@ -30,7 +30,7 @@ final class PortsConfigTests: XCTestCase {
           VITE_PORT:  { assigned: true }
         """)
 
-        let config = try XCTUnwrap(PortsConfig.load(from: dir.path))
+        let config = try XCTUnwrap(ProcessCompose.PortsConfig.load(from: dir.path))
 
         XCTAssertEqual(config.entries.count, 3)
         let bff = try XCTUnwrap(config.entries.first { $0.name == "BFF_PORT" })
@@ -50,13 +50,13 @@ final class PortsConfigTests: XCTestCase {
           ALPHA_PORT: { assigned: true }
         """)
 
-        let config = try XCTUnwrap(PortsConfig.load(from: dir.path))
+        let config = try XCTUnwrap(ProcessCompose.PortsConfig.load(from: dir.path))
 
         XCTAssertEqual(config.entries.map(\.name), ["ALPHA_PORT", "ZED_PORT"])
     }
 
     func testNoFileReturnsNil() throws {
-        XCTAssertNil(try PortsConfig.load(from: dir.path))
+        XCTAssertNil(try ProcessCompose.PortsConfig.load(from: dir.path))
     }
 
     func testRejectsEntryWithNeitherAssignedNorFixed() throws {
@@ -65,8 +65,8 @@ final class PortsConfigTests: XCTestCase {
           BFF_PORT: { browser: true }
         """)
 
-        XCTAssertThrowsError(try PortsConfig.load(from: dir.path)) { error in
-            guard case let PortsConfig.LoadError.invalidEntry(name, _) = error else {
+        XCTAssertThrowsError(try ProcessCompose.PortsConfig.load(from: dir.path)) { error in
+            guard case let ProcessCompose.PortsConfig.LoadError.invalidEntry(name, _) = error else {
                 return XCTFail("wrong error: \(error)")
             }
             XCTAssertEqual(name, "BFF_PORT")
@@ -79,8 +79,8 @@ final class PortsConfigTests: XCTestCase {
           BFF_PORT: { assigned: true, fixed: 3006 }
         """)
 
-        XCTAssertThrowsError(try PortsConfig.load(from: dir.path)) { error in
-            guard case let PortsConfig.LoadError.invalidEntry(name, _) = error else {
+        XCTAssertThrowsError(try ProcessCompose.PortsConfig.load(from: dir.path)) { error in
+            guard case let ProcessCompose.PortsConfig.LoadError.invalidEntry(name, _) = error else {
                 return XCTFail("wrong error: \(error)")
             }
             XCTAssertEqual(name, "BFF_PORT")
@@ -94,8 +94,8 @@ final class PortsConfigTests: XCTestCase {
           VITE_PORT: { assigned: true, browser: true }
         """)
 
-        XCTAssertThrowsError(try PortsConfig.load(from: dir.path)) { error in
-            guard case let PortsConfig.LoadError.multipleBrowserPorts(names) = error else {
+        XCTAssertThrowsError(try ProcessCompose.PortsConfig.load(from: dir.path)) { error in
+            guard case let ProcessCompose.PortsConfig.LoadError.multipleBrowserPorts(names) = error else {
                 return XCTFail("wrong error: \(error)")
             }
             XCTAssertEqual(names.sorted(), ["BFF_PORT", "VITE_PORT"])
@@ -110,14 +110,14 @@ final class PortsConfigTests: XCTestCase {
           BFF_PORT: { assigned: false }
         """)
 
-        XCTAssertThrowsError(try PortsConfig.load(from: dir.path))
+        XCTAssertThrowsError(try ProcessCompose.PortsConfig.load(from: dir.path))
     }
 
     func testRejectsMalformedYAML() throws {
         try write("ports: [this is not a map")
 
-        XCTAssertThrowsError(try PortsConfig.load(from: dir.path)) { error in
-            guard case PortsConfig.LoadError.malformed = error else {
+        XCTAssertThrowsError(try ProcessCompose.PortsConfig.load(from: dir.path)) { error in
+            guard case ProcessCompose.PortsConfig.LoadError.malformed = error else {
                 return XCTFail("wrong error: \(error)")
             }
         }
@@ -130,7 +130,7 @@ final class PortsConfigTests: XCTestCase {
           BFF_PORT: { assigned: true, browser: true }  # what the browser opens
         """)
 
-        let config = try XCTUnwrap(PortsConfig.load(from: dir.path))
+        let config = try XCTUnwrap(ProcessCompose.PortsConfig.load(from: dir.path))
         XCTAssertEqual(config.entries.count, 1)
     }
 
@@ -139,8 +139,8 @@ final class PortsConfigTests: XCTestCase {
     func testAFixedPortAboveTheValidRangeIsRejected() throws {
         try write("ports:\n  API_PORT: { fixed: 70000 }")
 
-        XCTAssertThrowsError(try PortsConfig.load(from: dir.path)) { error in
-            guard case let .invalidEntry(name, reason) = error as? PortsConfig.LoadError else {
+        XCTAssertThrowsError(try ProcessCompose.PortsConfig.load(from: dir.path)) { error in
+            guard case let .invalidEntry(name, reason) = error as? ProcessCompose.PortsConfig.LoadError else {
                 return XCTFail("expected invalidEntry, got \(error)")
             }
             XCTAssertEqual(name, "API_PORT")
@@ -152,7 +152,7 @@ final class PortsConfigTests: XCTestCase {
         for port in ["0", "-1"] {
             try write("ports:\n  API_PORT: { fixed: \(port) }")
 
-            XCTAssertThrowsError(try PortsConfig.load(from: dir.path), "fixed: \(port) must be refused")
+            XCTAssertThrowsError(try ProcessCompose.PortsConfig.load(from: dir.path), "fixed: \(port) must be refused")
         }
     }
 
@@ -160,7 +160,7 @@ final class PortsConfigTests: XCTestCase {
         for port in [1, 65535] {
             try write("ports:\n  API_PORT: { fixed: \(port) }")
 
-            let config = try XCTUnwrap(try PortsConfig.load(from: dir.path))
+            let config = try XCTUnwrap(try ProcessCompose.PortsConfig.load(from: dir.path))
             XCTAssertEqual(config.entries.first?.kind, .fixed(port))
         }
     }
@@ -172,8 +172,8 @@ final class PortsConfigTests: XCTestCase {
         for name in ["ATELIER_WORKTREE_DIR", "ATELIER_PROJECT_DIR", "ATELIER_DEFAULT_BRANCH"] {
             try write("ports:\n  \(name): { assigned: true }")
 
-            XCTAssertThrowsError(try PortsConfig.load(from: dir.path), "\(name) must be refused") { error in
-                guard case let .invalidEntry(rejected, _) = error as? PortsConfig.LoadError else {
+            XCTAssertThrowsError(try ProcessCompose.PortsConfig.load(from: dir.path), "\(name) must be refused") { error in
+                guard case let .invalidEntry(rejected, _) = error as? ProcessCompose.PortsConfig.LoadError else {
                     return XCTFail("expected invalidEntry for \(name), got \(error)")
                 }
                 XCTAssertEqual(rejected, name)
@@ -186,14 +186,14 @@ final class PortsConfigTests: XCTestCase {
     func testATELIERPortMayStillBeDeclared() throws {
         try write("ports:\n  ATELIER_PORT: { assigned: true }")
 
-        let config = try XCTUnwrap(try PortsConfig.load(from: dir.path))
+        let config = try XCTUnwrap(try ProcessCompose.PortsConfig.load(from: dir.path))
         XCTAssertEqual(config.entries.map(\.name), ["ATELIER_PORT"])
     }
 
     func testAnFFDeclarationIsRejected() throws {
         try write("ports:\n  FF_PORT: { assigned: true }")
 
-        XCTAssertThrowsError(try PortsConfig.load(from: dir.path))
+        XCTAssertThrowsError(try ProcessCompose.PortsConfig.load(from: dir.path))
     }
 
     /// `ports.yaml` names become environment variable names and reach `sh -c`
@@ -205,7 +205,7 @@ final class PortsConfigTests: XCTestCase {
             try write("ports:\n  \"\(name)\": { assigned: true }")
 
             XCTAssertThrowsError(
-                try PortsConfig.load(from: dir.path),
+                try ProcessCompose.PortsConfig.load(from: dir.path),
                 "\(name) must be refused"
             )
         }
@@ -214,7 +214,7 @@ final class PortsConfigTests: XCTestCase {
     func testOrdinaryVariableNamesAreStillAccepted() throws {
         try write("ports:\n  BFF_PORT: { assigned: true }\n  _PRIVATE2: { fixed: 3005 }")
 
-        let config = try XCTUnwrap(PortsConfig.load(from: dir.path))
+        let config = try XCTUnwrap(ProcessCompose.PortsConfig.load(from: dir.path))
 
         XCTAssertEqual(config.entries.map(\.name), ["BFF_PORT", "_PRIVATE2"])
     }
@@ -224,8 +224,8 @@ final class PortsConfigTests: XCTestCase {
     func testTwoNamesPinningTheSamePortAreRejected() throws {
         try write("ports:\n  A_PORT: { fixed: 3005 }\n  B_PORT: { fixed: 3005 }")
 
-        XCTAssertThrowsError(try PortsConfig.load(from: dir.path)) { error in
-            guard case let .invalidEntry(_, reason) = error as? PortsConfig.LoadError else {
+        XCTAssertThrowsError(try ProcessCompose.PortsConfig.load(from: dir.path)) { error in
+            guard case let .invalidEntry(_, reason) = error as? ProcessCompose.PortsConfig.LoadError else {
                 return XCTFail("expected invalidEntry, got \(error)")
             }
             XCTAssertTrue(reason.contains("3005"), reason)
@@ -235,7 +235,7 @@ final class PortsConfigTests: XCTestCase {
     func testDistinctFixedPortsAreFine() throws {
         try write("ports:\n  A_PORT: { fixed: 3005 }\n  B_PORT: { fixed: 3006 }")
 
-        XCTAssertNoThrow(try PortsConfig.load(from: dir.path))
+        XCTAssertNoThrow(try ProcessCompose.PortsConfig.load(from: dir.path))
     }
 
     /// All six, not the three the previous version looped over: removing any
@@ -247,7 +247,7 @@ final class PortsConfigTests: XCTestCase {
         ] {
             try write("ports:\n  \(name): { assigned: true }")
 
-            XCTAssertThrowsError(try PortsConfig.load(from: dir.path), "\(name) must be refused")
+            XCTAssertThrowsError(try ProcessCompose.PortsConfig.load(from: dir.path), "\(name) must be refused")
         }
     }
 }

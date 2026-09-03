@@ -15,9 +15,9 @@ func shouldRestoreRunSession(useTmux: Bool, hasRunScript: Bool, hasExistingRunSe
 /// `DevCommand.Resolver` builds for that source is
 /// `process-compose up -U -f <files>` — no `-n`, so running it runs *every*
 /// namespace including `bootstrap` and `dispose`, past `PhasePolicy` and past
-/// `ScriptTrust`. `RunCommandPlan` makes it unreachable from Start; rendering it
+/// `ScriptTrust`. `ProcessCompose.RunCommandPlan` makes it unreachable from Start; rendering it
 /// here made it reachable by hand, in a monospaced font that invites exactly
-/// that. The files are what `RunCommandPlan` meant the user to be able to see.
+/// that. The files are what `ProcessCompose.RunCommandPlan` meant the user to be able to see.
 ///
 /// A free function, like its neighbours, so the property that matters — no
 /// output of this is ever a runnable process-compose command — can be tested
@@ -78,14 +78,14 @@ struct EnvironmentTabView: View {
     let runGeneration: Int
     /// Live process state from process-compose. Only rendered when the run is a
     /// process-compose run; otherwise nothing is polling it.
-    @ObservedObject var processTable: ProcessTableModel
+    @ObservedObject var processTable: ProcessCompose.TableModel
     let showsProcessTable: Bool
     /// The worktree's port plan, so each row can show the port it owns.
     let portsByName: [String: String]
     /// Processes the config declares in `execute`, for the selection list.
     let declaredProcesses: [String]
     /// Whether Start may run anything. **Passed in, never re-derived here.**
-    /// This is `RunCommandPlan.canRun` for the same plan `doStartRun` executes,
+    /// This is `ProcessCompose.RunCommandPlan.canRun` for the same plan `doStartRun` executes,
     /// so the button's enablement and the run's guard are one decision. They
     /// used to be two — enabled on `devCommand?.command != nil`, executed on the
     /// resolved command — and an unresolvable process-compose binary rendered an
@@ -254,7 +254,7 @@ struct EnvironmentTabView: View {
                         // Seeding it from a `.processCompose` command handed the
                         // user the un-`-n`'d string in an editable field, and
                         // Save turns whatever is in that field into an
-                        // `.override`, which `RunCommandPlan` runs literally.
+                        // `.override`, which `ProcessCompose.RunCommandPlan` runs literally.
                         // Three clicks, no typing, and `bootstrap` and `dispose`
                         // run with no approval.
                         devCommandEditText = devCommand?.source == .override
@@ -333,7 +333,7 @@ struct EnvironmentTabView: View {
     ///
     /// That, and not "the pane shows the command Start runs", is the reason. The
     /// pane never showed it: what Start runs is the phase-scoped
-    /// `prepare && execute`, assembled by `PhaseRunner`, while the string the
+    /// `prepare && execute`, assembled by `ProcessCompose.PhaseRunner`, while the string the
     /// pane used to render was a display-only one that must never execute. The
     /// decision to leave `execute` ungated stands; only the stated reason was
     /// false, and it was load-bearing in four places.

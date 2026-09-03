@@ -17,12 +17,12 @@ final class DevCommandTests: XCTestCase {
         // Detection is gated on the setting, and the setting defaults off. Every
         // test below that expects a command needs it on; the ones that check the
         // gate itself turn it back off explicitly.
-        originallyEnabled = ProcessComposeSettings.isEnabled
-        ProcessComposeSettings.isEnabled = true
+        originallyEnabled = ProcessCompose.Settings.isEnabled
+        ProcessCompose.Settings.isEnabled = true
     }
 
     override func tearDown() {
-        ProcessComposeSettings.isEnabled = originallyEnabled
+        ProcessCompose.Settings.isEnabled = originallyEnabled
         DevCommand.Resolver.saveOverride(nil, for: workstreamID)
         for container in projectContainers {
             try? FileManager.default.removeItem(at: container)
@@ -47,7 +47,7 @@ final class DevCommandTests: XCTestCase {
     /// So with the integration disabled there must be nothing here to run.
     func testDisabledIntegrationDetectsNothingEvenWithAConfigPresent() throws {
         try writeProcessCompose(named: "process-compose.yaml")
-        ProcessComposeSettings.isEnabled = false
+        ProcessCompose.Settings.isEnabled = false
 
         XCTAssertNil(DevCommand.Resolver.detectProcessCompose(
             in: tmpDir.path, projectDirectory: tmpDir.path
@@ -60,7 +60,7 @@ final class DevCommandTests: XCTestCase {
     /// behind it rather than an ungated all-namespace invocation.
     func testDisabledIntegrationResolvesToNoProcessComposeInvocation() throws {
         try writeProcessCompose(named: "process-compose.yaml")
-        ProcessComposeSettings.isEnabled = false
+        ProcessCompose.Settings.isEnabled = false
 
         let resolved = DevCommand.Resolver.resolve(
             workingDirectory: tmpDir.path,
@@ -77,7 +77,7 @@ final class DevCommandTests: XCTestCase {
     func testDisabledIntegrationAlsoIgnoresAProjectDirectoryConfig() throws {
         let project = try makeProjectContainer()
         try writeProcessCompose(named: "process-compose.yaml", in: project)
-        ProcessComposeSettings.isEnabled = false
+        ProcessCompose.Settings.isEnabled = false
 
         XCTAssertNil(DevCommand.Resolver.detectProcessCompose(
             in: tmpDir.path, projectDirectory: project.path
@@ -89,7 +89,7 @@ final class DevCommandTests: XCTestCase {
     /// no way to start anything at all.
     func testDisabledIntegrationStillHonoursTheOverride() throws {
         try writeProcessCompose(named: "process-compose.yaml")
-        ProcessComposeSettings.isEnabled = false
+        ProcessCompose.Settings.isEnabled = false
         DevCommand.Resolver.saveOverride("npm run dev", for: workstreamID)
 
         let resolved = DevCommand.Resolver.resolve(
@@ -106,12 +106,12 @@ final class DevCommandTests: XCTestCase {
     /// a one-way door.
     func testEnablingTheIntegrationRestoresDetection() throws {
         try writeProcessCompose(named: "process-compose.yaml")
-        ProcessComposeSettings.isEnabled = false
+        ProcessCompose.Settings.isEnabled = false
         XCTAssertNil(DevCommand.Resolver.detectProcessCompose(
             in: tmpDir.path, projectDirectory: tmpDir.path
         ))
 
-        ProcessComposeSettings.isEnabled = true
+        ProcessCompose.Settings.isEnabled = true
 
         XCTAssertEqual(
             DevCommand.Resolver.detectProcessCompose(
@@ -287,7 +287,7 @@ final class DevCommandTests: XCTestCase {
             to: tmpDir.appendingPathComponent("compose.yaml"), atomically: true, encoding: .utf8
         )
         let config = try XCTUnwrap(
-            ProcessComposeConfig.locate(worktree: tmpDir.path, projectDirectory: tmpDir.path)
+            ProcessCompose.Config.locate(worktree: tmpDir.path, projectDirectory: tmpDir.path)
         )
 
         let command = try XCTUnwrap(
@@ -367,8 +367,8 @@ final class DevCommandTests: XCTestCase {
     /// an `.override` and run literally, past PhasePolicy, on every Start.
     func testAStoredUnscopedProcessComposeCommandIsIgnored() throws {
         let dir = try makeWorktreeWithConfig()
-        ProcessComposeSettings.isEnabled = true
-        defer { ProcessComposeSettings.isEnabled = false }
+        ProcessCompose.Settings.isEnabled = true
+        defer { ProcessCompose.Settings.isEnabled = false }
 
         let resolved = DevCommand.Resolver.resolve(
             workingDirectory: dir,

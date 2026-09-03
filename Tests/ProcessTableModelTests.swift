@@ -10,57 +10,57 @@ final class ProcessTableModelTests: XCTestCase {
     private let workstreamID = UUID()
 
     override func tearDown() {
-        ProcessTableModel.setSelected([], for: workstreamID)
+        ProcessCompose.TableModel.setSelected([], for: workstreamID)
         super.tearDown()
     }
 
     /// No stored selection means everything runs — a fresh workstream should
     /// start the whole stack, not nothing.
     func testNoSelectionMeansAll() {
-        XCTAssertTrue(ProcessTableModel.selected(for: workstreamID).isEmpty)
+        XCTAssertTrue(ProcessCompose.TableModel.selected(for: workstreamID).isEmpty)
     }
 
     func testSelectionRoundTrips() {
-        ProcessTableModel.setSelected(["bff", "api"], for: workstreamID)
+        ProcessCompose.TableModel.setSelected(["bff", "api"], for: workstreamID)
 
-        XCTAssertEqual(ProcessTableModel.selected(for: workstreamID).sorted(), ["api", "bff"])
+        XCTAssertEqual(ProcessCompose.TableModel.selected(for: workstreamID).sorted(), ["api", "bff"])
     }
 
     func testSelectionIsPerWorkstream() {
         let other = UUID()
-        defer { ProcessTableModel.setSelected([], for: other) }
-        ProcessTableModel.setSelected(["bff"], for: workstreamID)
-        ProcessTableModel.setSelected(["api"], for: other)
+        defer { ProcessCompose.TableModel.setSelected([], for: other) }
+        ProcessCompose.TableModel.setSelected(["bff"], for: workstreamID)
+        ProcessCompose.TableModel.setSelected(["api"], for: other)
 
-        XCTAssertEqual(ProcessTableModel.selected(for: workstreamID), ["bff"])
-        XCTAssertEqual(ProcessTableModel.selected(for: other), ["api"])
+        XCTAssertEqual(ProcessCompose.TableModel.selected(for: workstreamID), ["bff"])
+        XCTAssertEqual(ProcessCompose.TableModel.selected(for: other), ["api"])
     }
 
     func testClearingSelectionRemovesIt() {
-        ProcessTableModel.setSelected(["bff"], for: workstreamID)
-        ProcessTableModel.setSelected([], for: workstreamID)
+        ProcessCompose.TableModel.setSelected(["bff"], for: workstreamID)
+        ProcessCompose.TableModel.setSelected([], for: workstreamID)
 
-        XCTAssertTrue(ProcessTableModel.selected(for: workstreamID).isEmpty)
+        XCTAssertTrue(ProcessCompose.TableModel.selected(for: workstreamID).isEmpty)
     }
 
     // MARK: - Port matching
 
     func testPortMatchesTheVariableNamedAfterTheProcess() {
-        XCTAssertEqual(ProcessTableModel.port(for: "bff", in: ["BFF_PORT": "4001"]), "4001")
+        XCTAssertEqual(ProcessCompose.TableModel.port(for: "bff", in: ["BFF_PORT": "4001"]), "4001")
     }
 
     /// Separators differ freely between a process name and a variable name.
     func testPortMatchIgnoresSeparatorsAndCase() {
         let ports = ["HTML_TO_JSON_PORT": "4002"]
 
-        XCTAssertEqual(ProcessTableModel.port(for: "html-to-json", in: ports), "4002")
-        XCTAssertEqual(ProcessTableModel.port(for: "HTML_TO_JSON", in: ports), "4002")
-        XCTAssertEqual(ProcessTableModel.port(for: "htmltojson", in: ports), "4002")
+        XCTAssertEqual(ProcessCompose.TableModel.port(for: "html-to-json", in: ports), "4002")
+        XCTAssertEqual(ProcessCompose.TableModel.port(for: "HTML_TO_JSON", in: ports), "4002")
+        XCTAssertEqual(ProcessCompose.TableModel.port(for: "htmltojson", in: ports), "4002")
     }
 
     /// The `_PORT` suffix is optional on the variable, not required.
     func testPortMatchesAVariableWithoutTheSuffix() {
-        XCTAssertEqual(ProcessTableModel.port(for: "bff", in: ["BFF": "4001"]), "4001")
+        XCTAssertEqual(ProcessCompose.TableModel.port(for: "bff", in: ["BFF": "4001"]), "4001")
     }
 
     /// An exact name match beats one that only matches after the suffix is
@@ -68,17 +68,17 @@ final class ProcessTableModelTests: XCTestCase {
     func testExactMatchWinsOverSuffixMatch() {
         let ports = ["BFF_PORT": "4001", "BFF_PORT_PORT": "4002"]
 
-        XCTAssertEqual(ProcessTableModel.port(for: "bff_port", in: ports), "4001")
+        XCTAssertEqual(ProcessCompose.TableModel.port(for: "bff_port", in: ports), "4001")
     }
 
     func testUnmatchedProcessHasNoPort() {
-        XCTAssertNil(ProcessTableModel.port(for: "worker", in: ["BFF_PORT": "4001"]))
+        XCTAssertNil(ProcessCompose.TableModel.port(for: "worker", in: ["BFF_PORT": "4001"]))
     }
 
     /// A variable named only `PORT` must not become a wildcard that every
     /// process matches once the suffix is stripped.
     func testBarePortVariableMatchesNothing() {
-        XCTAssertNil(ProcessTableModel.port(for: "bff", in: ["PORT": "3000"]))
+        XCTAssertNil(ProcessCompose.TableModel.port(for: "bff", in: ["PORT": "3000"]))
     }
 
     /// Two variables can normalize to the same key. The lowest variable name
@@ -87,8 +87,8 @@ final class ProcessTableModelTests: XCTestCase {
     func testCollidingVariablesResolveByLowestName() throws {
         let ports = ["BFF_PORT": "4001", "BFFPORT": "4002"]
 
-        XCTAssertEqual(ProcessTableModel.port(for: "bff", in: ports), try ports[XCTUnwrap(ports.keys.min())])
-        XCTAssertEqual(ProcessTableModel.port(for: "bff", in: ports), "4002")
+        XCTAssertEqual(ProcessCompose.TableModel.port(for: "bff", in: ports), try ports[XCTUnwrap(ports.keys.min())])
+        XCTAssertEqual(ProcessCompose.TableModel.port(for: "bff", in: ports), "4002")
     }
 
     // MARK: - Polling and control
@@ -103,8 +103,8 @@ final class ProcessTableModelTests: XCTestCase {
         return path
     }
 
-    private func row(_ name: String, running: Bool = true) -> ProcessComposeProcess {
-        ProcessComposeProcess(
+    private func row(_ name: String, running: Bool = true) -> ProcessCompose.ProcessEntry {
+        ProcessCompose.ProcessEntry(
             name: name, namespace: "execute", status: running ? "Running" : "Stopped",
             isReady: "-", hasReadyProbe: false, restarts: 0, exitCode: 0,
             pid: running ? 42 : 0, isRunning: running
@@ -117,7 +117,7 @@ final class ProcessTableModelTests: XCTestCase {
     func testConcurrentRefreshesDoNotOverlap() async throws {
         let path = try makeSocketFile()
         let stub = StubComposeClient(socketPath: path, replies: [.list([row("bff")])])
-        let model = ProcessTableModel(socketPath: path, client: stub)
+        let model = ProcessCompose.TableModel(socketPath: path, client: stub)
 
         async let first: Void = model.refresh()
         async let second: Void = model.refresh()
@@ -135,7 +135,7 @@ final class ProcessTableModelTests: XCTestCase {
     func testAControlRefreshDoesNotOverlapAPollInFlight() async throws {
         let path = try makeSocketFile()
         let stub = StubComposeClient(socketPath: path, replies: [.list([row("bff")])])
-        let model = ProcessTableModel(socketPath: path, client: stub)
+        let model = ProcessCompose.TableModel(socketPath: path, client: stub)
 
         async let poll: Void = model.refresh()
         async let control: Void = model.stop("bff")
@@ -153,7 +153,7 @@ final class ProcessTableModelTests: XCTestCase {
         let stub = StubComposeClient(
             socketPath: path, replies: [.list([row("bff")])], latency: .milliseconds(200)
         )
-        let model = ProcessTableModel(socketPath: path, client: stub)
+        let model = ProcessCompose.TableModel(socketPath: path, client: stub)
 
         async let inFlight: Void = model.refresh()
         try await Task.sleep(for: .milliseconds(30))
@@ -174,7 +174,7 @@ final class ProcessTableModelTests: XCTestCase {
             replies: [.list([row("bff")]), .failure(.notRunning)],
             removesSocketOnStop: true
         )
-        let model = ProcessTableModel(socketPath: path, client: stub)
+        let model = ProcessCompose.TableModel(socketPath: path, client: stub)
 
         await model.refresh()
         XCTAssertEqual(model.processes.map(\.name), ["bff"])
@@ -196,7 +196,7 @@ final class ProcessTableModelTests: XCTestCase {
             replies: [.list([row("bff")]), .failure(.malformedResponse)],
             removesSocketOnStop: true
         )
-        let model = ProcessTableModel(socketPath: path, client: stub)
+        let model = ProcessCompose.TableModel(socketPath: path, client: stub)
 
         await model.refresh()
         await model.stop("bff")
@@ -214,7 +214,7 @@ final class ProcessTableModelTests: XCTestCase {
             socketPath: path,
             replies: [.list([row("bff")]), .failure(.transport("read failed"))]
         )
-        let model = ProcessTableModel(socketPath: path, client: stub)
+        let model = ProcessCompose.TableModel(socketPath: path, client: stub)
 
         await model.refresh()
         XCTAssertEqual(model.processes.count, 1)
@@ -235,7 +235,7 @@ final class ProcessTableModelTests: XCTestCase {
             socketPath: path,
             replies: [.list([row("bff")]), .failure(.http(500))]
         )
-        let model = ProcessTableModel(socketPath: path, client: stub)
+        let model = ProcessCompose.TableModel(socketPath: path, client: stub)
 
         await model.refresh()
         await model.refresh()
@@ -256,7 +256,7 @@ final class ProcessTableModelTests: XCTestCase {
             stopFailure: .http(500),
             latency: .milliseconds(200)
         )
-        let model = ProcessTableModel(socketPath: path, client: stub)
+        let model = ProcessCompose.TableModel(socketPath: path, client: stub)
 
         async let control: Void = model.stop("bff")
         try await Task.sleep(for: .milliseconds(40))
@@ -272,7 +272,7 @@ final class ProcessTableModelTests: XCTestCase {
     func testStartPollingClearsWhatTheLastRunLeft() async throws {
         let path = try makeSocketFile()
         let stub = StubComposeClient(socketPath: path, replies: [.list([row("bff")])])
-        let model = ProcessTableModel(socketPath: path, client: stub)
+        let model = ProcessCompose.TableModel(socketPath: path, client: stub)
 
         await model.refresh()
         XCTAssertEqual(model.processes.count, 1)
@@ -287,16 +287,16 @@ final class ProcessTableModelTests: XCTestCase {
 /// Stands in for process-compose. An actor, so the counters are safe to read
 /// from the test, and reentrant across its own `await` — which is what lets it
 /// notice two listings in flight at once instead of hiding them.
-private actor StubComposeClient: ProcessComposeControlling {
+private actor StubComposeClient: ProcessCompose.Controlling {
     enum Reply {
-        case list([ProcessComposeProcess])
-        case failure(ProcessComposeClient.ClientError)
+        case list([ProcessCompose.ProcessEntry])
+        case failure(ProcessCompose.Client.ClientError)
     }
 
     private var replies: [Reply]
     private let socketPath: String
     private let removesSocketOnStop: Bool
-    private let stopFailure: ProcessComposeClient.ClientError?
+    private let stopFailure: ProcessCompose.Client.ClientError?
     private let latency: Duration
 
     private(set) var processesCalls = 0
@@ -309,7 +309,7 @@ private actor StubComposeClient: ProcessComposeControlling {
         socketPath: String,
         replies: [Reply],
         removesSocketOnStop: Bool = false,
-        stopFailure: ProcessComposeClient.ClientError? = nil,
+        stopFailure: ProcessCompose.Client.ClientError? = nil,
         latency: Duration = .milliseconds(40)
     ) {
         self.socketPath = socketPath
@@ -319,7 +319,7 @@ private actor StubComposeClient: ProcessComposeControlling {
         self.latency = latency
     }
 
-    func processes() async throws -> [ProcessComposeProcess] {
+    func processes() async throws -> [ProcessCompose.ProcessEntry] {
         processesCalls += 1
         inFlight += 1
         peakConcurrency = max(peakConcurrency, inFlight)

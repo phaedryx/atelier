@@ -6,8 +6,8 @@ import Foundation
 /// Localhost port infrastructure shared across the app: allocating one,
 /// detecting what is listening, and reporting liveness.
 ///
-/// The process-compose port *config* types (PortPlan, PortEntry,
-/// PortsConfig) are deliberately not here — they are that subsystem's
+/// The process-compose port *config* types (ProcessCompose.PortPlan, ProcessCompose.PortEntry,
+/// ProcessCompose.PortsConfig) are deliberately not here — they are that subsystem's
 /// schema and live under `ProcessCompose`.
 enum Port {}
 

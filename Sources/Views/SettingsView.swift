@@ -490,8 +490,8 @@ private struct PromptEditorSheet: View {
 private struct IntegrationsSettingsPane: View {
     @AppStorage(Shortcut.Settings.buttonEnabledKey) private var shortcutButtonEnabled: Bool = true
     @AppStorage(Shortcut.Settings.branchTemplateKey) private var branchTemplate: String = ""
-    @AppStorage(ProcessComposeSettings.enabledKey) private var processComposeEnabled = false
-    @AppStorage(ProcessComposeSettings.binaryPathKey) private var processComposeBinary = ""
+    @AppStorage(ProcessCompose.Settings.enabledKey) private var processComposeEnabled = false
+    @AppStorage(ProcessCompose.Settings.binaryPathKey) private var processComposeBinary = ""
 
     private var branchPreviewIsValid: Bool {
         Git.Operations.isValidBranchName(Shortcut.BranchName.preview(branchTemplate))
@@ -619,9 +619,9 @@ private struct IntegrationsSettingsPane: View {
                             TextField("auto-detect", text: $processComposeBinary)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.system(size: 11, design: .monospaced))
-                            Text(ProcessComposeSettings.resolveBinary() ?? NSLocalizedString("not found", comment: ""))
+                            Text(ProcessCompose.Settings.resolveBinary() ?? NSLocalizedString("not found", comment: ""))
                                 .font(.system(size: 10))
-                                .foregroundStyle(ProcessComposeSettings.resolveBinary() == nil ? .orange : .secondary)
+                                .foregroundStyle(ProcessCompose.Settings.resolveBinary() == nil ? .orange : .secondary)
                         }
                     }
                 }

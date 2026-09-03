@@ -14,13 +14,13 @@ enum ScriptTrust {
     /// terminal surface the user is looking at, Stop within reach — and is never
     /// held behind approval. It is attendance that decides, not display: the
     /// string the Environment pane renders is not the command Start runs, which
-    /// is `PhaseRunner`'s phase-scoped `prepare && execute`.
+    /// is `ProcessCompose.PhaseRunner`'s phase-scoped `prepare && execute`.
     ///
     /// Takes the whole list, never a single file. process-compose loads a base
     /// config *and* whatever override sits beside it, so fingerprinting only the
     /// base would let a repository ship a benign `process-compose.yaml`, have the
     /// user approve it, and execute an unseen `process-compose.override.yaml`
-    /// unattended. `ProcessComposeConfig.repositoryProvidedFiles` is the list
+    /// unattended. `ProcessCompose.Config.repositoryProvidedFiles` is the list
     /// that has to be passed here.
     ///
     /// A config in the project directory was placed there by hand, outside git,
@@ -29,7 +29,7 @@ enum ScriptTrust {
     /// what decides, not content.
     ///
     /// An empty list is *not* approved. Callers gate on
-    /// `ProcessComposeConfig.requiresApproval`, which is false exactly when the
+    /// `ProcessCompose.Config.requiresApproval`, which is false exactly when the
     /// list is empty, so the question is never asked; answering "yes" here would
     /// make a mistaken call site fail open.
     static func isApproved(configFiles paths: [String], for projectDirectory: String) -> Bool {

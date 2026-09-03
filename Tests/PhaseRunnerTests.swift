@@ -8,30 +8,30 @@ final class PhaseRunnerTests: XCTestCase {
     private let workstreamID = UUID(uuidString: "3F2504E0-4F89-11D3-9A0C-0305E82C3301")!
     private let binary = "/opt/homebrew/bin/process-compose"
 
-    private var worktreeConfig: ProcessComposeConfig {
-        ProcessComposeConfig(path: "/repo/wt/process-compose.yaml", isRepositoryProvided: true, overridePath: nil)
+    private var worktreeConfig: ProcessCompose.Config {
+        ProcessCompose.Config(path: "/repo/wt/process-compose.yaml", isRepositoryProvided: true, overridePath: nil)
     }
 
-    private var projectConfig: ProcessComposeConfig {
-        ProcessComposeConfig(path: "/repo/process-compose.yaml", isRepositoryProvided: false, overridePath: nil)
+    private var projectConfig: ProcessCompose.Config {
+        ProcessCompose.Config(path: "/repo/process-compose.yaml", isRepositoryProvided: false, overridePath: nil)
     }
 
     /// The socket path must be predictable — a bare `-U` generates one
     /// containing the PID, which Atelier cannot find afterwards.
     func testSocketPathIsDerivedFromTheWorkstream() throws {
-        let path = PhaseRunner.socketPath(for: workstreamID)
+        let path = ProcessCompose.PhaseRunner.socketPath(for: workstreamID)
         let otherID = try XCTUnwrap(UUID(uuidString: "550E8400-E29B-41D4-A716-446655440000"))
-        let otherPath = PhaseRunner.socketPath(for: otherID)
+        let otherPath = ProcessCompose.PhaseRunner.socketPath(for: otherID)
 
         XCTAssertTrue(path.hasSuffix(".sock"), path)
-        XCTAssertEqual(path, PhaseRunner.socketPath(for: workstreamID))
+        XCTAssertEqual(path, ProcessCompose.PhaseRunner.socketPath(for: workstreamID))
         XCTAssertNotEqual(path, otherPath, "different UUIDs must produce different paths")
     }
 
     /// macOS caps a unix socket path at 104 bytes. A full UUID plus a long home
     /// directory can approach that, so the name is shortened deliberately.
     func testSocketPathStaysUnderTheUnixLimit() {
-        let path = PhaseRunner.socketPath(for: workstreamID)
+        let path = ProcessCompose.PhaseRunner.socketPath(for: workstreamID)
         let fullUUID = workstreamID.uuidString.lowercased()
         let shortUUID = fullUUID.prefix(8)
 
@@ -45,11 +45,11 @@ final class PhaseRunnerTests: XCTestCase {
     /// a second `up` on a path a live server holds rebinds it — stranding the
     /// first server rather than refusing.
     func testHeadlessPhasesGetTheirOwnSocketPath() {
-        let execute = PhaseRunner.socketPath(for: workstreamID, phase: .execute)
-        let bootstrap = PhaseRunner.socketPath(for: workstreamID, phase: .bootstrap)
-        let dispose = PhaseRunner.socketPath(for: workstreamID, phase: .dispose)
+        let execute = ProcessCompose.PhaseRunner.socketPath(for: workstreamID, phase: .execute)
+        let bootstrap = ProcessCompose.PhaseRunner.socketPath(for: workstreamID, phase: .bootstrap)
+        let dispose = ProcessCompose.PhaseRunner.socketPath(for: workstreamID, phase: .dispose)
 
-        XCTAssertEqual(execute, PhaseRunner.socketPath(for: workstreamID))
+        XCTAssertEqual(execute, ProcessCompose.PhaseRunner.socketPath(for: workstreamID))
         XCTAssertEqual(Set([execute, bootstrap, dispose]).count, 3)
         XCTAssertTrue(bootstrap.hasSuffix("-bootstrap.sock"), bootstrap)
         XCTAssertLessThan(bootstrap.utf8.count, 104, "the longest suffix must still fit sun_path")
@@ -60,15 +60,15 @@ final class PhaseRunnerTests: XCTestCase {
     /// prepare into execute with `&&` and a prepare that never exits would
     /// never let execute start.
     func testKeepProjectIsOptInAndAbsentFromTheStartChain() {
-        let plain = PhaseRunner.command(
+        let plain = ProcessCompose.PhaseRunner.command(
             phase: .bootstrap, config: worktreeConfig, binary: binary,
             workstreamID: workstreamID, selectedProcesses: []
         )
-        let kept = PhaseRunner.command(
+        let kept = ProcessCompose.PhaseRunner.command(
             phase: .bootstrap, config: worktreeConfig, binary: binary,
             workstreamID: workstreamID, selectedProcesses: [], keepProject: true
         )
-        let start = PhaseRunner.startCommand(
+        let start = ProcessCompose.PhaseRunner.startCommand(
             config: worktreeConfig, binary: binary,
             workstreamID: workstreamID, selectedProcesses: []
         )
@@ -85,7 +85,7 @@ final class PhaseRunnerTests: XCTestCase {
     /// `process-compose.yaml` (verified against v1.122.0). Naming every file is
     /// what makes the executed set equal the approved set.
     func testWorktreeConfigIsNamedSoDiscoveryCannotAddFiles() {
-        let command = PhaseRunner.command(
+        let command = ProcessCompose.PhaseRunner.command(
             phase: .execute, config: worktreeConfig, binary: binary,
             workstreamID: workstreamID, selectedProcesses: []
         )
@@ -108,7 +108,7 @@ final class PhaseRunnerTests: XCTestCase {
             atomically: true, encoding: .utf8
         )
 
-        let command = PhaseRunner.command(
+        let command = ProcessCompose.PhaseRunner.command(
             phase: .execute, config: config, binary: binary,
             workstreamID: workstreamID, selectedProcesses: []
         )
@@ -120,7 +120,7 @@ final class PhaseRunnerTests: XCTestCase {
     }
 
     func testProjectConfigNamesTheFile() {
-        let command = PhaseRunner.command(
+        let command = ProcessCompose.PhaseRunner.command(
             phase: .execute, config: projectConfig, binary: binary,
             workstreamID: workstreamID, selectedProcesses: []
         )
@@ -129,13 +129,13 @@ final class PhaseRunnerTests: XCTestCase {
     }
 
     func testOverrideIsNamedWhenPresent() {
-        let config = ProcessComposeConfig(
+        let config = ProcessCompose.Config(
             path: "/repo/process-compose.yaml",
             isRepositoryProvided: false,
             overridePath: "/repo/wt/process-compose.override.yaml"
         )
 
-        let command = PhaseRunner.command(
+        let command = ProcessCompose.PhaseRunner.command(
             phase: .execute, config: config, binary: binary,
             workstreamID: workstreamID, selectedProcesses: []
         )
@@ -144,8 +144,8 @@ final class PhaseRunnerTests: XCTestCase {
     }
 
     func testHeadlessPhasesDisableTheTUI() {
-        for phase in [ProcessComposePhase.bootstrap, .prepare, .dispose] {
-            let command = PhaseRunner.command(
+        for phase in [ProcessCompose.Phase.bootstrap, .prepare, .dispose] {
+            let command = ProcessCompose.PhaseRunner.command(
                 phase: phase, config: worktreeConfig, binary: binary,
                 workstreamID: workstreamID, selectedProcesses: []
             )
@@ -154,7 +154,7 @@ final class PhaseRunnerTests: XCTestCase {
     }
 
     func testExecuteKeepsTheTUI() {
-        let command = PhaseRunner.command(
+        let command = ProcessCompose.PhaseRunner.command(
             phase: .execute, config: worktreeConfig, binary: binary,
             workstreamID: workstreamID, selectedProcesses: []
         )
@@ -163,7 +163,7 @@ final class PhaseRunnerTests: XCTestCase {
     }
 
     func testSelectedProcessesAreAppended() {
-        let command = PhaseRunner.command(
+        let command = ProcessCompose.PhaseRunner.command(
             phase: .execute, config: worktreeConfig, binary: binary,
             workstreamID: workstreamID, selectedProcesses: ["bff", "api"]
         )
@@ -173,7 +173,7 @@ final class PhaseRunnerTests: XCTestCase {
 
     /// Selection applies only to execute — bootstrap runs whole or not at all.
     func testSelectionIsIgnoredForOtherPhases() {
-        let command = PhaseRunner.command(
+        let command = ProcessCompose.PhaseRunner.command(
             phase: .bootstrap, config: worktreeConfig, binary: binary,
             workstreamID: workstreamID, selectedProcesses: ["bff"]
         )
@@ -202,7 +202,7 @@ final class PhaseRunnerTests: XCTestCase {
             command: "true"
         """, in: dir)
 
-        let command = PhaseRunner.startCommand(
+        let command = ProcessCompose.PhaseRunner.startCommand(
             config: config, binary: binary,
             workstreamID: workstreamID, selectedProcesses: ["bff"]
         )
@@ -233,9 +233,9 @@ final class PhaseRunnerTests: XCTestCase {
             namespace: execute
             command: "true"
         """.write(to: path, atomically: true, encoding: .utf8)
-        let config = ProcessComposeConfig(path: path.path, isRepositoryProvided: false, overridePath: nil)
+        let config = ProcessCompose.Config(path: path.path, isRepositoryProvided: false, overridePath: nil)
 
-        let command = PhaseRunner.startCommand(
+        let command = ProcessCompose.PhaseRunner.startCommand(
             config: config, binary: binary,
             workstreamID: workstreamID, selectedProcesses: ["bff"]
         )
@@ -254,10 +254,10 @@ final class PhaseRunnerTests: XCTestCase {
         return dir
     }
 
-    private func writeConfig(_ body: String, in dir: URL) throws -> ProcessComposeConfig {
+    private func writeConfig(_ body: String, in dir: URL) throws -> ProcessCompose.Config {
         let path = dir.appendingPathComponent("process-compose.yaml")
         try "processes:\n\(body)".write(to: path, atomically: true, encoding: .utf8)
-        return ProcessComposeConfig(path: path.path, isRepositoryProvided: true, overridePath: nil)
+        return ProcessCompose.Config(path: path.path, isRepositoryProvided: true, overridePath: nil)
     }
 
     /// A config that declares both namespaces keeps the existing chain.
@@ -273,7 +273,7 @@ final class PhaseRunnerTests: XCTestCase {
             command: "true"
         """, in: dir)
 
-        let command = PhaseRunner.startCommand(
+        let command = ProcessCompose.PhaseRunner.startCommand(
             config: config, binary: binary, workstreamID: workstreamID, selectedProcesses: []
         )
 
@@ -294,7 +294,7 @@ final class PhaseRunnerTests: XCTestCase {
             command: "true"
         """, in: dir)
 
-        let command = PhaseRunner.startCommand(
+        let command = ProcessCompose.PhaseRunner.startCommand(
             config: config, binary: binary, workstreamID: workstreamID, selectedProcesses: []
         )
 
@@ -315,7 +315,7 @@ final class PhaseRunnerTests: XCTestCase {
             command: "true"
         """, in: dir)
 
-        let command = PhaseRunner.startCommand(
+        let command = ProcessCompose.PhaseRunner.startCommand(
             config: config, binary: binary, workstreamID: workstreamID, selectedProcesses: []
         )
 
@@ -340,13 +340,13 @@ final class PhaseRunnerTests: XCTestCase {
         """.write(to: path, atomically: true, encoding: .utf8)
         let overridePath = dir.appendingPathComponent("process-compose.override.yaml")
         try "version: \"0.5\"".write(to: overridePath, atomically: true, encoding: .utf8)
-        let config = ProcessComposeConfig(
+        let config = ProcessCompose.Config(
             path: path.path, isRepositoryProvided: true, overridePath: nil
         )
 
         XCTAssertEqual(config.namespacePresence("prepare"), .unknown, "precondition")
 
-        let command = PhaseRunner.startCommand(
+        let command = ProcessCompose.PhaseRunner.startCommand(
             config: config, binary: binary, workstreamID: workstreamID, selectedProcesses: []
         )
 
@@ -357,15 +357,15 @@ final class PhaseRunnerTests: XCTestCase {
 
     /// The trade this makes, stated so it is not mistaken for an oversight: a
     /// config that really does declare `prepare` but cannot be parsed loses its
-    /// prepare phase rather than hanging Start. `PhaseExecutor` answers the same
+    /// prepare phase rather than hanging Start. `ProcessCompose.PhaseExecutor` answers the same
     /// question the other way for `bootstrap` and `dispose`, where a deadline
     /// and a grace period bound the cost of being wrong.
     func testStartCommandStillRunsExecuteWhenNothingCanBeParsedAtAll() {
-        let config = ProcessComposeConfig(
+        let config = ProcessCompose.Config(
             path: "/nonexistent/process-compose.yaml", isRepositoryProvided: true, overridePath: nil
         )
 
-        let command = PhaseRunner.startCommand(
+        let command = ProcessCompose.PhaseRunner.startCommand(
             config: config, binary: binary, workstreamID: workstreamID, selectedProcesses: []
         )
 
@@ -374,11 +374,11 @@ final class PhaseRunnerTests: XCTestCase {
     }
 
     func testPathsWithSpacesAreQuoted() {
-        let config = ProcessComposeConfig(
+        let config = ProcessCompose.Config(
             path: "/repo/my project/process-compose.yaml", isRepositoryProvided: false, overridePath: nil
         )
 
-        let command = PhaseRunner.command(
+        let command = ProcessCompose.PhaseRunner.command(
             phase: .execute, config: config, binary: binary,
             workstreamID: workstreamID, selectedProcesses: []
         )
@@ -399,9 +399,9 @@ final class PhaseRunnerTests: XCTestCase {
           bff:  { namespace: execute, command: "true" }
           "-n": { namespace: execute, command: "true" }
         """.write(to: dir.appendingPathComponent("process-compose.yaml"), atomically: true, encoding: .utf8)
-        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: dir.path, projectDirectory: dir.path))
+        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: dir.path, projectDirectory: dir.path))
 
-        let command = PhaseRunner.command(
+        let command = ProcessCompose.PhaseRunner.command(
             phase: .execute,
             config: config,
             binary: "/usr/bin/true",

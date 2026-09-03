@@ -134,8 +134,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // `up --keep-project` servers outlive their processes deliberately, so
         // without this a quit mid-run leaves one per phase holding the
         // worktree's ports until its own deadline.
-        if let composeBinary = ProcessComposeSettings.resolveBinary() {
-            PhaseExecutor.stopAllServers(binary: composeBinary)
+        if let composeBinary = ProcessCompose.Settings.resolveBinary() {
+            ProcessCompose.PhaseExecutor.stopAllServers(binary: composeBinary)
         }
     }
 

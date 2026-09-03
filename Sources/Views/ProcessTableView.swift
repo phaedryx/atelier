@@ -4,7 +4,7 @@
 import SwiftUI
 
 struct ProcessTableView: View {
-    @ObservedObject var model: ProcessTableModel
+    @ObservedObject var model: ProcessCompose.TableModel
     /// Variable name to port, so a row can show the port it owns.
     let portsByName: [String: String]
 
@@ -32,7 +32,7 @@ struct ProcessTableView: View {
         }
     }
 
-    private func row(for process: ProcessComposeProcess) -> some View {
+    private func row(for process: ProcessCompose.ProcessEntry) -> some View {
         HStack(spacing: 8) {
             Text(process.name)
                 .font(.system(size: 11, design: .monospaced))
@@ -80,8 +80,8 @@ struct ProcessTableView: View {
     /// dash rather than a blank, so an unmatched name reads as "no port known"
     /// instead of as a rendering gap. Not localized: the value is a `String`
     /// rather than a literal, and an em dash is punctuation, not prose.
-    private func portCell(for process: ProcessComposeProcess) -> some View {
-        Text(ProcessTableModel.port(for: process.name, in: portsByName) ?? "\u{2014}")
+    private func portCell(for process: ProcessCompose.ProcessEntry) -> some View {
+        Text(ProcessCompose.TableModel.port(for: process.name, in: portsByName) ?? "\u{2014}")
             .font(.system(size: 11, design: .monospaced))
             .foregroundStyle(.secondary)
             .frame(width: 50, alignment: .leading)
@@ -92,7 +92,7 @@ struct ProcessTableView: View {
 /// must be refused.
 ///
 /// `current` is the stored selection, where **empty means all** — that is what
-/// `PhaseRunner` already means by it, since `up -n execute` with no names
+/// `ProcessCompose.PhaseRunner` already means by it, since `up -n execute` with no names
 /// starts the whole namespace. Keeping "all" canonical as empty is what lets a
 /// project add a process to its YAML and have it included automatically.
 ///
@@ -194,13 +194,13 @@ struct ProcessSelectionView: View {
         }
         .onAppear {
             let cleaned = processSelectionOnLoad(
-                stored: ProcessTableModel.selected(for: workstreamID),
+                stored: ProcessCompose.TableModel.selected(for: workstreamID),
                 declared: declaredProcesses
             )
             selection = Set(cleaned)
             // Written back, not just filtered for display: otherwise Start
             // keeps reading the stale name straight out of UserDefaults.
-            ProcessTableModel.setSelected(cleaned, for: workstreamID)
+            ProcessCompose.TableModel.setSelected(cleaned, for: workstreamID)
         }
     }
 
@@ -213,7 +213,7 @@ struct ProcessSelectionView: View {
     /// What Start will run.
     ///
     /// Stored empty when everything is selected, because that is what
-    /// `PhaseRunner` already means by empty: `up -n execute` with no names
+    /// `ProcessCompose.PhaseRunner` already means by empty: `up -n execute` with no names
     /// starts the whole namespace. Keeping "all" canonical as empty means a
     /// project that adds a process to its YAML picks it up automatically
     /// instead of silently excluding it.
@@ -242,6 +242,6 @@ struct ProcessSelectionView: View {
 
     private func store(_ canonical: [String]) {
         selection = Set(canonical)
-        ProcessTableModel.setSelected(canonical, for: workstreamID)
+        ProcessCompose.TableModel.setSelected(canonical, for: workstreamID)
     }
 }
