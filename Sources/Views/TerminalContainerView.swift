@@ -402,7 +402,7 @@ struct TerminalContainerView: View {
 
     /// A declared `browser: true` port wins over detection: Atelier assigned it,
     /// so there is nothing to infer. Detection cannot help here anyway —
-    /// PortSelectionTracker returns nil once more than one process is listening
+    /// RunState.PortSelectionTracker returns nil once more than one process is listening
     /// and no port was expected, which is every multi-service stack.
     private var browserDefaultURL: String {
         let port = portPlan.browserPort ?? portDetector.selectedPort ?? workstreamPort

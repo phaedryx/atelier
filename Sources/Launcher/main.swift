@@ -104,19 +104,19 @@ private func runMonitor(configuration: Configuration) -> Never {
         detectedPorts: scanner.detectedPorts,
         selectedPort: scanner.selectedPort
     )
-    RunStateStore.remove(for: configuration.workstreamID)
+    RunState.Store.remove(for: configuration.workstreamID)
     exit(0)
 }
 
-private func writeState(configuration: Configuration, pid: Int32, status: RunStateStatus, detectedPorts: [Int], selectedPort: Int?) {
-    let state = RunStateSnapshot(
+private func writeState(configuration: Configuration, pid: Int32, status: RunState.Status, detectedPorts: [Int], selectedPort: Int?) {
+    let state = RunState.Snapshot(
         pid: pid,
         status: status,
         detectedPorts: detectedPorts.sorted(),
         selectedPort: selectedPort,
         startedAt: configuration.startedAt
     )
-    try? RunStateStore.write(state, for: configuration.workstreamID)
+    try? RunState.Store.write(state, for: configuration.workstreamID)
 }
 
 // MARK: - Port Scanner
@@ -125,7 +125,7 @@ private final class PortScanner: @unchecked Sendable {
     private let pid: Int32
     private let queue = DispatchQueue(label: "atelier.atelier-run.scanner")
     private var timer: DispatchSourceTimer?
-    private var tracker: PortSelectionTracker
+    private var tracker: RunState.PortSelectionTracker
     private(set) var detectedPorts: [Int] = []
     private(set) var selectedPort: Int?
     private var pollCount = 0
@@ -133,7 +133,7 @@ private final class PortScanner: @unchecked Sendable {
 
     init(pid: Int32, expectedPort: Int?) {
         self.pid = pid
-        tracker = PortSelectionTracker(expectedPort: expectedPort)
+        tracker = RunState.PortSelectionTracker(expectedPort: expectedPort)
     }
 
     func start(startedAt: Date, workstreamID: UUID) {
@@ -149,15 +149,15 @@ private final class PortScanner: @unchecked Sendable {
             detectedPorts = result.detectedPorts
             selectedPort = result.selectedPort
 
-            let status: RunStateStatus = result.detectedPorts.isEmpty ? .starting : .running
-            let state = RunStateSnapshot(
+            let status: RunState.Status = result.detectedPorts.isEmpty ? .starting : .running
+            let state = RunState.Snapshot(
                 pid: pid,
                 status: status,
                 detectedPorts: result.detectedPorts,
                 selectedPort: result.selectedPort,
                 startedAt: startedAt
             )
-            try? RunStateStore.write(state, for: workstreamID)
+            try? RunState.Store.write(state, for: workstreamID)
 
             if result.selectedPort != nil {
                 active = false

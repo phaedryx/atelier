@@ -33,7 +33,7 @@ final class PortDetector: ObservableObject, @unchecked Sendable {
     }
 
     private func start() {
-        try? FileManager.default.createDirectory(at: RunStateStore.directoryURL, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: RunState.Store.directoryURL, withIntermediateDirectories: true)
         attachDirectoryWatcher()
         refreshState()
     }
@@ -46,7 +46,7 @@ final class PortDetector: ObservableObject, @unchecked Sendable {
     }
 
     private func attachDirectoryWatcher() {
-        let directoryPath = RunStateStore.directoryURL.path
+        let directoryPath = RunState.Store.directoryURL.path
         let descriptor = open(directoryPath, O_EVTONLY)
         guard descriptor >= 0 else { return }
 
@@ -69,7 +69,7 @@ final class PortDetector: ObservableObject, @unchecked Sendable {
     }
 
     private func attachFileWatcherIfNeeded() {
-        let statePath = RunStateStore.fileURL(for: workstreamID).path
+        let statePath = RunState.Store.fileURL(for: workstreamID).path
         guard FileManager.default.fileExists(atPath: statePath) else {
             fileSource?.cancel()
             fileSource = nil
@@ -96,7 +96,7 @@ final class PortDetector: ObservableObject, @unchecked Sendable {
     }
 
     private func refreshState() {
-        let state = RunStateStore.loadValidated(for: workstreamID)
+        let state = RunState.Store.loadValidated(for: workstreamID)
         if state == nil {
             attachFileWatcherIfNeeded()
         }

@@ -395,7 +395,7 @@ final class AppEnvironment: ObservableObject {
                 githubRemoteResults[project.directory] = GitHub.Operations.hasGitHubRemote(at: project.directory)
 
                 for ws in project.workstreams {
-                    if RunStateStore.loadValidated(for: ws.id)?.detectedPorts.isEmpty == false {
+                    if RunState.Store.loadValidated(for: ws.id)?.detectedPorts.isEmpty == false {
                         portResults.insert(ws.id)
                     }
                     guard let path = ws.worktreePath else { continue }

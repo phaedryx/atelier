@@ -38,7 +38,7 @@ final class PortDetectionTests: XCTestCase {
     }
 
     func testSingleNewPortRequiresTwoPollsBeforeSelection() {
-        var tracker = PortSelectionTracker(expectedPort: 40001)
+        var tracker = RunState.PortSelectionTracker(expectedPort: 40001)
 
         let first = tracker.update(listeningPorts: [5173])
         XCTAssertEqual(first.detectedPorts, [5173])
@@ -49,7 +49,7 @@ final class PortDetectionTests: XCTestCase {
     }
 
     func testMultiplePortsPreferExpectedPort() {
-        var tracker = PortSelectionTracker(expectedPort: 40001)
+        var tracker = RunState.PortSelectionTracker(expectedPort: 40001)
         _ = tracker.update(listeningPorts: [40001, 5173])
 
         let second = tracker.update(listeningPorts: [40001, 5173])
@@ -59,7 +59,7 @@ final class PortDetectionTests: XCTestCase {
     }
 
     func testMultiplePortsWithoutExpectedPortDoNotAutoSelect() {
-        var tracker = PortSelectionTracker(expectedPort: 40001)
+        var tracker = RunState.PortSelectionTracker(expectedPort: 40001)
         _ = tracker.update(listeningPorts: [3000, 5173])
 
         let second = tracker.update(listeningPorts: [3000, 5173])
