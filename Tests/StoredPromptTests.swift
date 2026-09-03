@@ -76,6 +76,68 @@ final class StoredPromptStoreTests: XCTestCase {
         let store = StoredPromptStore(defaults: defaults)
         XCTAssertEqual(store.prompts.map(\.label), StoredPromptStore.defaultPrompts().map(\.label))
     }
+
+    // MARK: - One unreadable prompt must not take the rest with it
+
+    /// The list went through a single `try?`, so one prompt the current shape
+    /// cannot read discarded all of them — and because the fallback is the seed
+    /// list, the user's own prompts were replaced by two they never wrote.
+    func testKeepsThePromptsItCanReadWhenOneIsUnreadable() {
+        let json = """
+        [{ "id": "\(UUID().uuidString)", "label": "Mine", "text": "keep me" },
+         { "label": "no id, not a prompt" }]
+        """
+        defaults.set(Data(json.utf8), forKey: StoredPromptStore.storageKey)
+
+        let store = StoredPromptStore(defaults: defaults)
+
+        XCTAssertEqual(store.prompts.map(\.label), ["Mine"])
+    }
+
+    /// The seed fallback is what makes an unreadable blob destructive: the store
+    /// hands back two prompts the user never wrote, and the first edit saves
+    /// them over the bytes it could not read. Keep those bytes.
+    func testKeepsTheOriginalBlobWhenItCouldNotBeReadInFull() {
+        let json = "not json"
+        defaults.set(Data(json.utf8), forKey: StoredPromptStore.storageKey)
+
+        let store = StoredPromptStore(defaults: defaults)
+        store.add(StoredPrompt(label: "New", text: "text"))
+
+        let kept = defaults.data(forKey: StoredPromptStore.storageKey + LossyStore.unreadableKeySuffix)
+        XCTAssertEqual(kept.map { String(decoding: $0, as: UTF8.self) }, json)
+    }
+
+    /// "The user deleted all their prompts" and "not one of their prompts could
+    /// be read" both end up as an empty list, and they must not be treated the
+    /// same: the first is a state the store is documented to preserve, the second
+    /// is a failed read that should fall back to the seeds like any other.
+    /// `testDeletingEverySeedStaysEmptyAcrossReload` pins the other side.
+    func testFallsBackToSeedsWhenNoPromptCanBeRead() {
+        let json = """
+        [{ "label": "no id" }, { "label": "also no id" }]
+        """
+        defaults.set(Data(json.utf8), forKey: StoredPromptStore.storageKey)
+
+        let store = StoredPromptStore(defaults: defaults)
+
+        XCTAssertEqual(store.prompts.map(\.label), StoredPromptStore.defaultPrompts().map(\.label))
+        XCTAssertEqual(
+            defaults.data(forKey: StoredPromptStore.storageKey + LossyStore.unreadableKeySuffix)
+                .map { String(decoding: $0, as: UTF8.self) },
+            json,
+            "and the bytes it could not read are still there"
+        )
+    }
+
+    func testKeepsNoBlobWhenEverythingReads() {
+        let store = StoredPromptStore(defaults: defaults)
+        store.add(StoredPrompt(label: "One", text: "text"))
+
+        _ = StoredPromptStore(defaults: defaults)
+
+        XCTAssertNil(defaults.data(forKey: StoredPromptStore.storageKey + LossyStore.unreadableKeySuffix))
+    }
 }
 
 @MainActor

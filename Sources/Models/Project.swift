@@ -14,8 +14,10 @@ struct Workstream: Identifiable, Hashable, Codable {
     ///
     /// Must stay Optional. The synthesized `init(from:)` calls `decode` — not
     /// `decodeIfPresent` — for a non-Optional property and throws when the key is
-    /// absent, and `ProjectStore` decodes the whole `[Project]` array with `try?`,
-    /// so one missing key would silently wipe every project on upgrade.
+    /// absent, so a blob written before this key existed would fail to decode.
+    /// That now costs one workstream rather than every project the user has (see
+    /// `Project.init(from:)` and `LossyStore`), but a workstream silently
+    /// vanishing on upgrade is still not an acceptable price for a stored field.
     var shortcutStoryID: Int?
 
     init(name: String, displayName: String? = nil, worktreePath: String? = nil, bypassPermissions: Bool = false, id: UUID = UUID(), lastAccessedAt: Date = Date(), shortcutStoryID: Int? = nil) {
@@ -73,6 +75,21 @@ struct Project: Identifiable, Hashable, Codable {
         self.directory = directory
         self.workstreams = workstreams
         self.lastAccessedAt = lastAccessedAt
+    }
+
+    /// Hand-written for one reason: `workstreams` decodes element by element.
+    ///
+    /// A workstream the current shape cannot read used to fail the whole project,
+    /// and `ProjectStore` then failed the whole list — so one stale record cost
+    /// the user every project they had. `encode(to:)` is still synthesized, which
+    /// is what keeps `CodingKeys` in step with the properties above.
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        directory = try container.decode(String.self, forKey: .directory)
+        lastAccessedAt = try container.decode(Date.self, forKey: .lastAccessedAt)
+        workstreams = try container.decodeLossyArray(Workstream.self, forKey: .workstreams)
     }
 
     static func == (lhs: Project, rhs: Project) -> Bool {
