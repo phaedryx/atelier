@@ -370,7 +370,7 @@ struct TerminalContainerView: View {
         workstreamID
     }
 
-    private var quickActionRunner: QuickActionRunner {
+    private var quickActionRunner: QuickAction.Runner {
         surfaceCache.quickActionRunner(for: workstreamID)
     }
 
@@ -1910,7 +1910,7 @@ private struct WorkspaceTabDropDelegate: DropDelegate {
 }
 
 private struct GitHubActionMenu: View {
-    @ObservedObject var runner: QuickActionRunner
+    @ObservedObject var runner: QuickAction.Runner
     let claudePath: String?
     let ghPath: String?
     let workingDirectory: String
@@ -1996,7 +1996,7 @@ private struct GitHubActionMenu: View {
         return false
     }
 
-    private func resultState(for action: QuickAction) -> QuickActionState? {
+    private func resultState(for action: QuickAction) -> QuickAction.State? {
         switch runner.state {
         case let .succeeded(a) where a == action: runner.state
         case let .failed(a) where a == action: runner.state
@@ -2354,7 +2354,7 @@ final class TerminalSurfaceCache: ObservableObject {
     private var surfaces: [UUID: TerminalView] = [:]
     private var surfaceParams: [UUID: SurfaceParams] = [:]
     private var webViews: [UUID: WKWebView] = [:]
-    private var quickActionRunners: [UUID: QuickActionRunner] = [:]
+    private var quickActionRunners: [UUID: QuickAction.Runner] = [:]
     private var workspaceModels: [UUID: WorkspaceModel] = [:]
     /// Surface IDs that should respawn when closed (e.g., the agent).
     var respawnableIDs: Set<UUID> = []
@@ -2476,11 +2476,11 @@ final class TerminalSurfaceCache: ObservableObject {
         return view
     }
 
-    func quickActionRunner(for workstreamID: UUID) -> QuickActionRunner {
+    func quickActionRunner(for workstreamID: UUID) -> QuickAction.Runner {
         if let existing = quickActionRunners[workstreamID] {
             return existing
         }
-        let runner = QuickActionRunner()
+        let runner = QuickAction.Runner()
         quickActionRunners[workstreamID] = runner
         return runner
     }

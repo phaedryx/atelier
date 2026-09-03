@@ -14,7 +14,7 @@ private let logger = Logger(subsystem: "atelier", category: "process")
 /// a deadline instead, or one wedged child stalls every later call.
 ///
 /// Two spawn sites deliberately stay outside this type, and say so where they
-/// spawn: `BareRepoClone.run` and `QuickActionRunner.runShellCommand`. Both run
+/// spawn: `BareRepoClone.run` and `QuickAction.Runner.runShellCommand`. Both run
 /// work with no honest deadline — a clone, or the user's own command — and both
 /// already offer the better answer, a cancellation the user drives. Everything
 /// else that spawns a child goes through here.
