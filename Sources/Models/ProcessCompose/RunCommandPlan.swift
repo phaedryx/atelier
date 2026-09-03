@@ -6,7 +6,7 @@ import Foundation
 /// What Start is allowed to run for a workstream.
 ///
 /// This exists to hold **one invariant**: the command string
-/// `DevCommandResolver` builds for a `.processCompose` source is *never
+/// `DevCommand.Resolver` builds for a `.processCompose` source is *never
 /// executed*. That string is `process-compose up -U -f <files>` — it carries no
 /// `-n`, so process-compose runs every namespace it finds, `bootstrap` and
 /// `dispose` included. Those two are exactly what `PhasePolicy` gates behind the
@@ -39,7 +39,7 @@ enum RunCommandPlan: Equatable {
     /// back to anything.
     case nothing
 
-    /// - Parameter devCommand: what `DevCommandResolver` resolved, or nil when it
+    /// - Parameter devCommand: what `DevCommand.Resolver` resolved, or nil when it
     ///   found nothing.
     /// - Parameter config: the config located for the *run*, or nil when the run
     ///   is not a process-compose run.
@@ -72,7 +72,7 @@ enum RunCommandPlan: Equatable {
     /// they cannot describe different states.
     ///
     /// - Parameter isEnabled: whether the integration is switched on. Needed
-    ///   because `DevCommandResolver` detects nothing while it is off, which
+    ///   because `DevCommand.Resolver` detects nothing while it is off, which
     ///   arrives here as `devCommand == nil` — indistinguishable, without this,
     ///   from a project that genuinely has no config, and those want opposite
     ///   advice.

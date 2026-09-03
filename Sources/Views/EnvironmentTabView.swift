@@ -12,7 +12,7 @@ func shouldRestoreRunSession(useTmux: Bool, hasRunScript: Bool, hasExistingRunSe
 /// An override is shown as the command it is — the user typed it, and it is what
 /// Start runs. A process-compose config is shown as the **files** that will be
 /// loaded, and deliberately not as a command, because the string
-/// `DevCommandResolver` builds for that source is
+/// `DevCommand.Resolver` builds for that source is
 /// `process-compose up -U -f <files>` — no `-n`, so running it runs *every*
 /// namespace including `bootstrap` and `dispose`, past `PhasePolicy` and past
 /// `ScriptTrust`. `RunCommandPlan` makes it unreachable from Start; rendering it

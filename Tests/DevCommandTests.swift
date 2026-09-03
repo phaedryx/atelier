@@ -23,7 +23,7 @@ final class DevCommandTests: XCTestCase {
 
     override func tearDown() {
         ProcessComposeSettings.isEnabled = originallyEnabled
-        DevCommandResolver.saveOverride(nil, for: workstreamID)
+        DevCommand.Resolver.saveOverride(nil, for: workstreamID)
         for container in projectContainers {
             try? FileManager.default.removeItem(at: container)
         }
@@ -49,7 +49,7 @@ final class DevCommandTests: XCTestCase {
         try writeProcessCompose(named: "process-compose.yaml")
         ProcessComposeSettings.isEnabled = false
 
-        XCTAssertNil(DevCommandResolver.detectProcessCompose(
+        XCTAssertNil(DevCommand.Resolver.detectProcessCompose(
             in: tmpDir.path, projectDirectory: tmpDir.path
         ))
     }
@@ -62,7 +62,7 @@ final class DevCommandTests: XCTestCase {
         try writeProcessCompose(named: "process-compose.yaml")
         ProcessComposeSettings.isEnabled = false
 
-        let resolved = DevCommandResolver.resolve(
+        let resolved = DevCommand.Resolver.resolve(
             workingDirectory: tmpDir.path,
             projectDirectory: tmpDir.path,
             override: nil
@@ -79,7 +79,7 @@ final class DevCommandTests: XCTestCase {
         try writeProcessCompose(named: "process-compose.yaml", in: project)
         ProcessComposeSettings.isEnabled = false
 
-        XCTAssertNil(DevCommandResolver.detectProcessCompose(
+        XCTAssertNil(DevCommand.Resolver.detectProcessCompose(
             in: tmpDir.path, projectDirectory: project.path
         ))
     }
@@ -90,12 +90,12 @@ final class DevCommandTests: XCTestCase {
     func testDisabledIntegrationStillHonoursTheOverride() throws {
         try writeProcessCompose(named: "process-compose.yaml")
         ProcessComposeSettings.isEnabled = false
-        DevCommandResolver.saveOverride("npm run dev", for: workstreamID)
+        DevCommand.Resolver.saveOverride("npm run dev", for: workstreamID)
 
-        let resolved = DevCommandResolver.resolve(
+        let resolved = DevCommand.Resolver.resolve(
             workingDirectory: tmpDir.path,
             projectDirectory: tmpDir.path,
-            override: DevCommandResolver.savedOverride(for: workstreamID)
+            override: DevCommand.Resolver.savedOverride(for: workstreamID)
         )
 
         XCTAssertEqual(resolved?.command, "npm run dev")
@@ -107,14 +107,14 @@ final class DevCommandTests: XCTestCase {
     func testEnablingTheIntegrationRestoresDetection() throws {
         try writeProcessCompose(named: "process-compose.yaml")
         ProcessComposeSettings.isEnabled = false
-        XCTAssertNil(DevCommandResolver.detectProcessCompose(
+        XCTAssertNil(DevCommand.Resolver.detectProcessCompose(
             in: tmpDir.path, projectDirectory: tmpDir.path
         ))
 
         ProcessComposeSettings.isEnabled = true
 
         XCTAssertEqual(
-            DevCommandResolver.detectProcessCompose(
+            DevCommand.Resolver.detectProcessCompose(
                 in: tmpDir.path, projectDirectory: tmpDir.path
             )?.source,
             .processCompose
@@ -125,12 +125,12 @@ final class DevCommandTests: XCTestCase {
 
     func testOverrideBeatsDetection() throws {
         try writeProcessCompose(named: "process-compose.yaml")
-        DevCommandResolver.saveOverride("npm run dev -- --port 3000", for: workstreamID)
+        DevCommand.Resolver.saveOverride("npm run dev -- --port 3000", for: workstreamID)
 
-        let resolved = DevCommandResolver.resolve(
+        let resolved = DevCommand.Resolver.resolve(
             workingDirectory: tmpDir.path,
             projectDirectory: tmpDir.path,
-            override: DevCommandResolver.savedOverride(for: workstreamID)
+            override: DevCommand.Resolver.savedOverride(for: workstreamID)
         )
 
         XCTAssertEqual(resolved?.command, "npm run dev -- --port 3000")
@@ -140,7 +140,7 @@ final class DevCommandTests: XCTestCase {
     func testLocatedConfigUsedWhenNoOverride() throws {
         try writeProcessCompose(named: "process-compose.yaml")
 
-        let resolved = DevCommandResolver.resolve(
+        let resolved = DevCommand.Resolver.resolve(
             workingDirectory: tmpDir.path,
             projectDirectory: tmpDir.path,
             override: nil
@@ -155,7 +155,7 @@ final class DevCommandTests: XCTestCase {
     func testPackageJSONIsNotConsulted() throws {
         try writePackageJSON(["dev": "vite"])
 
-        XCTAssertNil(DevCommandResolver.resolve(
+        XCTAssertNil(DevCommand.Resolver.resolve(
             workingDirectory: tmpDir.path,
             projectDirectory: tmpDir.path,
             override: nil
@@ -163,7 +163,7 @@ final class DevCommandTests: XCTestCase {
     }
 
     func testNothingDetectedReturnsNil() {
-        let resolved = DevCommandResolver.resolve(
+        let resolved = DevCommand.Resolver.resolve(
             workingDirectory: tmpDir.path,
             projectDirectory: tmpDir.path,
             override: nil
@@ -177,7 +177,7 @@ final class DevCommandTests: XCTestCase {
     func testDetectsProcessComposeConfig() throws {
         try writeProcessCompose(named: "process-compose.yaml")
 
-        let command = try XCTUnwrap(DevCommandResolver.detectProcessCompose(in: tmpDir.path, projectDirectory: tmpDir.path))
+        let command = try XCTUnwrap(DevCommand.Resolver.detectProcessCompose(in: tmpDir.path, projectDirectory: tmpDir.path))
 
         XCTAssertEqual(
             command.command,
@@ -190,7 +190,7 @@ final class DevCommandTests: XCTestCase {
     func testDetectsShortYamlExtension() throws {
         try writeProcessCompose(named: "process-compose.yml")
 
-        let command = try XCTUnwrap(DevCommandResolver.detectProcessCompose(in: tmpDir.path, projectDirectory: tmpDir.path))
+        let command = try XCTUnwrap(DevCommand.Resolver.detectProcessCompose(in: tmpDir.path, projectDirectory: tmpDir.path))
 
         XCTAssertEqual(command.sourceDescription, "process-compose.yml")
     }
@@ -205,7 +205,7 @@ final class DevCommandTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertNil(DevCommandResolver.detectProcessCompose(in: tmpDir.path, projectDirectory: tmpDir.path))
+        XCTAssertNil(DevCommand.Resolver.detectProcessCompose(in: tmpDir.path, projectDirectory: tmpDir.path))
     }
 
     // MARK: - Config in the project directory
@@ -217,7 +217,7 @@ final class DevCommandTests: XCTestCase {
         try writeProcessCompose(named: "process-compose.yaml", in: project)
 
         let command = try XCTUnwrap(
-            DevCommandResolver.detectProcessCompose(in: tmpDir.path, projectDirectory: project.path)
+            DevCommand.Resolver.detectProcessCompose(in: tmpDir.path, projectDirectory: project.path)
         )
 
         XCTAssertEqual(
@@ -235,7 +235,7 @@ final class DevCommandTests: XCTestCase {
         try writeProcessCompose(named: "process-compose.override.yaml")
 
         let command = try XCTUnwrap(
-            DevCommandResolver.detectProcessCompose(in: tmpDir.path, projectDirectory: project.path)
+            DevCommand.Resolver.detectProcessCompose(in: tmpDir.path, projectDirectory: project.path)
         )
 
         XCTAssertTrue(command.command.hasSuffix(
@@ -252,7 +252,7 @@ final class DevCommandTests: XCTestCase {
         try writeProcessCompose(named: "process-compose.yaml")
 
         let command = try XCTUnwrap(
-            DevCommandResolver.detectProcessCompose(in: tmpDir.path, projectDirectory: project.path)
+            DevCommand.Resolver.detectProcessCompose(in: tmpDir.path, projectDirectory: project.path)
         )
 
         XCTAssertEqual(
@@ -268,7 +268,7 @@ final class DevCommandTests: XCTestCase {
         try writeProcessCompose(named: "process-compose.yaml")
 
         let command = try XCTUnwrap(
-            DevCommandResolver.detectProcessCompose(in: tmpDir.path, projectDirectory: tmpDir.path)
+            DevCommand.Resolver.detectProcessCompose(in: tmpDir.path, projectDirectory: tmpDir.path)
         )
 
         XCTAssertEqual(
@@ -291,7 +291,7 @@ final class DevCommandTests: XCTestCase {
         )
 
         let command = try XCTUnwrap(
-            DevCommandResolver.detectProcessCompose(in: tmpDir.path, projectDirectory: tmpDir.path)
+            DevCommand.Resolver.detectProcessCompose(in: tmpDir.path, projectDirectory: tmpDir.path)
         )
 
         for file in config.loadedFiles {
@@ -306,7 +306,7 @@ final class DevCommandTests: XCTestCase {
     func testNoConfigInEitherPlace() throws {
         let project = try makeProjectContainer()
 
-        XCTAssertNil(DevCommandResolver.detectProcessCompose(in: tmpDir.path, projectDirectory: project.path))
+        XCTAssertNil(DevCommand.Resolver.detectProcessCompose(in: tmpDir.path, projectDirectory: project.path))
     }
 
     private func makeProjectContainer() throws -> URL {
@@ -335,22 +335,22 @@ final class DevCommandTests: XCTestCase {
     // MARK: - Override persistence
 
     func testOverrideRoundTrip() {
-        DevCommandResolver.saveOverride("bun run dev", for: workstreamID)
+        DevCommand.Resolver.saveOverride("bun run dev", for: workstreamID)
 
-        XCTAssertEqual(DevCommandResolver.savedOverride(for: workstreamID), "bun run dev")
+        XCTAssertEqual(DevCommand.Resolver.savedOverride(for: workstreamID), "bun run dev")
     }
 
     func testEmptyOverrideClearsSavedValue() {
-        DevCommandResolver.saveOverride("bun run dev", for: workstreamID)
-        DevCommandResolver.saveOverride(nil, for: workstreamID)
+        DevCommand.Resolver.saveOverride("bun run dev", for: workstreamID)
+        DevCommand.Resolver.saveOverride(nil, for: workstreamID)
 
-        XCTAssertNil(DevCommandResolver.savedOverride(for: workstreamID))
+        XCTAssertNil(DevCommand.Resolver.savedOverride(for: workstreamID))
     }
 
     func testBlankOverrideIsTreatedAsAbsent() {
-        DevCommandResolver.saveOverride("   ", for: workstreamID)
+        DevCommand.Resolver.saveOverride("   ", for: workstreamID)
 
-        XCTAssertNil(DevCommandResolver.savedOverride(for: workstreamID))
+        XCTAssertNil(DevCommand.Resolver.savedOverride(for: workstreamID))
     }
 
     // MARK: - Helpers
@@ -370,7 +370,7 @@ final class DevCommandTests: XCTestCase {
         ProcessComposeSettings.isEnabled = true
         defer { ProcessComposeSettings.isEnabled = false }
 
-        let resolved = DevCommandResolver.resolve(
+        let resolved = DevCommand.Resolver.resolve(
             workingDirectory: dir,
             projectDirectory: dir,
             override: "process-compose up -U -f '\(dir)/process-compose.yaml'"
@@ -382,7 +382,7 @@ final class DevCommandTests: XCTestCase {
     func testAnOverrideThatNamesANamespaceIsHonoured() throws {
         let dir = try makeWorktreeWithConfig()
 
-        let resolved = DevCommandResolver.resolve(
+        let resolved = DevCommand.Resolver.resolve(
             workingDirectory: dir,
             projectDirectory: dir,
             override: "process-compose up -n execute -f x.yaml"
@@ -394,7 +394,7 @@ final class DevCommandTests: XCTestCase {
     func testAnOrdinaryOverrideIsUntouched() throws {
         let dir = try makeWorktreeWithConfig()
 
-        let resolved = DevCommandResolver.resolve(
+        let resolved = DevCommand.Resolver.resolve(
             workingDirectory: dir,
             projectDirectory: dir,
             override: "pnpm dev"
@@ -406,20 +406,20 @@ final class DevCommandTests: XCTestCase {
 
     func testSavingAnUnscopedProcessComposeCommandIsRefused() {
         let id = UUID()
-        defer { DevCommandResolver.saveOverride(nil, for: id) }
+        defer { DevCommand.Resolver.saveOverride(nil, for: id) }
 
-        DevCommandResolver.saveOverride("process-compose up -U -f a.yaml", for: id)
+        DevCommand.Resolver.saveOverride("process-compose up -U -f a.yaml", for: id)
 
-        XCTAssertNil(DevCommandResolver.savedOverride(for: id))
+        XCTAssertNil(DevCommand.Resolver.savedOverride(for: id))
     }
 
     func testSavingAScopedCommandStillWorks() {
         let id = UUID()
-        defer { DevCommandResolver.saveOverride(nil, for: id) }
+        defer { DevCommand.Resolver.saveOverride(nil, for: id) }
 
-        DevCommandResolver.saveOverride("process-compose up -n execute", for: id)
+        DevCommand.Resolver.saveOverride("process-compose up -n execute", for: id)
 
-        XCTAssertEqual(DevCommandResolver.savedOverride(for: id), "process-compose up -n execute")
+        XCTAssertEqual(DevCommand.Resolver.savedOverride(for: id), "process-compose up -n execute")
     }
 
     /// Word boundaries: a path or process name containing "up" is not the
@@ -428,43 +428,43 @@ final class DevCommandTests: XCTestCase {
     /// command runs the project, and a `bootstrap` process in the named file
     /// executes. Requiring the word `up` let this straight through.
     func testABareInvocationWithNoSubcommandIsUnscoped() {
-        XCTAssertTrue(DevCommandResolver.isUnscopedProcessComposeCommand("process-compose -f a.yaml"))
-        XCTAssertTrue(DevCommandResolver.isUnscopedProcessComposeCommand("process-compose"))
+        XCTAssertTrue(DevCommand.Resolver.isUnscopedProcessComposeCommand("process-compose -f a.yaml"))
+        XCTAssertTrue(DevCommand.Resolver.isUnscopedProcessComposeCommand("process-compose"))
         XCTAssertTrue(
-            DevCommandResolver.isUnscopedProcessComposeCommand("/opt/homebrew/bin/process-compose -U -f a.yaml")
+            DevCommand.Resolver.isUnscopedProcessComposeCommand("/opt/homebrew/bin/process-compose -U -f a.yaml")
         )
     }
 
     /// Splitting on whitespace and quotes alone read this as the word `up;`.
     func testShellPunctuationDoesNotHideTheSubcommand() {
-        XCTAssertTrue(DevCommandResolver.isUnscopedProcessComposeCommand("process-compose up; echo done"))
-        XCTAssertTrue(DevCommandResolver.isUnscopedProcessComposeCommand("process-compose up&"))
-        XCTAssertTrue(DevCommandResolver.isUnscopedProcessComposeCommand("(process-compose up)"))
+        XCTAssertTrue(DevCommand.Resolver.isUnscopedProcessComposeCommand("process-compose up; echo done"))
+        XCTAssertTrue(DevCommand.Resolver.isUnscopedProcessComposeCommand("process-compose up&"))
+        XCTAssertTrue(DevCommand.Resolver.isUnscopedProcessComposeCommand("(process-compose up)"))
     }
 
     /// pflag shorthand: both of these do scope the run.
     func testAttachedNamespaceShorthandCountsAsScoped() {
-        XCTAssertFalse(DevCommandResolver.isUnscopedProcessComposeCommand("process-compose up -nexecute"))
-        XCTAssertFalse(DevCommandResolver.isUnscopedProcessComposeCommand("process-compose up -n=execute"))
+        XCTAssertFalse(DevCommand.Resolver.isUnscopedProcessComposeCommand("process-compose up -nexecute"))
+        XCTAssertFalse(DevCommand.Resolver.isUnscopedProcessComposeCommand("process-compose up -n=execute"))
         XCTAssertFalse(
-            DevCommandResolver.isUnscopedProcessComposeCommand("process-compose up --namespace=execute")
+            DevCommand.Resolver.isUnscopedProcessComposeCommand("process-compose up --namespace=execute")
         )
     }
 
     /// A real subcommand is not the root command and does not run the project.
     func testANonRunningSubcommandIsNotUnscoped() {
-        XCTAssertFalse(DevCommandResolver.isUnscopedProcessComposeCommand("process-compose down"))
-        XCTAssertFalse(DevCommandResolver.isUnscopedProcessComposeCommand("process-compose version"))
-        XCTAssertFalse(DevCommandResolver.isUnscopedProcessComposeCommand("process-compose attach"))
+        XCTAssertFalse(DevCommand.Resolver.isUnscopedProcessComposeCommand("process-compose down"))
+        XCTAssertFalse(DevCommand.Resolver.isUnscopedProcessComposeCommand("process-compose version"))
+        XCTAssertFalse(DevCommand.Resolver.isUnscopedProcessComposeCommand("process-compose attach"))
     }
 
     func testTheShapeCheckDoesNotFireOnLookalikes() {
-        XCTAssertFalse(DevCommandResolver.isUnscopedProcessComposeCommand("pnpm dev"))
-        XCTAssertFalse(DevCommandResolver.isUnscopedProcessComposeCommand("./bin/upload --all"))
-        XCTAssertFalse(DevCommandResolver.isUnscopedProcessComposeCommand("process-compose down"))
-        XCTAssertFalse(DevCommandResolver.isUnscopedProcessComposeCommand("cd up-tools && process-compose down"))
-        XCTAssertTrue(DevCommandResolver.isUnscopedProcessComposeCommand("process-compose up -U -f a.yaml"))
-        XCTAssertTrue(DevCommandResolver.isUnscopedProcessComposeCommand("PROCESS-COMPOSE UP"))
+        XCTAssertFalse(DevCommand.Resolver.isUnscopedProcessComposeCommand("pnpm dev"))
+        XCTAssertFalse(DevCommand.Resolver.isUnscopedProcessComposeCommand("./bin/upload --all"))
+        XCTAssertFalse(DevCommand.Resolver.isUnscopedProcessComposeCommand("process-compose down"))
+        XCTAssertFalse(DevCommand.Resolver.isUnscopedProcessComposeCommand("cd up-tools && process-compose down"))
+        XCTAssertTrue(DevCommand.Resolver.isUnscopedProcessComposeCommand("process-compose up -U -f a.yaml"))
+        XCTAssertTrue(DevCommand.Resolver.isUnscopedProcessComposeCommand("PROCESS-COMPOSE UP"))
     }
 
     private func makeWorktreeWithConfig() throws -> String {

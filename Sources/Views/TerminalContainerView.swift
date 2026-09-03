@@ -357,9 +357,9 @@ struct TerminalContainerView: View {
             socketPath: PhaseRunner.socketPath(for: workstreamID)
         ))
 
-        let savedOverride = DevCommandResolver.savedOverride(for: workstreamID)
+        let savedOverride = DevCommand.Resolver.savedOverride(for: workstreamID)
         _devCommandOverride = State(initialValue: savedOverride)
-        _resolvedDevCommand = State(initialValue: DevCommandResolver.resolve(
+        _resolvedDevCommand = State(initialValue: DevCommand.Resolver.resolve(
             workingDirectory: workingDirectory,
             projectDirectory: projectDirectory,
             override: savedOverride
@@ -427,7 +427,7 @@ struct TerminalContainerView: View {
     ///
     /// Asks the same two questions as `usesProcessCompose` — the integration is
     /// on, and the resolved dev command came from a config rather than from the
-    /// user's own override, which `DevCommandResolver.resolve` prefers. It takes
+    /// user's own override, which `DevCommand.Resolver.resolve` prefers. It takes
     /// the dev command as a parameter rather than reading `resolvedDevCommand`
     /// because `refreshDevCommand` needs the config for the resolution it is in
     /// the middle of storing, not for the previous one.
@@ -1008,7 +1008,7 @@ struct TerminalContainerView: View {
                 }
             }
             .onChange(of: devCommandOverride) { _, newValue in
-                DevCommandResolver.saveOverride(newValue, for: workstreamID)
+                DevCommand.Resolver.saveOverride(newValue, for: workstreamID)
                 refreshDevCommand()
             }
             // The two Settings-window inputs to `runPlan`. `refreshConfigApproval`
@@ -1278,7 +1278,7 @@ struct TerminalContainerView: View {
     /// only about whether there is a socket worth polling.
     ///
     /// The `isEnabled` half is belt-and-braces rather than the load-bearing
-    /// check: `DevCommandResolver.detectProcessCompose` refuses to detect
+    /// check: `DevCommand.Resolver.detectProcessCompose` refuses to detect
     /// anything while the setting is off, so a `.processCompose` source already
     /// implies it. Kept anyway, because the two are read from different places
     /// and a reader here should not have to go and confirm that the resolver
@@ -1394,7 +1394,7 @@ struct TerminalContainerView: View {
     /// earlier dev command. Both are also the only two inputs the Start button
     /// reads, so this is the whole of what has to stay in step.
     private func refreshDevCommand() {
-        let devCommand = DevCommandResolver.resolve(
+        let devCommand = DevCommand.Resolver.resolve(
             workingDirectory: workingDirectory,
             projectDirectory: projectDirectory,
             override: devCommandOverride
