@@ -134,8 +134,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // `up --keep-project` servers outlive their processes deliberately, so
         // without this a quit mid-run leaves one per phase holding the
         // worktree's ports until its own deadline.
-        if let composeBinary = ProcessComposeSettings.resolveBinary() {
-            PhaseExecutor.stopAllServers(binary: composeBinary)
+        if let composeBinary = ProcessCompose.Settings.resolveBinary() {
+            ProcessCompose.PhaseExecutor.stopAllServers(binary: composeBinary)
         }
     }
 
@@ -178,14 +178,14 @@ struct AtelierApp: App {
         HookEventReceiver.shared.onEvent = { projectDir, event in
             HookEventRouter.shared.route(projectDir: projectDir, event: event)
             MainActor.assumeIsolated {
-                WorkstreamAgentStateTracker.shared.handle(projectDir: projectDir, event: event)
+                Workstream.AgentStateTracker.shared.handle(projectDir: projectDir, event: event)
             }
         }
         HookEventReceiver.shared.start()
 
         // Agent IPC listens only when the user has enabled it; SettingsView
         // calls apply() again whenever the switch moves.
-        AgentIPCSettings.apply()
+        IPC.AgentSettings.apply()
 
         // Install atelier-hook into ~/.claude/settings.json so Claude Code forwards events
         if let hookURL = Bundle.main.url(forResource: "atelier-hook", withExtension: nil, subdirectory: "Scripts") {

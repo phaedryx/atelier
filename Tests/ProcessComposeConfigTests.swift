@@ -34,7 +34,7 @@ final class ProcessComposeConfigTests: XCTestCase {
         try write("process-compose.yaml", in: worktree)
 
         let config = try XCTUnwrap(
-            ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path)
+            ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path)
         )
 
         XCTAssertEqual(config.path, worktree.appendingPathComponent("process-compose.yaml").path)
@@ -46,7 +46,7 @@ final class ProcessComposeConfigTests: XCTestCase {
         try write("process-compose.yaml", in: project)
 
         let config = try XCTUnwrap(
-            ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path)
+            ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path)
         )
 
         XCTAssertEqual(config.path, project.appendingPathComponent("process-compose.yaml").path)
@@ -58,7 +58,7 @@ final class ProcessComposeConfigTests: XCTestCase {
         try write("process-compose.yaml", in: worktree)
 
         let config = try XCTUnwrap(
-            ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path)
+            ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path)
         )
 
         XCTAssertEqual(config.path, worktree.appendingPathComponent("process-compose.yaml").path)
@@ -72,7 +72,7 @@ final class ProcessComposeConfigTests: XCTestCase {
         try write("process-compose.override.yaml", in: worktree)
 
         let config = try XCTUnwrap(
-            ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path)
+            ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path)
         )
 
         XCTAssertEqual(config.overridePath, worktree.appendingPathComponent("process-compose.override.yaml").path)
@@ -83,7 +83,7 @@ final class ProcessComposeConfigTests: XCTestCase {
         try write("process-compose.override.yaml", in: worktree)
 
         let config = try XCTUnwrap(
-            ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path)
+            ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path)
         )
 
         XCTAssertNil(config.overridePath, "a worktree base resolves its sibling override through loadedFiles")
@@ -95,14 +95,14 @@ final class ProcessComposeConfigTests: XCTestCase {
         try write("process-compose.yaml", in: worktree)
 
         let config = try XCTUnwrap(
-            ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: worktree.path)
+            ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: worktree.path)
         )
 
         XCTAssertTrue(config.isRepositoryProvided)
     }
 
     func testNoConfigAnywhere() {
-        XCTAssertNil(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+        XCTAssertNil(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
     }
 
     func testIgnoresBareComposeFile() throws {
@@ -110,7 +110,7 @@ final class ProcessComposeConfigTests: XCTestCase {
             to: worktree.appendingPathComponent("compose.yaml"), atomically: true, encoding: .utf8
         )
 
-        XCTAssertNil(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+        XCTAssertNil(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
     }
 
     // MARK: - Namespace declarations
@@ -135,7 +135,7 @@ final class ProcessComposeConfigTests: XCTestCase {
             namespace: bootstrap
             command: "true"
         """, name: "process-compose.override.yaml", in: worktree)
-        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
 
         XCTAssertNil(config.overridePath, "loadedFiles resolves it; locate does not record it")
         XCTAssertEqual(config.namespacePresence("bootstrap"), .present)
@@ -163,7 +163,7 @@ final class ProcessComposeConfigTests: XCTestCase {
             namespace: bootstrap
             command: "true"
         """, name: "process-compose.override.yml", in: worktree)
-        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
 
         XCTAssertEqual(config.loadedFiles, [
             worktree.appendingPathComponent("process-compose.yaml").path,
@@ -187,7 +187,7 @@ final class ProcessComposeConfigTests: XCTestCase {
             namespace: bootstrap
             command: "true"
         """, name: "process-compose.override.yaml", in: project)
-        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
 
         XCTAssertFalse(config.isRepositoryProvided)
         XCTAssertEqual(config.namespacePresence("bootstrap"), .empty)
@@ -199,7 +199,7 @@ final class ProcessComposeConfigTests: XCTestCase {
             namespace: prepare
             command: "true"
         """, in: worktree)
-        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
 
         XCTAssertEqual(config.namespacePresence("prepare"), .present)
     }
@@ -210,7 +210,7 @@ final class ProcessComposeConfigTests: XCTestCase {
             namespace: execute
             command: "true"
         """, in: worktree)
-        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
 
         XCTAssertEqual(config.namespacePresence("prepare"), .empty)
     }
@@ -222,7 +222,7 @@ final class ProcessComposeConfigTests: XCTestCase {
           web:
             command: "true"
         """, in: worktree)
-        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
 
         XCTAssertEqual(config.namespacePresence("prepare"), .empty)
         XCTAssertEqual(config.namespacePresence("execute"), .empty)
@@ -241,7 +241,7 @@ final class ProcessComposeConfigTests: XCTestCase {
             namespace: prepare
             command: "true"
         """, name: "process-compose.override.yaml", in: worktree)
-        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
 
         XCTAssertEqual(config.namespacePresence("prepare"), .present)
     }
@@ -250,11 +250,11 @@ final class ProcessComposeConfigTests: XCTestCase {
     /// The three `.unknown` cases below are asserted as `.unknown` rather than
     /// as "not empty", which is what they used to say through
     /// `namespaceIsConfidentlyEmpty`. That distinction is now load-bearing:
-    /// `PhaseRunner.startCommand` chains `prepare` only on `.present`, because
+    /// `ProcessCompose.PhaseRunner.startCommand` chains `prepare` only on `.present`, because
     /// chaining it on an unparseable config hangs Start forever, while
-    /// `PhaseExecutor` still runs an `.unknown` phase on a bounded leash.
+    /// `ProcessCompose.PhaseExecutor` still runs an `.unknown` phase on a bounded leash.
     func testUnknownWhenTheFileCannotBeRead() {
-        let config = ProcessComposeConfig(
+        let config = ProcessCompose.Config(
             path: "/nonexistent/process-compose.yaml", isRepositoryProvided: true, overridePath: nil
         )
 
@@ -268,7 +268,7 @@ final class ProcessComposeConfigTests: XCTestCase {
         try "processes: {web: {command: \"true\"".write(
             to: worktree.appendingPathComponent("process-compose.yaml"), atomically: true, encoding: .utf8
         )
-        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
 
         XCTAssertEqual(config.namespacePresence("prepare"), .unknown)
     }
@@ -280,7 +280,7 @@ final class ProcessComposeConfigTests: XCTestCase {
         try "version: \"0.5\"".write(
             to: worktree.appendingPathComponent("process-compose.yaml"), atomically: true, encoding: .utf8
         )
-        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
 
         XCTAssertEqual(config.namespacePresence("prepare"), .unknown)
     }
@@ -290,7 +290,7 @@ final class ProcessComposeConfigTests: XCTestCase {
     /// The base config in the worktree is repository content, so it is approved.
     func testWorktreeConfigRequiresApproval() throws {
         try write("process-compose.yaml", in: worktree)
-        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
 
         XCTAssertTrue(config.requiresApproval)
         XCTAssertEqual(config.repositoryProvidedFiles, [worktree.appendingPathComponent("process-compose.yaml").path])
@@ -303,7 +303,7 @@ final class ProcessComposeConfigTests: XCTestCase {
     func testWorktreeOverrideIsPartOfWhatIsApproved() throws {
         try write("process-compose.yaml", in: worktree)
         try write("process-compose.override.yaml", in: worktree)
-        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
 
         XCTAssertNil(config.overridePath, "locate does not record the sibling override")
         XCTAssertTrue(config.requiresApproval)
@@ -317,7 +317,7 @@ final class ProcessComposeConfigTests: XCTestCase {
     /// worktree, is theirs: nothing to approve.
     func testProjectDirectoryConfigAloneRequiresNoApproval() throws {
         try write("process-compose.yaml", in: project)
-        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
 
         XCTAssertFalse(config.requiresApproval)
         XCTAssertEqual(config.repositoryProvidedFiles, [])
@@ -331,7 +331,7 @@ final class ProcessComposeConfigTests: XCTestCase {
     func testWorktreeOverrideBesideAUserConfigStillRequiresApproval() throws {
         try write("process-compose.yaml", in: project)
         try write("process-compose.override.yaml", in: worktree)
-        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
 
         XCTAssertFalse(config.isRepositoryProvided)
         XCTAssertTrue(config.requiresApproval, "a worktree override is repository content whatever the base config is")
@@ -349,7 +349,7 @@ final class ProcessComposeConfigTests: XCTestCase {
     func testComposeYamlIsNeverLoaded() throws {
         try write("process-compose.yaml", in: worktree)
         try write("compose.yaml", in: worktree)
-        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
 
         XCTAssertEqual(config.loadedFiles, [worktree.appendingPathComponent("process-compose.yaml").path])
         XCTAssertFalse(config.loadedFiles.contains { $0.hasSuffix("/compose.yaml") })
@@ -364,7 +364,7 @@ final class ProcessComposeConfigTests: XCTestCase {
         try write("process-compose.yaml", in: worktree)
         try write("process-compose.override.yaml", in: worktree)
         try write("process-compose.override.yml", in: worktree)
-        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
 
         XCTAssertEqual(config.loadedFiles, [
             worktree.appendingPathComponent("process-compose.yaml").path,
@@ -378,7 +378,7 @@ final class ProcessComposeConfigTests: XCTestCase {
     func testApprovedSetEqualsTheExecutedSetForARepositoryConfig() throws {
         try write("process-compose.yaml", in: worktree)
         try write("process-compose.override.yml", in: worktree)
-        let config = try XCTUnwrap(ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path))
+        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
 
         XCTAssertEqual(config.repositoryProvidedFiles, config.loadedFiles)
     }
@@ -395,7 +395,7 @@ final class ProcessComposeConfigTests: XCTestCase {
           orphan: { command: "true" }
         """)
         let config = try XCTUnwrap(
-            ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path)
+            ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path)
         )
 
         XCTAssertEqual(config.declaredProcesses(in: "execute"), ["api", "bff"])
@@ -411,7 +411,7 @@ final class ProcessComposeConfigTests: XCTestCase {
           orphan: { command: "true" }
         """)
         let config = try XCTUnwrap(
-            ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path)
+            ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path)
         )
 
         XCTAssertEqual(config.declaredProcesses(in: "execute"), [])
@@ -423,7 +423,7 @@ final class ProcessComposeConfigTests: XCTestCase {
     func testDeclaredProcessesIsNilWhenTheConfigCannotBeParsed() throws {
         try write("process-compose.yaml", in: worktree, contents: "processes: [this, is, not, a, mapping]")
         let config = try XCTUnwrap(
-            ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path)
+            ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path)
         )
 
         XCTAssertNil(config.declaredProcesses(in: "execute"))

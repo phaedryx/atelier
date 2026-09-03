@@ -12,7 +12,7 @@ final class PhaseExecutorTests: XCTestCase {
 
     override func setUpWithError() throws {
         try super.setUpWithError()
-        guard let found = ProcessComposeSettings.searchPaths.first(where: {
+        guard let found = ProcessCompose.Settings.searchPaths.first(where: {
             FileManager.default.isExecutableFile(atPath: $0)
         }) else {
             throw XCTSkip("process-compose is not installed")
@@ -27,21 +27,21 @@ final class PhaseExecutorTests: XCTestCase {
     override func tearDown() {
         try? FileManager.default.removeItem(at: dir)
         try? FileManager.default.removeItem(at: projectDir)
-        try? FileManager.default.removeItem(atPath: PhaseRunner.socketPath(for: workstreamID, phase: .bootstrap))
+        try? FileManager.default.removeItem(atPath: ProcessCompose.PhaseRunner.socketPath(for: workstreamID, phase: .bootstrap))
         super.tearDown()
     }
 
-    private func writeConfig(_ body: String) throws -> ProcessComposeConfig {
+    private func writeConfig(_ body: String) throws -> ProcessCompose.Config {
         let path = dir.appendingPathComponent("process-compose.yaml")
         try body.write(to: path, atomically: true, encoding: .utf8)
-        return ProcessComposeConfig(path: path.path, isRepositoryProvided: true, overridePath: nil)
+        return ProcessCompose.Config(path: path.path, isRepositoryProvided: true, overridePath: nil)
     }
 
     private func runBootstrap(
-        _ config: ProcessComposeConfig,
+        _ config: ProcessCompose.Config,
         environment: [String: String] = [:]
-    ) -> PhaseExecutor.Outcome {
-        PhaseExecutor.run(
+    ) -> ProcessCompose.PhaseExecutor.Outcome {
+        ProcessCompose.PhaseExecutor.run(
             phase: .bootstrap,
             config: config,
             binary: binary,
@@ -56,7 +56,7 @@ final class PhaseExecutorTests: XCTestCase {
     }
 
     /// C1, end to end: the phase's own processes must be able to read the
-    /// workstream's variables. They could not — `PhaseExecutor` built the child
+    /// workstream's variables. They could not — `ProcessCompose.PhaseExecutor` built the child
     /// environment from `ProcessInfo` plus a `PATH` override, so `bootstrap`
     /// and `dispose` saw no `ATELIER_*` and nothing from `ports.yaml`, while
     /// `prepare` and `execute` in a Ghostty surface saw all of it.
@@ -127,7 +127,7 @@ final class PhaseExecutorTests: XCTestCase {
             command: sh -c 'touch bootstrap-marker'
             availability: { restart: "no" }
         """.write(to: path, atomically: true, encoding: .utf8)
-        let config = ProcessComposeConfig(path: path.path, isRepositoryProvided: false, overridePath: nil)
+        let config = ProcessCompose.Config(path: path.path, isRepositoryProvided: false, overridePath: nil)
 
         XCTAssertEqual(runBootstrap(config), .succeeded)
         XCTAssertTrue(
@@ -275,10 +275,10 @@ final class PhaseOutcomeReportingTests: XCTestCase {
     }
 
     private func outcome(
-        _ poll: PhaseExecutor.PollResult,
+        _ poll: ProcessCompose.PhaseExecutor.PollResult,
         _ output: ProcessRunner.Output?
-    ) -> PhaseExecutor.Outcome {
-        PhaseExecutor.outcome(for: .bootstrap, poll: poll, output: output)
+    ) -> ProcessCompose.PhaseExecutor.Outcome {
+        ProcessCompose.PhaseExecutor.outcome(for: .bootstrap, poll: poll, output: output)
     }
 
     /// The regression guard. A nil status means `down` did not land inside the
@@ -348,8 +348,8 @@ final class PhaseOutcomeReportingTests: XCTestCase {
     /// every one. `/usr/bin/true` stands in for the binary: this asserts the
     /// iteration, not process-compose's behaviour.
     func testStopAllServersVisitsEverySocket() throws {
-        PhaseRunner.ensureSocketDirectory()
-        let directory = PhaseRunner.socketDirectory
+        ProcessCompose.PhaseRunner.ensureSocketDirectory()
+        let directory = ProcessCompose.PhaseRunner.socketDirectory
         let sockets = (0 ..< 3).map { directory.appendingPathComponent("sweep-\($0).sock") }
         let ignored = directory.appendingPathComponent("not-a-socket.txt")
         for url in sockets + [ignored] {
@@ -359,7 +359,7 @@ final class PhaseOutcomeReportingTests: XCTestCase {
             try? FileManager.default.removeItem(at: url)
         } }
 
-        PhaseExecutor.stopAllServers(binary: "/usr/bin/true", timeout: 10)
+        ProcessCompose.PhaseExecutor.stopAllServers(binary: "/usr/bin/true", timeout: 10)
 
         for url in sockets {
             XCTAssertFalse(
@@ -374,12 +374,12 @@ final class PhaseOutcomeReportingTests: XCTestCase {
     }
 
     func testStopAllServersDoesNothingWithNoSockets() {
-        PhaseRunner.ensureSocketDirectory()
-        let stray = PhaseRunner.socketDirectory.appendingPathComponent("keep.txt")
+        ProcessCompose.PhaseRunner.ensureSocketDirectory()
+        let stray = ProcessCompose.PhaseRunner.socketDirectory.appendingPathComponent("keep.txt")
         try? Data("x".utf8).write(to: stray)
         defer { try? FileManager.default.removeItem(at: stray) }
 
-        PhaseExecutor.stopAllServers(binary: "/usr/bin/true", timeout: 1)
+        ProcessCompose.PhaseExecutor.stopAllServers(binary: "/usr/bin/true", timeout: 1)
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: stray.path))
     }
@@ -401,7 +401,7 @@ final class PhaseOutcomeReportingTests: XCTestCase {
     /// reported detail became that line instead of the failing command's
     /// output.
     func testTheFailureDetailComesFromStdoutWhenBothStreamsHaveText() {
-        let detail = PhaseExecutor.detail(from: output(
+        let detail = ProcessCompose.PhaseExecutor.detail(from: output(
             stdout: "boom",
             stderr: #"{"level":"debug","message":"Path not found for process compose config home"}"#
         ))
@@ -412,7 +412,7 @@ final class PhaseOutcomeReportingTests: XCTestCase {
     /// The fallback still matters: if process-compose itself could not run,
     /// there is no process output and stderr is all there is.
     func testTheFailureDetailFallsBackToStderrWhenStdoutIsEmpty() {
-        let detail = PhaseExecutor.detail(from: output(stdout: "", stderr: "unknown flag: --nope"))
+        let detail = ProcessCompose.PhaseExecutor.detail(from: output(stdout: "", stderr: "unknown flag: --nope"))
 
         XCTAssertEqual(detail, "unknown flag: --nope")
     }

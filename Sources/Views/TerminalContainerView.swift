@@ -195,9 +195,9 @@ func workspaceEnvironmentVariables(
     workingDirectory: String,
     port: Int,
     defaultBranch: String,
-    portPlan: PortPlan = .empty
+    portPlan: ProcessCompose.PortPlan = .empty
 ) -> [String: String] {
-    WorkstreamEnvironment.variables(
+    Workstream.Environment.variables(
         workstreamID: workstreamID,
         projectName: projectName,
         workstreamName: workstreamName,
@@ -249,7 +249,7 @@ struct TerminalContainerView: View {
     @AppStorage("atelier.tmuxMode") private var tmuxMode: Bool = false
     @AppStorage("atelier.autoRenameBranch") private var autoRenameBranch: Bool = false
     @AppStorage("atelier.allowOutsideWorktree") private var allowOutsideWorktree: Bool = false
-    @AppStorage(AgentIPCSettings.enabledKey) private var agentIPC: Bool = false
+    @AppStorage(IPC.AgentSettings.enabledKey) private var agentIPC: Bool = false
     /// Both process-compose settings, observed rather than read.
     ///
     /// They are inputs to `runPlan`, and they are changed in the Settings
@@ -259,19 +259,19 @@ struct TerminalContainerView: View {
     /// path in Settings" is advice the user follows, and Start has to become
     /// enabled when they do. `@AppStorage` watches UserDefaults process-wide, so
     /// a write from the other window lands here.
-    @AppStorage(ProcessComposeSettings.enabledKey) private var processComposeEnabled: Bool = false
-    @AppStorage(ProcessComposeSettings.binaryPathKey) private var processComposeBinaryPath: String = ""
+    @AppStorage(ProcessCompose.Settings.enabledKey) private var processComposeEnabled: Bool = false
+    @AppStorage(ProcessCompose.Settings.binaryPathKey) private var processComposeBinaryPath: String = ""
     @AppStorage("atelier.editorTabActive") private var editorTabActive: Bool = false
     @AppStorage("atelier.editorFileDirty") private var editorFileDirty: Bool = false
     @State private var fileTree: [FileNode] = []
-    @State private var gitFileStatuses = GitFileStatusProvider()
+    @State private var gitFileStatuses = Git.FileStatusProvider()
     @State private var directoryWatcher: DirectoryWatcher?
     @State private var refreshGeneration = 0
     @State private var refreshDebounceTask: Task<Void, Never>?
     @State private var fileFinderRequest = 0
     @State private var cachedClaudeCommand: String?
     @State private var draggedCustomTab: WorkspaceTab?
-    @StateObject private var portDetector: PortDetector
+    @StateObject private var portDetector: Port.Detector
     @State private var browserStartPending = false
     @State private var devCommandOverride: String?
     @State private var resolvedDevCommand: DevCommand?
@@ -285,7 +285,7 @@ struct TerminalContainerView: View {
     /// override that discovery loads, and showing only the base would ask the
     /// user to approve a file that is not the whole of what runs.
     ///
-    /// Resolved with a bare `ProcessComposeConfig.locate`, deliberately not
+    /// Resolved with a bare `ProcessCompose.Config.locate`, deliberately not
     /// through `processComposeConfig`: that one is narrowed to the *run*, so it
     /// disappears when the user has a per-workstream override. Bootstrap and
     /// dispose locate unconditionally, so hanging the approval off the run's
@@ -296,7 +296,7 @@ struct TerminalContainerView: View {
     @State private var isReviewingConfig = false
     /// Resolved once per change rather than per render: resolving binds a socket
     /// to check whether each port is free.
-    @State private var portPlan: PortPlan = .empty
+    @State private var portPlan: ProcessCompose.PortPlan = .empty
     /// What Start may run, decided once per change in `refreshDevCommand`.
     ///
     /// Stored rather than recomputed because *agreement* is the invariant here,
@@ -305,7 +305,7 @@ struct TerminalContainerView: View {
     /// different worlds; a plan that is a moment stale but consistent is
     /// harmless, while a fresh plan disagreeing with the button is exactly the
     /// bug — an enabled Start that silently did nothing. Do not turn this back
-    /// into a computed property: `RunCommandPlan.plan` locates the config and
+    /// into a computed property: `ProcessCompose.RunCommandPlan.plan` locates the config and
     /// stats the binary, so reading it from the view body would also put
     /// filesystem work in every render pass.
     ///
@@ -316,7 +316,7 @@ struct TerminalContainerView: View {
     /// message tells the user to go and change them, so a plan that did not
     /// notice would leave Start disabled after they had done exactly what it
     /// asked. Do not drop them when adding another input here.
-    @State private var runPlan: RunCommandPlan = .nothing
+    @State private var runPlan: ProcessCompose.RunCommandPlan = .nothing
     /// Every file the run's config will load, for the pane to show in place of a
     /// command string. Set in the same refresh as `runPlan`.
     @State private var devCommandFiles: [String] = []
@@ -331,7 +331,7 @@ struct TerminalContainerView: View {
     /// discarded. It is read here and rendered on the Info tab, which is
     /// permanent and cannot be closed out from under the message.
     @State private var setupState: AsyncSetupState = .idle
-    @StateObject private var processTable: ProcessTableModel
+    @StateObject private var processTable: ProcessCompose.TableModel
     init(
         workstreamID: UUID,
         workingDirectory: String,
@@ -352,14 +352,14 @@ struct TerminalContainerView: View {
         self.bypassPermissions = bypassPermissions
         self.isActive = isActive
         self.model = model
-        _portDetector = StateObject(wrappedValue: PortDetector(workstreamID: workstreamID))
-        _processTable = StateObject(wrappedValue: ProcessTableModel(
-            socketPath: PhaseRunner.socketPath(for: workstreamID)
+        _portDetector = StateObject(wrappedValue: Port.Detector(workstreamID: workstreamID))
+        _processTable = StateObject(wrappedValue: ProcessCompose.TableModel(
+            socketPath: ProcessCompose.PhaseRunner.socketPath(for: workstreamID)
         ))
 
-        let savedOverride = DevCommandResolver.savedOverride(for: workstreamID)
+        let savedOverride = DevCommand.Resolver.savedOverride(for: workstreamID)
         _devCommandOverride = State(initialValue: savedOverride)
-        _resolvedDevCommand = State(initialValue: DevCommandResolver.resolve(
+        _resolvedDevCommand = State(initialValue: DevCommand.Resolver.resolve(
             workingDirectory: workingDirectory,
             projectDirectory: projectDirectory,
             override: savedOverride
@@ -370,7 +370,7 @@ struct TerminalContainerView: View {
         workstreamID
     }
 
-    private var quickActionRunner: QuickActionRunner {
+    private var quickActionRunner: QuickAction.Runner {
         surfaceCache.quickActionRunner(for: workstreamID)
     }
 
@@ -397,12 +397,12 @@ struct TerminalContainerView: View {
     }
 
     private var workstreamPort: Int {
-        PortAllocator.port(for: workingDirectory)
+        Port.Allocator.port(for: workingDirectory)
     }
 
     /// A declared `browser: true` port wins over detection: Atelier assigned it,
     /// so there is nothing to infer. Detection cannot help here anyway —
-    /// PortSelectionTracker returns nil once more than one process is listening
+    /// RunState.PortSelectionTracker returns nil once more than one process is listening
     /// and no port was expected, which is every multi-service stack.
     private var browserDefaultURL: String {
         let port = portPlan.browserPort ?? portDetector.selectedPort ?? workstreamPort
@@ -427,22 +427,22 @@ struct TerminalContainerView: View {
     ///
     /// Asks the same two questions as `usesProcessCompose` — the integration is
     /// on, and the resolved dev command came from a config rather than from the
-    /// user's own override, which `DevCommandResolver.resolve` prefers. It takes
+    /// user's own override, which `DevCommand.Resolver.resolve` prefers. It takes
     /// the dev command as a parameter rather than reading `resolvedDevCommand`
     /// because `refreshDevCommand` needs the config for the resolution it is in
     /// the middle of storing, not for the previous one.
     ///
     /// A function, and called only from `refreshDevCommand`, so locating the
     /// config never happens in a render pass.
-    private func processComposeConfig(for devCommand: DevCommand?) -> ProcessComposeConfig? {
-        guard ProcessComposeSettings.isEnabled, devCommand?.source == .processCompose else { return nil }
-        return ProcessComposeConfig.locate(worktree: workingDirectory, projectDirectory: projectDirectory)
+    private func processComposeConfig(for devCommand: DevCommand?) -> ProcessCompose.Config? {
+        guard ProcessCompose.Settings.isEnabled, devCommand?.source == .processCompose else { return nil }
+        return ProcessCompose.Config.locate(worktree: workingDirectory, projectDirectory: projectDirectory)
     }
 
     /// The command that starts the dev server: process-compose's chained
     /// `prepare && execute`, or the user's own per-workstream override.
     ///
-    /// The decision itself lives in `RunCommandPlan.plan`, which is where the
+    /// The decision itself lives in `ProcessCompose.RunCommandPlan.plan`, which is where the
     /// reasoning is. The short version: this must never fall back to
     /// `resolvedDevCommand?.command` for a `.processCompose` source, because
     /// that string carries no `-n` and would run `bootstrap` and `dispose`
@@ -458,7 +458,7 @@ struct TerminalContainerView: View {
     /// selection list treats as "offer no choices" rather than "no processes".
     private var declaredExecuteProcesses: [String] {
         guard case let .phaseScoped(config, _) = runPlan else { return [] }
-        return config.declaredProcesses(in: ProcessComposePhase.execute.namespace) ?? []
+        return config.declaredProcesses(in: ProcessCompose.Phase.execute.namespace) ?? []
     }
 
     /// Reads the stored `runPlan` rather than re-deriving one, so this is nil
@@ -470,12 +470,12 @@ struct TerminalContainerView: View {
         case let .literal(command):
             return command
         case let .phaseScoped(config, binary):
-            PhaseRunner.ensureSocketDirectory()
-            return PhaseRunner.startCommand(
+            ProcessCompose.PhaseRunner.ensureSocketDirectory()
+            return ProcessCompose.PhaseRunner.startCommand(
                 config: config,
                 binary: binary,
                 workstreamID: workstreamID,
-                selectedProcesses: ProcessTableModel.selected(for: workstreamID)
+                selectedProcesses: ProcessCompose.TableModel.selected(for: workstreamID)
             )
         case .nothing:
             return nil
@@ -491,7 +491,7 @@ struct TerminalContainerView: View {
         return vars
     }
 
-    private var branchPR: GitHubPR? {
+    private var branchPR: GitHub.PR? {
         guard let branch = appEnv.branchName(for: workingDirectory) else { return nil }
         return appEnv.githubPR(for: projectDirectory, branch: branch)
     }
@@ -511,7 +511,7 @@ struct TerminalContainerView: View {
         // both: LaunchLogger records finalCommand verbatim. --strict-mcp-config
         // stays off, since turning it on would silently drop the user's own
         // global MCP servers.
-        let mcpConfigPath = agentIPC ? IPCConfig.write(for: workstreamID) : nil
+        let mcpConfigPath = agentIPC ? IPC.Config.write(for: workstreamID) : nil
         if mcpConfigPath != nil {
             // Tied to the config actually being written: an agent told it has
             // peers but given no server would call tools that do not exist.
@@ -934,7 +934,7 @@ struct TerminalContainerView: View {
             try? await Task.sleep(nanoseconds: 50_000_000)
             guard !Task.isCancelled else { return }
             let branch = await Task.detached {
-                GitOperations.defaultBranch(at: projectDirectory)
+                Git.Operations.defaultBranch(at: projectDirectory)
             }.value
             guard !Task.isCancelled else { return }
             await MainActor.run {
@@ -1008,7 +1008,7 @@ struct TerminalContainerView: View {
                 }
             }
             .onChange(of: devCommandOverride) { _, newValue in
-                DevCommandResolver.saveOverride(newValue, for: workstreamID)
+                DevCommand.Resolver.saveOverride(newValue, for: workstreamID)
                 refreshDevCommand()
             }
             // The two Settings-window inputs to `runPlan`. `refreshConfigApproval`
@@ -1274,18 +1274,18 @@ struct TerminalContainerView: View {
     /// approval — and `scriptCommand` wrapped it in `$SHELL -lic`, so PATH
     /// resolved the very binary `resolveBinary` had just failed to find.
     /// Reasoning about the process table hid that for a whole review round.
-    /// `RunCommandPlan` now holds the invariant structurally; this property is
+    /// `ProcessCompose.RunCommandPlan` now holds the invariant structurally; this property is
     /// only about whether there is a socket worth polling.
     ///
     /// The `isEnabled` half is belt-and-braces rather than the load-bearing
-    /// check: `DevCommandResolver.detectProcessCompose` refuses to detect
+    /// check: `DevCommand.Resolver.detectProcessCompose` refuses to detect
     /// anything while the setting is off, so a `.processCompose` source already
     /// implies it. Kept anyway, because the two are read from different places
     /// and a reader here should not have to go and confirm that the resolver
     /// still guards. It cannot *disagree* with the resolver — only be redundant
     /// with it.
     private var usesProcessCompose: Bool {
-        ProcessComposeSettings.isEnabled && resolvedDevCommand?.source == .processCompose
+        ProcessCompose.Settings.isEnabled && resolvedDevCommand?.source == .processCompose
     }
 
     /// Polls the control socket exactly while a process-compose run is up.
@@ -1394,21 +1394,21 @@ struct TerminalContainerView: View {
     /// earlier dev command. Both are also the only two inputs the Start button
     /// reads, so this is the whole of what has to stay in step.
     private func refreshDevCommand() {
-        let devCommand = DevCommandResolver.resolve(
+        let devCommand = DevCommand.Resolver.resolve(
             workingDirectory: workingDirectory,
             projectDirectory: projectDirectory,
             override: devCommandOverride
         )
         resolvedDevCommand = devCommand
         let config = processComposeConfig(for: devCommand)
-        let binary = ProcessComposeSettings.resolveBinary()
+        let binary = ProcessCompose.Settings.resolveBinary()
         devCommandFiles = config?.loadedFiles ?? []
-        runPlan = RunCommandPlan.plan(devCommand: devCommand, config: config, binary: binary)
-        runUnavailableReason = RunCommandPlan.unavailableReason(
+        runPlan = ProcessCompose.RunCommandPlan.plan(devCommand: devCommand, config: config, binary: binary)
+        runUnavailableReason = ProcessCompose.RunCommandPlan.unavailableReason(
             devCommand: devCommand,
             config: config,
             binary: binary,
-            isEnabled: ProcessComposeSettings.isEnabled
+            isEnabled: ProcessCompose.Settings.isEnabled
         )
     }
 
@@ -1417,11 +1417,11 @@ struct TerminalContainerView: View {
     /// in Task 8; nothing here should throw into a view update.
     private func refreshPortPlan() {
         do {
-            guard let config = try PortsConfig.load(from: projectDirectory) else {
+            guard let config = try ProcessCompose.PortsConfig.load(from: projectDirectory) else {
                 portPlan = .empty
                 return
             }
-            portPlan = PortPlan.resolve(config, workingDirectory: workingDirectory)
+            portPlan = ProcessCompose.PortPlan.resolve(config, workingDirectory: workingDirectory)
         } catch {
             logger.warning("ports.yaml: \(error.localizedDescription, privacy: .public)")
             portPlan = .empty
@@ -1500,11 +1500,11 @@ struct TerminalContainerView: View {
             } else {
                 FileNode.refreshLoadedNodes(in: currentTree, rootPath: workingDirectory)
             }
-            let statuses = GitOperations.fileStatuses(at: workingDirectory)
+            let statuses = Git.Operations.fileStatuses(at: workingDirectory)
             DispatchQueue.main.async {
                 guard gen == refreshGeneration else { return }
                 fileTree = tree
-                gitFileStatuses = GitFileStatusProvider(fileStatuses: statuses)
+                gitFileStatuses = Git.FileStatusProvider(fileStatuses: statuses)
             }
         }
     }
@@ -1530,7 +1530,7 @@ struct TerminalContainerView: View {
             directoryWatcher?.stop()
             directoryWatcher = nil
             fileTree = []
-            gitFileStatuses = GitFileStatusProvider()
+            gitFileStatuses = Git.FileStatusProvider()
             // The Monaco bridge is deliberately untouched here: it lives on
             // WorkspaceModel (model.editorBridge) precisely so closing the
             // last editor tab never tears down the ~17 MB WebView.
@@ -1752,8 +1752,8 @@ struct TerminalContainerView: View {
     /// whether it is approved. Called on appear and after an approval, not from
     /// the view body: it stats the worktree and hashes a file.
     private func refreshConfigApproval() {
-        guard ProcessComposeSettings.isEnabled,
-              let config = ProcessComposeConfig.locate(
+        guard ProcessCompose.Settings.isEnabled,
+              let config = ProcessCompose.Config.locate(
                   worktree: workingDirectory, projectDirectory: projectDirectory
               ),
               config.requiresApproval
@@ -1910,15 +1910,15 @@ private struct WorkspaceTabDropDelegate: DropDelegate {
 }
 
 private struct GitHubActionMenu: View {
-    @ObservedObject var runner: QuickActionRunner
+    @ObservedObject var runner: QuickAction.Runner
     let claudePath: String?
     let ghPath: String?
     let workingDirectory: String
     let branchName: String?
     let bypassPermissions: Bool
-    let worktreeState: WorktreeState
+    let worktreeState: Worktree.State
     let hasGitHubRemote: Bool
-    let branchPR: GitHubPR?
+    let branchPR: GitHub.PR?
 
     private var prState: String? {
         branchPR?.state
@@ -1996,7 +1996,7 @@ private struct GitHubActionMenu: View {
         return false
     }
 
-    private func resultState(for action: QuickAction) -> QuickActionState? {
+    private func resultState(for action: QuickAction) -> QuickAction.State? {
         switch runner.state {
         case let .succeeded(a) where a == action: runner.state
         case let .failed(a) where a == action: runner.state
@@ -2132,7 +2132,7 @@ private struct GitHubActionMenu: View {
 /// Represents either a quick action or opening a PR in the browser.
 private enum PrimaryAction: Equatable, Identifiable {
     case quickAction(QuickAction)
-    case openPR(GitHubPR)
+    case openPR(GitHub.PR)
 
     var id: String {
         switch self {
@@ -2354,7 +2354,7 @@ final class TerminalSurfaceCache: ObservableObject {
     private var surfaces: [UUID: TerminalView] = [:]
     private var surfaceParams: [UUID: SurfaceParams] = [:]
     private var webViews: [UUID: WKWebView] = [:]
-    private var quickActionRunners: [UUID: QuickActionRunner] = [:]
+    private var quickActionRunners: [UUID: QuickAction.Runner] = [:]
     private var workspaceModels: [UUID: WorkspaceModel] = [:]
     /// Surface IDs that should respawn when closed (e.g., the agent).
     var respawnableIDs: Set<UUID> = []
@@ -2476,11 +2476,11 @@ final class TerminalSurfaceCache: ObservableObject {
         return view
     }
 
-    func quickActionRunner(for workstreamID: UUID) -> QuickActionRunner {
+    func quickActionRunner(for workstreamID: UUID) -> QuickAction.Runner {
         if let existing = quickActionRunners[workstreamID] {
             return existing
         }
-        let runner = QuickActionRunner()
+        let runner = QuickAction.Runner()
         quickActionRunners[workstreamID] = runner
         return runner
     }

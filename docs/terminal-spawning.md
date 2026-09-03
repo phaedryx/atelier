@@ -18,7 +18,7 @@ execution.
 
 ## Environment Variables
 
-`WorkstreamEnvironment.variables()` (Sources/Models/WorkstreamEnvironment.swift)
+`Workstream.Environment.variables()` (Sources/Models/WorkstreamEnvironment.swift)
 builds the environment injected into every workstream terminal:
 
 | Variable | Value |
@@ -45,10 +45,10 @@ prevent session inheritance from a parent tmux.
 
 ### 2. Run Session
 
-`DevCommandResolver` resolves it — the per-workstream override, else the
+`DevCommand.Resolver` resolves it — the per-workstream override, else the
 `process-compose.yaml` located for the worktree — and it only starts when the
 user clicks "Start". A project's `bootstrap` and `prepare` phases run headless
-through `PhaseExecutor` rather than in a surface; see the process-compose section
+through `ProcessCompose.PhaseExecutor` rather than in a surface; see the process-compose section
 of `AGENTS.md`.
 
 If the atelier-run launcher is available, the command is wrapped as:

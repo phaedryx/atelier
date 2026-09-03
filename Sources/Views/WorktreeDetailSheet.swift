@@ -4,13 +4,13 @@
 import SwiftUI
 
 struct WorktreeDetailSheet: View {
-    let worktree: WorktreeInfo
+    let worktree: Worktree.Info
     let projectDirectory: String
     let defaultTerminal: String
     let onForceRemove: () -> Void
 
     @Environment(\.dismiss) private var dismiss
-    @State private var detail: WorktreeDetail?
+    @State private var detail: Worktree.Detail?
     @State private var isLoading = true
     @State private var showForceRemoveConfirm = false
     @State private var showDiscardConfirm = false
@@ -133,7 +133,7 @@ struct WorktreeDetailSheet: View {
         let path = worktree.path
         let mainRepo = projectDirectory
         Task.detached {
-            let result = GitOperations.worktreeDetail(at: path, mainRepoPath: mainRepo)
+            let result = Git.Operations.worktreeDetail(at: path, mainRepoPath: mainRepo)
             await MainActor.run {
                 detail = result
                 isLoading = false
@@ -145,8 +145,8 @@ struct WorktreeDetailSheet: View {
         let path = worktree.path
         let mainRepo = projectDirectory
         Task.detached {
-            GitOperations.discardAllChanges(at: path)
-            let refreshed = GitOperations.worktreeDetail(at: path, mainRepoPath: mainRepo)
+            Git.Operations.discardAllChanges(at: path)
+            let refreshed = Git.Operations.worktreeDetail(at: path, mainRepoPath: mainRepo)
             await MainActor.run {
                 detail = refreshed
             }
@@ -157,7 +157,7 @@ struct WorktreeDetailSheet: View {
         let path = worktree.path
         let projectDir = projectDirectory
         Task.detached {
-            GitOperations.forceRemoveWorktreeByPath(worktreePath: path, projectPath: projectDir)
+            Git.Operations.forceRemoveWorktreeByPath(worktreePath: path, projectPath: projectDir)
             await MainActor.run {
                 onForceRemove()
                 dismiss()
@@ -180,7 +180,7 @@ struct WorktreeDetailSheet: View {
 }
 
 private struct FileChangeButton: View {
-    let change: WorktreeDetail.FileChange
+    let change: Worktree.Detail.FileChange
     let directory: String
 
     @State private var isHovering = false

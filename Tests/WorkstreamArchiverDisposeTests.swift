@@ -5,7 +5,7 @@
 import XCTest
 
 /// `PhasePolicyTests` covers what the policy decides. This covers that
-/// `WorkstreamArchiver` actually asks it — an archiver that stopped calling
+/// `Workstream.Archiver` actually asks it — an archiver that stopped calling
 /// `PhasePolicy.plan` altogether would otherwise pass every dispose test in
 /// the suite.
 final class WorkstreamArchiverDisposeTests: XCTestCase {
@@ -20,17 +20,17 @@ final class WorkstreamArchiverDisposeTests: XCTestCase {
         worktree = project.appendingPathComponent("wt")
         try! FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
 
-        for key in [ProcessComposeSettings.enabledKey, ProcessComposeSettings.binaryPathKey] {
+        for key in [ProcessCompose.Settings.enabledKey, ProcessCompose.Settings.binaryPathKey] {
             savedSettings[key] = UserDefaults.standard.object(forKey: key)
         }
-        ProcessComposeSettings.isEnabled = true
+        ProcessCompose.Settings.isEnabled = true
         // A real, always-present executable rather than whatever this machine
         // happens to have installed. `plan` checks the binary *before* it checks
         // approval, so on a runner without process-compose the refusal tests
         // would report "was not found" and fail — and those are precisely the
         // two that assert the security refusal. This makes every branch here
         // deterministic and independent of the host.
-        ProcessComposeSettings.binaryPath = "/bin/ls"
+        ProcessCompose.Settings.binaryPath = "/bin/ls"
     }
 
     override func tearDown() {
@@ -50,7 +50,7 @@ final class WorkstreamArchiverDisposeTests: XCTestCase {
     /// would start passing for the wrong reason (a missing binary, not a missing
     /// approval).
     func testTheBinaryPreconditionIsSatisfiedForEveryTestHere() {
-        XCTAssertEqual(ProcessComposeSettings.resolveBinary(), "/bin/ls")
+        XCTAssertEqual(ProcessCompose.Settings.resolveBinary(), "/bin/ls")
     }
 
     private func note(_ plan: PhasePolicy.Plan) -> String? {
@@ -69,9 +69,9 @@ final class WorkstreamArchiverDisposeTests: XCTestCase {
     /// `runDispose` that had kept its own inline preconditions would report
     /// something else, or nothing.
     func testDisposeAsksThePolicy() {
-        ProcessComposeSettings.isEnabled = false
+        ProcessCompose.Settings.isEnabled = false
 
-        let plan = WorkstreamArchiver.disposePlan(
+        let plan = Workstream.Archiver.disposePlan(
             worktreePath: worktree.path, projectDirectory: project.path
         )
 
@@ -82,7 +82,7 @@ final class WorkstreamArchiverDisposeTests: XCTestCase {
     func testDisposeIsRefusedForAnUnapprovedRepositoryConfig() throws {
         _ = try writeConfig(in: worktree)
 
-        let plan = WorkstreamArchiver.disposePlan(
+        let plan = Workstream.Archiver.disposePlan(
             worktreePath: worktree.path, projectDirectory: project.path
         )
 
@@ -95,12 +95,12 @@ final class WorkstreamArchiverDisposeTests: XCTestCase {
     func testDisposeRunsOnceTheRepositoryConfigIsApproved() throws {
         let path = try writeConfig(in: worktree)
         let config = try XCTUnwrap(
-            ProcessComposeConfig.locate(worktree: worktree.path, projectDirectory: project.path)
+            ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path)
         )
         XCTAssertEqual(config.repositoryProvidedFiles, [path])
         ScriptTrust.approve(configFiles: config.repositoryProvidedFiles, for: project.path)
 
-        let plan = WorkstreamArchiver.disposePlan(
+        let plan = Workstream.Archiver.disposePlan(
             worktreePath: worktree.path, projectDirectory: project.path
         )
 
@@ -117,7 +117,7 @@ final class WorkstreamArchiverDisposeTests: XCTestCase {
         _ = try writeConfig(in: project)
         _ = try writeConfig(in: worktree, named: "process-compose.override.yml")
 
-        let plan = WorkstreamArchiver.disposePlan(
+        let plan = Workstream.Archiver.disposePlan(
             worktreePath: worktree.path, projectDirectory: project.path
         )
 
@@ -127,7 +127,7 @@ final class WorkstreamArchiverDisposeTests: XCTestCase {
     func testDisposeNeedsNoApprovalForTheUsersOwnConfig() throws {
         let path = try writeConfig(in: project)
 
-        let plan = WorkstreamArchiver.disposePlan(
+        let plan = Workstream.Archiver.disposePlan(
             worktreePath: worktree.path, projectDirectory: project.path
         )
 

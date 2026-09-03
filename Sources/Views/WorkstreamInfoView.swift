@@ -315,7 +315,7 @@ struct WorkstreamInfoView: View {
         let workingDir = workingDirectory
         let gitHubProjectDir = projectDirectory
         Task.detached {
-            let info = GitOperations.repoInfo(at: workingDir)
+            let info = Git.Operations.repoInfo(at: workingDir)
             await updateRepoInfo(branch: info.branch, isDirty: info.isDirty, projectDirectory: gitHubProjectDir)
         }
 

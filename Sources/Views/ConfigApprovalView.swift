@@ -10,7 +10,7 @@ import SwiftUI
 /// Takes a *list*, never one file. process-compose loads a base config and
 /// whatever override sits beside it, and a pane that displayed only the base
 /// would show a benign file while an unseen sibling ran. The list is
-/// `ProcessComposeConfig.repositoryProvidedFiles`, and it is exactly what
+/// `ProcessCompose.Config.repositoryProvidedFiles`, and it is exactly what
 /// `ScriptTrust` fingerprints, so what is shown and what is approved cannot
 /// drift apart.
 ///

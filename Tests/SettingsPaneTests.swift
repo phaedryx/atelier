@@ -97,7 +97,7 @@ final class BaseBranchSettingTests: XCTestCase {
     /// *something* non-empty for `.repositoryDefault` — but `"HEAD"`, git's own
     /// last-resort fallback, would satisfy that even if the setting were wired
     /// to nothing. Instead, build a real repo whose actual branch is
-    /// "development" — one of `GitOperations.defaultBranch`'s recognized names,
+    /// "development" — one of `Git.Operations.defaultBranch`'s recognized names,
     /// but not "main" — and check both directions: `.repositoryDefault` must
     /// pick it up via git, and an explicit `.main` set against that *same* repo
     /// must NOT follow git — it must return "main" verbatim even though no such

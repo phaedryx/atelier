@@ -1,5 +1,5 @@
 // ABOUTME: Tests that an unattended phase runs with the workstream's own environment.
-// ABOUTME: Covers the assembled variables and the layering PhaseExecutor hands to the child.
+// ABOUTME: Covers the assembled variables and the layering ProcessCompose.PhaseExecutor hands to the child.
 
 @testable import Atelier
 import XCTest
@@ -33,7 +33,7 @@ final class PhaseEnvironmentTests: XCTestCase {
     }
 
     private func variables() -> [String: String] {
-        PhaseEnvironment.variables(
+        ProcessCompose.PhaseEnvironment.variables(
             workstreamID: UUID(uuidString: "3F2504E0-4F89-11D3-9A0C-0305E82C3301")!,
             projectName: "app",
             workstreamName: "amber-otter",
@@ -45,7 +45,7 @@ final class PhaseEnvironmentTests: XCTestCase {
 
     /// The C1 case, stated directly: a `bootstrap` process must be able to read
     /// `$ATELIER_WORKTREE_DIR` and a port its own `ports.yaml` declared. Both
-    /// were absent before — `PhaseExecutor` built the child environment from
+    /// were absent before — `ProcessCompose.PhaseExecutor` built the child environment from
     /// `ProcessInfo` alone — which made the documented seeding replacement
     /// (`rsync "$$ATELIER_PROJECT_DIR/seed-files/" .`) rsync from `/seed-files/`.
     func testBootstrapSeesTheWorktreeDirectoryAndItsDeclaredPorts() throws {
@@ -101,11 +101,11 @@ final class PhaseEnvironmentTests: XCTestCase {
 
     // MARK: - What the child actually receives
 
-    /// The layering `PhaseExecutor` hands to `ProcessRunner`: inherited, then
+    /// The layering `ProcessCompose.PhaseExecutor` hands to `ProcessRunner`: inherited, then
     /// the workstream's own, then the login PATH. Asserted here rather than
     /// through `run`, which spawns process-compose.
     func testTheChildEnvironmentLayersTheWorkstreamVariablesOverTheInheritedOnes() {
-        let child = PhaseExecutor.childEnvironment(
+        let child = ProcessCompose.PhaseExecutor.childEnvironment(
             workstreamEnvironment: ["ATELIER_WORKTREE_DIR": "/w", "BFF_PORT": "41476"],
             loginPath: "/opt/homebrew/bin:/usr/bin",
             baseEnvironment: ["PATH": "/usr/bin", "HOME": "/h", "ATELIER_WORKTREE_DIR": "/stale"]
@@ -121,7 +121,7 @@ final class PhaseEnvironmentTests: XCTestCase {
     /// whose PATH came from the repository's YAML would resolve tools from
     /// somewhere the user never chose.
     func testADeclaredPathCannotDisplaceTheLoginPath() {
-        let child = PhaseExecutor.childEnvironment(
+        let child = ProcessCompose.PhaseExecutor.childEnvironment(
             workstreamEnvironment: ["PATH": "/attacker/bin"],
             loginPath: "/usr/bin",
             baseEnvironment: ["PATH": "/inherited"]
@@ -133,7 +133,7 @@ final class PhaseEnvironmentTests: XCTestCase {
     /// With no login shell PATH to inject, the inherited one stands — the
     /// pre-existing behaviour, which was to leave the environment alone.
     func testTheInheritedPathSurvivesWhenNoLoginPathResolves() {
-        let child = PhaseExecutor.childEnvironment(
+        let child = ProcessCompose.PhaseExecutor.childEnvironment(
             workstreamEnvironment: ["ATELIER_PORT": "5000"],
             loginPath: nil,
             baseEnvironment: ["PATH": "/inherited"]

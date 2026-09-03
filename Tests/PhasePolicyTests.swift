@@ -9,15 +9,15 @@ final class PhasePolicyTests: XCTestCase {
     /// fixtures are the two shapes that differ: one in a worktree (repository
     /// content, gated) and one in the project directory with no worktree
     /// override beside it (the user's own, never gated).
-    private let repositoryConfig = ProcessComposeConfig(
+    private let repositoryConfig = ProcessCompose.Config(
         path: "/repo/wt/process-compose.yaml", isRepositoryProvided: true, overridePath: nil
     )
-    private let userConfig = ProcessComposeConfig(
+    private let userConfig = ProcessCompose.Config(
         path: "/repo/process-compose.yaml", isRepositoryProvided: false, overridePath: nil
     )
     /// The user's own base config with a worktree override beside it. The base
     /// needs no approval; the override is repository content and does.
-    private let userConfigWithRepositoryOverride = ProcessComposeConfig(
+    private let userConfigWithRepositoryOverride = ProcessCompose.Config(
         path: "/repo/process-compose.yaml",
         isRepositoryProvided: false,
         overridePath: "/repo/wt/process-compose.override.yaml"
@@ -30,8 +30,8 @@ final class PhasePolicyTests: XCTestCase {
 
     /// Approval stubs. The real check hashes a file on disk; what this suite
     /// covers is which branch the answer is consulted in, not how it is derived.
-    private let approved: (ProcessComposeConfig) -> Bool = { _ in true }
-    private let unapproved: (ProcessComposeConfig) -> Bool = { _ in false }
+    private let approved: (ProcessCompose.Config) -> Bool = { _ in true }
+    private let unapproved: (ProcessCompose.Config) -> Bool = { _ in false }
 
     // MARK: - Plan
 
@@ -123,7 +123,7 @@ final class PhasePolicyTests: XCTestCase {
     /// `dispose` answers to the same preconditions as `bootstrap` — it is the
     /// same unattended execution of repository-authored processes — and shares
     /// this one implementation of them rather than an untestable copy in
-    /// `WorkstreamArchiver`. Only the note's wording differs.
+    /// `Workstream.Archiver`. Only the note's wording differs.
     func testDisposeIsGatedByTheSamePolicy() {
         let plan = PhasePolicy.plan(
             phase: .dispose, isEnabled: true, config: repositoryConfig,

@@ -64,17 +64,17 @@ struct ProjectSidebar: View {
     @State private var pendingWorkstreamProjectID: UUID?
     @State private var pendingWorkstreamBypass: Bool?
 
-    @AppStorage(ShortcutSettings.buttonEnabledKey) private var shortcutButtonEnabled: Bool = true
-    @AppStorage(ShortcutSettings.branchTemplateKey) private var branchTemplate: String = ""
+    @AppStorage(Shortcut.Settings.buttonEnabledKey) private var shortcutButtonEnabled: Bool = true
+    @AppStorage(Shortcut.Settings.branchTemplateKey) private var branchTemplate: String = ""
     /// Keychain presence is not observable, so this is seeded at init and refreshed
-    /// whenever Settings posts `ShortcutSettings.tokenChanged`. It can still go stale if
+    /// whenever Settings posts `Shortcut.Settings.tokenChanged`. It can still go stale if
     /// the item is removed outside the app; that surfaces as a `.noToken` error in the
     /// dialog rather than a hidden button.
     @State private var hasShortcutToken = KeychainTokenStore().hasToken
     @State private var showingShortcutStory = false
     @State private var shortcutStoryInput = ""
     @State private var shortcutError = ""
-    /// Set from the `ShortcutError` case, so the Settings link never depends on message wording.
+    /// Set from the `Shortcut.Error` case, so the Settings link never depends on message wording.
     @State private var shortcutErrorNeedsToken = false
     @State private var shortcutFetching = false
     /// Held so Cancel can actually stop it. Without this the fetch completes after the
@@ -173,7 +173,7 @@ struct ProjectSidebar: View {
                 onAdd: { logger.warning("[Atelier] onAdd button tapped for project \(project.name, privacy: .public)"); addWorkstream(for: project.id) },
                 onAddWithPermissions: { addWorkstream(for: project.id, bypassPermissions: true) },
                 onAddWithoutPermissions: { addWorkstream(for: project.id, bypassPermissions: false) },
-                showShortcutButton: ShortcutSettings.shouldShowButton(
+                showShortcutButton: Shortcut.Settings.shouldShowButton(
                     isGitRepo: appEnv.isGitRepo(project.directory),
                     toggleEnabled: shortcutButtonEnabled,
                     hasToken: hasShortcutToken
@@ -433,7 +433,7 @@ struct ProjectSidebar: View {
                     }
                 )
             }
-            .onReceive(NotificationCenter.default.publisher(for: ShortcutSettings.tokenChanged)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: Shortcut.Settings.tokenChanged)) { _ in
                 hasShortcutToken = KeychainTokenStore().hasToken
             }
             .onReceive(NotificationCenter.default.publisher(for: .addProject)) { _ in
@@ -528,7 +528,7 @@ struct ProjectSidebar: View {
         let project = projects[index]
         logger.warning("[Atelier] addWorkstream: project=\(project.name, privacy: .public) dir=\(project.directory, privacy: .public)")
 
-        guard GitOperations.isGitRepo(at: project.directory) else {
+        guard Git.Operations.isGitRepo(at: project.directory) else {
             logger.warning("[Atelier] addWorkstream: not a git repo")
             showNotGitRepoError = true
             return
@@ -546,7 +546,7 @@ struct ProjectSidebar: View {
 
     private func addWorkstreamFromShortcut(for projectID: UUID) {
         guard let index = projects.firstIndex(where: { $0.id == projectID }) else { return }
-        guard GitOperations.isGitRepo(at: projects[index].directory) else {
+        guard Git.Operations.isGitRepo(at: projects[index].directory) else {
             showNotGitRepoError = true
             return
         }
@@ -568,7 +568,7 @@ struct ProjectSidebar: View {
         // leave the Settings link showing next to an unrelated validation message.
         shortcutErrorNeedsToken = false
 
-        guard let storyID = ShortcutStoryID.parse(shortcutStoryInput) else {
+        guard let storyID = Shortcut.StoryID.parse(shortcutStoryInput) else {
             shortcutError = NSLocalizedString(
                 "Enter a story id.",
                 comment: "Shortcut story input validation error"
@@ -584,15 +584,15 @@ struct ProjectSidebar: View {
 
         shortcutFetchTask = Task {
             do {
-                let story = try await ShortcutClient().story(id: storyID)
+                let story = try await Shortcut.Client().story(id: storyID)
                 // The sheet may have been cancelled while the request was in flight; the
                 // 15s timeout makes that window wide on a slow network. Creating a
                 // workstream after the user dismissed the dialog is the worst outcome here.
                 guard !Task.isCancelled, pendingWorkstreamProjectID == projectID else { return }
                 shortcutFetching = false
 
-                let name = ShortcutBranchName.render(branchTemplate, story: story)
-                guard GitOperations.isValidBranchName(name) else {
+                let name = Shortcut.BranchName.render(branchTemplate, story: story)
+                guard Git.Operations.isValidBranchName(name) else {
                     shortcutError = NSLocalizedString(
                         "Shortcut suggested a branch name git will not accept.",
                         comment: "Shortcut branch name validation error"
@@ -629,7 +629,7 @@ struct ProjectSidebar: View {
                     bypass: bypass,
                     shortcutStoryID: story.id
                 )
-            } catch let error as ShortcutError {
+            } catch let error as Shortcut.Error {
                 guard !Task.isCancelled, pendingWorkstreamProjectID == projectID else { return }
                 shortcutFetching = false
                 shortcutError = error.message
@@ -654,7 +654,7 @@ struct ProjectSidebar: View {
 
         let typedName = newWorkstreamName.trimmingCharacters(in: .whitespacesAndNewlines)
         if !typedName.isEmpty {
-            guard GitOperations.isValidBranchName(typedName) else {
+            guard Git.Operations.isValidBranchName(typedName) else {
                 newWorkstreamError = NSLocalizedString(
                     "That name isn't valid for a git branch.",
                     comment: "Error when the workstream name is not a valid git branch name"
@@ -711,7 +711,7 @@ struct ProjectSidebar: View {
         let workstreamID = workstream.id
 
         DispatchQueue.global(qos: .userInitiated).async {
-            let worktreePath = GitOperations.createWorktree(
+            let worktreePath = Git.Operations.createWorktree(
                 projectPath: projectPath,
                 projectName: projectName,
                 workstreamName: name
@@ -739,10 +739,10 @@ struct ProjectSidebar: View {
 
     @EnvironmentObject private var surfaceCache: TerminalSurfaceCache
     @EnvironmentObject private var appEnv: AppEnvironment
-    @EnvironmentObject private var agentStateTracker: WorkstreamAgentStateTracker
+    @EnvironmentObject private var agentStateTracker: Workstream.AgentStateTracker
 
     private func confirmPurge(_ workstream: Workstream) {
-        purgeWarningMessage = WorkstreamArchiver.purgeWarning(for: workstream)
+        purgeWarningMessage = Workstream.Archiver.purgeWarning(for: workstream)
         workstreamToPurge = workstream.id
     }
 
@@ -787,7 +787,7 @@ struct ProjectSidebar: View {
         guard let wsID = workstreamToRemove,
               let pi = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
         let projectID = projects[pi].id
-        WorkstreamArchiver.remove(wsID, in: &projects[pi], surfaceCache: surfaceCache, tmuxPath: appEnv.toolStatus.tmux.path)
+        Workstream.Archiver.remove(wsID, in: &projects[pi], surfaceCache: surfaceCache, tmuxPath: appEnv.toolStatus.tmux.path)
         agentStateTracker.clear(workstreamID: wsID)
         rebuildIndices()
         if case let .workstream(id) = selection, id == wsID {
@@ -801,7 +801,7 @@ struct ProjectSidebar: View {
         guard let wsID = workstreamToPurge,
               let pi = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
         let projectID = projects[pi].id
-        WorkstreamArchiver.purge(wsID, in: &projects[pi], surfaceCache: surfaceCache, tmuxPath: appEnv.toolStatus.tmux.path)
+        Workstream.Archiver.purge(wsID, in: &projects[pi], surfaceCache: surfaceCache, tmuxPath: appEnv.toolStatus.tmux.path)
         agentStateTracker.clear(workstreamID: wsID)
         rebuildIndices()
         if case let .workstream(id) = selection, id == wsID {
@@ -882,7 +882,7 @@ struct ProjectSidebar: View {
         }
 
         // Initialize git repo in the new directory
-        _ = GitOperations.initRepo(at: dirURL.path)
+        _ = Git.Operations.initRepo(at: dirURL.path)
 
         showingNewProjectName = false
         addProject(name: name, directory: dirURL.path)
@@ -953,7 +953,7 @@ struct ProjectSidebar: View {
     private func addProject(name: String, directory: String) {
         // Resolve worktree branches to their main repository, and .bare
         // containers forward to their default checkout.
-        let location = GitOperations.projectLocation(for: directory)
+        let location = Git.Operations.projectLocation(for: directory)
         let resolvedDirectory = location.directory
         let resolvedName = location.name.isEmpty ? name : location.name
 
@@ -1131,10 +1131,10 @@ private struct WorkstreamRow: View {
     var branchName: String?
     var worktreePath: String?
     let isPathValid: Bool
-    var agentState: WorkstreamAgentStateTracker.AgentRunState = .idle
+    var agentState: Workstream.AgentStateTracker.AgentRunState = .idle
     var hasLiveSession: Bool = false
     var mainActivity: String?
-    var mainContextUsage: WorkstreamAgentStateTracker.ContextUsage?
+    var mainContextUsage: Workstream.AgentStateTracker.ContextUsage?
     /// When this workstream's main run was first seen this launch; drives
     /// the status line's ticking elapsed time.
     var startedAt: Date?

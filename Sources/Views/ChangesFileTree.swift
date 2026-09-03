@@ -1,10 +1,10 @@
 // ABOUTME: Pure file-tree model + builder for the Changes tab "Files changed" sidebar.
-// ABOUTME: Turns a flat [DiffFile] into a sorted, fully-nested directory tree (dirs before files).
+// ABOUTME: Turns a flat [Git.DiffFile] into a sorted, fully-nested directory tree (dirs before files).
 
 import SwiftUI
 
 /// A node in the Changes "Files changed" tree. Directories carry `children`;
-/// leaves carry the associated `DiffFile`. `id` is the full slash-joined path so
+/// leaves carry the associated `Git.DiffFile`. `id` is the full slash-joined path so
 /// it is stable across rebuilds and unique within the tree.
 struct FileTreeNode: Identifiable, Equatable {
     /// Full path from the tree root (e.g. "Sources/Models/Git.swift"). For the
@@ -16,20 +16,20 @@ struct FileTreeNode: Identifiable, Equatable {
     /// Child nodes for directories; nil for leaves.
     let children: [FileTreeNode]?
     /// The changed file for leaves; nil for directories and the root.
-    let diffFile: DiffFile?
+    let diffFile: Git.DiffFile?
 
     /// Build a sorted, fully-nested tree from a flat list of changed files.
     ///
     /// Sort order at every level: directories before files, each alphabetical
     /// (case-insensitive). The returned node is a synthetic root whose
     /// `children` are the top-level entries.
-    static func build(from files: [DiffFile]) -> FileTreeNode {
+    static func build(from files: [Git.DiffFile]) -> FileTreeNode {
         // Mutable builder mirror of the immutable node, assembled bottom-up.
         final class Builder {
             let name: String
             let path: String
             var children: [String: Builder] = [:]
-            var diffFile: DiffFile?
+            var diffFile: Git.DiffFile?
 
             init(name: String, path: String) {
                 self.name = name
@@ -107,7 +107,7 @@ struct FileTreeNode: Identifiable, Equatable {
 /// tree built from `files` as a collapsible outline; selecting a leaf invokes
 /// `onSelect` with its relative path (the diff webview scrolls to that block).
 struct ChangesFileTreeSidebar: View {
-    let files: [DiffFile]
+    let files: [Git.DiffFile]
     @Binding var selectedFilePath: String?
     let onSelect: (String) -> Void
 
@@ -175,7 +175,7 @@ private struct ChangesFileLeafRow: View {
     /// Brief checkmark confirmation after a copy, cleared by a delayed reset.
     @State private var copied = false
 
-    private var file: DiffFile? {
+    private var file: Git.DiffFile? {
         node.diffFile
     }
 
@@ -263,7 +263,7 @@ private struct ChangesFileLeafRow: View {
     }
 
     /// Status badge color matching the diff webview conventions (GitHub palette).
-    static func badgeColor(for status: DiffFile.Status) -> Color {
+    static func badgeColor(for status: Git.DiffFile.Status) -> Color {
         switch status {
         case .added: Color(red: 0.25, green: 0.72, blue: 0.31)
         case .modified: Color(red: 0.82, green: 0.60, blue: 0.13)
@@ -273,7 +273,7 @@ private struct ChangesFileLeafRow: View {
     }
 
     /// Localized accessibility/tooltip label for a status (badge letters stay A/M/D/R).
-    static func accessibilityLabel(for status: DiffFile.Status) -> String {
+    static func accessibilityLabel(for status: Git.DiffFile.Status) -> String {
         switch status {
         case .added: NSLocalizedString("Added", comment: "Changes sidebar: file status")
         case .modified: NSLocalizedString("Modified", comment: "Changes sidebar: file status")

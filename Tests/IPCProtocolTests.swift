@@ -8,7 +8,7 @@ final class IPCProtocolTests: XCTestCase {
     func test_identity_comesFromTheInheritedEnvironment() {
         let surfaceID = UUID().uuidString
         let workstreamID = UUID().uuidString
-        let identity = IPCClientIdentity.fromEnvironment([
+        let identity = IPC.ClientIdentity.fromEnvironment([
             "ATELIER_WORKSTREAM_ID": workstreamID,
             "ATELIER_WORKSTREAM": "bold-crimson-parser",
             "ATELIER_PROJECT_DIR": "/repos/atelier",
@@ -23,7 +23,7 @@ final class IPCProtocolTests: XCTestCase {
     }
 
     func test_identity_outsideAWorkstream_isEmptyRatherThanWrong() {
-        let identity = IPCClientIdentity.fromEnvironment([:])
+        let identity = IPC.ClientIdentity.fromEnvironment([:])
         XCTAssertNil(identity.workstreamID)
         XCTAssertNil(identity.projectDirectory)
         XCTAssertNil(identity.surfaceID, "no surface id means pull-only, not a guessed pane")
@@ -32,13 +32,13 @@ final class IPCProtocolTests: XCTestCase {
 
     func test_framing_splitsOnNewlinesAndKeepsThePartialLine() {
         var buffer = Data("{\"a\":1}\n{\"b\":2}\n{\"c\"".utf8)
-        let (lines, remainder) = IPCFraming.lines(from: buffer)
+        let (lines, remainder) = IPC.Framing.lines(from: buffer)
         XCTAssertEqual(lines.map { String(decoding: $0, as: UTF8.self) }, ["{\"a\":1}", "{\"b\":2}"])
         XCTAssertEqual(String(decoding: remainder, as: UTF8.self), "{\"c\"")
 
         buffer = remainder
         buffer.append(Data(":3}\n".utf8))
-        let (rest, tail) = IPCFraming.lines(from: buffer)
+        let (rest, tail) = IPC.Framing.lines(from: buffer)
         XCTAssertEqual(rest.map { String(decoding: $0, as: UTF8.self) }, ["{\"c\":3}"])
         XCTAssertTrue(tail.isEmpty)
     }

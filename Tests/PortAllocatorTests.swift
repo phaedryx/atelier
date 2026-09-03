@@ -10,24 +10,24 @@ final class PortAllocatorTests: XCTestCase {
     /// The unsalted value is what `ATELIER_PORT` has always been. Changing the
     /// hash would move it for every existing workstream, so it is pinned.
     func testUnsaltedPortHashesTheBarePath() {
-        XCTAssertEqual(PortAllocator.port(for: "/a/b"), PortAllocator.port(for: "/a/b", salt: ""))
+        XCTAssertEqual(Port.Allocator.port(for: "/a/b"), Port.Allocator.port(for: "/a/b", salt: ""))
     }
 
     func testSaltChangesTheResult() {
-        XCTAssertNotEqual(PortAllocator.port(for: worktree), PortAllocator.port(for: worktree, salt: "BFF_PORT"))
+        XCTAssertNotEqual(Port.Allocator.port(for: worktree), Port.Allocator.port(for: worktree, salt: "BFF_PORT"))
     }
 
-    /// Literals, not `PortAllocator.rangeStart`/`rangeEnd`. Asserting against
+    /// Literals, not `Port.Allocator.rangeStart`/`rangeEnd`. Asserting against
     /// the constants under test made this pass for any range at all —
     /// `rangeStart = 80` was green.
     func testTheRangeIsTheDocumentedOne() {
-        XCTAssertEqual(PortAllocator.rangeStart, 40001)
-        XCTAssertEqual(PortAllocator.rangeEnd, 49999)
+        XCTAssertEqual(Port.Allocator.rangeStart, 40001)
+        XCTAssertEqual(Port.Allocator.rangeEnd, 49999)
     }
 
     func testPortsStayInRange() {
         for index in 0 ..< 500 {
-            let port = PortAllocator.port(for: "/tmp/w\(index)", salt: "SALT_\(index)")
+            let port = Port.Allocator.port(for: "/tmp/w\(index)", salt: "SALT_\(index)")
             XCTAssertGreaterThanOrEqual(port, 40001)
             XCTAssertLessThanOrEqual(port, 49999)
         }
@@ -41,26 +41,26 @@ final class PortAllocatorTests: XCTestCase {
     /// then `40001 + hash % 9999`. Changing the multiplier to 31 sends the
     /// first case to 40196.
     func testTheDerivedPortsAreThePinnedOnes() {
-        XCTAssertEqual(PortAllocator.port(for: "/Users/tthorley/repos/app/main"), 43017)
+        XCTAssertEqual(Port.Allocator.port(for: "/Users/tthorley/repos/app/main"), 43017)
         XCTAssertEqual(
-            PortAllocator.port(for: "/Users/tthorley/repos/app/main", salt: "BFF_PORT"),
+            Port.Allocator.port(for: "/Users/tthorley/repos/app/main", salt: "BFF_PORT"),
             42150
         )
-        XCTAssertEqual(PortAllocator.port(for: "/tmp/w"), 48799)
+        XCTAssertEqual(Port.Allocator.port(for: "/tmp/w"), 48799)
     }
 
     func testAvailablePortReturnsHashWhenFree() {
-        let hashed = PortAllocator.port(for: worktree, salt: "X")
+        let hashed = Port.Allocator.port(for: worktree, salt: "X")
 
-        let port = PortAllocator.availablePort(for: worktree, salt: "X", claimed: [], isFree: { _ in true })
+        let port = Port.Allocator.availablePort(for: worktree, salt: "X", claimed: [], isFree: { _ in true })
 
         XCTAssertEqual(port, hashed)
     }
 
     func testAvailablePortWalksPastClaimedPorts() {
-        let hashed = PortAllocator.port(for: worktree, salt: "X")
+        let hashed = Port.Allocator.port(for: worktree, salt: "X")
 
-        let port = PortAllocator.availablePort(
+        let port = Port.Allocator.availablePort(
             for: worktree,
             salt: "X",
             claimed: [hashed, hashed + 1],
@@ -71,9 +71,9 @@ final class PortAllocatorTests: XCTestCase {
     }
 
     func testAvailablePortWalksPastBoundPorts() {
-        let hashed = PortAllocator.port(for: worktree, salt: "X")
+        let hashed = Port.Allocator.port(for: worktree, salt: "X")
 
-        let port = PortAllocator.availablePort(
+        let port = Port.Allocator.availablePort(
             for: worktree,
             salt: "X",
             claimed: [],
@@ -86,9 +86,9 @@ final class PortAllocatorTests: XCTestCase {
     /// An exhausted range returns the hash rather than looping or returning a
     /// sentinel: a bind error is the honest outcome.
     func testAvailablePortGivesUpOnAnExhaustedRange() {
-        let hashed = PortAllocator.port(for: worktree, salt: "X")
+        let hashed = Port.Allocator.port(for: worktree, salt: "X")
 
-        let port = PortAllocator.availablePort(for: worktree, salt: "X", claimed: [], isFree: { _ in false })
+        let port = Port.Allocator.availablePort(for: worktree, salt: "X", claimed: [], isFree: { _ in false })
 
         XCTAssertEqual(port, hashed)
     }
@@ -97,7 +97,7 @@ final class PortAllocatorTests: XCTestCase {
         let listener = try XCTUnwrap(TestListener())
         defer { listener.close() }
 
-        XCTAssertFalse(PortAllocator.isPortFree(listener.port))
+        XCTAssertFalse(Port.Allocator.isPortFree(listener.port))
     }
 }
 

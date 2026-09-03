@@ -56,10 +56,10 @@ actor AsyncSetupService {
     ///
     /// `runBackgroundSetup` suspends at `withCheckedContinuation`, and an actor
     /// admits other calls across a suspension. Two concurrent bootstraps for one
-    /// workstream would share `<id>-bootstrap.sock`, and `PhaseExecutor.run`
+    /// workstream would share `<id>-bootstrap.sock`, and `ProcessCompose.PhaseExecutor.run`
     /// shuts that socket down before spawning — so the second run would strand
     /// the first's control server with no way to reach it, exactly the case
-    /// `PhaseRunner.socketPath` warns about. Reachable from revoke → Review →
+    /// `ProcessCompose.PhaseRunner.socketPath` warns about. Reachable from revoke → Review →
     /// Approve, and from `setupExistingWorktree` firing on
     /// `workstreamWorktreeReady` while an approval press lands.
     private var runningBootstraps: Set<UUID> = []
@@ -108,9 +108,9 @@ actor AsyncSetupService {
 
         let plan = PhasePolicy.plan(
             phase: .bootstrap,
-            isEnabled: ProcessComposeSettings.isEnabled,
-            config: ProcessComposeConfig.locate(worktree: worktreePath, projectDirectory: projectPath),
-            binary: ProcessComposeSettings.resolveBinary(),
+            isEnabled: ProcessCompose.Settings.isEnabled,
+            config: ProcessCompose.Config.locate(worktree: worktreePath, projectDirectory: projectPath),
+            binary: ProcessCompose.Settings.resolveBinary(),
             isApproved: {
                 ScriptTrust.isApproved(configFiles: $0.repositoryProvidedFiles, for: projectPath)
             }
@@ -118,7 +118,7 @@ actor AsyncSetupService {
         // Exhaustive on purpose. A nested `guard case` would leave the
         // workstream reporting `.inProgress` forever if a third `Plan` case
         // were ever added; a `switch` cannot compile past one.
-        let config: ProcessComposeConfig
+        let config: ProcessCompose.Config
         let binary: String
         switch plan {
         case let .run(planned, planBinary):
@@ -130,25 +130,25 @@ actor AsyncSetupService {
             return
         }
 
-        // `PhaseExecutor.run` blocks its thread for as long as bootstrap takes,
+        // `ProcessCompose.PhaseExecutor.run` blocks its thread for as long as bootstrap takes,
         // so it must not run on the actor. The environment is assembled inside
         // the same hop for the same reason: it reads `ports.yaml` and asks git
         // for the default branch, neither of which the actor should wait on.
-        let outcome: PhaseExecutor.Outcome = await withCheckedContinuation { continuation in
+        let outcome: ProcessCompose.PhaseExecutor.Outcome = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
-                // Built here rather than inside `PhaseExecutor` so the phase
+                // Built here rather than inside `ProcessCompose.PhaseExecutor` so the phase
                 // layer stays free of the project model. Without it bootstrap
                 // would run with none of the `ATELIER_*` or `ports.yaml`
                 // variables the same file's `prepare` and `execute` phases see.
-                let environment = PhaseEnvironment.variables(
+                let environment = ProcessCompose.PhaseEnvironment.variables(
                     workstreamID: workstreamID,
                     projectName: projectName,
                     workstreamName: workstreamName,
                     projectDirectory: projectPath,
                     worktreePath: worktreePath,
-                    defaultBranch: GitOperations.defaultBranch(at: projectPath)
+                    defaultBranch: Git.Operations.defaultBranch(at: projectPath)
                 )
-                continuation.resume(returning: PhaseExecutor.run(
+                continuation.resume(returning: ProcessCompose.PhaseExecutor.run(
                     phase: .bootstrap,
                     config: config,
                     binary: binary,
@@ -180,7 +180,7 @@ actor AsyncSetupService {
 
     /// Run bootstrap on a worktree that already exists.
     ///
-    /// Two callers. The worktree was created by upstream `GitOperations` and
+    /// Two callers. The worktree was created by upstream `Git.Operations` and
     /// only the project's own setup still has to run; or the first bootstrap
     /// was refused because the repository's config had not been approved, the
     /// user has now approved it, and this re-runs the plan against a worktree
@@ -213,7 +213,7 @@ actor AsyncSetupService {
     /// bootstrap's own server would then hold its ports until its 30-minute
     /// deadline with nothing left to shut it down.
     ///
-    /// Shutting the socket down is what makes `PhaseExecutor.run` return: the
+    /// Shutting the socket down is what makes `ProcessCompose.PhaseExecutor.run` return: the
     /// server exits, the spawned `up` follows, and the `defer` in
     /// `runBackgroundSetup` clears the claim. The poll below reads that claim
     /// rather than the process, so it observes the real end of the work.
@@ -221,9 +221,9 @@ actor AsyncSetupService {
         guard runningBootstraps.contains(workstreamID) else { return }
         logger.info("Archive is waiting for bootstrap of \(worktreePath, privacy: .public)")
         if let binary {
-            PhaseExecutor.shutDown(
+            ProcessCompose.PhaseExecutor.shutDown(
                 binary: binary,
-                socketPath: PhaseRunner.socketPath(for: workstreamID, phase: .bootstrap),
+                socketPath: ProcessCompose.PhaseRunner.socketPath(for: workstreamID, phase: .bootstrap),
                 workingDirectory: worktreePath
             )
         }

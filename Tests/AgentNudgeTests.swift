@@ -9,7 +9,7 @@ final class AgentNudgeTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_000_000)
 
     private func shouldNudge(
-        state: WorkstreamAgentStateTracker.AgentRunState,
+        state: Workstream.AgentStateTracker.AgentRunState,
         hasSurface: Bool = true,
         nudgeEnabled: Bool = true,
         lastNudge: Date? = nil
@@ -66,7 +66,7 @@ final class AgentNudgeTests: XCTestCase {
     }
 
     func test_releasingAPeer_clearsTheSurfaceItOccupied() async {
-        let tracker = WorkstreamAgentStateTracker.shared
+        let tracker = Workstream.AgentStateTracker.shared
         tracker.resetForTesting()
         defer { tracker.resetForTesting() }
 
@@ -78,11 +78,11 @@ final class AgentNudgeTests: XCTestCase {
         tracker.handle(projectDir: "/tmp/atelier-nudge-test", event: finished)
         XCTAssertEqual(tracker.state(forSurface: surface), .idle)
 
-        let service = IPCService()
+        let service = IPC.Service()
         let peer = await service._testRegister(
             name: "departing",
             role: "",
-            context: IPCService.PeerContext(
+            context: IPC.Service.PeerContext(
                 workstreamID: workstream.uuidString,
                 workstreamName: "bold-crimson-parser",
                 projectDirectory: "/repos/atelier",

@@ -1,4 +1,4 @@
-// ABOUTME: Tests where GitOperations places a new worktree for a project.
+// ABOUTME: Tests where Git.Operations places a new worktree for a project.
 // ABOUTME: Bare-repo containers get siblings in place; ordinary clones keep the central location.
 
 @testable import Atelier
@@ -35,7 +35,7 @@ final class WorktreeDestinationTests: XCTestCase {
     func testBareContainerPutsWorktreesBesideTheRepo() throws {
         let container = try makeBareContainer(named: "app")
 
-        let destination = GitOperations.worktreeDestination(
+        let destination = Git.Operations.worktreeDestination(
             projectPath: container.path,
             projectName: "app",
             workstreamName: "tadthorley/sc-15391/some-title"
@@ -61,7 +61,7 @@ final class WorktreeDestinationTests: XCTestCase {
         let mainWorktree = container.appendingPathComponent("main")
         try XCTSkipUnless(FileManager.default.fileExists(atPath: mainWorktree.path))
 
-        let destination = GitOperations.worktreeDestination(
+        let destination = Git.Operations.worktreeDestination(
             projectPath: mainWorktree.path,
             projectName: "app",
             workstreamName: "feature"
@@ -80,7 +80,7 @@ final class WorktreeDestinationTests: XCTestCase {
         try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
         git(["init"], in: repo)
 
-        let destination = GitOperations.worktreeDestination(
+        let destination = Git.Operations.worktreeDestination(
             projectPath: repo.path,
             projectName: "plain-repo",
             workstreamName: "feature"
@@ -105,7 +105,7 @@ final class WorktreeDestinationTests: XCTestCase {
         git(["init", "--bare", "myproj.git"], in: parent)
         let bare = parent.appendingPathComponent("myproj.git")
 
-        let destination = GitOperations.worktreeDestination(
+        let destination = Git.Operations.worktreeDestination(
             projectPath: bare.path,
             projectName: "myproj",
             workstreamName: "feature"
@@ -125,7 +125,7 @@ final class WorktreeDestinationTests: XCTestCase {
         git(["init", "--bare", "sub"], in: modules)
         let sub = modules.appendingPathComponent("sub")
 
-        let destination = GitOperations.worktreeDestination(
+        let destination = Git.Operations.worktreeDestination(
             projectPath: sub.path,
             projectName: "sub",
             workstreamName: "feature"
@@ -142,7 +142,7 @@ final class WorktreeDestinationTests: XCTestCase {
         let plain = tempDir.appendingPathComponent("not-a-repo")
         try FileManager.default.createDirectory(at: plain, withIntermediateDirectories: true)
 
-        let destination = GitOperations.worktreeDestination(
+        let destination = Git.Operations.worktreeDestination(
             projectPath: plain.path,
             projectName: "not-a-repo",
             workstreamName: "feature"

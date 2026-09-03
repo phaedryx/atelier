@@ -71,7 +71,7 @@ enum TmuxSession {
         // Both halves escaped. The key was not, and keys come from
         // `ports.yaml` — repository content in an ordinary clone — so a name
         // containing a quote or `$(…)` was an ungated path from a repository
-        // into `sh -c` whenever tmux mode was on. `PortsConfig.validateName`
+        // into `sh -c` whenever tmux mode was on. `ProcessCompose.PortsConfig.validateName`
         // now restricts names to variable-name characters; this is the second
         // line of that defence, not a substitute for it.
         let envFlags = environmentVars
@@ -114,7 +114,7 @@ enum TmuxSession {
         // Both halves escaped. The key was not, and keys come from
         // `ports.yaml` — repository content in an ordinary clone — so a name
         // containing a quote or `$(…)` was an ungated path from a repository
-        // into `sh -c` whenever tmux mode was on. `PortsConfig.validateName`
+        // into `sh -c` whenever tmux mode was on. `ProcessCompose.PortsConfig.validateName`
         // now restricts names to variable-name characters; this is the second
         // line of that defence, not a substitute for it.
         let envFlags = environmentVars

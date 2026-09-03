@@ -132,7 +132,7 @@ jobs:
             || test -x /usr/local/bin/process-compose \
             || test -x "$HOME/.local/bin/process-compose" \
             || {
-              echo "::error::process-compose is not on ProcessComposeSettings.searchPaths — PhaseExecutorTests would skip"
+              echo "::error::process-compose is not on ProcessCompose.Settings.searchPaths — PhaseExecutorTests would skip"
               exit 1
             }
           process-compose version

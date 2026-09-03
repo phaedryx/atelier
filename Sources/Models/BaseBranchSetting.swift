@@ -30,14 +30,14 @@ enum BaseBranchSetting: String, CaseIterable, Identifiable {
     }
 
     /// The branch name to use for a project. A named branch is used verbatim;
-    /// `repositoryDefault` asks git via `GitOperations.defaultBranch`, which
+    /// `repositoryDefault` asks git via `Git.Operations.defaultBranch`, which
     /// never returns an empty string (worst case `"HEAD"`) — an empty branch
     /// name would fail a worktree creation with an obscure git error.
     static func resolve(for projectDirectory: String) -> String {
         let setting = current
         guard setting == .repositoryDefault else { return setting.rawValue }
-        // GitOperations.defaultBranch returns a non-optional String and already
+        // Git.Operations.defaultBranch returns a non-optional String and already
         // falls back on its own, so there is nothing to coalesce here.
-        return GitOperations.defaultBranch(at: projectDirectory)
+        return Git.Operations.defaultBranch(at: projectDirectory)
     }
 }

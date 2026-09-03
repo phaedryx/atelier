@@ -6,7 +6,7 @@ import SwiftUI
 struct FileTreeView: View {
     let nodes: [FileNode]
     let selectedPath: String?
-    let gitStatus: GitFileStatusProvider
+    let gitStatus: Git.FileStatusProvider
     var onSelect: (String) -> Void
     var onExpandFolder: (String) -> Void
 
@@ -59,7 +59,7 @@ struct FileTreeView: View {
 private let modifiedColor = Color(red: 0.886, green: 0.753, blue: 0.553) // #E2C08D
 private let untrackedColor = Color(red: 0.451, green: 0.788, blue: 0.569) // #73C991
 
-private func gitTextColor(for status: FileGitStatus?) -> Color {
+private func gitTextColor(for status: Git.FileStatus?) -> Color {
     switch status {
     case .modified: modifiedColor
     case .untracked: untrackedColor
@@ -73,7 +73,7 @@ private struct FileTreeNodeView: View {
     let node: FileNode
     let depth: Int
     let selectedPath: String?
-    let gitStatus: GitFileStatusProvider
+    let gitStatus: Git.FileStatusProvider
     @Binding var expandedFolders: Set<String>
     var onSelect: (String) -> Void
     var onExpandFolder: (String) -> Void

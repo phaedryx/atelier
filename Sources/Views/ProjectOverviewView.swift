@@ -11,20 +11,20 @@ struct ProjectOverviewView: View {
     let onProjectChanged: () -> Void
 
     @EnvironmentObject var appEnv: AppEnvironment
-    @AppStorage("atelier.workstreamSortOrder") private var workstreamSortOrder: ProjectSortOrder = .recent
-    @State private var worktrees: [WorktreeInfo] = []
+    @AppStorage("atelier.workstreamSortOrder") private var workstreamSortOrder: Project.SortOrder = .recent
+    @State private var worktrees: [Worktree.Info] = []
     @State private var showingPruneConfirm = false
     @State private var isPruning = false
     @State private var purgingPaths: Set<String> = []
-    @State private var worktreeToPurge: WorktreeInfo?
+    @State private var worktreeToPurge: Worktree.Info?
     @State private var worktreePurgeWarning: String?
 
     @AppStorage("atelier.defaultTerminal") private var defaultTerminal: String = ""
     @State private var docFiles: [DocFile] = []
     @State private var selectedDoc: String?
-    @State private var selectedWorktreeForDetail: WorktreeInfo?
+    @State private var selectedWorktreeForDetail: Worktree.Info?
     @State private var showRepoChanges = false
-    @State private var repoDetail: WorktreeDetail?
+    @State private var repoDetail: Worktree.Detail?
     @State private var isPulling = false
     @State private var pullErrorMessage: String?
     @State private var showPullError = false
@@ -228,7 +228,7 @@ struct ProjectOverviewView: View {
                         Spacer()
                         if project.workstreams.count > 1 {
                             Picker("", selection: $workstreamSortOrder) {
-                                ForEach(ProjectSortOrder.allCases, id: \.self) { order in
+                                ForEach(Project.SortOrder.allCases, id: \.self) { order in
                                     Text(order.rawValue).tag(order)
                                 }
                             }
@@ -317,7 +317,7 @@ struct ProjectOverviewView: View {
         .onAppear {
             appEnv.refreshRepoInfo(for: project.directory)
             appEnv.refreshGitHubInfo(for: project.directory)
-            purgingPaths = WorkstreamArchiver.archivingPaths
+            purgingPaths = Workstream.Archiver.archivingPaths
             refreshWorktrees()
             loadDocFiles()
         }
@@ -327,16 +327,16 @@ struct ProjectOverviewView: View {
             worktrees = []
             docFiles = []
             selectedDoc = nil
-            purgingPaths = WorkstreamArchiver.archivingPaths
+            purgingPaths = Workstream.Archiver.archivingPaths
             refreshWorktrees()
             loadDocFiles()
         }
-        .onReceive(NotificationCenter.default.publisher(for: WorkstreamArchiver.archivingDidComplete)) { _ in
-            purgingPaths = WorkstreamArchiver.archivingPaths
+        .onReceive(NotificationCenter.default.publisher(for: Workstream.Archiver.archivingDidComplete)) { _ in
+            purgingPaths = Workstream.Archiver.archivingPaths
             refreshWorktrees()
         }
-        .onReceive(NotificationCenter.default.publisher(for: WorkstreamArchiver.archivingDidStart)) { _ in
-            purgingPaths = WorkstreamArchiver.archivingPaths
+        .onReceive(NotificationCenter.default.publisher(for: Workstream.Archiver.archivingDidStart)) { _ in
+            purgingPaths = Workstream.Archiver.archivingPaths
             refreshWorktrees()
         }
         .popover(item: $selectedWorktreeForDetail, arrowEdge: .trailing) { wt in
@@ -390,7 +390,7 @@ struct ProjectOverviewView: View {
         Set(project.workstreams.compactMap(\.worktreePath).map(Self.standardizedPath))
     }
 
-    private var prunableWorktrees: [WorktreeInfo] {
+    private var prunableWorktrees: [Worktree.Info] {
         worktrees.filter { worktree in
             guard !worktree.isMain, !worktree.isDirty, !worktree.hasBranchCommits else { return false }
             return !workstreamPaths.contains(Self.standardizedPath(worktree.path))
@@ -409,7 +409,7 @@ struct ProjectOverviewView: View {
         let dir = project.directory
         repoDetail = nil
         Task.detached {
-            let result = GitOperations.worktreeDetail(at: dir, mainRepoPath: dir)
+            let result = Git.Operations.worktreeDetail(at: dir, mainRepoPath: dir)
             await MainActor.run { repoDetail = result }
         }
     }
@@ -418,7 +418,7 @@ struct ProjectOverviewView: View {
         let dir = project.directory
         isPulling = true
         Task.detached {
-            let result = GitOperations.pullCurrentBranch(at: dir)
+            let result = Git.Operations.pullCurrentBranch(at: dir)
             await MainActor.run {
                 isPulling = false
                 switch result {
@@ -432,7 +432,7 @@ struct ProjectOverviewView: View {
         }
     }
 
-    private func adoptWorktree(_ worktree: WorktreeInfo) {
+    private func adoptWorktree(_ worktree: Worktree.Info) {
         let name = worktree.branch ?? worktree.path.components(separatedBy: "/").last ?? "workstream"
         let workstream = Workstream(name: name, worktreePath: worktree.path)
         NotificationCenter.default.post(
@@ -445,7 +445,7 @@ struct ProjectOverviewView: View {
     private func refreshWorktrees() {
         let dir = project.directory
         Task.detached {
-            let wts = GitOperations.listWorktreesWithInfo(at: dir)
+            let wts = Git.Operations.listWorktreesWithInfo(at: dir)
             await updateWorktrees(wts)
             // Populate PR cache for worktree branches
             let branches = Set(wts.compactMap(\.branch))
@@ -472,14 +472,14 @@ struct ProjectOverviewView: View {
         }
     }
 
-    private func confirmPurgeWorktree(_ worktree: WorktreeInfo) {
-        worktreePurgeWarning = WorkstreamArchiver.orphanPurgeWarning(at: worktree.path)
+    private func confirmPurgeWorktree(_ worktree: Worktree.Info) {
+        worktreePurgeWarning = Workstream.Archiver.orphanPurgeWarning(at: worktree.path)
         worktreeToPurge = worktree
     }
 
     private func performPurgeWorktree() {
         guard let wt = worktreeToPurge else { return }
-        WorkstreamArchiver.purgeOrphanWorktree(projectDirectory: project.directory, worktreePath: wt.path)
+        Workstream.Archiver.purgeOrphanWorktree(projectDirectory: project.directory, worktreePath: wt.path)
         worktreeToPurge = nil
         worktreePurgeWarning = nil
     }
@@ -489,13 +489,13 @@ struct ProjectOverviewView: View {
         let dir = project.directory
         let pathsToPrune = prunablePaths
         Task.detached {
-            GitOperations.pruneCleanWorktrees(at: dir, onlyPaths: pathsToPrune)
+            Git.Operations.pruneCleanWorktrees(at: dir, onlyPaths: pathsToPrune)
             await applyPrunedWorktrees(pathsToPrune)
         }
     }
 
     @MainActor
-    private func updateWorktrees(_ worktrees: [WorktreeInfo]) {
+    private func updateWorktrees(_ worktrees: [Worktree.Info]) {
         self.worktrees = worktrees
     }
 
@@ -521,7 +521,7 @@ struct ProjectOverviewView: View {
 }
 
 private struct WorktreeInfoRow: View {
-    let worktree: WorktreeInfo
+    let worktree: Worktree.Info
     let projectDirectory: String
     let isWorkstream: Bool
     var isPurging: Bool = false
@@ -530,7 +530,7 @@ private struct WorktreeInfoRow: View {
 
     @EnvironmentObject var appEnv: AppEnvironment
 
-    private var pr: GitHubPR? {
+    private var pr: GitHub.PR? {
         guard let branch = worktree.branch else { return nil }
         return appEnv.githubPR(for: projectDirectory, branch: branch)
     }
@@ -815,7 +815,7 @@ private struct RepoStatusBadge: View {
 }
 
 private struct RepoChangesPopover: View {
-    let detail: WorktreeDetail?
+    let detail: Worktree.Detail?
     let directory: String
     let onDiscarded: () -> Void
 
@@ -867,14 +867,14 @@ private struct RepoChangesPopover: View {
     private func discardAll() {
         let dir = directory
         Task.detached {
-            GitOperations.discardAllChanges(at: dir)
+            Git.Operations.discardAllChanges(at: dir)
             await MainActor.run { onDiscarded() }
         }
     }
 }
 
 private struct FileChangeRow: View {
-    let change: WorktreeDetail.FileChange
+    let change: Worktree.Detail.FileChange
     let directory: String
 
     @State private var isHovering = false

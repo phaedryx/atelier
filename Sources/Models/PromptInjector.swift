@@ -30,7 +30,7 @@ final class PromptInjector {
     /// intervening half-second. That is accepted because this path only runs
     /// when the user just invoked the command on that pane. `canInject` is not
     /// a safety proof; it is a check for *evidence against*.
-    nonisolated static func canInject(state: WorkstreamAgentStateTracker.AgentRunState?) -> Bool {
+    nonisolated static func canInject(state: Workstream.AgentStateTracker.AgentRunState?) -> Bool {
         state.map(\.turnHasEnded) ?? true
     }
 
@@ -40,7 +40,7 @@ final class PromptInjector {
     /// where running it would silently do nothing.
     func canDeliver(to surfaceID: UUID) -> Bool {
         guard surfaceCache?.hasLiveSurface(surfaceID) == true else { return false }
-        return Self.canInject(state: WorkstreamAgentStateTracker.shared.state(forSurface: surfaceID))
+        return Self.canInject(state: Workstream.AgentStateTracker.shared.state(forSurface: surfaceID))
     }
 
     func inject(_ text: String, into surfaceID: UUID) {
@@ -50,7 +50,7 @@ final class PromptInjector {
         }
 
         surfaceCache.typeAndSubmit(text, into: surfaceID) {
-            Self.canInject(state: WorkstreamAgentStateTracker.shared.state(forSurface: surfaceID))
+            Self.canInject(state: Workstream.AgentStateTracker.shared.state(forSurface: surfaceID))
         }
     }
 }

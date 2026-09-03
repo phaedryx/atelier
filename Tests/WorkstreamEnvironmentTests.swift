@@ -1,4 +1,4 @@
-// ABOUTME: Tests for WorkstreamEnvironment env var construction.
+// ABOUTME: Tests for Workstream.Environment env var construction.
 // ABOUTME: Validates ATELIER_* vars, the legacy FF_* mirror, and the project's port declarations.
 
 @testable import Atelier
@@ -17,7 +17,7 @@ final class WorkstreamEnvironmentTests: XCTestCase {
     // MARK: - Core ATELIER_* variables
 
     func testCoreVariables() {
-        let vars = WorkstreamEnvironment.variables(
+        let vars = Workstream.Environment.variables(
             workstreamID: baseParams.0,
             projectName: baseParams.1,
             workstreamName: baseParams.2,
@@ -42,7 +42,7 @@ final class WorkstreamEnvironmentTests: XCTestCase {
     /// no longer read, so nothing is compatible with them and nothing is
     /// exported for them.
     func testNoCompatibilityAliasesForOtherTools() {
-        let vars = WorkstreamEnvironment.variables(
+        let vars = Workstream.Environment.variables(
             workstreamID: baseParams.0,
             projectName: baseParams.1,
             workstreamName: baseParams.2,
@@ -61,7 +61,7 @@ final class WorkstreamEnvironmentTests: XCTestCase {
     // MARK: - Legacy FF_* aliases
 
     func testLegacyFFAliasesMirrorEveryAtelierVariable() {
-        let vars = WorkstreamEnvironment.variables(
+        let vars = Workstream.Environment.variables(
             workstreamID: baseParams.0,
             projectName: baseParams.1,
             workstreamName: baseParams.2,
@@ -81,14 +81,14 @@ final class WorkstreamEnvironmentTests: XCTestCase {
     // MARK: - Port plan export
 
     func testPortPlanValuesAreExported() {
-        let vars = WorkstreamEnvironment.variables(
+        let vars = Workstream.Environment.variables(
             workstreamID: UUID(),
             projectName: "app",
             workstreamName: "ws",
             projectDirectory: "/repo",
             workingDirectory: "/repo/ws",
             port: 40001,
-            portPlan: PortPlan(values: ["BFF_PORT": "41476"], browserPort: 41476)
+            portPlan: ProcessCompose.PortPlan(values: ["BFF_PORT": "41476"], browserPort: 41476)
         )
 
         XCTAssertEqual(vars["BFF_PORT"], "41476")
@@ -97,14 +97,14 @@ final class WorkstreamEnvironmentTests: XCTestCase {
     /// A project naming a variable Atelier also sets should win — the project
     /// knows what its own stack needs.
     func testPortPlanOverridesAtelierDefaults() {
-        let vars = WorkstreamEnvironment.variables(
+        let vars = Workstream.Environment.variables(
             workstreamID: UUID(),
             projectName: "app",
             workstreamName: "ws",
             projectDirectory: "/repo",
             workingDirectory: "/repo/ws",
             port: 40001,
-            portPlan: PortPlan(values: ["ATELIER_PORT": "50000"], browserPort: nil)
+            portPlan: ProcessCompose.PortPlan(values: ["ATELIER_PORT": "50000"], browserPort: nil)
         )
 
         XCTAssertEqual(vars["ATELIER_PORT"], "50000")
@@ -113,21 +113,21 @@ final class WorkstreamEnvironmentTests: XCTestCase {
     /// The FF_* mirror must reflect the overridden value, not the pre-override
     /// default — a script reading FF_PORT should see what ATELIER_PORT says.
     func testPortPlanOverrideIsReflectedInFFAlias() {
-        let vars = WorkstreamEnvironment.variables(
+        let vars = Workstream.Environment.variables(
             workstreamID: UUID(),
             projectName: "app",
             workstreamName: "ws",
             projectDirectory: "/repo",
             workingDirectory: "/repo/ws",
             port: 40001,
-            portPlan: PortPlan(values: ["ATELIER_PORT": "50000"], browserPort: nil)
+            portPlan: ProcessCompose.PortPlan(values: ["ATELIER_PORT": "50000"], browserPort: nil)
         )
 
         XCTAssertEqual(vars["FF_PORT"], "50000")
     }
 
     func testEmptyPortPlanChangesNothing() {
-        let base = WorkstreamEnvironment.variables(
+        let base = Workstream.Environment.variables(
             workstreamID: UUID(), projectName: "app", workstreamName: "ws",
             projectDirectory: "/repo", workingDirectory: "/repo/ws", port: 40001
         )

@@ -1,9 +1,9 @@
-// ABOUTME: Presentation for GitHubPR status, check rollup, and review decision.
+// ABOUTME: Presentation for GitHub.PR status, check rollup, and review decision.
 // ABOUTME: Shared so the two PR badges and the Info tab cannot drift apart on color or wording.
 
 import SwiftUI
 
-extension GitHubPR.Status {
+extension GitHub.PR.Status {
     var color: Color {
         switch self {
         // Draft is deliberately not green: its whole point is that it is not ready, and the
@@ -33,7 +33,7 @@ extension GitHubPR.Status {
     }
 }
 
-extension GitHubPR.ChecksRollup {
+extension GitHub.PR.ChecksRollup {
     var color: Color {
         switch self {
         case .none: .secondary

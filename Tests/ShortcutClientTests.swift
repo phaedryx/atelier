@@ -1,4 +1,4 @@
-// ABOUTME: Tests ShortcutClient's request construction and response handling.
+// ABOUTME: Tests Shortcut.Client's request construction and response handling.
 // ABOUTME: Uses a stubbed URLProtocol so no request leaves the machine.
 
 @testable import Atelier
@@ -55,9 +55,9 @@ final class ShortcutClientTests: XCTestCase {
         super.tearDown()
     }
 
-    private func client(token: String? = "test-token") -> ShortcutClient {
+    private func client(token: String? = "test-token") -> Shortcut.Client {
         let stored: String? = token
-        return ShortcutClient(session: session, token: { stored })
+        return Shortcut.Client(session: session, token: { stored })
     }
 
     private func respond(_ status: Int, _ body: String) {
@@ -154,7 +154,7 @@ final class ShortcutClientTests: XCTestCase {
     }
 
     private func assertThrows(
-        _ expected: ShortcutError,
+        _ expected: Shortcut.Error,
         file: StaticString = #filePath,
         line: UInt = #line,
         _ body: () async throws -> Void
@@ -162,7 +162,7 @@ final class ShortcutClientTests: XCTestCase {
         do {
             try await body()
             XCTFail("expected \(expected) but the call succeeded", file: file, line: line)
-        } catch let error as ShortcutError {
+        } catch let error as Shortcut.Error {
             XCTAssertEqual(error, expected, file: file, line: line)
         } catch {
             XCTFail("expected \(expected) but got \(error)", file: file, line: line)

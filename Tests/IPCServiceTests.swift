@@ -1,18 +1,18 @@
 // ABOUTME: Tests for the IPC tool surface: registration, addressing, project scoping, and the mailbox.
-// ABOUTME: Exercises IPCService directly, with no socket in the way.
+// ABOUTME: Exercises IPC.Service directly, with no socket in the way.
 
 @testable import Atelier
 import XCTest
 
 final class IPCServiceTests: XCTestCase {
-    private var service: IPCService!
+    private var service: IPC.Service!
 
     private let projectA = "/repos/atelier"
     private let projectB = "/repos/other"
 
     override func setUp() {
         super.setUp()
-        service = IPCService()
+        service = IPC.Service()
     }
 
     // MARK: - Helpers
@@ -22,8 +22,8 @@ final class IPCServiceTests: XCTestCase {
         peerID: String? = nil,
         workstream: String = "bold-crimson-parser",
         surfaceID: UUID? = UUID()
-    ) -> IPCClientIdentity {
-        IPCClientIdentity(
+    ) -> IPC.ClientIdentity {
+        IPC.ClientIdentity(
             workstreamID: UUID().uuidString,
             workstreamName: workstream,
             projectDirectory: project,
@@ -32,8 +32,8 @@ final class IPCServiceTests: XCTestCase {
         )
     }
 
-    private func call(_ tool: IPCTool, _ arguments: [String: String] = [:], as client: IPCClientIdentity) async -> IPCResponse {
-        await service.handle(IPCRequest(token: "unused", tool: tool, arguments: arguments, client: client))
+    private func call(_ tool: IPC.Tool, _ arguments: [String: String] = [:], as client: IPC.ClientIdentity) async -> IPC.Response {
+        await service.handle(IPC.Request(token: "unused", tool: tool, arguments: arguments, client: client))
     }
 
     /// Registers a peer and returns its id, as the helper would remember it.
@@ -45,7 +45,7 @@ final class IPCServiceTests: XCTestCase {
         return peer.id
     }
 
-    private func peers(of response: IPCResponse) throws -> [IPCPeerInfo] {
+    private func peers(of response: IPC.Response) throws -> [IPC.PeerInfo] {
         guard case let .peers(peers) = response.payload else {
             throw XCTSkip("expected a peers payload, got \(String(describing: response.payload ?? nil))")
         }
@@ -215,7 +215,7 @@ final class IPCServiceTests: XCTestCase {
         // What the Coding Agent surface exports: its surface id is the
         // workstream id, since claudeID == workstreamID.
         let workstreamID = UUID()
-        let agent = IPCClientIdentity(
+        let agent = IPC.ClientIdentity(
             workstreamID: workstreamID.uuidString,
             workstreamName: "bold-crimson-parser",
             projectDirectory: projectA,
@@ -233,8 +233,8 @@ final class IPCServiceTests: XCTestCase {
         let workstreamID = UUID()
         let tabSurface = UUID()
 
-        func identity(surface: UUID) -> IPCClientIdentity {
-            IPCClientIdentity(
+        func identity(surface: UUID) -> IPC.ClientIdentity {
+            IPC.ClientIdentity(
                 workstreamID: workstreamID.uuidString,
                 workstreamName: "bold-crimson-parser",
                 projectDirectory: projectA,

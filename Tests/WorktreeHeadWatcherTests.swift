@@ -23,7 +23,7 @@ final class WorktreeGitDirectoryTests: XCTestCase {
         let gitDir = tmpDir.appendingPathComponent(".git")
         try FileManager.default.createDirectory(at: gitDir, withIntermediateDirectories: true)
 
-        XCTAssertEqual(WorktreeHeadWatcher.gitDirectory(forWorktreeAt: tmpDir.path), gitDir.path)
+        XCTAssertEqual(Worktree.HeadWatcher.gitDirectory(forWorktreeAt: tmpDir.path), gitDir.path)
     }
 
     /// A linked worktree: `.git` is a file pointing at the real git dir, which
@@ -38,7 +38,7 @@ final class WorktreeGitDirectoryTests: XCTestCase {
             to: worktree.appendingPathComponent(".git"), atomically: true, encoding: .utf8
         )
 
-        XCTAssertEqual(WorktreeHeadWatcher.gitDirectory(forWorktreeAt: worktree.path), realGitDir.path)
+        XCTAssertEqual(Worktree.HeadWatcher.gitDirectory(forWorktreeAt: worktree.path), realGitDir.path)
     }
 
     func testResolvesRelativePointerAgainstTheWorktree() throws {
@@ -50,12 +50,12 @@ final class WorktreeGitDirectoryTests: XCTestCase {
             to: worktree.appendingPathComponent(".git"), atomically: true, encoding: .utf8
         )
 
-        let resolved = WorktreeHeadWatcher.gitDirectory(forWorktreeAt: worktree.path)
+        let resolved = Worktree.HeadWatcher.gitDirectory(forWorktreeAt: worktree.path)
         XCTAssertEqual(resolved.map { URL(fileURLWithPath: $0).standardizedFileURL.path }, realGitDir.standardizedFileURL.path)
     }
 
     func testReturnsNilWhenThereIsNoGitEntry() {
-        XCTAssertNil(WorktreeHeadWatcher.gitDirectory(forWorktreeAt: tmpDir.path))
+        XCTAssertNil(Worktree.HeadWatcher.gitDirectory(forWorktreeAt: tmpDir.path))
     }
 
     func testReturnsNilForAGitFileWithoutAGitdirLine() throws {
@@ -65,7 +65,7 @@ final class WorktreeGitDirectoryTests: XCTestCase {
             to: worktree.appendingPathComponent(".git"), atomically: true, encoding: .utf8
         )
 
-        XCTAssertNil(WorktreeHeadWatcher.gitDirectory(forWorktreeAt: worktree.path))
+        XCTAssertNil(Worktree.HeadWatcher.gitDirectory(forWorktreeAt: worktree.path))
     }
 }
 
@@ -130,7 +130,7 @@ final class WorktreeHeadWatcherTests: XCTestCase {
         fired.assertForOverFulfill = false
         let reported = ReportedPaths()
 
-        let watcher = WorktreeHeadWatcher(debounce: .milliseconds(50)) { path in
+        let watcher = Worktree.HeadWatcher(debounce: .milliseconds(50)) { path in
             reported.append(path)
             fired.fulfill()
         }
@@ -150,7 +150,7 @@ final class WorktreeHeadWatcherTests: XCTestCase {
         let stayedQuiet = expectation(description: "no callback after unwatch")
         stayedQuiet.isInverted = true
 
-        let watcher = WorktreeHeadWatcher(debounce: .milliseconds(50)) { _ in
+        let watcher = Worktree.HeadWatcher(debounce: .milliseconds(50)) { _ in
             stayedQuiet.fulfill()
         }
         watcher.sync(paths: [worktree])
@@ -172,7 +172,7 @@ final class WorktreeHeadWatcherTests: XCTestCase {
         fired.expectedFulfillmentCount = 1
         fired.assertForOverFulfill = true
 
-        let watcher = WorktreeHeadWatcher(debounce: .milliseconds(300)) { _ in
+        let watcher = Worktree.HeadWatcher(debounce: .milliseconds(300)) { _ in
             fired.fulfill()
         }
         watcher.sync(paths: [worktree])
@@ -188,7 +188,7 @@ final class WorktreeHeadWatcherTests: XCTestCase {
     }
 
     func testIgnoresPathsThatAreNotWorktrees() {
-        let watcher = WorktreeHeadWatcher(debounce: .milliseconds(50)) { _ in
+        let watcher = Worktree.HeadWatcher(debounce: .milliseconds(50)) { _ in
             XCTFail("should not watch a directory with no .git")
         }
         watcher.sync(paths: [tmpDir.appendingPathComponent("nope").path])
@@ -200,7 +200,7 @@ final class WorktreeHeadWatcherTests: XCTestCase {
         let (alpha, _) = try makeWorktree("alpha2")
         let (beta, _) = try makeWorktree("beta2")
 
-        let watcher = WorktreeHeadWatcher(debounce: .milliseconds(50)) { _ in }
+        let watcher = Worktree.HeadWatcher(debounce: .milliseconds(50)) { _ in }
         watcher.sync(paths: [alpha, beta])
         Thread.sleep(forTimeInterval: 0.2)
         XCTAssertEqual(watcher.watchedPathsForTesting, Set([alpha, beta]))

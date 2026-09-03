@@ -5,7 +5,7 @@
 import XCTest
 
 final class RunCommandPlanTests: XCTestCase {
-    private let config = ProcessComposeConfig(
+    private let config = ProcessCompose.Config(
         path: "/repo/ws/process-compose.yaml",
         isRepositoryProvided: true,
         overridePath: nil
@@ -37,7 +37,7 @@ final class RunCommandPlanTests: XCTestCase {
     /// it in `$SHELL -lic`, PATH would resolve the very binary `resolveBinary`
     /// had just failed to find.
     func testUnresolvableBinaryProducesNothingRatherThanTheUngatedCommand() {
-        let plan = RunCommandPlan.plan(
+        let plan = ProcessCompose.RunCommandPlan.plan(
             devCommand: processComposeCommand(), config: config, binary: nil
         )
 
@@ -47,7 +47,7 @@ final class RunCommandPlanTests: XCTestCase {
     /// The same hole from the other side: a config that could not be located
     /// while the dev command still claims a process-compose source.
     func testMissingConfigProducesNothingRatherThanTheUngatedCommand() {
-        let plan = RunCommandPlan.plan(
+        let plan = ProcessCompose.RunCommandPlan.plan(
             devCommand: processComposeCommand(), config: nil, binary: "/opt/homebrew/bin/process-compose"
         )
 
@@ -61,7 +61,7 @@ final class RunCommandPlanTests: XCTestCase {
     func testNoInputCombinationEverYieldsTheDisplayCommand() {
         for configOption in [config, nil] {
             for binaryOption in ["/opt/homebrew/bin/process-compose", nil] {
-                let plan = RunCommandPlan.plan(
+                let plan = ProcessCompose.RunCommandPlan.plan(
                     devCommand: processComposeCommand(),
                     config: configOption,
                     binary: binaryOption
@@ -79,7 +79,7 @@ final class RunCommandPlanTests: XCTestCase {
     func testFullyUsableProcessComposeRunIsPhaseScoped() {
         let binary = "/opt/homebrew/bin/process-compose"
 
-        let plan = RunCommandPlan.plan(
+        let plan = ProcessCompose.RunCommandPlan.plan(
             devCommand: processComposeCommand(), config: config, binary: binary
         )
 
@@ -90,7 +90,7 @@ final class RunCommandPlanTests: XCTestCase {
     /// working whatever state process-compose is in — otherwise the escape
     /// hatch would close exactly when it is needed.
     func testOverrideRunsLiterallyEvenWithNoBinaryOrConfig() {
-        let plan = RunCommandPlan.plan(
+        let plan = ProcessCompose.RunCommandPlan.plan(
             devCommand: DevCommand(command: "npm run dev", source: .override, sourceDescription: nil),
             config: nil,
             binary: nil
@@ -100,7 +100,7 @@ final class RunCommandPlanTests: XCTestCase {
     }
 
     func testOverrideStillWinsWhenProcessComposeIsFullyUsable() {
-        let plan = RunCommandPlan.plan(
+        let plan = ProcessCompose.RunCommandPlan.plan(
             devCommand: DevCommand(command: "just dev", source: .override, sourceDescription: nil),
             config: config,
             binary: "/opt/homebrew/bin/process-compose"
@@ -111,7 +111,7 @@ final class RunCommandPlanTests: XCTestCase {
 
     func testNoDevCommandIsNothing() {
         XCTAssertEqual(
-            RunCommandPlan.plan(devCommand: nil, config: config, binary: "/bin/pc"),
+            ProcessCompose.RunCommandPlan.plan(devCommand: nil, config: config, binary: "/bin/pc"),
             .nothing
         )
     }
@@ -123,9 +123,9 @@ final class RunCommandPlanTests: XCTestCase {
     /// command: a `canRun` that drifted from that would put the pane back where
     /// it was, enabling Start for a plan that runs nothing.
     func testCanRunIsTrueForExactlyThePlansThatYieldACommand() {
-        XCTAssertTrue(RunCommandPlan.literal("npm run dev").canRun)
-        XCTAssertTrue(RunCommandPlan.phaseScoped(config: config, binary: "/bin/pc").canRun)
-        XCTAssertFalse(RunCommandPlan.nothing.canRun)
+        XCTAssertTrue(ProcessCompose.RunCommandPlan.literal("npm run dev").canRun)
+        XCTAssertTrue(ProcessCompose.RunCommandPlan.phaseScoped(config: config, binary: "/bin/pc").canRun)
+        XCTAssertFalse(ProcessCompose.RunCommandPlan.nothing.canRun)
     }
 
     /// The C2 state in full: integration on, config present, binary
@@ -135,15 +135,15 @@ final class RunCommandPlanTests: XCTestCase {
         let devCommand = processComposeCommand()
 
         XCTAssertFalse(
-            RunCommandPlan.plan(devCommand: devCommand, config: config, binary: nil).canRun
+            ProcessCompose.RunCommandPlan.plan(devCommand: devCommand, config: config, binary: nil).canRun
         )
-        XCTAssertNotNil(RunCommandPlan.unavailableReason(
+        XCTAssertNotNil(ProcessCompose.RunCommandPlan.unavailableReason(
             devCommand: devCommand, config: config, binary: nil, isEnabled: true
         ))
     }
 
     func testAMissingConfigIsAlsoExplained() {
-        XCTAssertNotNil(RunCommandPlan.unavailableReason(
+        XCTAssertNotNil(ProcessCompose.RunCommandPlan.unavailableReason(
             devCommand: processComposeCommand(), config: nil, binary: "/bin/pc", isEnabled: true
         ))
     }
@@ -153,10 +153,10 @@ final class RunCommandPlanTests: XCTestCase {
     /// versus write a config. Only the first gets a reason; the second is what
     /// the pane's own "add a process-compose.yaml" copy already says.
     func testTheSwitchedOffIntegrationSaysSoRatherThanLookingLikeAMissingConfig() {
-        XCTAssertNotNil(RunCommandPlan.unavailableReason(
+        XCTAssertNotNil(ProcessCompose.RunCommandPlan.unavailableReason(
             devCommand: nil, config: nil, binary: nil, isEnabled: false
         ))
-        XCTAssertNil(RunCommandPlan.unavailableReason(
+        XCTAssertNil(ProcessCompose.RunCommandPlan.unavailableReason(
             devCommand: nil, config: nil, binary: nil, isEnabled: true
         ))
     }
@@ -164,10 +164,10 @@ final class RunCommandPlanTests: XCTestCase {
     /// A usable run has nothing to explain, and neither does the user's own
     /// override — no precondition of theirs can fail.
     func testAUsableRunAndAnOverrideNeedNoExplanation() {
-        XCTAssertNil(RunCommandPlan.unavailableReason(
+        XCTAssertNil(ProcessCompose.RunCommandPlan.unavailableReason(
             devCommand: processComposeCommand(), config: config, binary: "/bin/pc", isEnabled: true
         ))
-        XCTAssertNil(RunCommandPlan.unavailableReason(
+        XCTAssertNil(ProcessCompose.RunCommandPlan.unavailableReason(
             devCommand: DevCommand(command: "npm run dev", source: .override, sourceDescription: nil),
             config: nil, binary: nil, isEnabled: true
         ))

@@ -1,4 +1,4 @@
-// ABOUTME: Tests for UsageProbe's parsing of `claude -p /usage --output-format json`
+// ABOUTME: Tests for Usage.Probe's parsing of `claude -p /usage --output-format json`
 // ABOUTME: output into session / weekly / model-week percentage windows.
 
 @testable import Atelier
@@ -20,21 +20,21 @@ final class UsageProbeTests: XCTestCase {
     // MARK: - parseText
 
     func testParsesAllThreeWindows() {
-        let report = UsageProbe.parseText(realOutput)
+        let report = Usage.Probe.parseText(realOutput)
         XCTAssertEqual(report?.session?.percentUsed, 100)
         XCTAssertEqual(report?.week?.percentUsed, 58)
         XCTAssertEqual(report?.modelWeek?.percentUsed, 29)
     }
 
     func testParsesResetTextWithoutTimezone() {
-        let report = UsageProbe.parseText(realOutput)
+        let report = Usage.Probe.parseText(realOutput)
         XCTAssertEqual(report?.session?.resetText, "Aug 30 at 1:10am")
         XCTAssertEqual(report?.week?.resetText, "Aug 31 at 8pm")
         XCTAssertEqual(report?.modelWeek?.resetText, "Aug 31 at 8pm")
     }
 
     func testParsesModelWeekForAnyModelName() {
-        let report = UsageProbe.parseText(
+        let report = Usage.Probe.parseText(
             "Current week (Opus): 12% used · resets Sep 1 at 9am (UTC)"
         )
         XCTAssertEqual(report?.modelWeek?.percentUsed, 12)
@@ -43,11 +43,11 @@ final class UsageProbeTests: XCTestCase {
     }
 
     func testCapturesModelNameFromRealOutput() {
-        XCTAssertEqual(UsageProbe.parseText(realOutput)?.modelName, "Fable")
+        XCTAssertEqual(Usage.Probe.parseText(realOutput)?.modelName, "Fable")
     }
 
     func testSessionOnlyOutputYieldsPartialReport() {
-        let report = UsageProbe.parseText("Current session: 7% used")
+        let report = Usage.Probe.parseText("Current session: 7% used")
         XCTAssertEqual(report?.session?.percentUsed, 7)
         XCTAssertNil(report?.session?.resetText)
         XCTAssertNil(report?.week)
@@ -57,13 +57,13 @@ final class UsageProbeTests: XCTestCase {
     func testUnrelatedPercentLinesAreIgnored() {
         // Breakdown lines like "67% of your usage was at >150k context" must not
         // be mistaken for usage windows.
-        let report = UsageProbe.parseText("Last 24h\n  67% of your usage was at >150k context")
+        let report = Usage.Probe.parseText("Last 24h\n  67% of your usage was at >150k context")
         XCTAssertNil(report)
     }
 
     func testGarbageYieldsNil() {
-        XCTAssertNil(UsageProbe.parseText(""))
-        XCTAssertNil(UsageProbe.parseText("API usage billing — no limits apply"))
+        XCTAssertNil(Usage.Probe.parseText(""))
+        XCTAssertNil(Usage.Probe.parseText("API usage billing — no limits apply"))
     }
 
     // MARK: - parse (JSON envelope)
@@ -72,13 +72,13 @@ final class UsageProbeTests: XCTestCase {
         let json = """
         {"is_error":false,"result":"Current session: 42% used · resets Aug 30 at 1am (UTC)","type":"result"}
         """
-        let report = UsageProbe.parse(Data(json.utf8))
+        let report = Usage.Probe.parse(Data(json.utf8))
         XCTAssertEqual(report?.session?.percentUsed, 42)
     }
 
     func testMalformedJSONYieldsNil() {
-        XCTAssertNil(UsageProbe.parse(Data("not json".utf8)))
-        XCTAssertNil(UsageProbe.parse(Data("{\"result\":123}".utf8)))
+        XCTAssertNil(Usage.Probe.parse(Data("not json".utf8)))
+        XCTAssertNil(Usage.Probe.parse(Data("{\"result\":123}".utf8)))
     }
 }
 
@@ -86,7 +86,7 @@ final class UsageProbeTests: XCTestCase {
 
 extension UsageProbeTests {
     private func environment(base: [String: String]) -> [String: String] {
-        UsageProbe.childEnvironment(
+        Usage.Probe.childEnvironment(
             base: base,
             loginShellPath: { _ in "/login/bin" },
             userName: "resolved-user",

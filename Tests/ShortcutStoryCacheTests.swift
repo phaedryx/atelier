@@ -6,7 +6,7 @@ import XCTest
 
 @MainActor
 final class ShortcutStoryCacheTests: XCTestCase {
-    private func makeStory(id: Int, name: String = "A story", stateID: Int = 500_000_030) -> ShortcutStory {
+    private func makeStory(id: Int, name: String = "A story", stateID: Int = 500_000_030) -> Shortcut.Story {
         let json = """
         {
           "id": \(id),
@@ -18,7 +18,7 @@ final class ShortcutStoryCacheTests: XCTestCase {
         }
         """
         // Decoding rather than a memberwise init keeps the fixture honest about the wire shape.
-        return try! JSONDecoder().decode(ShortcutStory.self, from: Data(json.utf8))
+        return try! JSONDecoder().decode(Shortcut.Story.self, from: Data(json.utf8))
     }
 
     func testNoStoryForUnknownPath() {

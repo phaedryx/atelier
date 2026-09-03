@@ -1,4 +1,4 @@
-// ABOUTME: Tests for GitOperations worktree resolution.
+// ABOUTME: Tests for Git.Operations worktree resolution.
 // ABOUTME: Validates detection of worktree directories and resolution to main repository.
 
 @testable import Atelier
@@ -24,7 +24,7 @@ final class GitOperationsTests: XCTestCase {
         let plainDir = tempDir.appendingPathComponent("plain")
         try FileManager.default.createDirectory(at: plainDir, withIntermediateDirectories: true)
 
-        XCTAssertNil(GitOperations.mainRepositoryPath(for: plainDir.path))
+        XCTAssertNil(Git.Operations.mainRepositoryPath(for: plainDir.path))
     }
 
     func testMainRepositoryPathReturnsNilForMainRepo() throws {
@@ -32,7 +32,7 @@ final class GitOperationsTests: XCTestCase {
         try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
         git(["init"], in: repoDir)
 
-        XCTAssertNil(GitOperations.mainRepositoryPath(for: repoDir.path))
+        XCTAssertNil(Git.Operations.mainRepositoryPath(for: repoDir.path))
     }
 
     func testMainRepositoryPathResolvesWorktreeToMainRepo() throws {
@@ -45,7 +45,7 @@ final class GitOperationsTests: XCTestCase {
         let worktreeDir = tempDir.appendingPathComponent("worktree-branch")
         git(["worktree", "add", "-b", "test-branch", worktreeDir.path], in: repoDir)
 
-        let result = GitOperations.mainRepositoryPath(for: worktreeDir.path)
+        let result = Git.Operations.mainRepositoryPath(for: worktreeDir.path)
         XCTAssertEqual(
             URL(fileURLWithPath: result ?? "").standardizedFileURL.path,
             repoDir.standardizedFileURL.path
@@ -65,7 +65,7 @@ final class GitOperationsTests: XCTestCase {
         // A subdirectory inside the worktree doesn't have its own .git file
         let subDir = worktreeDir.appendingPathComponent("subdir")
         try FileManager.default.createDirectory(at: subDir, withIntermediateDirectories: true)
-        XCTAssertNil(GitOperations.mainRepositoryPath(for: subDir.path))
+        XCTAssertNil(Git.Operations.mainRepositoryPath(for: subDir.path))
     }
 
     // MARK: - defaultBranch
@@ -77,7 +77,7 @@ final class GitOperationsTests: XCTestCase {
         git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
              "commit", "--allow-empty", "-m", "init"], in: repoDir)
 
-        let branch = GitOperations.defaultBranch(at: repoDir.path)
+        let branch = Git.Operations.defaultBranch(at: repoDir.path)
         XCTAssertEqual(branch, "main")
     }
 
@@ -88,7 +88,7 @@ final class GitOperationsTests: XCTestCase {
         git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
              "commit", "--allow-empty", "-m", "init"], in: repoDir)
 
-        let branch = GitOperations.defaultBranch(at: repoDir.path)
+        let branch = Git.Operations.defaultBranch(at: repoDir.path)
         XCTAssertEqual(branch, "master")
     }
 
@@ -99,7 +99,7 @@ final class GitOperationsTests: XCTestCase {
         git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
              "commit", "--allow-empty", "-m", "init"], in: repoDir)
 
-        let branch = GitOperations.defaultBranch(at: repoDir.path)
+        let branch = Git.Operations.defaultBranch(at: repoDir.path)
         XCTAssertEqual(branch, "HEAD")
     }
 
@@ -115,7 +115,7 @@ final class GitOperationsTests: XCTestCase {
         let repoDir = tempDir.appendingPathComponent("cloned")
         git(["clone", remoteDir.path, repoDir.path], in: tempDir)
 
-        let branch = GitOperations.defaultBranch(at: repoDir.path)
+        let branch = Git.Operations.defaultBranch(at: repoDir.path)
         XCTAssertTrue(branch.contains("origin"), "Expected origin-prefixed branch, got: \(branch)")
     }
 
@@ -128,7 +128,7 @@ final class GitOperationsTests: XCTestCase {
              "commit", "--allow-empty", "-m", "init"], in: repoDir)
         git(["branch", "development"], in: repoDir)
 
-        let branch = GitOperations.defaultBranch(at: repoDir.path)
+        let branch = Git.Operations.defaultBranch(at: repoDir.path)
         XCTAssertEqual(branch, "development", "local development must win over local main")
     }
 
@@ -144,7 +144,7 @@ final class GitOperationsTests: XCTestCase {
         let repoDir = tempDir.appendingPathComponent("cloned-dev")
         git(["clone", remoteDir.path, repoDir.path], in: tempDir)
 
-        let branch = GitOperations.defaultBranch(at: repoDir.path)
+        let branch = Git.Operations.defaultBranch(at: repoDir.path)
         XCTAssertEqual(branch, "origin/development",
                        "origin/development must take precedence over every other ref")
     }
@@ -163,7 +163,7 @@ final class GitOperationsTests: XCTestCase {
         // Ensure origin/HEAD points at the remote default branch.
         git(["remote", "set-head", "origin", "--auto"], in: repoDir)
 
-        let branch = GitOperations.defaultBranch(at: repoDir.path)
+        let branch = Git.Operations.defaultBranch(at: repoDir.path)
         XCTAssertEqual(branch, "origin/master",
                        "with no development branch, origin/HEAD must resolve the default, got: \(branch)")
     }
@@ -178,7 +178,7 @@ final class GitOperationsTests: XCTestCase {
              "commit", "--allow-empty", "-m", "init"], in: repoDir)
 
         // Should return silently without crashing
-        GitOperations.fetchDefaultBranch(at: repoDir.path)
+        Git.Operations.fetchDefaultBranch(at: repoDir.path)
     }
 
     func testFetchDefaultBranchDoesNotCrashForNonGitDirectory() throws {
@@ -186,7 +186,7 @@ final class GitOperationsTests: XCTestCase {
         try FileManager.default.createDirectory(at: plainDir, withIntermediateDirectories: true)
 
         // Should return silently without crashing
-        GitOperations.fetchDefaultBranch(at: plainDir.path)
+        Git.Operations.fetchDefaultBranch(at: plainDir.path)
     }
 
     func testFetchDefaultBranchDoesNotCrashWithUnreachableRemote() throws {
@@ -198,7 +198,7 @@ final class GitOperationsTests: XCTestCase {
         git(["remote", "add", "origin", "https://invalid.example.com/repo.git"], in: repoDir)
 
         // Should fail silently (timeout or network error)
-        GitOperations.fetchDefaultBranch(at: repoDir.path)
+        Git.Operations.fetchDefaultBranch(at: repoDir.path)
     }
 
     // MARK: - currentBranch
@@ -210,14 +210,14 @@ final class GitOperationsTests: XCTestCase {
         git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
              "commit", "--allow-empty", "-m", "init"], in: repoDir)
 
-        XCTAssertEqual(GitOperations.currentBranch(at: repoDir.path), "main")
+        XCTAssertEqual(Git.Operations.currentBranch(at: repoDir.path), "main")
     }
 
     func testCurrentBranchReturnsNilForNonGitDirectory() throws {
         let plainDir = tempDir.appendingPathComponent("not-a-repo")
         try FileManager.default.createDirectory(at: plainDir, withIntermediateDirectories: true)
 
-        XCTAssertNil(GitOperations.currentBranch(at: plainDir.path))
+        XCTAssertNil(Git.Operations.currentBranch(at: plainDir.path))
     }
 
     func testCurrentBranchReturnsWorktreeBranch() throws {
@@ -230,7 +230,7 @@ final class GitOperationsTests: XCTestCase {
         let worktreeDir = tempDir.appendingPathComponent("wt")
         git(["worktree", "add", "-b", "ff/my-feature", worktreeDir.path], in: repoDir)
 
-        XCTAssertEqual(GitOperations.currentBranch(at: worktreeDir.path), "ff/my-feature")
+        XCTAssertEqual(Git.Operations.currentBranch(at: worktreeDir.path), "ff/my-feature")
     }
 
     // MARK: - deleteLocalBranch
@@ -243,7 +243,7 @@ final class GitOperationsTests: XCTestCase {
              "commit", "--allow-empty", "-m", "init"], in: repoDir)
         git(["branch", "feature"], in: repoDir)
 
-        GitOperations.deleteLocalBranch(at: repoDir.path, branchName: "feature")
+        Git.Operations.deleteLocalBranch(at: repoDir.path, branchName: "feature")
 
         // Verify branch no longer exists
         let result = git(["rev-parse", "--verify", "refs/heads/feature"], in: repoDir)
@@ -260,7 +260,7 @@ final class GitOperationsTests: XCTestCase {
              "commit", "--allow-empty", "-m", "init"], in: repoDir)
 
         // Should return silently without crashing
-        GitOperations.fetchDefaultBranch(at: repoDir.path)
+        Git.Operations.fetchDefaultBranch(at: repoDir.path)
     }
 
     func testFetchDefaultBranchDoesNotMoveLocalRef() throws {
@@ -283,7 +283,7 @@ final class GitOperationsTests: XCTestCase {
              "commit", "--allow-empty", "-m", "second"], in: remoteDir)
 
         // Fetch should update remote tracking ref but not local main
-        GitOperations.fetchDefaultBranch(at: repoDir.path)
+        Git.Operations.fetchDefaultBranch(at: repoDir.path)
 
         let afterSHA = gitOutput(["rev-parse", "refs/heads/main"], in: repoDir)
         XCTAssertEqual(beforeSHA, afterSHA, "Local main should not have moved")
@@ -307,7 +307,7 @@ final class GitOperationsTests: XCTestCase {
 
         try "changed".write(to: filePath, atomically: true, encoding: .utf8)
 
-        let statuses = GitOperations.fileStatuses(at: repoDir.path)
+        let statuses = Git.Operations.fileStatuses(at: repoDir.path)
         XCTAssertEqual(statuses["tracked.txt"], .modified)
     }
 
@@ -323,7 +323,7 @@ final class GitOperationsTests: XCTestCase {
             atomically: true, encoding: .utf8
         )
 
-        let statuses = GitOperations.fileStatuses(at: repoDir.path)
+        let statuses = Git.Operations.fileStatuses(at: repoDir.path)
         XCTAssertEqual(statuses["untracked.txt"], .untracked)
     }
 
@@ -343,7 +343,7 @@ final class GitOperationsTests: XCTestCase {
             atomically: true, encoding: .utf8
         )
 
-        let statuses = GitOperations.fileStatuses(at: repoDir.path)
+        let statuses = Git.Operations.fileStatuses(at: repoDir.path)
         XCTAssertEqual(statuses["build"], .ignored)
     }
 
@@ -351,7 +351,7 @@ final class GitOperationsTests: XCTestCase {
         let plainDir = tempDir.appendingPathComponent("no-git")
         try FileManager.default.createDirectory(at: plainDir, withIntermediateDirectories: true)
 
-        let statuses = GitOperations.fileStatuses(at: plainDir.path)
+        let statuses = Git.Operations.fileStatuses(at: plainDir.path)
         XCTAssertTrue(statuses.isEmpty)
     }
 
@@ -370,7 +370,7 @@ final class GitOperationsTests: XCTestCase {
 
         git(["mv", "old.txt", "new.txt"], in: repoDir)
 
-        let statuses = GitOperations.fileStatuses(at: repoDir.path)
+        let statuses = Git.Operations.fileStatuses(at: repoDir.path)
         XCTAssertEqual(statuses["new.txt"], .modified)
     }
 
@@ -388,7 +388,7 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertTrue(git(["worktree", "add", "-b", "feature/a", worktreeA.path], in: repoDir))
         XCTAssertTrue(git(["worktree", "add", "-b", "feature/b", worktreeB.path], in: repoDir))
 
-        let pruned = GitOperations.pruneCleanWorktrees(
+        let pruned = Git.Operations.pruneCleanWorktrees(
             at: repoDir.path,
             onlyPaths: Set([worktreeA.path])
         )
@@ -413,7 +413,7 @@ final class GitOperationsTests: XCTestCase {
         // Modify the tracked file without committing.
         try "let modified = 2\n".write(to: file, atomically: true, encoding: .utf8)
 
-        let files = GitOperations.uncommittedDiffFiles(at: repoDir.path)
+        let files = Git.Operations.uncommittedDiffFiles(at: repoDir.path)
         XCTAssertGreaterThanOrEqual(files.count, 1)
         XCTAssertTrue(files.contains { $0.relativePath == "a.swift" && $0.status == .modified })
     }
@@ -428,7 +428,7 @@ final class GitOperationsTests: XCTestCase {
         git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
              "commit", "-m", "init"], in: repoDir)
 
-        let content = GitOperations.fileContent(at: repoDir.path, ref: "HEAD", filePath: "a.swift")
+        let content = Git.Operations.fileContent(at: repoDir.path, ref: "HEAD", filePath: "a.swift")
         XCTAssertEqual(content, "let original = 1\n")
     }
 
@@ -455,7 +455,7 @@ final class GitOperationsTests: XCTestCase {
         git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
              "commit", "-m", "big"], in: repoDir)
 
-        let content = GitOperations.fileContent(at: repoDir.path, ref: "HEAD", filePath: "big.txt")
+        let content = Git.Operations.fileContent(at: repoDir.path, ref: "HEAD", filePath: "big.txt")
         XCTAssertNotNil(content)
         XCTAssertEqual(content?.utf8.count, expectedCount, "Large git output must not be truncated")
     }
@@ -480,14 +480,14 @@ final class GitOperationsTests: XCTestCase {
              "-c", "user.email=test@test.com", "-c", "user.name=Test"], in: repoDir)
 
         // mergeBase(main, HEAD=feature) must be the base commit.
-        let mb = GitOperations.mergeBase(worktreePath: repoDir.path, projectPath: repoDir.path)
+        let mb = Git.Operations.mergeBase(worktreePath: repoDir.path, projectPath: repoDir.path)
         XCTAssertEqual(mb, baseSHA)
     }
 
     func testMergeBaseReturnsNilForNonGitDirectory() throws {
         let plainDir = tempDir.appendingPathComponent("mb-not-a-repo")
         try FileManager.default.createDirectory(at: plainDir, withIntermediateDirectories: true)
-        XCTAssertNil(GitOperations.mergeBase(worktreePath: plainDir.path, projectPath: plainDir.path))
+        XCTAssertNil(Git.Operations.mergeBase(worktreePath: plainDir.path, projectPath: plainDir.path))
     }
 
     // MARK: - branchDiffFiles (Branch mode + untracked union — Hardening 1)
@@ -521,7 +521,7 @@ final class GitOperationsTests: XCTestCase {
         // (c) untracked new file
         try "let c = 3\n".write(to: wt.appendingPathComponent("c.swift"), atomically: true, encoding: .utf8)
 
-        let files = GitOperations.branchDiffFiles(worktreePath: wt.path, projectPath: projectDir.path)
+        let files = Git.Operations.branchDiffFiles(worktreePath: wt.path, projectPath: projectDir.path)
         let paths = Set(files.map(\.relativePath))
         XCTAssertTrue(paths.contains("a.swift"), "committed file missing")
         XCTAssertTrue(paths.contains("b.swift"), "uncommitted edit missing")
@@ -544,7 +544,7 @@ final class GitOperationsTests: XCTestCase {
         git(["worktree", "add", "-b", "feature2", wt.path], in: projectDir)
         try "hello\n".write(to: wt.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
 
-        let files = GitOperations.branchDiffFiles(worktreePath: wt.path, projectPath: projectDir.path)
+        let files = Git.Operations.branchDiffFiles(worktreePath: wt.path, projectPath: projectDir.path)
         XCTAssertTrue(
             files.contains { $0.relativePath == "new.txt" && $0.status == .added },
             "untracked-only branch change must be listed (PR #440 gap)"
@@ -564,7 +564,7 @@ final class GitOperationsTests: XCTestCase {
         git(["worktree", "add", "-b", "feature-del", wt.path], in: projectDir)
         try FileManager.default.removeItem(at: wt.appendingPathComponent("gone.txt"))
 
-        let files = GitOperations.branchDiffFiles(worktreePath: wt.path, projectPath: projectDir.path)
+        let files = Git.Operations.branchDiffFiles(worktreePath: wt.path, projectPath: projectDir.path)
         XCTAssertTrue(files.contains { $0.relativePath == "gone.txt" && $0.status == .deleted })
     }
 
@@ -584,7 +584,7 @@ final class GitOperationsTests: XCTestCase {
         git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
              "commit", "-m", "rename"], in: wt)
 
-        let files = GitOperations.branchDiffFiles(worktreePath: wt.path, projectPath: projectDir.path)
+        let files = Git.Operations.branchDiffFiles(worktreePath: wt.path, projectPath: projectDir.path)
         XCTAssertTrue(
             files.contains { $0.relativePath == "new.swift" },
             "renamed file should be listed under its new path"
@@ -596,7 +596,7 @@ final class GitOperationsTests: XCTestCase {
         let plainDir = tempDir.appendingPathComponent("branch-not-a-repo")
         try FileManager.default.createDirectory(at: plainDir, withIntermediateDirectories: true)
         XCTAssertTrue(
-            GitOperations.branchDiffFiles(worktreePath: plainDir.path, projectPath: plainDir.path).isEmpty
+            Git.Operations.branchDiffFiles(worktreePath: plainDir.path, projectPath: plainDir.path).isEmpty
         )
     }
 
@@ -610,7 +610,7 @@ final class GitOperationsTests: XCTestCase {
              "commit", "--allow-empty", "-m", "init"], in: repoDir)
         try "let c = 3\n".write(to: repoDir.appendingPathComponent("c.swift"), atomically: true, encoding: .utf8)
 
-        let files = GitOperations.uncommittedDiffFiles(at: repoDir.path)
+        let files = Git.Operations.uncommittedDiffFiles(at: repoDir.path)
         XCTAssertTrue(files.contains { $0.relativePath == "c.swift" && $0.status == .added })
     }
 
@@ -626,7 +626,7 @@ final class GitOperationsTests: XCTestCase {
         // Only modify b.swift.
         try "let b = 99\n".write(to: repoDir.appendingPathComponent("b.swift"), atomically: true, encoding: .utf8)
 
-        let files = GitOperations.uncommittedDiffFiles(at: repoDir.path)
+        let files = Git.Operations.uncommittedDiffFiles(at: repoDir.path)
         XCTAssertTrue(files.contains { $0.relativePath == "b.swift" })
         XCTAssertFalse(files.contains { $0.relativePath == "a.swift" }, "unchanged file must not appear")
     }
@@ -653,7 +653,7 @@ final class GitOperationsTests: XCTestCase {
         git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
              "commit", "-m", "add binary"], in: wt)
 
-        let files = GitOperations.branchDiffFiles(worktreePath: wt.path, projectPath: projectDir.path)
+        let files = Git.Operations.branchDiffFiles(worktreePath: wt.path, projectPath: projectDir.path)
         let entry = files.first { $0.relativePath == "image.png" }
         XCTAssertNotNil(entry)
         XCTAssertTrue(entry?.isBinary ?? false, "tracked binary must be flagged via numstat -/-")
@@ -673,7 +673,7 @@ final class GitOperationsTests: XCTestCase {
         }
         try bytes.write(to: repoDir.appendingPathComponent("untracked.bin"))
 
-        let files = GitOperations.uncommittedDiffFiles(at: repoDir.path)
+        let files = Git.Operations.uncommittedDiffFiles(at: repoDir.path)
         let entry = files.first { $0.relativePath == "untracked.bin" }
         XCTAssertNotNil(entry)
         XCTAssertTrue(entry?.isBinary ?? false, "untracked binary must be detected by null-byte sniff")
@@ -689,7 +689,7 @@ final class GitOperationsTests: XCTestCase {
              "commit", "-m", "init"], in: repoDir)
         try "let a = 2\nlet b = 3\n".write(to: repoDir.appendingPathComponent("a.swift"), atomically: true, encoding: .utf8)
 
-        let files = GitOperations.uncommittedDiffFiles(at: repoDir.path)
+        let files = Git.Operations.uncommittedDiffFiles(at: repoDir.path)
         let entry = files.first { $0.relativePath == "a.swift" }
         XCTAssertNotNil(entry)
         XCTAssertFalse(entry?.isBinary ?? true, "text file must not be flagged binary")
@@ -708,7 +708,7 @@ final class GitOperationsTests: XCTestCase {
         // Add 2 lines, remove 0 (append).
         try "line1\nline2\nline3\nline4\nline5\n".write(to: repoDir.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
 
-        let files = GitOperations.uncommittedDiffFiles(at: repoDir.path)
+        let files = Git.Operations.uncommittedDiffFiles(at: repoDir.path)
         let entry = files.first { $0.relativePath == "a.txt" }
         XCTAssertNotNil(entry)
         XCTAssertEqual(entry?.changedLines, 2, "added=2, deleted=0 → changedLines=2")
@@ -722,7 +722,7 @@ final class GitOperationsTests: XCTestCase {
              "commit", "--allow-empty", "-m", "init"], in: repoDir)
         try "a\nb\nc\nd\n".write(to: repoDir.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
 
-        let files = GitOperations.uncommittedDiffFiles(at: repoDir.path)
+        let files = Git.Operations.uncommittedDiffFiles(at: repoDir.path)
         let entry = files.first { $0.relativePath == "new.txt" }
         XCTAssertNotNil(entry)
         XCTAssertEqual(entry?.changedLines, 4, "untracked changedLines = line count of file")
@@ -744,7 +744,7 @@ final class GitOperationsTests: XCTestCase {
             to: repoDir.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8
         )
 
-        let files = GitOperations.uncommittedDiffFiles(at: repoDir.path)
+        let files = Git.Operations.uncommittedDiffFiles(at: repoDir.path)
         let entry = files.first { $0.relativePath == "a.txt" }
         XCTAssertNotNil(entry)
         // git numstat: replacing 2 lines = 2 add + 2 del; appending 2 lines = 2 add.
@@ -761,7 +761,7 @@ final class GitOperationsTests: XCTestCase {
              "commit", "--allow-empty", "-m", "init"], in: repoDir)
         try "a\nb\nc\n".write(to: repoDir.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
 
-        let files = GitOperations.uncommittedDiffFiles(at: repoDir.path)
+        let files = Git.Operations.uncommittedDiffFiles(at: repoDir.path)
         let entry = files.first { $0.relativePath == "new.txt" }
         XCTAssertNotNil(entry)
         XCTAssertEqual(entry?.added, 3, "untracked added = file line count")
@@ -778,7 +778,7 @@ final class GitOperationsTests: XCTestCase {
              "commit", "-m", "init"], in: repoDir)
         try FileManager.default.removeItem(at: repoDir.appendingPathComponent("gone.txt"))
 
-        let files = GitOperations.uncommittedDiffFiles(at: repoDir.path)
+        let files = Git.Operations.uncommittedDiffFiles(at: repoDir.path)
         let entry = files.first { $0.relativePath == "gone.txt" }
         XCTAssertNotNil(entry)
         XCTAssertEqual(entry?.added, 0, "deleted file has no additions")
@@ -797,8 +797,8 @@ final class GitOperationsTests: XCTestCase {
              "commit", "-m", "init"], in: repoDir)
         try "let a = 2\n".write(to: repoDir.appendingPathComponent("a.swift"), atomically: true, encoding: .utf8)
 
-        let fp1 = GitOperations.diffFingerprint(worktreePath: repoDir.path, projectPath: repoDir.path, mode: "uncommitted")
-        let fp2 = GitOperations.diffFingerprint(worktreePath: repoDir.path, projectPath: repoDir.path, mode: "uncommitted")
+        let fp1 = Git.Operations.diffFingerprint(worktreePath: repoDir.path, projectPath: repoDir.path, mode: "uncommitted")
+        let fp2 = Git.Operations.diffFingerprint(worktreePath: repoDir.path, projectPath: repoDir.path, mode: "uncommitted")
         XCTAssertEqual(fp1, fp2, "fingerprint must be stable when nothing changes")
     }
 
@@ -811,16 +811,16 @@ final class GitOperationsTests: XCTestCase {
         git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
              "commit", "-m", "init"], in: repoDir)
 
-        let fpClean = GitOperations.diffFingerprint(worktreePath: repoDir.path, projectPath: repoDir.path, mode: "uncommitted")
+        let fpClean = Git.Operations.diffFingerprint(worktreePath: repoDir.path, projectPath: repoDir.path, mode: "uncommitted")
 
         // Edit the file.
         try "let a = 2\nlet b = 3\n".write(to: repoDir.appendingPathComponent("a.swift"), atomically: true, encoding: .utf8)
-        let fpEdited = GitOperations.diffFingerprint(worktreePath: repoDir.path, projectPath: repoDir.path, mode: "uncommitted")
+        let fpEdited = Git.Operations.diffFingerprint(worktreePath: repoDir.path, projectPath: repoDir.path, mode: "uncommitted")
         XCTAssertNotEqual(fpClean, fpEdited, "fingerprint must change after an edit")
 
         // Add an untracked file (uncommitted mode includes ls-files --others).
         try "new\n".write(to: repoDir.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
-        let fpUntracked = GitOperations.diffFingerprint(worktreePath: repoDir.path, projectPath: repoDir.path, mode: "uncommitted")
+        let fpUntracked = Git.Operations.diffFingerprint(worktreePath: repoDir.path, projectPath: repoDir.path, mode: "uncommitted")
         XCTAssertNotEqual(fpEdited, fpUntracked, "fingerprint must change when an untracked file appears")
     }
 
@@ -828,7 +828,7 @@ final class GitOperationsTests: XCTestCase {
         let plainDir = tempDir.appendingPathComponent("fp-not-a-repo")
         try FileManager.default.createDirectory(at: plainDir, withIntermediateDirectories: true)
         // Must not crash; returns some stable string.
-        let fp = GitOperations.diffFingerprint(worktreePath: plainDir.path, projectPath: plainDir.path, mode: "branch")
+        let fp = Git.Operations.diffFingerprint(worktreePath: plainDir.path, projectPath: plainDir.path, mode: "branch")
         XCTAssertFalse(fp.isEmpty)
     }
 
@@ -853,19 +853,19 @@ final class GitOperationsTests: XCTestCase {
         let wt = tempDir.appendingPathComponent("fp-branch-wt")
         git(["worktree", "add", "-b", "feature-fp", wt.path], in: projectDir)
 
-        let fp1 = GitOperations.diffFingerprint(worktreePath: wt.path, projectPath: projectDir.path, mode: "branch")
-        let fp2 = GitOperations.diffFingerprint(worktreePath: wt.path, projectPath: projectDir.path, mode: "branch")
+        let fp1 = Git.Operations.diffFingerprint(worktreePath: wt.path, projectPath: projectDir.path, mode: "branch")
+        let fp2 = Git.Operations.diffFingerprint(worktreePath: wt.path, projectPath: projectDir.path, mode: "branch")
         XCTAssertEqual(fp1, fp2, "branch-mode fingerprint must be stable when nothing changes")
 
         // Edit a tracked file — this moves `git diff --stat`, so the fingerprint changes.
         try "let b = 99\n".write(to: wt.appendingPathComponent("b.swift"), atomically: true, encoding: .utf8)
-        let fpEdited = GitOperations.diffFingerprint(worktreePath: wt.path, projectPath: projectDir.path, mode: "branch")
+        let fpEdited = Git.Operations.diffFingerprint(worktreePath: wt.path, projectPath: projectDir.path, mode: "branch")
         XCTAssertNotEqual(fp1, fpEdited, "branch-mode fingerprint must change after a tracked-file edit")
 
         // Add an untracked file — branch mode folds in `ls-files --others`, so
         // the fingerprint must move even though `git diff --stat` is unchanged.
         try "let c = 3\n".write(to: wt.appendingPathComponent("c.swift"), atomically: true, encoding: .utf8)
-        let fpUntracked = GitOperations.diffFingerprint(worktreePath: wt.path, projectPath: projectDir.path, mode: "branch")
+        let fpUntracked = Git.Operations.diffFingerprint(worktreePath: wt.path, projectPath: projectDir.path, mode: "branch")
         XCTAssertNotEqual(fpEdited, fpUntracked, "branch-mode fingerprint must change when an untracked file is added")
     }
 
@@ -877,7 +877,7 @@ final class GitOperationsTests: XCTestCase {
         git(["init", "-q", "-b", "main"], in: repoDir)
         git(["-c", "user.email=t@t", "-c", "user.name=T", "commit", "-q", "--allow-empty", "-m", "init"], in: repoDir)
 
-        let location = GitOperations.projectLocation(for: repoDir.path)
+        let location = Git.Operations.projectLocation(for: repoDir.path)
         XCTAssertEqual(standardized(location.directory), repoDir.standardizedFileURL.path)
         XCTAssertEqual(location.name, "plain-repo")
     }
@@ -886,7 +886,7 @@ final class GitOperationsTests: XCTestCase {
         let plainDir = tempDir.appendingPathComponent("just-files")
         try FileManager.default.createDirectory(at: plainDir, withIntermediateDirectories: true)
 
-        let location = GitOperations.projectLocation(for: plainDir.path)
+        let location = Git.Operations.projectLocation(for: plainDir.path)
         XCTAssertEqual(standardized(location.directory), plainDir.standardizedFileURL.path)
         XCTAssertEqual(location.name, "just-files")
     }
@@ -899,7 +899,7 @@ final class GitOperationsTests: XCTestCase {
         let worktreeDir = tempDir.appendingPathComponent("wt")
         git(["worktree", "add", "-q", "-b", "feature", worktreeDir.path], in: repoDir)
 
-        let location = GitOperations.projectLocation(for: worktreeDir.path)
+        let location = Git.Operations.projectLocation(for: worktreeDir.path)
         XCTAssertEqual(standardized(location.directory), repoDir.standardizedFileURL.path)
         XCTAssertEqual(location.name, "main-repo")
     }
@@ -907,7 +907,7 @@ final class GitOperationsTests: XCTestCase {
     func testProjectLocationOfABareContainerResolvesToItsDefaultWorktree() throws {
         let container = try makeBareContainer(named: "bare-project")
 
-        let location = GitOperations.projectLocation(for: container.path)
+        let location = Git.Operations.projectLocation(for: container.path)
         XCTAssertEqual(
             standardized(location.directory),
             container.appendingPathComponent("main").standardizedFileURL.path,
@@ -920,7 +920,7 @@ final class GitOperationsTests: XCTestCase {
         let container = try makeBareContainer(named: "bare-project")
         let checkout = container.appendingPathComponent("main")
 
-        let location = GitOperations.projectLocation(for: checkout.path)
+        let location = Git.Operations.projectLocation(for: checkout.path)
         XCTAssertEqual(standardized(location.directory), checkout.standardizedFileURL.path)
         XCTAssertEqual(location.name, "bare-project")
     }
@@ -930,7 +930,7 @@ final class GitOperationsTests: XCTestCase {
         let stray = tempDir.appendingPathComponent("stray-worktree")
         git(["worktree", "add", "-q", "-b", "stray", stray.path, "main"], in: container)
 
-        let location = GitOperations.projectLocation(for: stray.path)
+        let location = Git.Operations.projectLocation(for: stray.path)
         XCTAssertEqual(
             standardized(location.directory),
             container.appendingPathComponent("main").standardizedFileURL.path
@@ -943,7 +943,7 @@ final class GitOperationsTests: XCTestCase {
         let container = try makeBareContainer(named: "bare-project")
         git(["config", "--unset", "wt.default"], in: container)
 
-        let location = GitOperations.projectLocation(for: container.path)
+        let location = Git.Operations.projectLocation(for: container.path)
         XCTAssertEqual(
             standardized(location.directory),
             container.appendingPathComponent("main").standardizedFileURL.path
@@ -959,7 +959,7 @@ final class GitOperationsTests: XCTestCase {
         // Sorts ahead of "main", so this is the entry a naive scan would take.
         git(["worktree", "add", "-q", "-b", "aaa-feature", container.appendingPathComponent("aaa-feature").path, "main"], in: container)
 
-        let location = GitOperations.projectLocation(for: container.path)
+        let location = Git.Operations.projectLocation(for: container.path)
         XCTAssertEqual(
             standardized(location.directory),
             container.appendingPathComponent("main").standardizedFileURL.path,
@@ -970,14 +970,14 @@ final class GitOperationsTests: XCTestCase {
     func testProjectLocationCarriesTheContainerSoStaleProjectsCanBeMatched() throws {
         let container = try makeBareContainer(named: "bare-project")
 
-        let location = GitOperations.projectLocation(for: container.path)
+        let location = Git.Operations.projectLocation(for: container.path)
         XCTAssertEqual(standardized(location.containerDirectory ?? ""), container.standardizedFileURL.path)
 
         // A plain repo resolved to itself has no container to report.
         let repoDir = tempDir.appendingPathComponent("plain-repo")
         try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
         git(["init", "-q", "-b", "main"], in: repoDir)
-        XCTAssertNil(GitOperations.projectLocation(for: repoDir.path).containerDirectory)
+        XCTAssertNil(Git.Operations.projectLocation(for: repoDir.path).containerDirectory)
     }
 
     func testProjectLocationPrefersTheCheckedOutDefaultOverADevelopmentBranch() throws {
@@ -990,7 +990,7 @@ final class GitOperationsTests: XCTestCase {
         git(["branch", "development", "main"], in: container)
         git(["worktree", "add", "-q", "-b", "aaa-feature", container.appendingPathComponent("aaa-feature").path, "main"], in: container)
 
-        let location = GitOperations.projectLocation(for: container.path)
+        let location = Git.Operations.projectLocation(for: container.path)
         XCTAssertEqual(
             standardized(location.directory),
             container.appendingPathComponent("main").standardizedFileURL.path
@@ -1005,7 +1005,7 @@ final class GitOperationsTests: XCTestCase {
         let outside = tempDir.appendingPathComponent("elsewhere")
         git(["worktree", "add", "-q", "-b", "feature", outside.path, "main"], in: container)
 
-        let location = GitOperations.projectLocation(for: container.path)
+        let location = Git.Operations.projectLocation(for: container.path)
         XCTAssertEqual(
             standardized(location.directory),
             container.appendingPathComponent("main").standardizedFileURL.path
@@ -1018,7 +1018,7 @@ final class GitOperationsTests: XCTestCase {
         let container = try makeBareContainer(named: "bare-project")
         git(["worktree", "remove", "--force", "main"], in: container)
 
-        let location = GitOperations.projectLocation(for: container.path)
+        let location = Git.Operations.projectLocation(for: container.path)
         XCTAssertEqual(standardized(location.directory), container.standardizedFileURL.path)
         XCTAssertEqual(location.name, "bare-project")
     }
@@ -1030,7 +1030,7 @@ final class GitOperationsTests: XCTestCase {
         try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
         git(["init", "-q", "-b", "main"], in: repoDir)
 
-        GitOperations.addExcludeEntry(at: repoDir.path, pattern: ".atelier-state/")
+        Git.Operations.addExcludeEntry(at: repoDir.path, pattern: ".atelier-state/")
 
         XCTAssertTrue(excludeLines(of: repoDir).contains(".atelier-state/"))
     }
@@ -1041,7 +1041,7 @@ final class GitOperationsTests: XCTestCase {
         let container = try makeBareContainer(named: "bare-project")
         let checkout = container.appendingPathComponent("main")
 
-        GitOperations.addExcludeEntry(at: checkout.path, pattern: ".atelier-state/")
+        Git.Operations.addExcludeEntry(at: checkout.path, pattern: ".atelier-state/")
 
         XCTAssertTrue(
             excludeLines(of: checkout).contains(".atelier-state/"),
@@ -1053,8 +1053,8 @@ final class GitOperationsTests: XCTestCase {
         let container = try makeBareContainer(named: "bare-project")
         let checkout = container.appendingPathComponent("main")
 
-        GitOperations.addExcludeEntry(at: checkout.path, pattern: ".atelier-state/")
-        GitOperations.addExcludeEntry(at: checkout.path, pattern: ".atelier-state/")
+        Git.Operations.addExcludeEntry(at: checkout.path, pattern: ".atelier-state/")
+        Git.Operations.addExcludeEntry(at: checkout.path, pattern: ".atelier-state/")
 
         XCTAssertEqual(excludeLines(of: checkout).count(where: { $0 == ".atelier-state/" }), 1)
     }
@@ -1072,7 +1072,7 @@ final class GitOperationsTests: XCTestCase {
         let container = try makeBareContainer(named: "bare-project")
         let checkout = container.appendingPathComponent("main")
 
-        let worktrees = GitOperations.listWorktreesWithInfo(at: checkout.path)
+        let worktrees = Git.Operations.listWorktreesWithInfo(at: checkout.path)
 
         XCTAssertFalse(
             worktrees.contains { $0.standardizedPath == container.appendingPathComponent(".bare").standardizedFileURL.path },

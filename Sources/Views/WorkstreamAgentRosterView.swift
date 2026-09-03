@@ -10,14 +10,14 @@ import SwiftUI
 /// exist exactly while their run is live — Claude Code's stop hooks remove
 /// them the moment an agent finishes.
 struct WorkstreamAgentRosterView: View {
-    let runs: [WorkstreamAgentStateTracker.AgentRun]
+    let runs: [Workstream.AgentStateTracker.AgentRun]
     /// Called when a roster line is clicked: selects the workstream and
     /// focuses its Coding Agent tab.
     let onSelect: () -> Void
 
     private static let maxVisibleLines = 3
 
-    private var visibleRuns: [WorkstreamAgentStateTracker.AgentRun] {
+    private var visibleRuns: [Workstream.AgentStateTracker.AgentRun] {
         Array(runs.prefix(Self.maxVisibleLines))
     }
 
@@ -56,7 +56,7 @@ struct WorkstreamAgentRosterView: View {
 // MARK: - Single roster card
 
 private struct RosterCard: View {
-    let run: WorkstreamAgentStateTracker.AgentRun
+    let run: Workstream.AgentStateTracker.AgentRun
 
     private var statusColor: Color {
         switch run.state {

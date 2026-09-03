@@ -1,12 +1,12 @@
 // ABOUTME: Sidebar plan-usage meter: three labeled bars (5h session, weekly all-models,
-// ABOUTME: weekly model-specific) fed by UsageStore. Click forces a refresh.
+// ABOUTME: weekly model-specific) fed by Usage.Store. Click forces a refresh.
 
 import SwiftUI
 
 /// Renders nothing until the store has a report, so the sidebar stays clean when
 /// `claude` isn't installed or `/usage` has nothing to say.
 struct UsageMeterView: View {
-    @EnvironmentObject private var usageStore: UsageStore
+    @EnvironmentObject private var usageStore: Usage.Store
 
     /// Which fifth of the plan window the usage falls in: 0 = 0–19%, 4 = 80–100%.
     static func band(percentUsed: Int) -> Int {
@@ -46,7 +46,7 @@ struct UsageMeterView: View {
     }
 
     @ViewBuilder
-    private func row(label: String, window: UsageReport.Window?, help: String) -> some View {
+    private func row(label: String, window: Usage.Report.Window?, help: String) -> some View {
         if let window {
             let percent = min(max(window.percentUsed, 0), 100)
             HStack(spacing: 4) {
