@@ -249,7 +249,7 @@ struct TerminalContainerView: View {
     @AppStorage("atelier.tmuxMode") private var tmuxMode: Bool = false
     @AppStorage("atelier.autoRenameBranch") private var autoRenameBranch: Bool = false
     @AppStorage("atelier.allowOutsideWorktree") private var allowOutsideWorktree: Bool = false
-    @AppStorage(AgentIPCSettings.enabledKey) private var agentIPC: Bool = false
+    @AppStorage(IPC.AgentSettings.enabledKey) private var agentIPC: Bool = false
     /// Both process-compose settings, observed rather than read.
     ///
     /// They are inputs to `runPlan`, and they are changed in the Settings
@@ -511,7 +511,7 @@ struct TerminalContainerView: View {
         // both: LaunchLogger records finalCommand verbatim. --strict-mcp-config
         // stays off, since turning it on would silently drop the user's own
         // global MCP servers.
-        let mcpConfigPath = agentIPC ? IPCConfig.write(for: workstreamID) : nil
+        let mcpConfigPath = agentIPC ? IPC.Config.write(for: workstreamID) : nil
         if mcpConfigPath != nil {
             // Tied to the config actually being written: an agent told it has
             // peers but given no server would call tools that do not exist.

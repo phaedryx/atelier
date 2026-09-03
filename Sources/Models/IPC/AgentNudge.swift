@@ -99,7 +99,7 @@ final class AgentNudge {
         guard Self.shouldNudge(
             state: state,
             hasSurface: true,
-            nudgeEnabled: AgentIPCSettings.nudgeEnabled,
+            nudgeEnabled: IPC.AgentSettings.nudgeEnabled,
             lastNudge: lastNudge[surfaceID],
             now: now
         ) else {

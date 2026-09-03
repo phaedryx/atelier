@@ -1,4 +1,4 @@
-// ABOUTME: Tests for the IPCStore actor.
+// ABOUTME: Tests for the IPC.Store actor.
 // ABOUTME: Covers registration, liveness/TTL, send, broadcast, delete-on-read receive, requeue, and caps.
 
 @testable import Atelier
@@ -7,8 +7,8 @@ import XCTest
 final class IPCStoreTests: XCTestCase {
     // MARK: - Helpers
 
-    private func makeStore() -> IPCStore {
-        IPCStore()
+    private func makeStore() -> IPC.Store {
+        IPC.Store()
     }
 
     // ==================== 1. Register Peer ====================
@@ -126,8 +126,8 @@ final class IPCStoreTests: XCTestCase {
             _ = try await store.sendMessage(
                 from: fakeID, to: peerB.id, content: "should fail"
             )
-            XCTFail("Expected IPCError.unregisteredPeer to be thrown")
-        } catch let error as IPCError {
+            XCTFail("Expected IPC.Error.unregisteredPeer to be thrown")
+        } catch let error as IPC.Error {
             if case .unregisteredPeer = error {
                 // Expected
             } else {
@@ -151,8 +151,8 @@ final class IPCStoreTests: XCTestCase {
             _ = try await store.sendMessage(
                 from: peerA.id, to: unknownID, content: "no one home"
             )
-            XCTFail("Expected IPCError.peerNotFound to be thrown")
-        } catch let error as IPCError {
+            XCTFail("Expected IPC.Error.peerNotFound to be thrown")
+        } catch let error as IPC.Error {
             if case let .peerNotFound(id) = error {
                 XCTAssertEqual(id, unknownID,
                                "peerNotFound should carry the unknown peer's UUID")
@@ -810,8 +810,8 @@ final class IPCStoreTests: XCTestCase {
             _ = try await store.sendMessage(
                 from: peerA.id, to: peerB.id, content: "should not go"
             )
-            XCTFail("Expected IPCError.unregisteredPeer because A is expired with no pin")
-        } catch let error as IPCError {
+            XCTFail("Expected IPC.Error.unregisteredPeer because A is expired with no pin")
+        } catch let error as IPC.Error {
             if case .unregisteredPeer = error {
                 // Expected
             } else {
@@ -871,8 +871,8 @@ final class IPCStoreTests: XCTestCase {
             _ = try await store.sendMessage(
                 from: peerA.id, to: peerB.id, content: "should fail"
             )
-            XCTFail("Expected IPCError.peerNotFound because B is expired with no pin")
-        } catch let error as IPCError {
+            XCTFail("Expected IPC.Error.peerNotFound because B is expired with no pin")
+        } catch let error as IPC.Error {
             if case let .peerNotFound(id) = error {
                 XCTAssertEqual(id, peerB.id,
                                "peerNotFound should carry the expired recipient's UUID")
@@ -1280,7 +1280,7 @@ final class IPCStoreTests: XCTestCase {
     func test_requeue_expiredPeer_isNoOp() async throws {
         // Contract: requeue must not revive a peer that expired in the
         // gap between the failed receiveMessages call and the requeue
-        // call — same revive-prevention rule every other IPCStore API
+        // call — same revive-prevention rule every other IPC.Store API
         // follows.
         let store = makeStore()
         let peerA = await store.registerPeer(name: "A", role: "terminal")

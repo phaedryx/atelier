@@ -25,7 +25,7 @@ final class IPCTransport {
         buffer.removeAll()
     }
 
-    func connect(to endpoint: IPCEndpoint) -> Bool {
+    func connect(to endpoint: IPC.Endpoint) -> Bool {
         let socketFD = socket(AF_INET, SOCK_STREAM, 0)
         guard socketFD >= 0 else { return false }
 
@@ -57,8 +57,8 @@ final class IPCTransport {
     }
 
     /// Sends one request and blocks for its reply.
-    func roundTrip(_ request: IPCRequest) -> IPCResponse? {
-        guard fd >= 0, let data = try? IPCFraming.encode(request) else { return nil }
+    func roundTrip(_ request: IPC.Request) -> IPC.Response? {
+        guard fd >= 0, let data = try? IPC.Framing.encode(request) else { return nil }
 
         var sent = 0
         while sent < data.count {
@@ -70,10 +70,10 @@ final class IPCTransport {
         }
 
         while true {
-            let (lines, remainder) = IPCFraming.lines(from: buffer)
+            let (lines, remainder) = IPC.Framing.lines(from: buffer)
             buffer = remainder
             for line in lines {
-                if let response = try? JSONDecoder().decode(IPCResponse.self, from: line), response.id == request.id {
+                if let response = try? JSONDecoder().decode(IPC.Response.self, from: line), response.id == request.id {
                     return response
                 }
             }
@@ -91,9 +91,9 @@ final class IPCTransport {
 
 // MARK: - Tool definitions
 
-/// The MCP tool surface. Each entry maps 1:1 onto an `IPCTool`.
+/// The MCP tool surface. Each entry maps 1:1 onto an `IPC.Tool`.
 struct ToolDefinition {
-    let tool: IPCTool
+    let tool: IPC.Tool
     let description: String
     let properties: [String: [String: Any]]
     let required: [String]
@@ -190,7 +190,7 @@ func reply(id: Any, code: Int, message: String) {
 }
 
 /// Renders a payload as the plain text an agent reads.
-func renderText(_ payload: IPCPayload?) -> String {
+func renderText(_ payload: IPC.Payload?) -> String {
     switch payload {
     case let .peers(peers):
         guard !peers.isEmpty else { return "No other agents are registered in this project." }
@@ -231,14 +231,14 @@ final class IPCBridge {
     /// as an error-flagged tool result, never as a JSON-RPC error: the server
     /// itself is fine, the call is what didn't work.
     enum Outcome {
-        case ok(IPCPayload?)
+        case ok(IPC.Payload?)
         case failed(String)
     }
 
     /// One attempt at a request, distinguishing "the app said no" from "the app
     /// isn't there any more" — only the second is worth reconnecting for.
     private enum Attempt {
-        case ok(IPCPayload?)
+        case ok(IPC.Payload?)
         case refused(String)
         case disconnected
     }
@@ -246,7 +246,7 @@ final class IPCBridge {
     private let transport = IPCTransport()
     /// Resolved lazily, and again after a reconnect: a restarted Atelier
     /// listens on a new port with a new token.
-    private var endpoint: IPCEndpoint?
+    private var endpoint: IPC.Endpoint?
     /// The identity `register_peer` handed this session. Sent with every later
     /// request, so a reconnect renames the same peer instead of stranding its
     /// inbox behind a dead id.
@@ -273,7 +273,7 @@ final class IPCBridge {
         _ = attempt(tool: .registerPeer, arguments: registration ?? [:])
     }
 
-    func call(tool: IPCTool, arguments: [String: String]) -> Outcome {
+    func call(tool: IPC.Tool, arguments: [String: String]) -> Outcome {
         if let failure = connect() {
             return .failed(failure)
         }
@@ -319,7 +319,7 @@ final class IPCBridge {
         if endpoint != nil {
             return nil
         }
-        guard let resolved = IPCEndpoint.read() else {
+        guard let resolved = IPC.Endpoint.read() else {
             return "Atelier is not running, or agent IPC is disabled in its settings."
         }
         guard transport.connect(to: resolved) else {
@@ -329,11 +329,11 @@ final class IPCBridge {
         return nil
     }
 
-    private func attempt(tool: IPCTool, arguments: [String: String]) -> Attempt {
+    private func attempt(tool: IPC.Tool, arguments: [String: String]) -> Attempt {
         guard let endpoint else { return .disconnected }
 
-        let identity = IPCClientIdentity.fromEnvironment(peerID: peerID)
-        let request = IPCRequest(token: endpoint.token, tool: tool, arguments: arguments, client: identity)
+        let identity = IPC.ClientIdentity.fromEnvironment(peerID: peerID)
+        let request = IPC.Request(token: endpoint.token, tool: tool, arguments: arguments, client: identity)
         guard let response = transport.roundTrip(request) else { return .disconnected }
         if let error = response.error {
             // The app refuses a peer id whose previous connection it still
@@ -402,7 +402,7 @@ while let line = readLine(strippingNewline: true) {
     case "tools/call":
         guard let id else { continue }
         let params = message["params"] as? [String: Any]
-        guard let name = params?["name"] as? String, let tool = IPCTool(rawValue: name) else {
+        guard let name = params?["name"] as? String, let tool = IPC.Tool(rawValue: name) else {
             reply(id: id, code: -32602, message: "Unknown tool: \(params?["name"] as? String ?? "")")
             continue
         }

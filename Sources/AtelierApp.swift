@@ -185,7 +185,7 @@ struct AtelierApp: App {
 
         // Agent IPC listens only when the user has enabled it; SettingsView
         // calls apply() again whenever the switch moves.
-        AgentIPCSettings.apply()
+        IPC.AgentSettings.apply()
 
         // Install atelier-hook into ~/.claude/settings.json so Claude Code forwards events
         if let hookURL = Bundle.main.url(forResource: "atelier-hook", withExtension: nil, subdirectory: "Scripts") {

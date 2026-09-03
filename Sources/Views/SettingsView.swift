@@ -286,8 +286,8 @@ private struct CodingAgentSettingsPane: View {
     @AppStorage("atelier.bypassPermissions") private var bypassPermissions: Bool = false
     @AppStorage("atelier.allowOutsideWorktree") private var allowOutsideWorktree: Bool = false
     @AppStorage("atelier.autoRenameBranch") private var autoRenameBranch: Bool = false
-    @AppStorage(AgentIPCSettings.enabledKey) private var agentIPC: Bool = false
-    @AppStorage(AgentIPCSettings.nudgeKey) private var agentIPCNudge: Bool = false
+    @AppStorage(IPC.AgentSettings.enabledKey) private var agentIPC: Bool = false
+    @AppStorage(IPC.AgentSettings.nudgeKey) private var agentIPCNudge: Bool = false
     @AppStorage("atelier.defaultTerminal") private var defaultTerminal: String = ""
     @AppStorage("atelier.defaultBrowser") private var defaultBrowser: String = ""
 
@@ -325,7 +325,7 @@ private struct CodingAgentSettingsPane: View {
                     )
                 )
                 .onChange(of: agentIPC) { _, _ in
-                    AgentIPCSettings.apply()
+                    IPC.AgentSettings.apply()
                 }
 
                 SettingToggle(

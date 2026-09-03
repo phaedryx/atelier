@@ -78,11 +78,11 @@ final class AgentNudgeTests: XCTestCase {
         tracker.handle(projectDir: "/tmp/atelier-nudge-test", event: finished)
         XCTAssertEqual(tracker.state(forSurface: surface), .idle)
 
-        let service = IPCService()
+        let service = IPC.Service()
         let peer = await service._testRegister(
             name: "departing",
             role: "",
-            context: IPCService.PeerContext(
+            context: IPC.Service.PeerContext(
                 workstreamID: workstream.uuidString,
                 workstreamName: "bold-crimson-parser",
                 projectDirectory: "/repos/atelier",

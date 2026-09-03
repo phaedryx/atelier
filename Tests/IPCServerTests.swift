@@ -6,14 +6,14 @@ import Darwin
 import XCTest
 
 final class IPCServerTests: XCTestCase {
-    private var server: IPCServer!
-    private var service: IPCService!
+    private var server: IPC.Server!
+    private var service: IPC.Service!
 
     override func setUp() {
         super.setUp()
-        try? FileManager.default.removeItem(at: IPCEndpoint.fileURL)
-        service = IPCService()
-        server = IPCServer(service: service)
+        try? FileManager.default.removeItem(at: IPC.Endpoint.fileURL)
+        service = IPC.Service()
+        server = IPC.Server(service: service)
         server.start()
     }
 
@@ -28,12 +28,12 @@ final class IPCServerTests: XCTestCase {
 
     /// The listener binds asynchronously, so every test waits for the endpoint
     /// file the way a helper process would.
-    private func waitForEndpoint(timeout: TimeInterval = 5) throws -> IPCEndpoint {
+    private func waitForEndpoint(timeout: TimeInterval = 5) throws -> IPC.Endpoint {
         // Must match *this* server's port: ipc.json is a shared path, and a
         // previous test's server can still be tearing down and removing it.
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if let endpoint = IPCEndpoint.read(), endpoint.port == server.boundPort {
+            if let endpoint = IPC.Endpoint.read(), endpoint.port == server.boundPort {
                 return endpoint
             }
             usleep(20_000)
@@ -41,7 +41,7 @@ final class IPCServerTests: XCTestCase {
         throw XCTSkip("IPC listener did not come up within \(timeout)s")
     }
 
-    private func connect(to endpoint: IPCEndpoint) throws -> Int32 {
+    private func connect(to endpoint: IPC.Endpoint) throws -> Int32 {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         var address = sockaddr_in()
         address.sin_family = sa_family_t(AF_INET)
@@ -56,8 +56,8 @@ final class IPCServerTests: XCTestCase {
         return fd
     }
 
-    private func roundTrip(_ request: IPCRequest, on fd: Int32) throws -> IPCResponse {
-        let data = try IPCFraming.encode(request)
+    private func roundTrip(_ request: IPC.Request, on fd: Int32) throws -> IPC.Response {
+        let data = try IPC.Framing.encode(request)
         _ = data.withUnsafeBytes { Darwin.send(fd, $0.baseAddress!, data.count, 0) }
 
         var buffer = Data()
@@ -68,16 +68,16 @@ final class IPCServerTests: XCTestCase {
             if read > 0 {
                 buffer.append(contentsOf: chunk[0 ..< read])
             }
-            let (lines, _) = IPCFraming.lines(from: buffer)
+            let (lines, _) = IPC.Framing.lines(from: buffer)
             if let line = lines.first {
-                return try JSONDecoder().decode(IPCResponse.self, from: line)
+                return try JSONDecoder().decode(IPC.Response.self, from: line)
             }
         }
         throw XCTSkip("no IPC response within 5s")
     }
 
-    private func identity(project: String?, surfaceID: UUID = UUID()) -> IPCClientIdentity {
-        IPCClientIdentity(
+    private func identity(project: String?, surfaceID: UUID = UUID()) -> IPC.ClientIdentity {
+        IPC.ClientIdentity(
             workstreamID: UUID().uuidString,
             workstreamName: "bold-crimson-parser",
             projectDirectory: project,
@@ -93,12 +93,12 @@ final class IPCServerTests: XCTestCase {
         XCTAssertGreaterThan(endpoint.port, 0)
         XCTAssertEqual(endpoint.token.count, 64)
 
-        let attributes = try FileManager.default.attributesOfItem(atPath: IPCEndpoint.fileURL.path)
+        let attributes = try FileManager.default.attributesOfItem(atPath: IPC.Endpoint.fileURL.path)
         XCTAssertEqual(attributes[.posixPermissions] as? NSNumber, 0o600)
     }
 
     func test_listPeers_roundTripsOverTheSocket() async throws {
-        let context = IPCService.PeerContext(
+        let context = IPC.Service.PeerContext(
             workstreamID: UUID().uuidString,
             workstreamName: "bold-crimson-parser",
             projectDirectory: "/repos/atelier",
@@ -110,7 +110,7 @@ final class IPCServerTests: XCTestCase {
         let fd = try connect(to: endpoint)
         defer { close(fd) }
 
-        let request = IPCRequest(token: endpoint.token, tool: .listPeers, client: identity(project: "/repos/atelier"))
+        let request = IPC.Request(token: endpoint.token, tool: .listPeers, client: identity(project: "/repos/atelier"))
         let response = try roundTrip(request, on: fd)
 
         XCTAssertNil(response.error)
@@ -128,7 +128,7 @@ final class IPCServerTests: XCTestCase {
         let fd = try connect(to: endpoint)
         defer { close(fd) }
 
-        let request = IPCRequest(token: String(repeating: "0", count: 64), tool: .listPeers, client: identity(project: "/repos/atelier"))
+        let request = IPC.Request(token: String(repeating: "0", count: 64), tool: .listPeers, client: identity(project: "/repos/atelier"))
         let response = try roundTrip(request, on: fd)
 
         XCTAssertEqual(response.error, "Unauthorized.")
@@ -140,9 +140,9 @@ final class IPCServerTests: XCTestCase {
         let fd = try connect(to: endpoint)
         defer { close(fd) }
 
-        let first = IPCRequest(token: endpoint.token, tool: .listPeers, client: identity(project: nil))
+        let first = IPC.Request(token: endpoint.token, tool: .listPeers, client: identity(project: nil))
         XCTAssertNil(try roundTrip(first, on: fd).error)
-        let second = IPCRequest(token: endpoint.token, tool: .listPeers, client: identity(project: nil))
+        let second = IPC.Request(token: endpoint.token, tool: .listPeers, client: identity(project: nil))
         XCTAssertNil(try roundTrip(second, on: fd).error)
     }
 
@@ -152,7 +152,7 @@ final class IPCServerTests: XCTestCase {
 
         let fd = try connect(to: endpoint)
         let registration = try roundTrip(
-            IPCRequest(token: endpoint.token, tool: .registerPeer, arguments: ["name": "departing"], client: caller),
+            IPC.Request(token: endpoint.token, tool: .registerPeer, arguments: ["name": "departing"], client: caller),
             on: fd
         )
         guard case let .peer(peer) = registration.payload else {
@@ -165,10 +165,10 @@ final class IPCServerTests: XCTestCase {
         let observer = try connect(to: endpoint)
         defer { close(observer) }
         let deadline = Date().addingTimeInterval(5)
-        var listed: [IPCPeerInfo] = [IPCPeerInfo(id: peer.id, name: peer.name, role: "", workstream: nil, lastSeenSecondsAgo: 0, pendingMessages: 0)]
+        var listed: [IPC.PeerInfo] = [IPC.PeerInfo(id: peer.id, name: peer.name, role: "", workstream: nil, lastSeenSecondsAgo: 0, pendingMessages: 0)]
         while Date() < deadline, !listed.isEmpty {
             let response = try roundTrip(
-                IPCRequest(token: endpoint.token, tool: .listPeers, client: identity(project: "/repos/atelier")),
+                IPC.Request(token: endpoint.token, tool: .listPeers, client: identity(project: "/repos/atelier")),
                 on: observer
             )
             guard case let .peers(peers) = response.payload else { return XCTFail("expected peers") }
@@ -238,7 +238,7 @@ final class IPCServerTests: XCTestCase {
         let owner = try connect(to: endpoint)
         defer { close(owner) }
         let registration = try roundTrip(
-            IPCRequest(token: endpoint.token, tool: .registerPeer, arguments: ["name": "owner"], client: identity(project: "/repos/atelier")),
+            IPC.Request(token: endpoint.token, tool: .registerPeer, arguments: ["name": "owner"], client: identity(project: "/repos/atelier")),
             on: owner
         )
         guard case let .peer(peer) = registration.payload else { return XCTFail("expected a peer") }
@@ -249,7 +249,7 @@ final class IPCServerTests: XCTestCase {
         let impostor = try connect(to: endpoint)
         defer { close(impostor) }
         var stolen = identity(project: "/repos/atelier")
-        stolen = IPCClientIdentity(
+        stolen = IPC.ClientIdentity(
             workstreamID: stolen.workstreamID,
             workstreamName: stolen.workstreamName,
             projectDirectory: stolen.projectDirectory,
@@ -257,7 +257,7 @@ final class IPCServerTests: XCTestCase {
             peerID: peer.id
         )
         let response = try roundTrip(
-            IPCRequest(token: endpoint.token, tool: .listPeers, client: stolen),
+            IPC.Request(token: endpoint.token, tool: .listPeers, client: stolen),
             on: impostor
         )
         XCTAssertEqual(response.error, "That peer id belongs to another session.")
@@ -268,7 +268,7 @@ final class IPCServerTests: XCTestCase {
 
         let first = try connect(to: endpoint)
         let registration = try roundTrip(
-            IPCRequest(token: endpoint.token, tool: .registerPeer, arguments: ["name": "reconnector"], client: identity(project: "/repos/atelier")),
+            IPC.Request(token: endpoint.token, tool: .registerPeer, arguments: ["name": "reconnector"], client: identity(project: "/repos/atelier")),
             on: first
         )
         guard case let .peer(peer) = registration.payload else { return XCTFail("expected a peer") }
@@ -283,7 +283,7 @@ final class IPCServerTests: XCTestCase {
             let second = try connect(to: endpoint)
             defer { close(second) }
             var returning = identity(project: "/repos/atelier")
-            returning = IPCClientIdentity(
+            returning = IPC.ClientIdentity(
                 workstreamID: returning.workstreamID,
                 workstreamName: returning.workstreamName,
                 projectDirectory: returning.projectDirectory,
@@ -291,7 +291,7 @@ final class IPCServerTests: XCTestCase {
                 peerID: peer.id
             )
             let response = try roundTrip(
-                IPCRequest(token: endpoint.token, tool: .registerPeer, arguments: ["name": "reconnector"], client: returning),
+                IPC.Request(token: endpoint.token, tool: .registerPeer, arguments: ["name": "reconnector"], client: returning),
                 on: second
             )
             accepted = response.error == nil
@@ -312,13 +312,13 @@ final class IPCServerTests: XCTestCase {
         let endpoint = try waitForEndpoint()
 
         let doomed = try connect(to: endpoint)
-        let request = IPCRequest(
+        let request = IPC.Request(
             token: endpoint.token,
             tool: .registerPeer,
             arguments: ["name": "ghost"],
             client: identity(project: "/repos/atelier")
         )
-        let data = try IPCFraming.encode(request)
+        let data = try IPC.Framing.encode(request)
         _ = data.withUnsafeBytes { Darwin.send(doomed, $0.baseAddress!, data.count, 0) }
         // Hang up without waiting for the reply.
         close(doomed)
@@ -326,10 +326,10 @@ final class IPCServerTests: XCTestCase {
         let observer = try connect(to: endpoint)
         defer { close(observer) }
         let deadline = Date().addingTimeInterval(5)
-        var listed: [IPCPeerInfo] = []
+        var listed: [IPC.PeerInfo] = []
         repeat {
             let response = try roundTrip(
-                IPCRequest(token: endpoint.token, tool: .listPeers, client: identity(project: "/repos/atelier")),
+                IPC.Request(token: endpoint.token, tool: .listPeers, client: identity(project: "/repos/atelier")),
                 on: observer
             )
             guard case let .peers(peers) = response.payload else { return XCTFail("expected peers") }
@@ -423,14 +423,14 @@ final class IPCServerTests: XCTestCase {
         XCTAssertNotNil(survivor.callTool("register_peer", ["name": "survivor", "role": "keeps going"]))
 
         server.stop()
-        let restarted = IPCServer(service: IPCService())
+        let restarted = IPC.Server(service: IPC.Service())
         defer { restarted.stop() }
         restarted.start()
 
         let deadline = Date().addingTimeInterval(5)
-        var second: IPCEndpoint?
+        var second: IPC.Endpoint?
         while Date() < deadline, second == nil {
-            let current = IPCEndpoint.read()
+            let current = IPC.Endpoint.read()
             second = current?.port == restarted.boundPort ? current : nil
             if second == nil {
                 usleep(20_000)
@@ -460,7 +460,7 @@ final class IPCServerTests: XCTestCase {
     func test_helperBinary_answersToolsCallOverStdio() async throws {
         let helper = try XCTUnwrap(MCPHelperLauncher.executableURL(), "atelier-mcp was not found in the host app bundle")
 
-        let context = IPCService.PeerContext(
+        let context = IPC.Service.PeerContext(
             workstreamID: UUID().uuidString,
             workstreamName: "wry-amber-lexer",
             projectDirectory: "/repos/atelier",
@@ -497,7 +497,7 @@ final class IPCServerTests: XCTestCase {
         let deadline = Date().addingTimeInterval(10)
         while replies.count < 3, Date() < deadline {
             buffer.append(output.fileHandleForReading.availableData)
-            let (lines, remainder) = IPCFraming.lines(from: buffer)
+            let (lines, remainder) = IPC.Framing.lines(from: buffer)
             buffer = remainder
             for line in lines {
                 if let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] {
@@ -559,7 +559,7 @@ private final class MCPProcess {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             buffer.append(output.fileHandleForReading.availableData)
-            let (lines, remainder) = IPCFraming.lines(from: buffer)
+            let (lines, remainder) = IPC.Framing.lines(from: buffer)
             buffer = remainder
             for line in lines {
                 guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }

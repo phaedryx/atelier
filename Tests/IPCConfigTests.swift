@@ -8,19 +8,19 @@ final class IPCConfigTests: XCTestCase {
     private let workstreamID = UUID()
 
     override func tearDown() {
-        IPCConfig.remove(for: workstreamID)
+        IPC.Config.remove(for: workstreamID)
         super.tearDown()
     }
 
     func test_configURL_livesInTheCacheDirectory_notTheWorktree() {
-        let url = IPCConfig.configURL(for: workstreamID)
+        let url = IPC.Config.configURL(for: workstreamID)
         XCTAssertEqual(url.lastPathComponent, "\(workstreamID.uuidString.lowercased()).json")
         XCTAssertEqual(url.deletingLastPathComponent().lastPathComponent, "mcp")
         XCTAssertTrue(url.path.hasPrefix(AppConstants.cacheDirectory.path), "expected a cache-directory path, got \(url.path)")
     }
 
     func test_configJSON_declaresOneStdioServer() throws {
-        let json = IPCConfig.configJSON(helperPath: "/Applications/Atelier.app/Contents/Helpers/atelier-mcp")
+        let json = IPC.Config.configJSON(helperPath: "/Applications/Atelier.app/Contents/Helpers/atelier-mcp")
         let servers = try XCTUnwrap(json["mcpServers"] as? [String: Any])
         XCTAssertEqual(Array(servers.keys), ["atelier-ipc"])
 
@@ -32,8 +32,8 @@ final class IPCConfigTests: XCTestCase {
     }
 
     func test_write_producesReadableJSONAtTheReturnedPath() throws {
-        let path = try XCTUnwrap(IPCConfig.write(for: workstreamID, helperPath: "/tmp/atelier-mcp"))
-        XCTAssertEqual(path, IPCConfig.configURL(for: workstreamID).path)
+        let path = try XCTUnwrap(IPC.Config.write(for: workstreamID, helperPath: "/tmp/atelier-mcp"))
+        XCTAssertEqual(path, IPC.Config.configURL(for: workstreamID).path)
 
         let data = try Data(contentsOf: URL(fileURLWithPath: path))
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -43,13 +43,13 @@ final class IPCConfigTests: XCTestCase {
     }
 
     func test_write_withoutAHelperBinary_returnsNil() {
-        XCTAssertNil(IPCConfig.write(for: workstreamID, helperPath: nil))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: IPCConfig.configURL(for: workstreamID).path))
+        XCTAssertNil(IPC.Config.write(for: workstreamID, helperPath: nil))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: IPC.Config.configURL(for: workstreamID).path))
     }
 
     func test_remove_deletesTheConfig() throws {
-        _ = try XCTUnwrap(IPCConfig.write(for: workstreamID, helperPath: "/tmp/atelier-mcp"))
-        IPCConfig.remove(for: workstreamID)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: IPCConfig.configURL(for: workstreamID).path))
+        _ = try XCTUnwrap(IPC.Config.write(for: workstreamID, helperPath: "/tmp/atelier-mcp"))
+        IPC.Config.remove(for: workstreamID)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: IPC.Config.configURL(for: workstreamID).path))
     }
 }
