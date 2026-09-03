@@ -146,7 +146,7 @@ actor AsyncSetupService {
                     workstreamName: workstreamName,
                     projectDirectory: projectPath,
                     worktreePath: worktreePath,
-                    defaultBranch: GitOperations.defaultBranch(at: projectPath)
+                    defaultBranch: Git.Operations.defaultBranch(at: projectPath)
                 )
                 continuation.resume(returning: PhaseExecutor.run(
                     phase: .bootstrap,
@@ -180,7 +180,7 @@ actor AsyncSetupService {
 
     /// Run bootstrap on a worktree that already exists.
     ///
-    /// Two callers. The worktree was created by upstream `GitOperations` and
+    /// Two callers. The worktree was created by upstream `Git.Operations` and
     /// only the project's own setup still has to run; or the first bootstrap
     /// was refused because the repository's config had not been approved, the
     /// user has now approved it, and this re-runs the plan against a worktree

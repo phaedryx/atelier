@@ -45,7 +45,7 @@ final class MonacoDiffBridge: ObservableObject {
     /// Structured changed-file list from the last load. Cached here (not @State)
     /// so the Changes sidebar tree survives the SwiftUI view being re-created on
     /// a tab switch, matching `lastFileCount`/`hasContent`.
-    var lastDiffFiles: [DiffFile] = []
+    var lastDiffFiles: [Git.DiffFile] = []
 
     /// Whether setFiles() has run at least once (cached content lives in the WebView).
     private(set) var hasContent = false

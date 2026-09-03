@@ -9,12 +9,12 @@ final class FileTreeTests: XCTestCase {
 
     private func file(
         _ path: String,
-        _ status: DiffFile.Status = .modified,
+        _ status: Git.DiffFile.Status = .modified,
         added: Int = 0,
         deleted: Int = 0,
         isBinary: Bool = false
-    ) -> DiffFile {
-        DiffFile(
+    ) -> Git.DiffFile {
+        Git.DiffFile(
             relativePath: path,
             status: status,
             isBinary: isBinary,

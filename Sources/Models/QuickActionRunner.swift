@@ -137,7 +137,7 @@ final class QuickActionRunner: ObservableObject {
         logger.info("Quick action \(actionRaw) starting in \(dir)")
 
         Task.detached {
-            let result = GitOperations.pushCurrentBranch(at: dir)
+            let result = Git.Operations.pushCurrentBranch(at: dir)
             await MainActor.run {
                 self.updateLog(output: result.output, exitCode: result.success ? 0 : 1)
                 self.runningProcess = nil

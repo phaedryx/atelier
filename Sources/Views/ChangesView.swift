@@ -68,7 +68,7 @@ struct ChangesView: View {
 
     /// The current changed-file set, surfaced for the sidebar tree. Captured
     /// from the same load that builds the diff payload (no extra git read).
-    @State private var diffFiles: [DiffFile] = []
+    @State private var diffFiles: [Git.DiffFile] = []
     /// The leaf currently selected in the sidebar (its full relative path).
     @State private var selectedFilePath: String?
 
@@ -265,7 +265,7 @@ struct ChangesView: View {
         let currentMode = mode
 
         DispatchQueue.global(qos: .userInitiated).async {
-            let fingerprint = GitOperations.diffFingerprint(
+            let fingerprint = Git.Operations.diffFingerprint(
                 worktreePath: workDir,
                 projectPath: projDir,
                 mode: currentMode.rawValue
@@ -307,7 +307,7 @@ struct ChangesView: View {
         let cachedFingerprint = bridge.lastFingerprint
 
         DispatchQueue.global(qos: .userInitiated).async {
-            let fingerprint = GitOperations.diffFingerprint(
+            let fingerprint = Git.Operations.diffFingerprint(
                 worktreePath: workDir,
                 projectPath: projDir,
                 mode: currentMode.rawValue
@@ -454,8 +454,8 @@ struct ChangesView: View {
 
         // repoInfo shells out to git — resolve the labels off the main thread.
         DispatchQueue.global(qos: .userInitiated).async {
-            let branch = GitOperations.repoInfo(at: workDir).branch
-            let base = GitOperations.repoInfo(at: projDir).branch
+            let branch = Git.Operations.repoInfo(at: workDir).branch
+            let base = Git.Operations.repoInfo(at: projDir).branch
             let payload = ChangeReviewFormatter.payload(
                 comments: toSend, mode: currentMode, branch: branch, baseBranch: base
             )
@@ -606,12 +606,12 @@ struct ChangesView: View {
         workDir: String,
         projDir: String,
         mode: ChangesMode
-    ) -> (payload: [[String: Any]], files: [DiffFile]) {
-        let diffFiles: [DiffFile] = switch mode {
+    ) -> (payload: [[String: Any]], files: [Git.DiffFile]) {
+        let diffFiles: [Git.DiffFile] = switch mode {
         case .branch:
-            GitOperations.branchDiffFiles(worktreePath: workDir, projectPath: projDir)
+            Git.Operations.branchDiffFiles(worktreePath: workDir, projectPath: projDir)
         case .uncommitted:
-            GitOperations.uncommittedDiffFiles(at: workDir)
+            Git.Operations.uncommittedDiffFiles(at: workDir)
         }
 
         let baseRef = baseRef(workDir: workDir, projDir: projDir, mode: mode)
@@ -664,8 +664,8 @@ struct ChangesView: View {
     /// sibling files and every level is alphabetical (case-insensitive) —
     /// identical to how `ChangesFileTreeSidebar` renders its rows, so the diff
     /// order always matches what the user sees in the sidebar.
-    nonisolated static func flattenedTreeOrder(_ files: [DiffFile]) -> [DiffFile] {
-        var ordered: [DiffFile] = []
+    nonisolated static func flattenedTreeOrder(_ files: [Git.DiffFile]) -> [Git.DiffFile] {
+        var ordered: [Git.DiffFile] = []
         func visit(_ node: FileTreeNode) {
             if let file = node.diffFile {
                 ordered.append(file)
@@ -690,7 +690,7 @@ struct ChangesView: View {
     nonisolated static func baseRef(workDir: String, projDir: String, mode: ChangesMode) -> String {
         switch mode {
         case .branch:
-            GitOperations.mergeBase(worktreePath: workDir, projectPath: projDir) ?? "HEAD"
+            Git.Operations.mergeBase(worktreePath: workDir, projectPath: projDir) ?? "HEAD"
         case .uncommitted:
             "HEAD"
         }
@@ -703,12 +703,12 @@ struct ChangesView: View {
         workDir: String,
         baseRef: String,
         filePath: String,
-        status: DiffFile.Status? = nil
+        status: Git.DiffFile.Status? = nil
     ) -> (original: String, modified: String) {
         let original: String = if status == .added {
             ""
         } else {
-            GitOperations.fileContent(at: workDir, ref: baseRef, filePath: filePath) ?? ""
+            Git.Operations.fileContent(at: workDir, ref: baseRef, filePath: filePath) ?? ""
         }
 
         let modified: String

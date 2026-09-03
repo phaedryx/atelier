@@ -108,7 +108,7 @@ final class BareRepoCloneTests: XCTestCase {
         XCTAssertNotNil(git(["rev-parse", "--verify", "refs/heads/root"], in: container))
 
         // The refspec + fetch must populate remote-tracking refs, which
-        // GitOperations.defaultBranch relies on.
+        // Git.Operations.defaultBranch relies on.
         XCTAssertNotNil(git(["rev-parse", "--verify", "refs/remotes/origin/main"], in: container))
 
         // The default branch is checked out as a peer worktree.
@@ -125,7 +125,7 @@ final class BareRepoCloneTests: XCTestCase {
             return XCTFail("clone failed")
         }
 
-        let location = GitOperations.projectLocation(for: container.path)
+        let location = Git.Operations.projectLocation(for: container.path)
         XCTAssertEqual(
             URL(fileURLWithPath: location.directory).standardizedFileURL.path,
             container.appendingPathComponent("main").standardizedFileURL.path

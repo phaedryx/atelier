@@ -1,4 +1,4 @@
-// ABOUTME: Tests for GitOperations.isValidBranchName.
+// ABOUTME: Tests for Git.Operations.isValidBranchName.
 // ABOUTME: Validates git check-ref-format rules used by the workstream naming dialog.
 
 @testable import Atelier
@@ -16,13 +16,13 @@ final class BranchNameValidationTests: XCTestCase {
             "v1.2.3",
         ]
         for name in valid {
-            XCTAssertTrue(GitOperations.isValidBranchName(name), "expected \(name) to be valid")
+            XCTAssertTrue(Git.Operations.isValidBranchName(name), "expected \(name) to be valid")
         }
     }
 
     func testEmptyNameIsInvalid() {
-        XCTAssertFalse(GitOperations.isValidBranchName(""))
-        XCTAssertFalse(GitOperations.isValidBranchName("   "))
+        XCTAssertFalse(Git.Operations.isValidBranchName(""))
+        XCTAssertFalse(Git.Operations.isValidBranchName("   "))
     }
 
     func testRejectsForbiddenCharacters() {
@@ -37,7 +37,7 @@ final class BranchNameValidationTests: XCTestCase {
             "backslash\\name",
         ]
         for name in invalid {
-            XCTAssertFalse(GitOperations.isValidBranchName(name), "expected \(name) to be invalid")
+            XCTAssertFalse(Git.Operations.isValidBranchName(name), "expected \(name) to be invalid")
         }
     }
 
@@ -48,19 +48,19 @@ final class BranchNameValidationTests: XCTestCase {
             "double//slash",
         ]
         for name in invalid {
-            XCTAssertFalse(GitOperations.isValidBranchName(name), "expected \(name) to be invalid")
+            XCTAssertFalse(Git.Operations.isValidBranchName(name), "expected \(name) to be invalid")
         }
     }
 
     func testRejectsLeadingHyphenAndTrailingPunctuation() {
-        XCTAssertFalse(GitOperations.isValidBranchName("-leading"))
-        XCTAssertFalse(GitOperations.isValidBranchName("trailing."))
-        XCTAssertFalse(GitOperations.isValidBranchName("trailing/"))
-        XCTAssertFalse(GitOperations.isValidBranchName("ends.lock"))
+        XCTAssertFalse(Git.Operations.isValidBranchName("-leading"))
+        XCTAssertFalse(Git.Operations.isValidBranchName("trailing."))
+        XCTAssertFalse(Git.Operations.isValidBranchName("trailing/"))
+        XCTAssertFalse(Git.Operations.isValidBranchName("ends.lock"))
     }
 
     func testRejectsControlCharacters() {
-        XCTAssertFalse(GitOperations.isValidBranchName("new\nline"))
-        XCTAssertFalse(GitOperations.isValidBranchName("tab\tname"))
+        XCTAssertFalse(Git.Operations.isValidBranchName("new\nline"))
+        XCTAssertFalse(Git.Operations.isValidBranchName("tab\tname"))
     }
 }

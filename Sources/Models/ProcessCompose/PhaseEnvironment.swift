@@ -29,7 +29,7 @@ private let logger = Logger(subsystem: "atelier", category: "phase-environment")
 enum PhaseEnvironment {
     /// - Parameter defaultBranch: passed in rather than resolved here so this
     ///   spawns no git. Both call sites want the same value the terminal
-    ///   surfaces get, which is `GitOperations.defaultBranch(at:)` — not
+    ///   surfaces get, which is `Git.Operations.defaultBranch(at:)` — not
     ///   `BaseBranchSetting`, which governs which branch a worktree is *cut
     ///   from* and is a different question.
     static func variables(

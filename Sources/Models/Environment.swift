@@ -23,7 +23,7 @@ final class AppEnvironment: ObservableObject {
     var isDetecting = false
 
     // Cached repo info per directory, refreshed asynchronously
-    private var repoInfoCache: [String: GitRepoInfo] = [:]
+    private var repoInfoCache: [String: Git.RepoInfo] = [:]
     private var repoInfoTimestamps: [String: Date] = [:]
 
     /// Worktree path validity cache
@@ -97,14 +97,14 @@ final class AppEnvironment: ObservableObject {
             }
             lastOriginFetch[dir] = now
             Task.detached {
-                GitOperations.fetchDefaultBranch(at: dir)
+                Git.Operations.fetchDefaultBranch(at: dir)
             }
         }
     }
 
     // MARK: - Repo Info
 
-    func repoInfo(for directory: String) -> GitRepoInfo? {
+    func repoInfo(for directory: String) -> Git.RepoInfo? {
         repoInfoCache[directory]
     }
 
@@ -118,7 +118,7 @@ final class AppEnvironment: ObservableObject {
         repoInfoTimestamps[directory] = Date()
 
         Task.detached {
-            let info = GitOperations.repoInfo(at: directory)
+            let info = Git.Operations.repoInfo(at: directory)
             await MainActor.run {
                 self.commitChanges {
                     self.repoInfoCache[directory] = info
@@ -144,7 +144,7 @@ final class AppEnvironment: ObservableObject {
             repoInfoTimestamps[project.directory] = now
             let dir = project.directory
             Task.detached {
-                let info = GitOperations.repoInfo(at: dir)
+                let info = Git.Operations.repoInfo(at: dir)
                 await MainActor.run {
                     self.commitChanges {
                         self.repoInfoCache[dir] = info
@@ -188,7 +188,7 @@ final class AppEnvironment: ObservableObject {
     /// poll writes the same cache and can land the new branch first.
     @MainActor
     func refreshBranchName(for worktreePath: String) async {
-        let branch = await Task.detached { GitOperations.currentBranch(at: worktreePath) }.value
+        let branch = await Task.detached { Git.Operations.currentBranch(at: worktreePath) }.value
         guard branchNameCache[worktreePath] != branch else { return }
         commitChanges {
             if let branch {
@@ -339,10 +339,10 @@ final class AppEnvironment: ObservableObject {
         let projectDir = projectDirectory
         Task.detached {
             let state = WorktreeState(
-                hasUncommittedChanges: GitOperations.hasUncommittedChanges(at: path),
-                hasUnpushedCommits: GitOperations.hasUnpushedCommits(at: path),
-                hasBranchCommits: GitOperations.hasBranchCommits(at: path, projectPath: projectDir),
-                hasRemote: GitOperations.hasRemote(at: path)
+                hasUncommittedChanges: Git.Operations.hasUncommittedChanges(at: path),
+                hasUnpushedCommits: Git.Operations.hasUnpushedCommits(at: path),
+                hasBranchCommits: Git.Operations.hasBranchCommits(at: path, projectPath: projectDir),
+                hasRemote: Git.Operations.hasRemote(at: path)
             )
             await self.deferWorktreeStateUpdate(state, for: path)
         }
@@ -389,7 +389,7 @@ final class AppEnvironment: ObservableObject {
                     missing.insert(project.id)
                 }
 
-                gitRepoResults[project.directory] = GitOperations.isGitRepo(at: project.directory)
+                gitRepoResults[project.directory] = Git.Operations.isGitRepo(at: project.directory)
                 githubRemoteResults[project.directory] = GitHubOperations.hasGitHubRemote(at: project.directory)
 
                 for ws in project.workstreams {
@@ -432,7 +432,7 @@ final class AppEnvironment: ObservableObject {
             ) { group in
                 for path in validPaths {
                     group.addTask {
-                        let info = GitOperations.repoInfo(at: path)
+                        let info = Git.Operations.repoInfo(at: path)
                         return (path, info.branch)
                     }
                 }
@@ -452,10 +452,10 @@ final class AppEnvironment: ObservableObject {
                 for (path, projectDir) in worktreeToProject {
                     group.addTask {
                         let state = WorktreeState(
-                            hasUncommittedChanges: GitOperations.hasUncommittedChanges(at: path),
-                            hasUnpushedCommits: GitOperations.hasUnpushedCommits(at: path),
-                            hasBranchCommits: GitOperations.hasBranchCommits(at: path, projectPath: projectDir),
-                            hasRemote: GitOperations.hasRemote(at: path)
+                            hasUncommittedChanges: Git.Operations.hasUncommittedChanges(at: path),
+                            hasUnpushedCommits: Git.Operations.hasUnpushedCommits(at: path),
+                            hasBranchCommits: Git.Operations.hasBranchCommits(at: path, projectPath: projectDir),
+                            hasRemote: Git.Operations.hasRemote(at: path)
                         )
                         return (path, state)
                     }

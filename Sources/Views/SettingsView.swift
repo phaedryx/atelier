@@ -494,7 +494,7 @@ private struct IntegrationsSettingsPane: View {
     @AppStorage(ProcessComposeSettings.binaryPathKey) private var processComposeBinary = ""
 
     private var branchPreviewIsValid: Bool {
-        GitOperations.isValidBranchName(Shortcut.BranchName.preview(branchTemplate))
+        Git.Operations.isValidBranchName(Shortcut.BranchName.preview(branchTemplate))
     }
 
     /// Unknown variables joined for display, or nil when the pattern is clean.

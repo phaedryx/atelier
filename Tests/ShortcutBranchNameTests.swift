@@ -116,7 +116,7 @@ final class ShortcutBranchNameTests: XCTestCase {
         let awkward = story(id: 4, name: "  ...Leading dots & --dashes-- everywhere...  ")
         for template in ["tad@sc-${STORY_ID}-${SLUG}", "${MENTION}/sc-${STORY_ID}/${SLUG}", "", "${TYPE}/${SLUG_FULL}"] {
             let name = Shortcut.BranchName.render(template, story: awkward)
-            XCTAssertTrue(GitOperations.isValidBranchName(name), "template \(template) produced invalid branch: \(name)")
+            XCTAssertTrue(Git.Operations.isValidBranchName(name), "template \(template) produced invalid branch: \(name)")
         }
     }
 

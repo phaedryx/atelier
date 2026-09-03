@@ -528,7 +528,7 @@ struct ProjectSidebar: View {
         let project = projects[index]
         logger.warning("[Atelier] addWorkstream: project=\(project.name, privacy: .public) dir=\(project.directory, privacy: .public)")
 
-        guard GitOperations.isGitRepo(at: project.directory) else {
+        guard Git.Operations.isGitRepo(at: project.directory) else {
             logger.warning("[Atelier] addWorkstream: not a git repo")
             showNotGitRepoError = true
             return
@@ -546,7 +546,7 @@ struct ProjectSidebar: View {
 
     private func addWorkstreamFromShortcut(for projectID: UUID) {
         guard let index = projects.firstIndex(where: { $0.id == projectID }) else { return }
-        guard GitOperations.isGitRepo(at: projects[index].directory) else {
+        guard Git.Operations.isGitRepo(at: projects[index].directory) else {
             showNotGitRepoError = true
             return
         }
@@ -592,7 +592,7 @@ struct ProjectSidebar: View {
                 shortcutFetching = false
 
                 let name = Shortcut.BranchName.render(branchTemplate, story: story)
-                guard GitOperations.isValidBranchName(name) else {
+                guard Git.Operations.isValidBranchName(name) else {
                     shortcutError = NSLocalizedString(
                         "Shortcut suggested a branch name git will not accept.",
                         comment: "Shortcut branch name validation error"
@@ -654,7 +654,7 @@ struct ProjectSidebar: View {
 
         let typedName = newWorkstreamName.trimmingCharacters(in: .whitespacesAndNewlines)
         if !typedName.isEmpty {
-            guard GitOperations.isValidBranchName(typedName) else {
+            guard Git.Operations.isValidBranchName(typedName) else {
                 newWorkstreamError = NSLocalizedString(
                     "That name isn't valid for a git branch.",
                     comment: "Error when the workstream name is not a valid git branch name"
@@ -711,7 +711,7 @@ struct ProjectSidebar: View {
         let workstreamID = workstream.id
 
         DispatchQueue.global(qos: .userInitiated).async {
-            let worktreePath = GitOperations.createWorktree(
+            let worktreePath = Git.Operations.createWorktree(
                 projectPath: projectPath,
                 projectName: projectName,
                 workstreamName: name
@@ -882,7 +882,7 @@ struct ProjectSidebar: View {
         }
 
         // Initialize git repo in the new directory
-        _ = GitOperations.initRepo(at: dirURL.path)
+        _ = Git.Operations.initRepo(at: dirURL.path)
 
         showingNewProjectName = false
         addProject(name: name, directory: dirURL.path)
@@ -953,7 +953,7 @@ struct ProjectSidebar: View {
     private func addProject(name: String, directory: String) {
         // Resolve worktree branches to their main repository, and .bare
         // containers forward to their default checkout.
-        let location = GitOperations.projectLocation(for: directory)
+        let location = Git.Operations.projectLocation(for: directory)
         let resolvedDirectory = location.directory
         let resolvedName = location.name.isEmpty ? name : location.name
 

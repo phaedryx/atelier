@@ -264,7 +264,7 @@ struct TerminalContainerView: View {
     @AppStorage("atelier.editorTabActive") private var editorTabActive: Bool = false
     @AppStorage("atelier.editorFileDirty") private var editorFileDirty: Bool = false
     @State private var fileTree: [FileNode] = []
-    @State private var gitFileStatuses = GitFileStatusProvider()
+    @State private var gitFileStatuses = Git.FileStatusProvider()
     @State private var directoryWatcher: DirectoryWatcher?
     @State private var refreshGeneration = 0
     @State private var refreshDebounceTask: Task<Void, Never>?
@@ -934,7 +934,7 @@ struct TerminalContainerView: View {
             try? await Task.sleep(nanoseconds: 50_000_000)
             guard !Task.isCancelled else { return }
             let branch = await Task.detached {
-                GitOperations.defaultBranch(at: projectDirectory)
+                Git.Operations.defaultBranch(at: projectDirectory)
             }.value
             guard !Task.isCancelled else { return }
             await MainActor.run {
@@ -1500,11 +1500,11 @@ struct TerminalContainerView: View {
             } else {
                 FileNode.refreshLoadedNodes(in: currentTree, rootPath: workingDirectory)
             }
-            let statuses = GitOperations.fileStatuses(at: workingDirectory)
+            let statuses = Git.Operations.fileStatuses(at: workingDirectory)
             DispatchQueue.main.async {
                 guard gen == refreshGeneration else { return }
                 fileTree = tree
-                gitFileStatuses = GitFileStatusProvider(fileStatuses: statuses)
+                gitFileStatuses = Git.FileStatusProvider(fileStatuses: statuses)
             }
         }
     }
@@ -1530,7 +1530,7 @@ struct TerminalContainerView: View {
             directoryWatcher?.stop()
             directoryWatcher = nil
             fileTree = []
-            gitFileStatuses = GitFileStatusProvider()
+            gitFileStatuses = Git.FileStatusProvider()
             // The Monaco bridge is deliberately untouched here: it lives on
             // WorkspaceModel (model.editorBridge) precisely so closing the
             // last editor tab never tears down the ~17 MB WebView.

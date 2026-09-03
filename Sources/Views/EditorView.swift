@@ -7,7 +7,7 @@ import WebKit
 struct EditorView: View {
     let workingDirectory: String
     let fileTree: [FileNode]
-    let gitStatus: GitFileStatusProvider
+    let gitStatus: Git.FileStatusProvider
     let initialFilePath: String?
     let bridge: MonacoEditorBridge
     let modelId: String

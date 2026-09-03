@@ -409,7 +409,7 @@ struct ProjectOverviewView: View {
         let dir = project.directory
         repoDetail = nil
         Task.detached {
-            let result = GitOperations.worktreeDetail(at: dir, mainRepoPath: dir)
+            let result = Git.Operations.worktreeDetail(at: dir, mainRepoPath: dir)
             await MainActor.run { repoDetail = result }
         }
     }
@@ -418,7 +418,7 @@ struct ProjectOverviewView: View {
         let dir = project.directory
         isPulling = true
         Task.detached {
-            let result = GitOperations.pullCurrentBranch(at: dir)
+            let result = Git.Operations.pullCurrentBranch(at: dir)
             await MainActor.run {
                 isPulling = false
                 switch result {
@@ -445,7 +445,7 @@ struct ProjectOverviewView: View {
     private func refreshWorktrees() {
         let dir = project.directory
         Task.detached {
-            let wts = GitOperations.listWorktreesWithInfo(at: dir)
+            let wts = Git.Operations.listWorktreesWithInfo(at: dir)
             await updateWorktrees(wts)
             // Populate PR cache for worktree branches
             let branches = Set(wts.compactMap(\.branch))
@@ -489,7 +489,7 @@ struct ProjectOverviewView: View {
         let dir = project.directory
         let pathsToPrune = prunablePaths
         Task.detached {
-            GitOperations.pruneCleanWorktrees(at: dir, onlyPaths: pathsToPrune)
+            Git.Operations.pruneCleanWorktrees(at: dir, onlyPaths: pathsToPrune)
             await applyPrunedWorktrees(pathsToPrune)
         }
     }
@@ -867,7 +867,7 @@ private struct RepoChangesPopover: View {
     private func discardAll() {
         let dir = directory
         Task.detached {
-            GitOperations.discardAllChanges(at: dir)
+            Git.Operations.discardAllChanges(at: dir)
             await MainActor.run { onDiscarded() }
         }
     }

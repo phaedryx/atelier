@@ -133,7 +133,7 @@ struct WorktreeDetailSheet: View {
         let path = worktree.path
         let mainRepo = projectDirectory
         Task.detached {
-            let result = GitOperations.worktreeDetail(at: path, mainRepoPath: mainRepo)
+            let result = Git.Operations.worktreeDetail(at: path, mainRepoPath: mainRepo)
             await MainActor.run {
                 detail = result
                 isLoading = false
@@ -145,8 +145,8 @@ struct WorktreeDetailSheet: View {
         let path = worktree.path
         let mainRepo = projectDirectory
         Task.detached {
-            GitOperations.discardAllChanges(at: path)
-            let refreshed = GitOperations.worktreeDetail(at: path, mainRepoPath: mainRepo)
+            Git.Operations.discardAllChanges(at: path)
+            let refreshed = Git.Operations.worktreeDetail(at: path, mainRepoPath: mainRepo)
             await MainActor.run {
                 detail = refreshed
             }
@@ -157,7 +157,7 @@ struct WorktreeDetailSheet: View {
         let path = worktree.path
         let projectDir = projectDirectory
         Task.detached {
-            GitOperations.forceRemoveWorktreeByPath(worktreePath: path, projectPath: projectDir)
+            Git.Operations.forceRemoveWorktreeByPath(worktreePath: path, projectPath: projectDir)
             await MainActor.run {
                 onForceRemove()
                 dismiss()

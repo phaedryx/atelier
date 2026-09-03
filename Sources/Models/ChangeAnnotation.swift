@@ -14,7 +14,7 @@ enum DiffSide: String {
 /// One review comment, anchored to a line (or range) of a file's diff.
 struct ReviewComment: Identifiable, Equatable {
     let id: UUID
-    let filePath: String // repo-relative, as in DiffFile.relativePath
+    let filePath: String // repo-relative, as in Git.DiffFile.relativePath
     let mode: ChangesMode // the diff scope it was written in
     let side: DiffSide
     var line: Int // 1-based on `side`

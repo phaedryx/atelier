@@ -45,10 +45,10 @@ enum WorkstreamArchiver {
     static func purgeWarning(for workstream: Workstream) -> String? {
         guard let path = workstream.worktreePath else { return nil }
         var warnings: [String] = []
-        if GitOperations.hasUncommittedChanges(at: path) {
+        if Git.Operations.hasUncommittedChanges(at: path) {
             warnings.append(NSLocalizedString("uncommitted changes", comment: ""))
         }
-        if GitOperations.hasUnpushedCommits(at: path) {
+        if Git.Operations.hasUnpushedCommits(at: path) {
             warnings.append(NSLocalizedString("unpushed commits", comment: ""))
         }
         guard !warnings.isEmpty else { return nil }
@@ -83,7 +83,7 @@ enum WorkstreamArchiver {
             let wsName = ws.name
             let projName = project.name
             // Capture the branch name before the worktree is removed
-            let branchName = GitOperations.currentBranch(at: worktreePath)
+            let branchName = Git.Operations.currentBranch(at: worktreePath)
             archivingPaths.insert(standardizedPath)
             NotificationCenter.default.post(name: archivingDidStart, object: nil)
             let composeBinary = ProcessComposeSettings.resolveBinary()
@@ -133,11 +133,11 @@ enum WorkstreamArchiver {
                                 projectDirectory: projectDir
                             )
                         }
-                        GitOperations.removeWorktree(projectPath: projectDir, worktreePath: worktreePath)
+                        Git.Operations.removeWorktree(projectPath: projectDir, worktreePath: worktreePath)
                         if let branchName {
-                            GitOperations.deleteLocalBranch(at: projectDir, branchName: branchName)
+                            Git.Operations.deleteLocalBranch(at: projectDir, branchName: branchName)
                         }
-                        GitOperations.fetchDefaultBranch(at: projectDir)
+                        Git.Operations.fetchDefaultBranch(at: projectDir)
                         if let tmuxPath {
                             TmuxSession.killWorkstreamSessions(tmuxPath: tmuxPath, project: projName, workstream: wsName)
                         }
@@ -223,7 +223,7 @@ enum WorkstreamArchiver {
             workstreamName: workstreamName,
             projectDirectory: projectDirectory,
             worktreePath: worktreePath,
-            defaultBranch: GitOperations.defaultBranch(at: projectDirectory)
+            defaultBranch: Git.Operations.defaultBranch(at: projectDirectory)
         )
 
         let outcome = PhaseExecutor.run(
@@ -244,10 +244,10 @@ enum WorkstreamArchiver {
     /// is purged, or nil if it is safe to purge.
     static func orphanPurgeWarning(at path: String) -> String? {
         var warnings: [String] = []
-        if GitOperations.hasUncommittedChanges(at: path) {
+        if Git.Operations.hasUncommittedChanges(at: path) {
             warnings.append(NSLocalizedString("uncommitted changes", comment: ""))
         }
-        if GitOperations.hasUnpushedCommits(at: path) {
+        if Git.Operations.hasUnpushedCommits(at: path) {
             warnings.append(NSLocalizedString("unpushed commits", comment: ""))
         }
         guard !warnings.isEmpty else { return nil }
@@ -265,7 +265,7 @@ enum WorkstreamArchiver {
     @MainActor
     static func purgeOrphanWorktree(projectDirectory: String, worktreePath: String) {
         let standardizedPath = URL(fileURLWithPath: worktreePath).standardizedFileURL.path
-        let branchName = GitOperations.currentBranch(at: worktreePath)
+        let branchName = Git.Operations.currentBranch(at: worktreePath)
         archivingPaths.insert(standardizedPath)
         NotificationCenter.default.post(name: archivingDidStart, object: nil)
         Task.detached {
@@ -275,11 +275,11 @@ enum WorkstreamArchiver {
                     NotificationCenter.default.post(name: archivingDidComplete, object: nil)
                 }
             }
-            GitOperations.removeWorktree(projectPath: projectDirectory, worktreePath: worktreePath)
+            Git.Operations.removeWorktree(projectPath: projectDirectory, worktreePath: worktreePath)
             if let branchName {
-                GitOperations.deleteLocalBranch(at: projectDirectory, branchName: branchName)
+                Git.Operations.deleteLocalBranch(at: projectDirectory, branchName: branchName)
             }
-            GitOperations.fetchDefaultBranch(at: projectDirectory)
+            Git.Operations.fetchDefaultBranch(at: projectDirectory)
         }
     }
 }
