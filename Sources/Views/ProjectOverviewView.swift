@@ -530,7 +530,7 @@ private struct WorktreeInfoRow: View {
 
     @EnvironmentObject var appEnv: AppEnvironment
 
-    private var pr: GitHubPR? {
+    private var pr: GitHub.PR? {
         guard let branch = worktree.branch else { return nil }
         return appEnv.githubPR(for: projectDirectory, branch: branch)
     }

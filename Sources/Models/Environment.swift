@@ -48,9 +48,9 @@ final class AppEnvironment: ObservableObject {
     private var githubRemoteCache: [String: Bool] = [:]
 
     // GitHub info cache
-    private var githubRepoCache: [String: GitHubRepoInfo] = [:]
-    private var githubPRCache: [String: [GitHubPR]] = [:]
-    private var githubBranchPRCache: [String: GitHubPR] = [:] // key: "dir|branch"
+    private var githubRepoCache: [String: GitHub.RepoInfo] = [:]
+    private var githubPRCache: [String: [GitHub.PR]] = [:]
+    private var githubBranchPRCache: [String: GitHub.PR] = [:] // key: "dir|branch"
 
     /// Send a single `objectWillChange` notification around a batch of mutations.
     /// Callers should batch every coherent refresh cycle into one call so subscribers
@@ -311,7 +311,7 @@ final class AppEnvironment: ObservableObject {
             return URL(string: ghURL)
         }
         if let remoteURL = repoInfoCache[directory]?.remoteURL {
-            return GitHubOperations.browserURL(from: remoteURL)
+            return GitHub.Operations.browserURL(from: remoteURL)
         }
         return nil
     }
@@ -390,7 +390,7 @@ final class AppEnvironment: ObservableObject {
                 }
 
                 gitRepoResults[project.directory] = Git.Operations.isGitRepo(at: project.directory)
-                githubRemoteResults[project.directory] = GitHubOperations.hasGitHubRemote(at: project.directory)
+                githubRemoteResults[project.directory] = GitHub.Operations.hasGitHubRemote(at: project.directory)
 
                 for ws in project.workstreams {
                     if RunStateStore.loadValidated(for: ws.id)?.detectedPorts.isEmpty == false {
@@ -488,15 +488,15 @@ final class AppEnvironment: ObservableObject {
         toolStatus.gh.isInstalled && toolStatus.ghAuthDetail != "Not authenticated"
     }
 
-    func githubRepo(for directory: String) -> GitHubRepoInfo? {
+    func githubRepo(for directory: String) -> GitHub.RepoInfo? {
         githubRepoCache[directory]
     }
 
-    func githubPRs(for directory: String) -> [GitHubPR] {
+    func githubPRs(for directory: String) -> [GitHub.PR] {
         githubPRCache[directory] ?? []
     }
 
-    func githubPR(for directory: String, branch: String) -> GitHubPR? {
+    func githubPR(for directory: String, branch: String) -> GitHub.PR? {
         githubBranchPRCache["\(directory)|\(branch)"]
     }
 
@@ -508,14 +508,14 @@ final class AppEnvironment: ObservableObject {
 
     func refreshGitHubInfo(for directory: String, branch: String? = nil) {
         guard ghAvailable, let ghPath = toolStatus.gh.path else { return }
-        guard GitHubOperations.hasGitHubRemote(at: directory) else { return }
+        guard GitHub.Operations.hasGitHubRemote(at: directory) else { return }
 
         Task.detached {
-            let repo = GitHubOperations.repoInfo(ghPath: ghPath, at: directory)
-            let prs = GitHubOperations.openPRs(ghPath: ghPath, at: directory)
+            let repo = GitHub.Operations.repoInfo(ghPath: ghPath, at: directory)
+            let prs = GitHub.Operations.openPRs(ghPath: ghPath, at: directory)
             // One call now covers every state, so the old open-then-merged fallback is gone.
             let branchPR = branch.flatMap {
-                GitHubOperations.prForBranch(ghPath: ghPath, at: directory, branch: $0)
+                GitHub.Operations.prForBranch(ghPath: ghPath, at: directory, branch: $0)
             }
 
             await MainActor.run {
@@ -541,8 +541,8 @@ final class AppEnvironment: ObservableObject {
     func refreshBranchPRs(for directory: String, branches: Set<String>) {
         guard ghAvailable, let ghPath = toolStatus.gh.path, !branches.isEmpty else { return }
         Task.detached {
-            let prs = GitHubOperations.recentPRs(ghPath: ghPath, at: directory, limit: 100)
-            let prsByBranch = GitHubPR.byBranch(prs)
+            let prs = GitHub.Operations.recentPRs(ghPath: ghPath, at: directory, limit: 100)
+            let prsByBranch = GitHub.PR.byBranch(prs)
             await MainActor.run {
                 self.commitChanges {
                     for branch in branches {
@@ -596,11 +596,11 @@ final class AppEnvironment: ObservableObject {
             // One gh call per project, now covering every PR state. That is what collapses
             // the open-then-merged two-phase lookup this used to need: a merged PR arrives
             // in the same response as an open one.
-            var allPRs: [(String, [GitHubPR])] = []
-            await withTaskGroup(of: (String, [GitHubPR]).self) { group in
+            var allPRs: [(String, [GitHub.PR])] = []
+            await withTaskGroup(of: (String, [GitHub.PR]).self) { group in
                 for (dir, _) in projectBranches {
                     group.addTask {
-                        (dir, GitHubOperations.recentPRs(ghPath: ghPath, at: dir, limit: 100))
+                        (dir, GitHub.Operations.recentPRs(ghPath: ghPath, at: dir, limit: 100))
                     }
                 }
                 for await result in group {
@@ -611,7 +611,7 @@ final class AppEnvironment: ObservableObject {
             var missing: [(dir: String, branch: String, key: String)] = []
             for (dir, prs) in allPRs {
                 let branches = projectBranches[dir] ?? []
-                let prsByBranch = GitHubPR.byBranch(prs)
+                let prsByBranch = GitHub.PR.byBranch(prs)
 
                 await MainActor.run {
                     self.commitChanges {
@@ -631,10 +631,10 @@ final class AppEnvironment: ObservableObject {
             // than the 100 most recent PRs, so ask about it directly rather than blanking a
             // badge that is still correct. Only a lookup that finds nothing clears the cache.
             guard !missing.isEmpty else { return }
-            await withTaskGroup(of: (String, GitHubPR?).self) { group in
+            await withTaskGroup(of: (String, GitHub.PR?).self) { group in
                 for lookup in missing {
                     group.addTask {
-                        (lookup.key, GitHubOperations.prForBranch(ghPath: ghPath, at: lookup.dir, branch: lookup.branch))
+                        (lookup.key, GitHub.Operations.prForBranch(ghPath: ghPath, at: lookup.dir, branch: lookup.branch))
                     }
                 }
                 for await (key, pr) in group {

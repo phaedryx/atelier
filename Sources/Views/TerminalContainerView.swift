@@ -491,7 +491,7 @@ struct TerminalContainerView: View {
         return vars
     }
 
-    private var branchPR: GitHubPR? {
+    private var branchPR: GitHub.PR? {
         guard let branch = appEnv.branchName(for: workingDirectory) else { return nil }
         return appEnv.githubPR(for: projectDirectory, branch: branch)
     }
@@ -1918,7 +1918,7 @@ private struct GitHubActionMenu: View {
     let bypassPermissions: Bool
     let worktreeState: WorktreeState
     let hasGitHubRemote: Bool
-    let branchPR: GitHubPR?
+    let branchPR: GitHub.PR?
 
     private var prState: String? {
         branchPR?.state
@@ -2132,7 +2132,7 @@ private struct GitHubActionMenu: View {
 /// Represents either a quick action or opening a PR in the browser.
 private enum PrimaryAction: Equatable, Identifiable {
     case quickAction(QuickAction)
-    case openPR(GitHubPR)
+    case openPR(GitHub.PR)
 
     var id: String {
         switch self {
