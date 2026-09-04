@@ -129,14 +129,7 @@ struct WorktreeDetailSheet: View {
                 forceRemove()
             }
         } message: {
-            // The reassuring version of this sentence is only honest when both probes
-            // ran. If one didn't, the sheet above it is showing a warning, and this
-            // must not contradict it by enumerating what will be lost as if it knew.
-            if let detail, !detail.isFullyLoaded {
-                Text("This worktree's contents could not be read, so what would be discarded is unknown. This permanently removes it either way.")
-            } else {
-                Text("This will permanently discard all uncommitted changes and unmerged commits in this worktree.")
-            }
+            Text(forceRemoveWarning)
         }
         .alert("Discard All Changes", isPresented: $showDiscardConfirm) {
             Button("Cancel", role: .cancel) {}
@@ -148,6 +141,22 @@ struct WorktreeDetailSheet: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text("The worktree directory is still on disk. Close anything using it and try again.")
+        }
+    }
+
+    /// The reassuring version of this sentence is only honest when both probes ran.
+    /// If one didn't, the sheet is showing a warning, and this must not contradict it
+    /// by enumerating what will be lost as if it knew.
+    ///
+    /// One value rather than a branch inside the alert's `message:` builder: an alert
+    /// message is the one place SwiftUI is picky about wrapped content, and a
+    /// confirmation that renders *no* message is worse than the wrong one this
+    /// replaces.
+    private var forceRemoveWarning: LocalizedStringKey {
+        if let detail, !detail.isFullyLoaded {
+            "This worktree's contents could not be read, so what would be discarded is unknown. This permanently removes it either way."
+        } else {
+            "This will permanently discard all uncommitted changes and unmerged commits in this worktree."
         }
     }
 

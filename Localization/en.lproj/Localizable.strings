@@ -581,3 +581,4 @@
 "Unmerged commits could not be read — no base branch to compare against. This worktree may still hold some." = "Unmerged commits could not be read — no base branch to compare against. This worktree may still hold some.";
 "This worktree's contents could not be read, so what would be discarded is unknown. This permanently removes it either way." = "This worktree's contents could not be read, so what would be discarded is unknown. This permanently removes it either way.";
 "Changes could not be read. This repository may still have some." = "Changes could not be read. This repository may still have some.";
+"This will permanently discard all uncommitted changes and unmerged commits in this worktree." = "This will permanently discard all uncommitted changes and unmerged commits in this worktree.";
