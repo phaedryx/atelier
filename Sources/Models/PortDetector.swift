@@ -97,13 +97,38 @@ extension Port {
                 queue: queue
             )
             source.setEventHandler { [weak self] in
-                self?.refreshState()
+                guard let self else { return }
+                // Every `RunState.Store.write` is a `writeAtomically`, i.e.
+                // `replaceItemAt` → rename, so the path we opened is a dead inode the
+                // moment the first write lands. Without dropping the source here it
+                // stays attached to that inode forever and never fires again;
+                // `refreshState` alone won't re-attach, because it only does so when
+                // the state file is *missing*. Detection kept working only because the
+                // directory watcher happened to cover it.
+                let data = fileSource?.data ?? []
+                if data.contains(.rename) || data.contains(.delete) {
+                    fileSource?.cancel()
+                    fileSource = nil
+                    attachFileWatcherIfNeeded()
+                }
+                refreshState()
             }
             source.setCancelHandler {
                 close(descriptor)
             }
             fileSource = source
             source.resume()
+        }
+
+        /// The inode the file watcher currently holds open, for tests. A watcher left
+        /// on a replaced inode still looks attached — only the inode shows the drift.
+        func _testWatchedInode() -> UInt64? {
+            queue.sync {
+                guard let descriptor = fileSource?.handle else { return nil }
+                var info = stat()
+                guard fstat(descriptor, &info) == 0 else { return nil }
+                return UInt64(info.st_ino)
+            }
         }
 
         private func refreshState() {

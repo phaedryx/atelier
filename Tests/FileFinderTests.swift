@@ -117,10 +117,66 @@ final class FileFinderTests: XCTestCase {
         XCTAssertTrue(results.allSatisfy { $0.hasPrefix("hooks/use") })
     }
 
-    func testSeparatorEquivalenceMatchesDashedName() {
-        XCTAssertNotNil(FileFinder.score(query: "use toast", path: "hooks/use-toast.tsx"))
-        XCTAssertNotNil(FileFinder.score(query: "use toast", path: "hooks/use_toast.tsx"))
-        XCTAssertNotNil(FileFinder.score(query: "use toast", path: "hooks/use.toast.tsx"))
+    /// The name promises equivalence, so assert equivalence: three `XCTAssertNotNil`
+    /// calls only prove the three names match *something*, which they would even if
+    /// each separator scored differently.
+    func testSeparatorEquivalenceMatchesDashedName() throws {
+        let dash = try XCTUnwrap(FileFinder.score(query: "use toast", path: "hooks/use-toast.tsx"))
+        let underscore = try XCTUnwrap(FileFinder.score(query: "use toast", path: "hooks/use_toast.tsx"))
+        let dot = try XCTUnwrap(FileFinder.score(query: "use toast", path: "hooks/use.toast.tsx"))
+
+        XCTAssertEqual(dash, underscore, "`-` and `_` must be interchangeable, not merely both matchable")
+        XCTAssertEqual(dash, dot, "`-` and `.` must be interchangeable, not merely both matchable")
+        XCTAssertEqual(dash, try XCTUnwrap(FileFinder.score(query: "use-toast", path: "hooks/use-toast.tsx")))
+    }
+
+    /// This is the case the contiguous and subsequence stages used to disagree on.
+    /// "use toast" matched "use-toast.tsx" contiguously, then fell through to the
+    /// subsequence stage for "use-my-toast.tsx" — which compared with a bare `==`
+    /// and rejected the space against the dash.
+    func testSeparatorEquivalenceAppliesToTheSubsequenceFallbackToo() {
+        XCTAssertNotNil(
+            FileFinder.score(query: "use toast", path: "hooks/use-my-toast.tsx"),
+            "A non-contiguous match must honour separator equivalence, like the contiguous stage does"
+        )
+        XCTAssertNotNil(FileFinder.score(query: "use_toast", path: "hooks/use-my-toast.tsx"))
+        XCTAssertNotNil(FileFinder.score(query: "use.toast", path: "hooks/use-my-toast.tsx"))
+    }
+
+    /// The carve-out on the rule above: a trailing query separator is a filter, not a
+    /// word break to find, so it keeps the strict comparison. Without this, "useTheme "
+    /// binds its space to the dot in ".tsx" and stops filtering anything.
+    func testATrailingQuerySeparatorStillRequiresARealBreak() {
+        XCTAssertNotNil(FileFinder.score(query: "useTheme ", path: "hooks/useTheme-Sync.tsx"))
+        XCTAssertNil(
+            FileFinder.score(query: "useTheme ", path: "hooks/useThemeSync.tsx"),
+            "A trailing separator must not bind to the extension dot"
+        )
+        // The interior case is unaffected — that is the bug this pairs with.
+        XCTAssertNotNil(FileFinder.score(query: "useTheme Sync", path: "hooks/useTheme-Sync.tsx"))
+    }
+
+    /// Selecting the top K on score alone dropped equal-scoring candidates at the
+    /// boundary, so the documented shorter-path tiebreak only applied to whichever
+    /// candidate happened to be scanned first.
+    func testEqualScoringCandidatesAtTheLimitAreRankedNotDroppedByArrivalOrder() {
+        let short = "a/thing.swift"
+        let long = "deeply/nested/directory/tree/thing.swift"
+
+        let longFirst = FileFinder.results(
+            matching: "thing",
+            in: [long, short].map { FileFinder.Entry(path: $0) },
+            limit: 1
+        )
+        let shortFirst = FileFinder.results(
+            matching: "thing",
+            in: [short, long].map { FileFinder.Entry(path: $0) },
+            limit: 1
+        )
+
+        XCTAssertEqual(longFirst, [short], "The shorter path must win the tiebreak even when scanned second")
+        XCTAssertEqual(shortFirst, [short])
+        XCTAssertEqual(longFirst, shortFirst, "Results must not depend on scan order")
     }
 
     func testRankingIgnoresUnrelatedFiles() {

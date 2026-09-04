@@ -98,7 +98,12 @@ enum FileFinder {
         let queryHasSeparator = (queryMaskFull & Self.separatorBits) != 0
         let queryMask = queryMaskFull & ~Self.separatorBits
 
-        var best: [(path: String, score: Int)] = []
+        // The top-K buffer is kept in final display order, not score order. Selecting
+        // on score alone and then re-sorting is what made the path-length tiebreak
+        // decorative: an equal-scoring candidate at the boundary was dropped before
+        // the sort ever saw it, so the shorter path only won when it happened to
+        // arrive first. Admitting on the same comparator the sort uses fixes that.
+        var best: [Candidate] = []
         best.reserveCapacity(limit)
         for entry in entries {
             // Cheap rejection: every query character must be present somewhere
@@ -106,27 +111,36 @@ enum FileFinder {
             guard (entry.mask & queryMask) == queryMask else { continue }
             guard !queryHasSeparator || (entry.mask & Self.separatorBits) != 0 else { continue }
             guard let score = Self.score(query: queryScalars, entry: entry) else { continue }
-            if best.count < limit {
-                let index = best.firstIndex { $0.score < score } ?? best.count
-                best.insert((entry.path, score), at: index)
-            } else if score > best[best.count - 1].score {
-                let index = best.firstIndex { $0.score < score } ?? best.count - 1
-                best.insert((entry.path, score), at: index)
+            let candidate = Candidate(path: entry.path, score: score)
+            if best.count == limit, !Self.ranks(candidate, before: best[best.count - 1]) {
+                continue
+            }
+            let index = best.firstIndex { Self.ranks(candidate, before: $0) } ?? best.count
+            best.insert(candidate, at: index)
+            if best.count > limit {
                 best.removeLast()
             }
         }
 
-        return best
-            .sorted { lhs, rhs in
-                if lhs.score != rhs.score {
-                    return lhs.score > rhs.score
-                }
-                if lhs.path.count != rhs.path.count {
-                    return lhs.path.count < rhs.path.count
-                }
-                return lhs.path.localizedCaseInsensitiveCompare(rhs.path) == .orderedAscending
-            }
-            .map(\.path)
+        return best.map(\.path)
+    }
+
+    private struct Candidate {
+        let path: String
+        let score: Int
+    }
+
+    /// Display order: score descending, then the shorter path, then alphabetical.
+    /// Used both to admit candidates into the top-K buffer and to order it, so a
+    /// candidate can never be dropped by a rule the final ordering disagrees with.
+    private static func ranks(_ lhs: Candidate, before rhs: Candidate) -> Bool {
+        if lhs.score != rhs.score {
+            return lhs.score > rhs.score
+        }
+        if lhs.path.count != rhs.path.count {
+            return lhs.path.count < rhs.path.count
+        }
+        return lhs.path.localizedCaseInsensitiveCompare(rhs.path) == .orderedAscending
     }
 
     /// Fuzzy-match `query` against `path`, returning a score (higher is better) or nil on no match.
@@ -176,7 +190,7 @@ enum FileFinder {
                     while i < qCount {
                         let qChar = q[i]
                         let tChar = t[start + i]
-                        if qChar != tChar, !(isSeparator(qChar) && isSeparator(tChar)) {
+                        if !matches(qChar, tChar) {
                             start += 1
                             continue outer
                         }
@@ -191,6 +205,18 @@ enum FileFinder {
     }
 
     /// Position of the first `query` character subsequence inside `target`, or nil.
+    ///
+    /// Separators are interchangeable here for the same reason they are in
+    /// `findContiguous`: a user typing "use toast" means the same thing as
+    /// "use-toast". Comparing with a bare `==` made the two stages disagree — the
+    /// query matched "use-toast.tsx" contiguously and then failed this fallback
+    /// against "use-my-toast.tsx", which is the one that needed the fallback.
+    ///
+    /// With one carve-out: a *trailing* query separator keeps the strict `==`. A
+    /// separator with query characters after it is a word break the user is asking
+    /// this stage to find. A separator with nothing after it is a filter — "the name
+    /// must break here" — and matching it loosely lets it bind to any separator in
+    /// the path, typically the dot before the extension, which filters nothing.
     private static func subsequence(_ query: [Unicode.Scalar], in target: [Unicode.Scalar]) -> (gapPenalty: Int, lastOffset: Int)? {
         var result: (gapPenalty: Int, lastOffset: Int)?
         query.withUnsafeBufferPointer { qBuffer in
@@ -204,7 +230,11 @@ enum FileFinder {
                 var lastMatchOffset = 0
                 var offset = 0
                 while offset < tCount {
-                    if t[offset] == q[queryIndex] {
+                    let isLastQueryScalar = queryIndex == qCount - 1
+                    let matched = isLastQueryScalar
+                        ? q[queryIndex] == t[offset]
+                        : matches(q[queryIndex], t[offset])
+                    if matched {
                         if previousMatchOffset >= 0, offset - previousMatchOffset > 1 {
                             gapPenalty += offset - previousMatchOffset - 1
                         }
@@ -221,6 +251,13 @@ enum FileFinder {
             }
         }
         return result
+    }
+
+    /// Whether a query scalar matches a target scalar. Any separator matches any
+    /// other, so `-`, `_`, `.`, `/` and space are one class to the user. Both match
+    /// stages go through this so they cannot drift apart again.
+    private static func matches(_ queryScalar: Unicode.Scalar, _ targetScalar: Unicode.Scalar) -> Bool {
+        queryScalar == targetScalar || (isSeparator(queryScalar) && isSeparator(targetScalar))
     }
 
     private static func isSeparator(_ scalar: Unicode.Scalar) -> Bool {

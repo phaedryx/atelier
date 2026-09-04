@@ -201,6 +201,7 @@ private struct GeneralSettingsPane: View {
     /// expression runs on every construction of this pane, and
     /// `LaunchAtLogin.isEnabled` is a cross-process SMAppService query.
     @State private var launchAtLogin = false
+    @State private var launchAtLoginNotice: LaunchAtLoginNotice.Notice?
 
     var body: some View {
         Form {
@@ -262,12 +263,30 @@ private struct GeneralSettingsPane: View {
                 // seeding the real value in .task doesn't re-register.
                 .onChange(of: launchAtLogin) { _, newValue in
                     guard newValue != LaunchAtLogin.isEnabled else { return }
-                    LaunchAtLogin.setEnabled(newValue)
+                    switch LaunchAtLogin.setEnabled(newValue) {
+                    case .success:
+                        launchAtLoginNotice = nil
+                    case .requiresApproval:
+                        // The registration stuck, so leave the toggle on and say what
+                        // is still missing. Silently snapping it back is what made this
+                        // look like a failure the user could do nothing about.
+                        launchAtLoginNotice = .requiresApproval
+                    case let .failed(message):
+                        launchAtLogin = !newValue
+                        launchAtLoginNotice = .failed(message)
+                    }
+                }
+
+                if let notice = launchAtLoginNotice {
+                    LaunchAtLoginNotice(notice: notice)
                 }
             }
         }
         .formStyle(.grouped)
-        .task { launchAtLogin = LaunchAtLogin.isEnabled }
+        .task {
+            launchAtLogin = LaunchAtLogin.status != .disabled
+            launchAtLoginNotice = LaunchAtLogin.status == .requiresApproval ? .requiresApproval : nil
+        }
     }
 
     private func applyAppearance(_ mode: String) {
@@ -798,6 +817,45 @@ private struct SettingToggle: View {
                     .font(.caption)
                     .foregroundStyle(descriptionStyle == .warning ? .orange : .secondary)
             }
+        }
+    }
+}
+
+/// Explains a launch-at-login toggle that did not simply turn on.
+///
+/// `.requiresApproval` is the common one and is not an error: the registration is
+/// recorded and the user has to approve it in System Settings, so this offers the
+/// button that takes them there.
+struct LaunchAtLoginNotice: View {
+    enum Notice: Equatable {
+        case requiresApproval
+        case failed(String)
+    }
+
+    let notice: Notice
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            switch notice {
+            case .requiresApproval:
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text("Approve Atelier in System Settings ▸ General ▸ Login Items to finish enabling this.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let url = LaunchAtLogin.loginItemsSettingsURL {
+                    Button("Open") { NSWorkspace.shared.open(url) }
+                        .buttonStyle(.link)
+                        .font(.caption)
+                }
+            case let .failed(message):
+                Image(systemName: "xmark.octagon.fill")
+                    .foregroundStyle(.red)
+                Text("Couldn't change this setting: \(message)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
         }
     }
 }

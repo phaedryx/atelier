@@ -79,14 +79,17 @@ struct CommandBuilder {
         shell.hasSuffix("/fish") || shell == "fish"
     }
 
+    /// Inside fish double quotes only `\\`, `$` and `"` are special — everything else,
+    /// including `(`, `)` and backticks, is already literal. Escaping those anyway does
+    /// not "extra-protect" them: fish leaves the backslash in place, so a payload handed
+    /// on to `sh -c` arrives as `\\(echo ...` and sh reads the paren as literal, which
+    /// destroys subshell grouping (`sh: (echo: command not found`). Escape the three that
+    /// are actually special and nothing more.
     private static func fishQuote(_ s: String) -> String {
         let escaped = s
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
             .replacingOccurrences(of: "$", with: "\\$")
-            .replacingOccurrences(of: "`", with: "\\`")
-            .replacingOccurrences(of: "(", with: "\\(")
-            .replacingOccurrences(of: ")", with: "\\)")
         return "\"\(escaped)\""
     }
 }
