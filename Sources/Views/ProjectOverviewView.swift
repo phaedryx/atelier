@@ -406,7 +406,7 @@ struct ProjectOverviewView: View {
         worktrees.filter { worktree in
             // `cleanlinessUnknown` fails closed. Offering a worktree for pruning
             // means asserting it is clean, and an unrun check has asserted nothing.
-            guard !worktree.isMain, !worktree.isDirty, !worktree.hasBranchCommits,
+            guard !worktree.isProtected, !worktree.isDirty, !worktree.hasBranchCommits,
                   !worktree.cleanlinessUnknown else { return false }
             return !workstreamPaths.contains(Self.standardizedPath(worktree.path))
         }
@@ -667,7 +667,12 @@ private struct WorktreeInfoRow: View {
                         .clipShape(RoundedRectangle(cornerRadius: 4))
                     }
                     .buttonStyle(.plain)
-                    if let onPurge {
+                    // No Purge for the trunk, and no override for it either: removing
+                    // the checkout of `main`/`master`/`origin/HEAD` is a thing to do
+                    // deliberately at a terminal, not a button that sits one click
+                    // away from every workstream row. Open stays — adopting the trunk
+                    // as a workstream is a normal thing to want.
+                    if let onPurge, !worktree.isProtected {
                         // Purge stays merged-only. A closed-unmerged PR now renders honestly
                         // but does not imply the branch is safe to discard.
                         let isMerged = pr?.status == .merged

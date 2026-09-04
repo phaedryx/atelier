@@ -42,6 +42,22 @@ extension Worktree {
         let hasUnpushedCommits: Bool
         let hasBranchCommits: Bool
 
+        /// This worktree holds the repository's trunk — the checkout at the project
+        /// directory, or the checkout of the default branch (`origin/HEAD`, `main`,
+        /// `master`) whatever it is called here. Purge and Prune must skip it.
+        ///
+        /// `isMain` alone was the guard and it is only a path comparison, so it
+        /// silently fails open: a project registered as its `.bare` *container*
+        /// rather than as a checkout matches no worktree path at all, and then
+        /// every row — the trunk included — reads as an ordinary purgeable
+        /// worktree. Naming the branch as well means the guard does not depend on
+        /// which path the project happens to be registered under.
+        ///
+        /// No default value on purpose, matching `cleanlinessUnknown` below: a
+        /// `= false` here would let a future construction site declare a worktree
+        /// unprotected without having asked the question.
+        let isProtected: Bool
+
         /// `isDirty` and/or `hasBranchCommits` are `false` because a probe did not
         /// run, not because the answer is no. Anything that acts on "this worktree
         /// is clean" — Prune, above all — has to treat it as not-clean.
@@ -678,6 +694,41 @@ extension Git {
                 return
             }
 
+            /// Whether the root `args` reports is `worktreePath` itself, rather than
+            /// some enclosing directory. Every git probe below answers for the
+            /// repository that *encloses* the path it runs in, so without this an
+            /// orphan directory inside the main checkout reports the trunk's branch,
+            /// and one inside a `.bare` container reports a bare repository — and the
+            /// guards would then refuse the filesystem cleanup that
+            /// `purgeOrphanWorktree` is built on.
+            func isRoot(_ args: [String]) -> Bool {
+                guard let root = run(args: args, in: worktreePath)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines), !root.isEmpty
+                else { return false }
+                return URL(fileURLWithPath: root).standardizedFileURL.resolvingSymlinksInPath().path == resolvedWorktree
+            }
+
+            // The last line of defence, below whichever caller got here: the trunk's
+            // checkout, and the bare repository itself, are not things Atelier
+            // removes. `git worktree remove --force` on the trunk takes the user's
+            // working copy with it, and the callers deciding what is removable are
+            // two layers of path comparison away from this one.
+            if isRoot(["rev-parse", "--show-toplevel"]),
+               let branch = currentBranch(at: worktreePath),
+               protectedBranchNames(at: projectPath).contains(branch)
+            {
+                logger.error(
+                    "[Atelier] Refusing to remove \(resolvedWorktree, privacy: .public): it is the checkout of protected branch \(branch, privacy: .public)"
+                )
+                return
+            }
+            if isRoot(["rev-parse", "--path-format=absolute", "--git-dir"]), isBareRepository(at: worktreePath) {
+                logger.error(
+                    "[Atelier] Refusing to remove \(resolvedWorktree, privacy: .public): that is the bare repository, not a worktree"
+                )
+                return
+            }
+
             _ = runOnWholeTree(args: ["worktree", "remove", "--force", worktreePath], in: projectPath)
 
             // Clean up empty directories
@@ -879,6 +930,10 @@ extension Git {
             }
 
             let mainPath = URL(fileURLWithPath: projectPath).standardizedFileURL.path
+            // Resolved once per call, not once per worktree: this runs on every
+            // refresh of the project overview, and the answer is a property of the
+            // repository, not of the row.
+            let protectedBranches = protectedBranchNames(at: projectPath)
 
             var results: [Worktree.Info] = []
             var currentPath: String?
@@ -891,6 +946,7 @@ extension Git {
             func flush() {
                 guard let path = currentPath, !currentIsBare else { return }
                 let isMain = URL(fileURLWithPath: path).standardizedFileURL.path == mainPath
+                let isProtected = isMain || currentBranch.map(protectedBranches.contains) == true
                 let dirtyProbe = isMain ? false : hasUncommittedChanges(at: path)
                 let unpushed = !isMain && hasUnpushedCommits(at: path)
                 let branchCommitsProbe = isMain ? false : hasBranchCommits(at: path, projectPath: projectPath)
@@ -901,6 +957,7 @@ extension Git {
                     isMain: isMain,
                     hasUnpushedCommits: unpushed,
                     hasBranchCommits: branchCommitsProbe ?? false,
+                    isProtected: isProtected,
                     cleanlinessUnknown: dirtyProbe == nil || branchCommitsProbe == nil
                 ))
             }
@@ -940,8 +997,10 @@ extension Git {
             }
             var pruned: Set<String> = []
             // `cleanlinessUnknown` fails closed: a worktree whose checks did not run
-            // is not a clean worktree, whatever the caller asked for.
-            for wt in worktrees where !wt.isMain && !wt.isDirty && !wt.hasBranchCommits && !wt.cleanlinessUnknown {
+            // is not a clean worktree, whatever the caller asked for. `isProtected`
+            // covers the trunk, which is clean by every one of these measures and so
+            // was the first thing a bulk prune reached for.
+            for wt in worktrees where !wt.isProtected && !wt.isDirty && !wt.hasBranchCommits && !wt.cleanlinessUnknown {
                 let standardizedPath = URL(fileURLWithPath: wt.path).standardizedFileURL.path
                 if let allowedPaths, !allowedPaths.contains(standardizedPath) {
                     continue
@@ -1047,6 +1106,24 @@ extension Git {
                 }
             }
             return candidates.first
+        }
+
+        /// Branch names whose checkout must never be purged or pruned.
+        ///
+        /// Deliberately not `defaultBranchNames` below: that one is answering
+        /// "which checkout represents this project" and includes `development`,
+        /// which is an ordinary long-lived branch someone may well want to discard
+        /// a worktree of. This set is the trunk only — whatever the remote calls
+        /// its HEAD, plus the two conventional names for repositories with no
+        /// `origin/HEAD` to ask.
+        static func protectedBranchNames(at path: String) -> Set<String> {
+            var names: Set = ["main", "master"]
+            if let head = run(args: ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], in: path)?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !head.isEmpty
+            {
+                names.insert(head.hasPrefix("origin/") ? String(head.dropFirst("origin/".count)) : head)
+            }
+            return names
         }
 
         /// Branch names that could be the repository's default, best guess first.

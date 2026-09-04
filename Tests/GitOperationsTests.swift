@@ -1408,6 +1408,100 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertEqual(worktrees.first?.isMain, true)
     }
 
+    /// The regression this guard exists for. A project registered as its `.bare`
+    /// *container* rather than as a checkout — which is what every project saved
+    /// before `projectLocation` resolved forward still holds — matches no worktree
+    /// path, so `isMain` is false for every row. That put a Purge button on the
+    /// trunk and, worse, made the trunk eligible for the bulk "Prune clean
+    /// worktrees" sweep, since it is clean by every measure that sweep looks at.
+    func testTrunkIsProtectedEvenWhenTheProjectIsRegisteredAsTheBareContainer() throws {
+        let container = try makeBareContainer(named: "bare-project")
+
+        let worktrees = Git.Operations.listWorktreesWithInfo(at: container.path)
+
+        let trunk = try XCTUnwrap(worktrees.first { $0.branch == "main" })
+        XCTAssertFalse(trunk.isMain, "the container path matches no worktree — this is the failing-open case")
+        XCTAssertTrue(trunk.isProtected, "the trunk must be protected by its branch, not only by its path")
+    }
+
+    func testOrdinaryWorktreeIsNotProtected() throws {
+        let container = try makeBareContainer(named: "bare-project")
+        git(["worktree", "add", "-q", "-b", "feature/x", "feature-x", "main"], in: container)
+
+        let worktrees = Git.Operations.listWorktreesWithInfo(at: container.path)
+
+        let feature = try XCTUnwrap(worktrees.first { $0.branch == "feature/x" })
+        XCTAssertFalse(feature.isProtected)
+    }
+
+    /// `origin/HEAD` is the answer when it exists, so a repository whose trunk is
+    /// called neither `main` nor `master` is protected too.
+    func testTrunkIsProtectedUnderANonConventionalDefaultBranchName() throws {
+        let repoDir = tempDir.appendingPathComponent("trunk-named-trunk")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-q", "-b", "trunk"], in: repoDir)
+        git(["-c", "user.email=t@t", "-c", "user.name=T", "commit", "-q", "--allow-empty", "-m", "init"], in: repoDir)
+        git(["remote", "add", "origin", repoDir.path], in: repoDir)
+        git(["fetch", "-q", "origin"], in: repoDir)
+        git(["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk"], in: repoDir)
+
+        XCTAssertTrue(Git.Operations.protectedBranchNames(at: repoDir.path).contains("trunk"))
+    }
+
+    /// The trunk is clean, has no branch commits, and is not a workstream — every
+    /// property the bulk prune selects on. Only `isProtected` keeps it.
+    func testPruneCleanWorktreesLeavesTheTrunkAloneInAContainerRegisteredProject() throws {
+        let container = try makeBareContainer(named: "bare-project")
+        let trunk = container.appendingPathComponent("main")
+        git(["worktree", "add", "-q", "-b", "feature/y", "feature-y", "main"], in: container)
+
+        let pruned = Git.Operations.pruneCleanWorktrees(at: container.path)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: trunk.path), "the trunk's checkout must survive a prune")
+        XCTAssertFalse(
+            pruned.contains(trunk.standardizedFileURL.path),
+            "the trunk must not be reported as pruned"
+        )
+        XCTAssertTrue(
+            pruned.contains(container.appendingPathComponent("feature-y").standardizedFileURL.path),
+            "an ordinary clean worktree is still pruned"
+        )
+    }
+
+    /// Below every caller: whatever decided this path was removable, the trunk's
+    /// checkout is not something `removeWorktree` deletes.
+    func testRemoveWorktreeRefusesTheCheckoutOfAProtectedBranch() throws {
+        let container = try makeBareContainer(named: "bare-project")
+        let trunk = container.appendingPathComponent("main")
+
+        Git.Operations.removeWorktree(projectPath: container.path, worktreePath: trunk.path)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: trunk.path))
+    }
+
+    func testRemoveWorktreeRefusesTheBareRepository() throws {
+        let container = try makeBareContainer(named: "bare-project")
+        let bare = container.appendingPathComponent(".bare")
+
+        Git.Operations.removeWorktree(projectPath: container.path, worktreePath: bare.path)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: bare.path))
+    }
+
+    /// The guards above must not swallow the orphan cleanup they sit in front of.
+    /// Every git probe answers for the repository that *encloses* the path, so an
+    /// orphan inside a `.bare` container reads back as a bare repository, and one
+    /// inside the trunk's checkout reads back as the trunk's branch.
+    func testRemoveWorktreeStillDeletesAnOrphanInsideABareContainer() throws {
+        let container = try makeBareContainer(named: "bare-project")
+        let orphan = container.appendingPathComponent("orphan")
+        try FileManager.default.createDirectory(at: orphan, withIntermediateDirectories: true)
+
+        Git.Operations.removeWorktree(projectPath: container.path, worktreePath: orphan.path)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: orphan.path))
+    }
+
     // MARK: - removeWorktree
 
     /// `removeWorktree` deletes whatever path it is handed, whether or not git
