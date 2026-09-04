@@ -451,6 +451,94 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: worktree.path))
     }
 
+    /// `repoInfo` collapsed a failed `git status` into `isDirty: false`, and the
+    /// Repository section renders that as a green "Clean". Worse, the badge that
+    /// opens the changes popover was gated on `isDirty`, so the popover's own
+    /// "could not be read" branch was unreachable in exactly the case it was
+    /// written for.
+    func testRepoInfoSaysItCouldNotTellRatherThanClean() throws {
+        let repoDir = tempDir.appendingPathComponent("repoinfo-unreadable")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        XCTAssertTrue(git(["init", "-b", "main"], in: repoDir))
+        XCTAssertTrue(git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+                           "commit", "--allow-empty", "-m", "init"], in: repoDir))
+        try "unsaved".write(to: repoDir.appendingPathComponent("scratch.txt"), atomically: true, encoding: .utf8)
+        // Breaks `git status` and nothing else — see the `updateDefaultBranch` test
+        // for why a corrupt index would be the wrong fixture here.
+        XCTAssertTrue(git(["config", "status.showUntrackedFiles", "bogus"], in: repoDir))
+
+        let info = Git.Operations.repoInfo(at: repoDir.path)
+
+        XCTAssertTrue(info.isRepo)
+        XCTAssertTrue(info.isDirtyUnknown, "the probe failed; \"not dirty\" was never established")
+    }
+
+    /// The positive control. An always-unknown flag would put a permanent warning
+    /// on every clean repository and make the green "Clean" unreachable.
+    func testRepoInfoReportsAReadableCleanTreeAsKnown() throws {
+        let repoDir = tempDir.appendingPathComponent("repoinfo-clean")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        XCTAssertTrue(git(["init", "-b", "main"], in: repoDir))
+        XCTAssertTrue(git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+                           "commit", "--allow-empty", "-m", "init"], in: repoDir))
+
+        let info = Git.Operations.repoInfo(at: repoDir.path)
+
+        XCTAssertFalse(info.isDirty)
+        XCTAssertFalse(info.isDirtyUnknown, "git status ran and found a clean tree")
+    }
+
+    /// A directory that is not a repository has no tree whose cleanliness could be
+    /// in question — that is an answer, not a failed look, and must not warn.
+    func testRepoInfoOnANonRepositoryIsNotReportedAsUnknown() throws {
+        let plainDir = tempDir.appendingPathComponent("repoinfo-not-a-repo")
+        try FileManager.default.createDirectory(at: plainDir, withIntermediateDirectories: true)
+
+        let info = Git.Operations.repoInfo(at: plainDir.path)
+
+        XCTAssertFalse(info.isRepo)
+        XCTAssertFalse(info.isDirtyUnknown)
+    }
+
+    /// `removeWorktree` grew a guard after it deleted a user's checkout: git refuses
+    /// to remove a main working tree, but the `removeItem` fallback never asked.
+    /// `forceRemoveWorktreeByPath` performs the same `removeItem` and had no guard.
+    func testForceRemoveByPathRefusesToDeleteTheProjectDirectoryItself() throws {
+        let repoDir = tempDir.appendingPathComponent("force-remove-guard")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        XCTAssertTrue(git(["init", "-b", "main"], in: repoDir))
+        XCTAssertTrue(git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+                           "commit", "--allow-empty", "-m", "init"], in: repoDir))
+        try "precious".write(to: repoDir.appendingPathComponent("work.txt"), atomically: true, encoding: .utf8)
+
+        Git.Operations.forceRemoveWorktreeByPath(worktreePath: repoDir.path, projectPath: repoDir.path)
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: repoDir.appendingPathComponent("work.txt").path),
+            "that path is the project directory, not a worktree of it"
+        )
+    }
+
+    /// The guard compares resolved paths, because the same directory arrives under
+    /// different spellings — a stored worktree path and a picked project directory
+    /// need not agree on /tmp vs /private/tmp.
+    func testForceRemoveByPathRefusesTheProjectDirectoryUnderAnotherSpelling() throws {
+        let repoDir = tempDir.appendingPathComponent("force-remove-guard-spelling")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        XCTAssertTrue(git(["init", "-b", "main"], in: repoDir))
+        try "precious".write(to: repoDir.appendingPathComponent("work.txt"), atomically: true, encoding: .utf8)
+
+        Git.Operations.forceRemoveWorktreeByPath(
+            worktreePath: repoDir.path + "/./",
+            projectPath: repoDir.path
+        )
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: repoDir.appendingPathComponent("work.txt").path),
+            "same directory, different spelling — the guard resolves before comparing"
+        )
+    }
+
     // MARK: - Probes that must not report "clean" when they could not look
 
     /// The destructive one. `updateDefaultBranch` runs `git reset --hard` behind

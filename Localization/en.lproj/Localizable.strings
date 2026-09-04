@@ -591,3 +591,5 @@
 "Uncommitted changes could not be read, so what would be discarded is unknown. Anything listed above is removed too." = "Uncommitted changes could not be read, so what would be discarded is unknown. Anything listed above is removed too.";
 "Unmerged commits could not be read, so what would be discarded is unknown. Anything listed above is removed too." = "Unmerged commits could not be read, so what would be discarded is unknown. Anything listed above is removed too.";
 "Unmerged commits could not be read. This worktree may still hold some." = "Unmerged commits could not be read. This worktree may still hold some.";
+"Changes could not be read" = "Changes could not be read";
+"State unknown" = "State unknown";
