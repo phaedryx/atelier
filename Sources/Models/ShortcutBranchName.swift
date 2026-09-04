@@ -27,9 +27,15 @@ extension Shortcut {
             for (name, value) in values(for: story) {
                 result = result.replacingOccurrences(of: "${\(name)}", with: value)
             }
-            // An empty ${SLUG} would otherwise leave the separator that preceded it dangling,
-            // e.g. "tad@sc-9-". Trailing separators are also invalid or ugly as branch names.
-            return trim(result)
+            // An empty variable leaves its separators behind. Two passes, because an
+            // empty variable in the *middle* of a template leaves a doubled separator
+            // that no amount of edge-trimming reaches: `${STORY_ID}-${TYPE}-${SLUG}`
+            // with no story type rendered `123--fix-the-thing`, and the `/` form
+            // rendered `you//fix-the-thing`, which git rejects outright.
+            let rendered = trim(collapseSeparators(result))
+            // Every variable empty collapses and trims to "", which is not a branch
+            // name either. Fall back exactly as an empty template does.
+            return rendered.isEmpty ? story.branchName : rendered
         }
 
         /// Variables in `template` that this type does not know how to expand, in the order
@@ -86,9 +92,31 @@ extension Shortcut {
             return words.joined(separator: "-")
         }
 
+        private static func isSeparator(_ character: Character) -> Bool {
+            character == "-" || character == "/" || character == "@" || character == "_"
+        }
+
+        /// Reduces each run of separators to its first character, so a template with
+        /// an empty variable in the middle reads as though the variable were never
+        /// there. Keeping the first preserves the author's intent at the seam:
+        /// `${MENTION}/${TYPE}/${SLUG}` with no type gives `you/fix-the-thing`.
+        private static func collapseSeparators(_ value: String) -> String {
+            var result = ""
+            var previousWasSeparator = false
+            for character in value {
+                let separator = isSeparator(character)
+                if separator, previousWasSeparator {
+                    continue
+                }
+                result.append(character)
+                previousWasSeparator = separator
+            }
+            return result
+        }
+
         private static func trim(_ value: String) -> String {
             var result = value
-            while let last = result.last, last == "-" || last == "/" || last == "@" || last == "_" {
+            while let last = result.last, isSeparator(last) {
                 result.removeLast()
             }
             while let first = result.first, first == "-" || first == "/" {

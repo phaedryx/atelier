@@ -678,6 +678,13 @@ private struct IntegrationsSettingsPane: View {
         // assuming what landed.
         savedToken = store.read() ?? ""
         // Keychain presence is not observable, so the sidebar is told explicitly.
+        //
+        // Deliberately posted before the status guard, not inside the success path.
+        // The observer re-reads the Keychain (`KeychainTokenStore().hasToken`) rather
+        // than trusting a payload, so the post cannot publish a false state — and a
+        // failed `write` is not proof nothing changed: it clears the item before
+        // adding, so a failure can still have removed the old token. Posting only on
+        // success is what would strand the sidebar showing a button for a gone token.
         NotificationCenter.default.post(name: Shortcut.Settings.tokenChanged, object: nil)
 
         guard status == errSecSuccess else {
@@ -709,6 +716,7 @@ private struct IntegrationsSettingsPane: View {
                 // sidebar button never appears.
                 let status = store.write(candidate)
                 savedToken = store.read() ?? ""
+                // Before the guard, for the reason spelled out in `save()`.
                 NotificationCenter.default.post(name: Shortcut.Settings.tokenChanged, object: nil)
                 guard status == errSecSuccess else {
                     testResult = .failure(String(
@@ -889,7 +897,10 @@ struct ToolStatus {
     var claudeSupportsSessionName: Bool = false
     var gh: BinaryStatus = .notFound
     var ghVersion: String?
+    /// Display-only. `ghAuthenticated` is the flag to branch on — this string is
+    /// a username or a status phrase and is free to be reworded.
     var ghAuthDetail: String?
+    var ghAuthenticated: Bool = false
     var git: BinaryStatus = .notFound
     var gitVersion: String?
 
@@ -910,7 +921,9 @@ struct ToolStatus {
         status.gh = findBinary("gh")
         if let path = status.gh.path {
             status.ghVersion = runForVersion(path, args: ["--version"])
-            status.ghAuthDetail = checkGhAuth(path)
+            let auth = checkGhAuth(path)
+            status.ghAuthenticated = auth.authenticated
+            status.ghAuthDetail = auth.detail
         }
 
         status.git = findBinary("git")
@@ -939,21 +952,24 @@ struct ToolStatus {
         return output.contains(flag)
     }
 
-    private static func checkGhAuth(_ ghPath: String) -> String? {
+    /// Returns the authentication *fact* alongside the string shown in Settings.
+    /// The two are separate on purpose: callers that gate behaviour on gh being
+    /// usable read the flag, so rewording the detail cannot switch them off.
+    private static func checkGhAuth(_ ghPath: String) -> (authenticated: Bool, detail: String) {
         guard let output = runCommand(ghPath, args: ["auth", "status"], includeStderr: true) else {
-            return "Not authenticated"
+            return (false, "Not authenticated")
         }
         if let range = output.range(of: "account ") {
             let afterAccount = output[range.upperBound...]
             let username = afterAccount.prefix(while: { !$0.isWhitespace && $0 != "(" })
             if !username.isEmpty {
-                return String(username)
+                return (true, String(username))
             }
         }
         if output.contains("Logged in") {
-            return "Authenticated"
+            return (true, "Authenticated")
         }
-        return "Not authenticated"
+        return (false, "Not authenticated")
     }
 
     /// Bounded: these probes run when the Environment pane appears, and

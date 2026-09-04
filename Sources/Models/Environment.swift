@@ -487,7 +487,7 @@ final class AppEnvironment: ObservableObject {
     // MARK: - GitHub
 
     var ghAvailable: Bool {
-        toolStatus.gh.isInstalled && toolStatus.ghAuthDetail != "Not authenticated"
+        toolStatus.gh.isInstalled && toolStatus.ghAuthenticated
     }
 
     func githubRepo(for directory: String) -> GitHub.RepoInfo? {
@@ -510,9 +510,13 @@ final class AppEnvironment: ObservableObject {
 
     func refreshGitHubInfo(for directory: String, branch: String? = nil) {
         guard ghAvailable, let ghPath = toolStatus.gh.path else { return }
-        guard GitHub.Operations.hasGitHubRemote(at: directory) else { return }
 
         Task.detached {
+            // `hasGitHubRemote` spawns `git remote get-url` synchronously, so it
+            // belongs inside the detached task — checking it above blocked the
+            // main actor on a subprocess for every refresh.
+            guard GitHub.Operations.hasGitHubRemote(at: directory) else { return }
+
             let repo = GitHub.Operations.repoInfo(ghPath: ghPath, at: directory)
             let prs = GitHub.Operations.openPRs(ghPath: ghPath, at: directory)
             // One call now covers every state, so the old open-then-merged fallback is gone.
@@ -564,7 +568,6 @@ final class AppEnvironment: ObservableObject {
     func refreshAllBranchPRs(projects: [Project]) {
         let now = Date()
         guard now.timeIntervalSince(lastBranchPRRefresh) >= 30 else { return }
-        lastBranchPRRefresh = now
 
         guard ghAvailable, let ghPath = toolStatus.gh.path else { return }
 
@@ -583,6 +586,11 @@ final class AppEnvironment: ObservableObject {
         }
 
         guard !projectBranches.isEmpty else { return }
+
+        // Stamped only once a refresh is actually going out. Stamping above the
+        // guards burned the whole 30s window on a call that did nothing — which
+        // is every call made before tool detection finishes at launch.
+        lastBranchPRRefresh = now
 
         // Which branches already have a badge on screen. A branch missing from the bulk
         // result only warrants a targeted lookup if it had one — otherwise it is simply a

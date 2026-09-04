@@ -62,7 +62,9 @@ enum SystemPrompts {
     - Branch `scan-deep-thr`, user says "fix the login timeout bug" → rename to `fix-login-timeout-bug` \
     and write "Fix login timeout by increasing session TTL" to the description file. \
     - Branch `scan-deep-thr`, user says "https://linear.app/keiron/issue/CRM-2943/cambiar-nombre-de-tablero \
-    no se puede cambiar nombre de tablero" → rename to `crm-2943-no-se-puede-cambiar-nombre-de-tablero` \
-    and write "Allow renaming a board" to the description file.
+    no se puede cambiar nombre de tablero" → rename to `crm-2943-no-se-puede-cambiar-nombre` \
+    and write "Allow renaming a board" to the description file. \
+    Note the descriptive part is five words, not the seven in the request: rule 4 applies to \
+    the example too, and an agent copies the example.
     """
 }

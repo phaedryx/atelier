@@ -568,3 +568,9 @@
 
 /* Workstream info tab - Shortcut section */
 "Type" = "Type";
+
+/* Quick actions - a run refused before it spawned anything */
+"Claude Code was not found on PATH." = "Claude Code was not found on PATH.";
+"The GitHub CLI (gh) was not found on PATH." = "The GitHub CLI (gh) was not found on PATH.";
+"This workstream has no branch to close a PR for." = "This workstream has no branch to close a PR for.";
+"No prompt is defined for this action." = "No prompt is defined for this action.";
