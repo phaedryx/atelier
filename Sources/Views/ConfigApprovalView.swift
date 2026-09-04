@@ -25,12 +25,26 @@ struct ConfigApprovalView: View {
     let onApprove: () -> Void
     let onCancel: () -> Void
 
+    /// One file, read once. Both this and `isReadable` used to be computed from
+    /// `body`: the fingerprint hashed every file and the preview did a synchronous
+    /// `String(contentsOfFile:)` per file, on every re-render of a security
+    /// dialog. Read on appear instead — the set of files does not change while
+    /// the pane is up, and if it did, `.onChange` reloads.
+    private struct LoadedFile: Identifiable {
+        var id: String {
+            path
+        }
+
+        let path: String
+        let text: String
+    }
+
+    @State private var loadedFiles: [LoadedFile] = []
+
     /// A file with no fingerprint cannot be approved — `ScriptTrust.approve`
     /// would silently do nothing — so the button is disabled rather than left as
     /// one that never takes effect. The previews say which file is unreadable.
-    private var isReadable: Bool {
-        ScriptTrust.fingerprint(configFiles: filePaths) != nil
-    }
+    @State private var isReadable = false
 
     private var fileNames: String {
         filePaths.map { ($0 as NSString).lastPathComponent }.joined(separator: ", ")
@@ -63,15 +77,15 @@ struct ConfigApprovalView: View {
             // when these processes run.
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    ForEach(filePaths, id: \.self) { path in
+                    ForEach(loadedFiles) { file in
                         VStack(alignment: .leading, spacing: 4) {
-                            Text((path as NSString).lastPathComponent)
+                            Text((file.path as NSString).lastPathComponent)
                                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                            Text(path)
+                            Text(file.path)
                                 .font(.system(size: 9, design: .monospaced))
                                 .foregroundStyle(.tertiary)
                                 .textSelection(.enabled)
-                            Text(contents(of: path))
+                            Text(file.text)
                                 .font(.system(size: 11, design: .monospaced))
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -101,6 +115,13 @@ struct ConfigApprovalView: View {
         }
         .padding(24)
         .frame(minWidth: 580, minHeight: 560)
+        .onAppear(perform: load)
+        .onChange(of: filePaths) { load() }
+    }
+
+    private func load() {
+        loadedFiles = filePaths.map { LoadedFile(path: $0, text: contents(of: $0)) }
+        isReadable = ScriptTrust.fingerprint(configFiles: filePaths) != nil
     }
 
     /// One file's whole text. An unreadable file shows as such rather than as an

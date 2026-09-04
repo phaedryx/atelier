@@ -250,4 +250,12 @@ final class CommandBuilderTests: XCTestCase {
         // Backticks and angle brackets should be quoted
         XCTAssertTrue(result.contains("'"))
     }
+
+    func testWithFallbackQuotesAShellPathContainingASpace() {
+        let result = CommandBuilder.withFallback("cmd1", "cmd2", shell: "/Applications/My Shells/zsh")
+        XCTAssertTrue(
+            result.hasPrefix("'/Applications/My Shells/zsh' -lic "),
+            "Expected a quoted shell path, got: \(result)"
+        )
+    }
 }

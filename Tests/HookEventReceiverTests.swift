@@ -87,4 +87,49 @@ final class HookEventReceiverTests: XCTestCase {
         XCTAssertFalse(events.isEmpty)
         XCTAssertTrue(events.allSatisfy { $0.surfaceID == nil })
     }
+
+    // MARK: - Connection deadline
+
+    /// A local client that opens a connection, sends half a header and goes
+    /// quiet used to leave `receiveData` recursing forever with the connection
+    /// pinned in `connections` for the life of the process.
+    func test_aHalfOpenRequestIsClosedByTheReadDeadline() throws {
+        let previous = HookEventReceiver.connectionTimeout
+        HookEventReceiver.connectionTimeout = 0.5
+        addTeardownBlock { HookEventReceiver.connectionTimeout = previous }
+
+        receiver.start()
+        let deadline = Date().addingTimeInterval(10)
+        var port: UInt16?
+        while Date() < deadline, port == nil {
+            port = receiver.boundPort
+            if port == nil {
+                usleep(20_000)
+            }
+        }
+        let resolved = try XCTUnwrap(port, "hook receiver did not bind a port")
+
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        defer { close(fd) }
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = resolved.bigEndian
+        address.sin_addr.s_addr = INADDR_LOOPBACK.bigEndian
+        let connected = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        XCTAssertEqual(connected, 0, "could not reach the hook receiver")
+
+        // Headers that never end, and a body that never arrives.
+        let partial = Data("POST /hook HTTP/1.1\r\nContent-Length: 4096\r\n".utf8)
+        _ = partial.withUnsafeBytes { Darwin.send(fd, $0.baseAddress!, partial.count, 0) }
+
+        let closed = Date().addingTimeInterval(10)
+        while Date() < closed, receiver.connectionCount > 0 {
+            usleep(50_000)
+        }
+        XCTAssertEqual(receiver.connectionCount, 0, "the stalled connection was never reaped")
+    }
 }

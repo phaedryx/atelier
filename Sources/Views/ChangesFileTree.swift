@@ -111,9 +111,11 @@ struct ChangesFileTreeSidebar: View {
     @Binding var selectedFilePath: String?
     let onSelect: (String) -> Void
 
-    private var rootChildren: [FileTreeNode] {
-        FileTreeNode.build(from: files).children ?? []
-    }
+    /// Built when `files` changes, not from `body`. `FileTreeNode.build` walks
+    /// every changed path and sorts every level; as a computed property it ran
+    /// again on each re-render — and selection alone re-renders this view, so a
+    /// keyboard walk down a large diff rebuilt the whole tree per keypress.
+    @State private var rootChildren: [FileTreeNode] = []
 
     var body: some View {
         List(selection: $selectedFilePath) {
@@ -127,6 +129,8 @@ struct ChangesFileTreeSidebar: View {
         }
         .listStyle(.sidebar)
         .accessibilityLabel(Text("Files changed"))
+        .onAppear { rebuild() }
+        .onChange(of: files) { rebuild() }
         // Selection drives the scroll — works for both mouse clicks and keyboard
         // navigation. Skipped when selection is cleared (mode switch / reload).
         .onChange(of: selectedFilePath) { _, newValue in
@@ -134,6 +138,10 @@ struct ChangesFileTreeSidebar: View {
                 onSelect(newValue)
             }
         }
+    }
+
+    private func rebuild() {
+        rootChildren = FileTreeNode.build(from: files).children ?? []
     }
 }
 

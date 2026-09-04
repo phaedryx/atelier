@@ -97,4 +97,21 @@ final class PortDetectionTests: XCTestCase {
             connectionError: false
         ))
     }
+
+    func testQuotesAShellPathContainingASpace() {
+        // `shell` defaults to $SHELL and was interpolated raw while everything
+        // around it was quoted, so a shell installed under a path with a space
+        // broke the command apart.
+        let command = runScriptCommand(
+            script: "bun dev",
+            workstreamID: UUID(),
+            launcherPath: "/path/to/atelier-run",
+            shell: "/Applications/My Shells/zsh"
+        )
+
+        XCTAssertTrue(
+            command.contains("'/Applications/My Shells/zsh' -lic"),
+            "Expected a quoted shell path, got: \(command)"
+        )
+    }
 }

@@ -41,7 +41,9 @@ struct CommandBuilder {
         let posixCmd = "\(primary) || \(fallbackCmd)"
         let shArgQuote = isFish(shell) ? fishQuote(posixCmd) : shellQuote(posixCmd)
         let shCmd = "exec sh -c \(shArgQuote)"
-        return "\(shell) -lic \(shellQuote(shCmd, forShell: shell))"
+        // Quoted for the same reason `RunLauncher.runScriptCommand` quotes it:
+        // $SHELL can sit under a path with a space.
+        return "\(shellQuote(shell)) -lic \(shellQuote(shCmd, forShell: shell))"
     }
 
     static var userShell: String {

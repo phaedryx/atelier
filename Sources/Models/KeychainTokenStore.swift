@@ -19,22 +19,53 @@ struct KeychainTokenStore {
         self.service = service
     }
 
+    /// What a read actually found. `errSecInteractionNotAllowed` and
+    /// `errSecAuthFailed` are not "no token": the token is there and the keychain
+    /// would not hand it over. Collapsing them into the same answer as
+    /// `errSecItemNotFound` presented a keychain problem as "your Shortcut token
+    /// vanished", which sends the user to re-paste a token they already have.
+    enum ReadOutcome: Equatable {
+        case token(String)
+        case absent
+        case failed(OSStatus)
+    }
+
     var hasToken: Bool {
         read() != nil
     }
 
+    /// The token, or nil for both absent and unreadable. Use `readOutcome()`
+    /// where the difference is worth telling the user about.
     func read() -> String? {
+        if case let .token(token) = readOutcome() {
+            return token
+        }
+        return nil
+    }
+
+    func readOutcome() -> ReadOutcome {
         var query = baseQuery
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
 
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data,
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound {
+            return .absent
+        }
+        guard status == errSecSuccess else {
+            return .failed(status)
+        }
+        guard let data = item as? Data,
               let token = String(data: data, encoding: .utf8),
               !token.isEmpty
-        else { return nil }
-        return token
+        else {
+            // Present but unusable is the same thing to every caller as absent —
+            // `write` clears rather than storing an empty credential, so this is
+            // only reachable for an item some other tool wrote.
+            return .absent
+        }
+        return .token(token)
     }
 
     /// Writes the token, replacing any existing one. An empty or whitespace-only
@@ -45,13 +76,20 @@ struct KeychainTokenStore {
     /// locked keychain or a denied access prompt otherwise looks exactly like a save that
     /// worked, and the user is left with a Shortcut button that never appears — or worse,
     /// with an old token still on disk after they believed they had replaced or cleared it.
-    @discardableResult
+    ///
+    /// Deliberately *not* `@discardableResult`: the attribute said the opposite of
+    /// the paragraph above, and one of the two had to go.
     func write(_ token: String) -> OSStatus {
         let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return delete() }
 
         let data = Data(trimmed.utf8)
-        let attributes = [kSecValueData as String: data]
+        // Set on the update path too, so an item written by an earlier build is
+        // migrated rather than left on whatever the default was then.
+        let attributes = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: accessibility,
+        ] as [String: Any]
         let updated = SecItemUpdate(baseQuery as CFDictionary, attributes as CFDictionary)
         if updated == errSecSuccess {
             return errSecSuccess
@@ -63,6 +101,7 @@ struct KeychainTokenStore {
 
         var insert = baseQuery
         insert[kSecValueData as String] = data
+        insert[kSecAttrAccessible as String] = accessibility
         return SecItemAdd(insert as CFDictionary, nil)
     }
 
@@ -72,6 +111,24 @@ struct KeychainTokenStore {
         // Nothing stored is the outcome the caller wanted.
         return status == errSecItemNotFound ? errSecSuccess : status
     }
+
+    /// Stated rather than inherited, though it does nothing *here*.
+    ///
+    /// This store lands in the macOS **file** keychain (the login keychain), and
+    /// `kSecAttrAccessible` is a data-protection-keychain concept: the file
+    /// keychain accepts the attribute, ignores it, and does not return it —
+    /// verified by reading the attributes back, which come out as `cdat`, `class`,
+    /// `labl`, `mdat`, `svce` and nothing else. What actually governs access is
+    /// the login keychain's own lock state.
+    ///
+    /// It is set anyway so that a move to `kSecUseDataProtectionKeychain` cannot
+    /// silently land an unprotected item. That move is *not* made here: the
+    /// two keychains are separate stores, so switching without a migration would
+    /// hide every already-saved token and read as "your Shortcut token vanished".
+    ///
+    /// Not on `baseQuery`: that dictionary is also the *search* query, and an
+    /// attribute there would stop matching items written before this was set.
+    private let accessibility = kSecAttrAccessibleWhenUnlocked
 
     private var baseQuery: [String: Any] {
         [

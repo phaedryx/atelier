@@ -32,6 +32,9 @@ struct ChangesView: View {
 
     @State private var isLoading = true
     @State private var isRefreshing = false
+    /// Bumped by every load; a completion whose token no longer matches is a
+    /// result for a mode or a refresh the user has already left behind.
+    @State private var loadGeneration = 0
     @State private var fileCount = 0
     @State private var mode: ChangesMode = .branch
     @State private var submitBlocked: SubmitBlocker?
@@ -260,6 +263,8 @@ struct ChangesView: View {
 
     private func fullLoad() {
         isLoading = true
+        loadGeneration += 1
+        let token = loadGeneration
         let workDir = workingDirectory
         let projDir = projectDirectory
         let currentMode = mode
@@ -277,6 +282,11 @@ struct ChangesView: View {
             )
 
             DispatchQueue.main.async {
+                // A mode switch (or a second refresh) during the git hop starts
+                // its own load. Without this the older completion lands second
+                // and paints the mode the user already left over the one they
+                // are on — files, counts, cached fingerprint and all.
+                guard token == loadGeneration else { return }
                 diffFiles = contents.files
                 selectedFilePath = nil
                 fileCount = contents.payload.count
@@ -301,6 +311,8 @@ struct ChangesView: View {
     // MARK: - Background refresh (revisit with cached content already shown)
 
     private func backgroundRefreshIfNeeded() {
+        loadGeneration += 1
+        let token = loadGeneration
         let workDir = workingDirectory
         let projDir = projectDirectory
         let currentMode = mode
@@ -325,6 +337,9 @@ struct ChangesView: View {
             )
 
             DispatchQueue.main.async {
+                // See `fullLoad`: a completion for a mode the user has left must
+                // not overwrite the current one.
+                guard token == loadGeneration else { return }
                 diffFiles = contents.files
                 selectedFilePath = nil
                 fileCount = contents.payload.count

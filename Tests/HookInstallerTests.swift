@@ -162,4 +162,39 @@ final class HookInstallerTests: XCTestCase {
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: settingsPath))
     }
+
+    // MARK: - Hand-edited shapes
+
+    /// Claude Code takes a bare object where the schema shows an array, and
+    /// people write settings.json by hand. `as? [[String: Any]] ?? []` returned
+    /// nil for that shape and the `?? []` then *replaced* the user's entry
+    /// instead of appending beside it.
+    func testKeepsASingleObjectEntryWrittenByHand() throws {
+        let foreign: [String: Any] = [
+            "matcher": "Bash",
+            "hooks": [["type": "command", "command": "/usr/local/bin/my-hook"]],
+        ]
+        try write(["hooks": ["PreToolUse": foreign]])
+
+        HookInstaller.install(hookScriptPath: "/Apps/Atelier.app/atelier-hook", at: settingsPath)
+
+        let commands = try entries(for: "PreToolUse", in: read())
+            .compactMap { ($0["hooks"] as? [[String: Any]])?.first?["command"] as? String }
+        XCTAssertEqual(commands.count, 2, "The hand-written entry must survive alongside ours")
+        XCTAssertTrue(commands.contains("/usr/local/bin/my-hook"))
+        XCTAssertTrue(commands.contains("/Apps/Atelier.app/atelier-hook"))
+    }
+
+    func testUninstallRemovesOurEntryFromASingleObjectShape() throws {
+        let ours: [String: Any] = [
+            "matcher": "",
+            "hooks": [["type": "command", "command": "/Apps/Atelier.app/atelier-hook"]],
+        ]
+        try write(["hooks": ["Stop": ours]])
+
+        HookInstaller.uninstall(at: settingsPath)
+
+        let settings = try read()
+        XCTAssertNil((settings["hooks"] as? [String: Any])?["Stop"])
+    }
 }

@@ -17,8 +17,29 @@ private let logger = Logger(subsystem: "atelier", category: "hook-receiver")
 final class HookEventReceiver: @unchecked Sendable {
     static let shared = HookEventReceiver()
 
+    /// How long a connection may go without completing a request before it is
+    /// closed. A hook posts a small body from a process on this machine; a
+    /// client that has not finished by now is not going to, and without a
+    /// deadline it pinned an `NWConnection` and a `receiveData` recursion for the
+    /// life of the app. Settable so a test can shorten it.
+    nonisolated(unsafe) static var connectionTimeout: TimeInterval = 15
+
     /// Called on the main queue with (projectDir, event).
-    var onEvent: ((String, AgentEvent) -> Void)?
+    ///
+    /// Behind a lock: it is read on the receiver's own queue and assigned from
+    /// wherever the app happens to wire it up.
+    var onEvent: ((String, AgentEvent) -> Void)? {
+        get { onEventLock.withLock { storedOnEvent } }
+        set { onEventLock.withLock { storedOnEvent = newValue } }
+    }
+
+    private let onEventLock = NSLock()
+    private var storedOnEvent: ((String, AgentEvent) -> Void)?
+
+    /// How many connections are open right now. Test-facing.
+    var connectionCount: Int {
+        queue.sync { connections.count }
+    }
 
     private let queue = DispatchQueue(label: "atelier.hook-receiver", qos: .utility)
     private var listener: NWListener?
@@ -104,9 +125,22 @@ final class HookEventReceiver: @unchecked Sendable {
         connections.append(connection)
 
         connection.stateUpdateHandler = { [weak self] state in
-            if case .failed = state {
+            // `.cancelled` as well as `.failed`: every request ends by cancelling
+            // the connection in `sendResponse`, and only `.failed` was being
+            // taken off `connections` — so a healthy request leaked an entry too.
+            switch state {
+            case .failed, .cancelled:
                 self?.removeConnection(connection)
+            default:
+                break
             }
+        }
+
+        queue.asyncAfter(deadline: .now() + Self.connectionTimeout) { [weak self] in
+            guard let self, connections.contains(where: { $0 === connection }) else { return }
+            logger.warning("Closing a hook connection that never completed a request")
+            connection.cancel()
+            removeConnection(connection)
         }
 
         connection.start(queue: queue)

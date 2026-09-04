@@ -178,6 +178,7 @@
 "Leave blank to use the branch name Shortcut suggests. Variables: %@ — for example %@. SLUG is the first six words of the title; SLUG_FULL is all of them." = "Leave blank to use the branch name Shortcut suggests. Variables: %@ — for example %@. SLUG is the first six words of the title; SLUG_FULL is all of them.";
 "Unknown variable %@. It will be used literally." = "Unknown variable %@. It will be used literally.";
 "Could not save to the Keychain (error %d)." = "Could not save to the Keychain (error %d).";
+"Could not read the Keychain (error %d). Any saved token is still there." = "Could not read the Keychain (error %d). Any saved token is still there.";
 "Preview" = "Preview";
 "git will not accept the branch name this produces." = "git will not accept the branch name this produces.";
 "Show Shortcut button in sidebar" = "Show Shortcut button in sidebar";

@@ -71,6 +71,42 @@ final class TranscriptContextReaderTests: XCTestCase {
     func testMissingFileReturnsNil() {
         XCTAssertNil(TranscriptContextReader.usage(transcriptPath: "/nonexistent/transcript.jsonl"))
     }
+
+    /// The tail window starts at an arbitrary byte offset, which lands
+    /// mid-codepoint whenever the transcript carries an emoji or a box-drawing
+    /// character — i.e. most agent sessions. `String(data:encoding:.utf8)` then
+    /// returns nil for the *whole* buffer, and the context meter showed nothing.
+    func testReadsATailThatBeginsMidCodepoint() throws {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("transcript-\(UUID().uuidString).jsonl")
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+
+        // Pad past the 256KB window with lines full of multi-byte characters, so
+        // wherever the seek lands it is inside one.
+        let padding = String(repeating: "🙂", count: 40)
+        var lines: [String] = []
+        var bytes = 0
+        while bytes < 300 * 1024 {
+            let line = #"{"type":"user","message":{"role":"user","content":"\#(padding)"}}"#
+            lines.append(line)
+            bytes += line.utf8.count + 1
+        }
+        lines.append(sonnetLine)
+        try (lines.joined(separator: "\n") + "\n").write(to: url, atomically: true, encoding: .utf8)
+
+        let usage = TranscriptContextReader.usage(transcriptPath: url.path)
+        XCTAssertEqual(usage?.usedTokens, 4 + 123 + 45000)
+    }
+
+    func testReadsAShortFileWhole() throws {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("transcript-\(UUID().uuidString).jsonl")
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        try "\(userLine)\n\(sonnetLine)\n".write(to: url, atomically: true, encoding: .utf8)
+
+        let usage = TranscriptContextReader.usage(transcriptPath: url.path)
+        XCTAssertEqual(usage?.usedTokens, 4 + 123 + 45000)
+    }
 }
 
 final class ContextLimitsTests: XCTestCase {

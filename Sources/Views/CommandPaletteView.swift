@@ -20,6 +20,8 @@ struct CommandPaletteView: View {
     @State private var paletteWindow: NSWindow?
     /// Whoever held the keyboard before the palette opened, restored on dismiss.
     @State private var previousResponder: NSResponder?
+    /// Set by `onDisappear`, read by the deferred `WindowReader` callback.
+    @State private var didDisappear = false
     @FocusState private var fieldFocused: Bool
 
     private var results: [PaletteCommand] {
@@ -85,13 +87,19 @@ struct CommandPaletteView: View {
         // because every open window toggles its own palette on the shared
         // notification, and only this one's responder should be disturbed.
         .background(WindowReader { window in
-            guard paletteWindow == nil, let window else { return }
+            // `WindowReader` reports one runloop turn late. A palette dismissed
+            // inside that turn — fast Esc, a rapid toggle — has already run
+            // `onDisappear` and restored the responder, so taking it now would
+            // leave the terminal underneath keyboard-dead with nothing left to
+            // hand it back.
+            guard !didDisappear, paletteWindow == nil, let window else { return }
             paletteWindow = window
             previousResponder = window.firstResponder
             window.makeFirstResponder(nil)
             fieldFocused = true
         })
         .onDisappear {
+            didDisappear = true
             // Hand the keyboard back to whatever had it, or the terminal the
             // palette was opened over stays keyboard-dead until it is clicked.
             // A command that focuses something of its own (New Terminal, say)
