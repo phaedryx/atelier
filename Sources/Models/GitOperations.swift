@@ -23,6 +23,13 @@ extension Git {
         let remoteURL: String?
         let commitCount: Int?
         let isDirty: Bool
+
+        /// `isDirty` is `false` because `git status` did not run, not because the
+        /// tree is clean. Whatever renders a green "Clean" has to check this first.
+        ///
+        /// No default value on purpose, matching `Worktree.Info.cleanlinessUnknown`:
+        /// a construction site must say whether it actually looked.
+        let isDirtyUnknown: Bool
     }
 }
 
@@ -212,7 +219,9 @@ extension Git {
         /// Get repo information for display.
         static func repoInfo(at path: String) -> Git.RepoInfo {
             guard isGitRepo(at: path) else {
-                return Git.RepoInfo(isRepo: false, branch: nil, remoteURL: nil, commitCount: nil, isDirty: false)
+                // Not a repository at all: there is no tree whose cleanliness could
+                // be in question, so this is an answer rather than a failure to look.
+                return Git.RepoInfo(isRepo: false, branch: nil, remoteURL: nil, commitCount: nil, isDirty: false, isDirtyUnknown: false)
             }
 
             let rawBranch = run(args: ["rev-parse", "--abbrev-ref", "HEAD"], in: path)?
@@ -229,14 +238,18 @@ extension Git {
 
             let status = run(args: ["status", "--porcelain", "--ignore-submodules=dirty"], in: path)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            // `?? false` alone reported a failed probe as a clean tree, and the
+            // surfaces above render that as a green "Clean".
             let isDirty = status.map { !$0.isEmpty } ?? false
+            let isDirtyUnknown = status == nil
 
             return Git.RepoInfo(
                 isRepo: true,
                 branch: branch,
                 remoteURL: remote,
                 commitCount: commitCount,
-                isDirty: isDirty
+                isDirty: isDirty,
+                isDirtyUnknown: isDirtyUnknown
             )
         }
 
@@ -324,6 +337,19 @@ extension Git {
         /// merge-base cannot be computed (e.g. non-repo, unborn HEAD, git failure).
         static func mergeBase(worktreePath: String, projectPath: String) -> String? {
             let base = defaultBranch(at: projectPath)
+            // `defaultBranch` hands back the literal "HEAD" when it resolves
+            // nothing, and `git merge-base HEAD HEAD` answers with HEAD's own SHA —
+            // exit 0, non-empty, straight past the guard below. That base means
+            // "compare this branch against itself", so Branch mode showed only
+            // uncommitted work and dropped every commit on the branch. An
+            // unresolvable base is no base at all.
+            //
+            // Same sentinel already guarded in `worktreeDetail` and
+            // `hasBranchCommits`, and for the same reason this is not the
+            // `BaseBranchSetting` migration those three sites share: which branch
+            // is compared does not change here, only whether an unresolved one is
+            // reported as a successful comparison.
+            guard base != "HEAD" else { return nil }
             guard let sha = run(args: ["merge-base", base, "HEAD"], in: worktreePath)?
                 .trimmingCharacters(in: .whitespacesAndNewlines),
                 !sha.isEmpty
@@ -745,7 +771,25 @@ extension Git {
         }
 
         /// Force-remove a git worktree by path, discarding uncommitted changes.
+        ///
+        /// Carries `removeWorktree`'s guard, and for the same reason: git refuses to
+        /// remove a main working tree, but the `removeItem` below never asked, and
+        /// that is how a user's checkout got deleted once already. Symlinks are
+        /// resolved before comparing, because the same directory reaches here under
+        /// different spellings (`/tmp` vs `/private/tmp`) and `removeItem` follows a
+        /// symlinked parent to the real directory.
         static func forceRemoveWorktreeByPath(worktreePath: String, projectPath: String) {
+            let resolvedWorktree = URL(fileURLWithPath: worktreePath)
+                .standardizedFileURL.resolvingSymlinksInPath().path
+            let resolvedProject = URL(fileURLWithPath: projectPath)
+                .standardizedFileURL.resolvingSymlinksInPath().path
+            guard resolvedWorktree != resolvedProject else {
+                logger.error(
+                    "[Atelier] Refusing to force-remove \(resolvedProject, privacy: .public): that is the project directory, not a worktree of it"
+                )
+                return
+            }
+
             _ = runOnWholeTree(args: ["worktree", "remove", "--force", worktreePath], in: projectPath)
 
             let fm = FileManager.default

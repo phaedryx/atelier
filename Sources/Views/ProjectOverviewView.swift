@@ -109,9 +109,12 @@ struct ProjectOverviewView: View {
                                 }
                             }
 
-                            if info.isDirty {
+                            if info.isDirty || info.isDirtyUnknown {
                                 LabeledContent("Status") {
-                                    RepoStatusBadge(label: "Uncommitted changes", color: .orange) {
+                                    RepoStatusBadge(
+                                        label: info.isDirtyUnknown ? "Changes could not be read" : "Uncommitted changes",
+                                        color: .orange
+                                    ) {
                                         showRepoChanges = true
                                         loadRepoDetail()
                                     }
@@ -627,6 +630,12 @@ private struct WorktreeInfoRow: View {
                                     .font(.caption)
                             }
                             .foregroundStyle(.blue)
+                        } else if worktree.cleanlinessUnknown {
+                            // The model answered "could not tell"; a green Clean here
+                            // throws that away, which is what the flag exists to stop.
+                            Text("State unknown")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
                         } else {
                             Text("Clean")
                                 .font(.caption)
@@ -823,7 +832,10 @@ private struct WorkstreamRow: View {
 }
 
 private struct RepoStatusBadge: View {
-    let label: String
+    /// `LocalizedStringKey`, not `String`: `Text` takes a plain `String` through its
+    /// `StringProtocol` overload, which does not localize. The sole call site passes
+    /// a literal either way, so this costs nothing and keeps the string in the table.
+    let label: LocalizedStringKey
     let color: Color
     let action: () -> Void
 

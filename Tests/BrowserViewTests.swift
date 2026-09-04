@@ -90,6 +90,11 @@ final class BrowserViewTests: XCTestCase {
     /// way. `populateMenu` exists so the population step can be substituted for one
     /// that does add an item — which is what `super` does against a live page — and
     /// the ordering becomes observable without a UI test target.
+    ///
+    /// Scope, exactly: this pins the *order* of the two steps. It does not pin
+    /// `populateMenu`'s body — the double replaces it, so deleting the `super` call
+    /// in production leaves this green (verified by mutation). `didPopulate` proves
+    /// the substituted step ran, not that production reaches `super`.
     func testWillOpenMenuRemovesItemsThePopulationStepAdded() throws {
         let webView = PopulatingBrowserWebView()
         let menu = NSMenu()

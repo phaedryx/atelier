@@ -82,7 +82,7 @@ struct WorktreeDetailSheet: View {
                     // run — with Force Remove sitting right below it.
                     if !detail.isFullyLoaded {
                         Section {
-                            Label(unavailableMessage(for: detail), systemImage: "exclamationmark.triangle")
+                            Label(Self.unavailableMessage(for: detail), systemImage: "exclamationmark.triangle")
                                 .foregroundStyle(.orange)
                         }
                     } else if detail.changes.isEmpty, detail.unmergedCommits.isEmpty {
@@ -145,18 +145,37 @@ struct WorktreeDetailSheet: View {
     }
 
     /// The reassuring version of this sentence is only honest when both probes ran.
-    /// If one didn't, the sheet is showing a warning, and this must not contradict it
-    /// by enumerating what will be lost as if it knew.
+    ///
+    /// Per-probe, not `isFullyLoaded`: collapsing the two flags with AND made this
+    /// contradict the sheet behind it. With changes readable and commits not, the
+    /// sheet listed twelve files by name while this said the contents "could not be
+    /// read" — less informative than the sentence it replaced, and visibly wrong.
     ///
     /// One value rather than a branch inside the alert's `message:` builder: an alert
     /// message is the one place SwiftUI is picky about wrapped content, and a
     /// confirmation that renders *no* message is worse than the wrong one this
     /// replaces.
     private var forceRemoveWarning: LocalizedStringKey {
-        if let detail, !detail.isFullyLoaded {
-            "This worktree's contents could not be read, so what would be discarded is unknown. This permanently removes it either way."
-        } else {
+        Self.forceRemoveWarning(for: detail)
+    }
+
+    /// `static` and non-private so the mapping can be tested directly. The bug this
+    /// replaced — one message for both probes — was a defect in exactly this table,
+    /// and no test could reach it while it lived on the view as a private property.
+    static func forceRemoveWarning(for detail: Worktree.Detail?) -> LocalizedStringKey {
+        // No detail yet: the load has not answered, so nothing has been established.
+        guard let detail else {
+            return "This worktree has not been read yet, so what would be discarded is unknown. This permanently removes it either way."
+        }
+        return switch (detail.changesUnavailable, detail.unmergedCommitsUnavailable) {
+        case (false, false):
             "This will permanently discard all uncommitted changes and unmerged commits in this worktree."
+        case (true, true):
+            "This worktree's contents could not be read, so what would be discarded is unknown. This permanently removes it either way."
+        case (true, false):
+            "Uncommitted changes could not be read, so what would be discarded is unknown. Anything listed above is removed too."
+        case (false, true):
+            "Unmerged commits could not be read, so what would be discarded is unknown. Anything listed above is removed too."
         }
     }
 
@@ -165,14 +184,17 @@ struct WorktreeDetailSheet: View {
     ///
     /// `LocalizedStringKey`, not `String`: `Label` takes a plain `String` through its
     /// `StringProtocol` overload, which does not localize.
-    private func unavailableMessage(for detail: Worktree.Detail) -> LocalizedStringKey {
+    static func unavailableMessage(for detail: Worktree.Detail) -> LocalizedStringKey {
         switch (detail.changesUnavailable, detail.unmergedCommitsUnavailable) {
         case (true, true):
             "This worktree's state could not be read. It may hold uncommitted changes or unmerged commits."
         case (true, false):
             "Uncommitted changes could not be read. This worktree may still hold some."
+        // Deliberately does not name a cause: this flag is set both by an
+        // unresolvable base branch and by `git log` itself failing or timing out,
+        // and naming the wrong one sends the user to investigate the wrong thing.
         case (false, true):
-            "Unmerged commits could not be read — no base branch to compare against. This worktree may still hold some."
+            "Unmerged commits could not be read. This worktree may still hold some."
         case (false, false):
             ""
         }

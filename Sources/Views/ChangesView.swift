@@ -31,6 +31,9 @@ struct ChangesView: View {
     @EnvironmentObject private var surfaceCache: TerminalSurfaceCache
 
     @State private var isLoading = true
+    /// Branch mode could not resolve a base branch, so an empty diff means
+    /// "nothing to compare against" rather than "nothing changed".
+    @State private var baseUnavailable = false
     @State private var isRefreshing = false
     /// Bumped by every load; a completion whose token no longer matches is a
     /// result for a mode or a refresh the user has already left behind.
@@ -186,6 +189,15 @@ struct ChangesView: View {
                 Text("Refreshing…")
                     .font(.system(size: 12))
                     .foregroundStyle(.tertiary)
+            } else if fileCount == 0, baseUnavailable {
+                // An empty Branch diff with no base branch is not a clean branch.
+                // The green check said "you are up to date" for a branch whose
+                // commits had simply never been looked for.
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                Text("No base branch to compare against")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
             } else if fileCount == 0 {
                 Image(systemName: "checkmark.circle")
                     .foregroundStyle(.green)
@@ -290,6 +302,7 @@ struct ChangesView: View {
                 diffFiles = contents.files
                 selectedFilePath = nil
                 fileCount = contents.payload.count
+                baseUnavailable = contents.baseUnavailable
                 bridge.lastFileCount = contents.payload.count
                 bridge.lastDiffFiles = contents.files
                 bridge.lastFingerprint = fingerprint
@@ -343,6 +356,7 @@ struct ChangesView: View {
                 diffFiles = contents.files
                 selectedFilePath = nil
                 fileCount = contents.payload.count
+                baseUnavailable = contents.baseUnavailable
                 bridge.lastFileCount = contents.payload.count
                 bridge.lastDiffFiles = contents.files
                 bridge.lastFingerprint = fingerprint
@@ -374,10 +388,12 @@ struct ChangesView: View {
         let currentMode = mode
         bridge.onLoadFile = { filePath in
             // Runs off the main thread; resolves base ref + content for one file.
+            // No base branch resolved: there is no "original" side to read, so
+            // show the file as it stands rather than diffing it against itself.
             let baseRef = Self.baseRef(workDir: workDir, projDir: projDir, mode: currentMode)
             let (original, modified) = Self.fileTexts(
                 workDir: workDir,
-                baseRef: baseRef,
+                baseRef: baseRef ?? "HEAD",
                 filePath: filePath
             )
             let languageId = MonacoLanguage.id(for: (filePath as NSString).lastPathComponent)
@@ -621,7 +637,7 @@ struct ChangesView: View {
         workDir: String,
         projDir: String,
         mode: ChangesMode
-    ) -> (payload: [[String: Any]], files: [Git.DiffFile]) {
+    ) -> (payload: [[String: Any]], files: [Git.DiffFile], baseUnavailable: Bool) {
         let diffFiles: [Git.DiffFile] = switch mode {
         case .branch:
             Git.Operations.branchDiffFiles(worktreePath: workDir, projectPath: projDir)
@@ -629,7 +645,11 @@ struct ChangesView: View {
             Git.Operations.uncommittedDiffFiles(at: workDir)
         }
 
-        let baseRef = baseRef(workDir: workDir, projDir: projDir, mode: mode)
+        // An empty list because no base branch resolved is not an empty list
+        // because nothing changed, and the tab must not render them the same way.
+        let resolvedBase = baseRef(workDir: workDir, projDir: projDir, mode: mode)
+        let baseUnavailable = resolvedBase == nil
+        let baseRef = resolvedBase ?? "HEAD"
 
         // Order diffs exactly as the sidebar tree displays them (directories
         // before files, alphabetical at every level), so the code review scrolls
@@ -672,7 +692,7 @@ struct ChangesView: View {
             payload.append(entry)
         }
 
-        return (payload, orderedFiles)
+        return (payload, orderedFiles, baseUnavailable)
     }
 
     /// Depth-first flattening of the sidebar tree. Directories come before
@@ -700,12 +720,16 @@ struct ChangesView: View {
 
     // MARK: - Content resolution helpers
 
-    /// The diff base ref for a mode: merge-base for branch (falling back to HEAD),
-    /// HEAD for uncommitted.
-    nonisolated static func baseRef(workDir: String, projDir: String, mode: ChangesMode) -> String {
+    /// The diff base ref for a mode: merge-base for branch, HEAD for uncommitted.
+    /// `nil` only in branch mode, when no base branch resolves.
+    ///
+    /// It used to fall back to HEAD there, which is not a weaker answer but a
+    /// different question: comparing the branch against itself hides every commit
+    /// on it, and the tab reported that as "No changes".
+    nonisolated static func baseRef(workDir: String, projDir: String, mode: ChangesMode) -> String? {
         switch mode {
         case .branch:
-            Git.Operations.mergeBase(worktreePath: workDir, projectPath: projDir) ?? "HEAD"
+            Git.Operations.mergeBase(worktreePath: workDir, projectPath: projDir)
         case .uncommitted:
             "HEAD"
         }
