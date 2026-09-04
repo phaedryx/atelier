@@ -229,7 +229,12 @@ extension GitHub {
         /// processes per worktree — a 12-worktree project paid that lookup ~37
         /// times per render. A `static let` is lazy and thread-safe, and matches
         /// `CommandLineTools`' own once-per-process shell PATH cache: git moving
-        /// mid-session is not a case either of them tries to follow.
+        /// mid-session is not a case either of them tries to follow — nor is git
+        /// appearing after a launch that could not find it, which is the direction
+        /// this actually changes: the computed property re-checked every call, so a
+        /// nil could recover. Installing git while the app runs is the only way to
+        /// reach that, and a stale answer either way is worth the ~37 lookups a
+        /// render this removes.
         private static let gitPath: String? = CommandLineTools.path(for: "git")
 
         /// The `--json` field set every PR query requests. Kept in one place so a field added for

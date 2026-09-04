@@ -54,4 +54,65 @@ final class MonacoResourceSchemeHandlerTests: XCTestCase {
     func testExtensionMatchingIsCaseInsensitive() {
         XCTAssertEqual(MonacoResourceSchemeHandler.mimeType(for: "WOFF2"), "font/woff2")
     }
+
+    // MARK: - Against the real bundle
+
+    /// The tests above use a fabricated base. This one uses the bundle the app
+    /// actually serves from, because the containment rule got *tighter* and its
+    /// failure mode is silent: a rejected request becomes `didFailWithError`, and
+    /// the editor pane just renders blank.
+    func testEveryFileTheRealBundleShipsStillResolves() throws {
+        let base = try XCTUnwrap(Bundle.main.resourceURL).appendingPathComponent("MonacoEditor")
+        try XCTSkipUnless(
+            FileManager.default.fileExists(atPath: base.path),
+            "MonacoEditor bundle is built by scripts/build-editor.sh"
+        )
+
+        let files = try FileManager.default
+            .subpathsOfDirectory(atPath: base.path)
+            .filter { !$0.hasSuffix(".DS_Store") }
+            .filter { path in
+                var isDirectory: ObjCBool = false
+                FileManager.default.fileExists(
+                    atPath: base.appendingPathComponent(path).path,
+                    isDirectory: &isDirectory
+                )
+                return !isDirectory.boolValue
+            }
+        XCTAssertGreaterThan(files.count, 10, "Expected a populated Monaco bundle")
+
+        for relativePath in files {
+            let resolved = MonacoResourceSchemeHandler.resolve(requestPath: "/" + relativePath, in: base)
+            XCTAssertNotNil(resolved, "\(relativePath) must still be servable")
+            XCTAssertEqual(resolved?.path, base.appendingPathComponent(relativePath).path)
+        }
+    }
+
+    /// The extensions WebKit is strict about — module scripts, stylesheets,
+    /// fonts, wasm — must carry a real type when the bundle ships them. Data
+    /// files Monaco `fetch()`es (`.txt`, `.tmlanguage`, `.code-snippets`) fall
+    /// back to `application/octet-stream` and always have; `fetch` does not care,
+    /// so this does not demand a type the handler never claimed to provide.
+    func testTheEnforcedExtensionsTheRealBundleShipsCarryRealTypes() throws {
+        let base = try XCTUnwrap(Bundle.main.resourceURL).appendingPathComponent("MonacoEditor")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: base.path))
+
+        let enforced: [String: String] = [
+            "js": "text/javascript",
+            "mjs": "text/javascript",
+            "css": "text/css",
+            "wasm": "application/wasm",
+            "ttf": "font/ttf",
+            "woff": "font/woff",
+            "woff2": "font/woff2",
+        ]
+        let shipped = try Set(
+            FileManager.default.subpathsOfDirectory(atPath: base.path)
+                .map { ($0 as NSString).pathExtension.lowercased() }
+        )
+        for (ext, expected) in enforced where shipped.contains(ext) {
+            XCTAssertEqual(MonacoResourceSchemeHandler.mimeType(for: ext), expected)
+        }
+        XCTAssertFalse(shipped.isDisjoint(with: enforced.keys), "Expected a populated Monaco bundle")
+    }
 }
