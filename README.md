@@ -146,10 +146,27 @@ processes:
       redis-cli -u "$${REDIS_URL:-redis://localhost:6379}" ping >/dev/null 2>&1 \
         || { echo "redis is not answering — brew services start redis"; exit 1; }
       pg_isready -q || { echo "postgres is not answering"; exit 1; }
+      # Every ${NAME:-default} below is a fallback for running this stack
+      # without Atelier. Under Atelier the names ports.yml declares are always
+      # set, so a fallback that fires means ports.yml misspelled or forgot one —
+      # which would otherwise be invisible, and would land every worktree on the
+      # same repo default. ATELIER_WORKTREE_DIR is set in all four namespaces
+      # under Atelier and in no plain shell, so it is what tells the two apart.
+      # Add a line here for each port ports.yml gains, or the new one is exactly
+      # the case this guard was written to catch.
+      if [ -n "$${ATELIER_WORKTREE_DIR:-}" ]; then
+        : "$${BFF_PORT:?not declared in ports.yml}"
+        : "$${RAILS_PORT:?not declared in ports.yml}"
+        : "$${HTML_TO_JSON_PORT:?not declared in ports.yml}"
+        : "$${VITE_PORT:?not declared in ports.yml}"
+      fi
     availability:
       restart: "no"
 
   # This is the app: it serves the SPA and proxies the API. Not Vite.
+  #
+  # `${NAME:-default}` throughout: Atelier sets every name ports.yml declares,
+  # and the default is only reached when nothing did — see preflight above.
   bff:
     namespace: execute
     command: pnpm dev:bff
@@ -219,10 +236,24 @@ ports:
 ```
 
 The names are yours, not Atelier's — they mean something only because
-`process-compose.yaml` reads them, and they have to match it exactly. Write every
-reference as `${NAME:-<repo default>}`: under Atelier the variable is set and the
-worktree gets its own number, and from a plain shell the default reproduces the
-layout the repo's own env files describe, so the same file works both ways.
+`process-compose.yaml` reads them, and they have to match it exactly.
+
+**Why the `:-3006` defaults are there.** `ports.yml` carries no number for an
+`assigned` port — Atelier picks that per worktree — so every reference in the
+config is written `${NAME:-<default>}`, and the default covers the case where
+nothing set the variable at all — running the stack by hand, with no Atelier in
+the picture. Once the ports come out of the repo's own env files and
+live only here, that fallback is the last remaining record of the stack's
+conventional layout, which is a reason to keep it rather than inline the numbers
+or drop them.
+
+What it cannot do is tell "no Atelier" from "declared it wrong". A name
+`ports.yml` misspells — or never declares — still yields a running stack, on the
+repo default, in every worktree at once: exactly the collision the mechanism
+exists to prevent, arrived at silently. So `preflight` asserts the fallbacks go
+*unused* whenever Atelier is running the stack, branching on
+`ATELIER_WORKTREE_DIR` because it is set in all four namespaces under Atelier and
+in no plain shell. Keep the defaults; make them prove they were unnecessary.
 
 An `assigned` port gets its own number per worktree; a `fixed: 4000` one is that
 number everywhere, for values registered off the machine such as an OAuth
