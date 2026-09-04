@@ -696,6 +696,31 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertEqual(mb, baseSHA)
     }
 
+    /// The third of the three `defaultBranch` comparison sites, and the one left
+    /// unguarded when `worktreeDetail` and `hasBranchCommits` got the same fix.
+    ///
+    /// `defaultBranch` returns the literal "HEAD" when it resolves nothing, and
+    /// `git merge-base HEAD HEAD` answers with HEAD's own SHA — exit 0, non-empty,
+    /// so the `guard let` passes and hands back a base that means "compare this
+    /// branch against itself". The Changes tab's Branch mode then shows only
+    /// uncommitted work: every commit on the branch silently disappears from it.
+    ///
+    /// `develop` is one of `BaseBranchSetting`'s own options and is not a name
+    /// `defaultBranch` probes, so this repository is ordinary, not contrived.
+    func testMergeBaseReturnsNilWhenTheBaseBranchDoesNotResolve() throws {
+        let repoDir = tempDir.appendingPathComponent("mb-unresolvable-base")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        XCTAssertTrue(git(["init", "-b", "develop"], in: repoDir))
+        XCTAssertTrue(git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+                           "commit", "--allow-empty", "-m", "init"], in: repoDir))
+        XCTAssertEqual(Git.Operations.defaultBranch(at: repoDir.path), "HEAD", "precondition")
+
+        XCTAssertNil(
+            Git.Operations.mergeBase(worktreePath: repoDir.path, projectPath: repoDir.path),
+            "an unresolvable base is not a base; returning HEAD's own SHA compares the branch to itself"
+        )
+    }
+
     func testMergeBaseReturnsNilForNonGitDirectory() throws {
         let plainDir = tempDir.appendingPathComponent("mb-not-a-repo")
         try FileManager.default.createDirectory(at: plainDir, withIntermediateDirectories: true)

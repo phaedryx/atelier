@@ -581,7 +581,13 @@
 /* Worktree detail - a probe that did not run, which must not read as "nothing to lose" */
 "This worktree's state could not be read. It may hold uncommitted changes or unmerged commits." = "This worktree's state could not be read. It may hold uncommitted changes or unmerged commits.";
 "Uncommitted changes could not be read. This worktree may still hold some." = "Uncommitted changes could not be read. This worktree may still hold some.";
-"Unmerged commits could not be read — no base branch to compare against. This worktree may still hold some." = "Unmerged commits could not be read — no base branch to compare against. This worktree may still hold some.";
 "This worktree's contents could not be read, so what would be discarded is unknown. This permanently removes it either way." = "This worktree's contents could not be read, so what would be discarded is unknown. This permanently removes it either way.";
 "Changes could not be read. This repository may still have some." = "Changes could not be read. This repository may still have some.";
 "This will permanently discard all uncommitted changes and unmerged commits in this worktree." = "This will permanently discard all uncommitted changes and unmerged commits in this worktree.";
+
+/* Changes tab - Branch mode with no resolvable base branch, distinct from "No changes" */
+"No base branch to compare against" = "No base branch to compare against";
+"This worktree has not been read yet, so what would be discarded is unknown. This permanently removes it either way." = "This worktree has not been read yet, so what would be discarded is unknown. This permanently removes it either way.";
+"Uncommitted changes could not be read, so what would be discarded is unknown. Anything listed above is removed too." = "Uncommitted changes could not be read, so what would be discarded is unknown. Anything listed above is removed too.";
+"Unmerged commits could not be read, so what would be discarded is unknown. Anything listed above is removed too." = "Unmerged commits could not be read, so what would be discarded is unknown. Anything listed above is removed too.";
+"Unmerged commits could not be read. This worktree may still hold some." = "Unmerged commits could not be read. This worktree may still hold some.";

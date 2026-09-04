@@ -12,14 +12,20 @@ extension Notification.Name {
 /// Hides the "Open Link in New Window" context menu item since the app is single-window.
 class BrowserWebView: WKWebView {
     /// Fills `menu` from the responder chain. Split out of `willOpenMenu` for one
-    /// reason: it is the only seam that makes the ordering below testable. A
+    /// reason: it is the only seam that makes the *ordering* below testable. A
     /// `WKWebView` with no loaded page contributes no items here, so a unit test that
     /// populates the menu itself passes whichever order the two steps run in — which
     /// is how the removal-first bug shipped. Overriding this substitutes a population
     /// step that does add items, the way a live page does.
     ///
-    /// Anything that calls `super.willOpenMenu` from `willOpenMenu` directly goes back
-    /// to being untested: the override below must route through here.
+    /// **What that does not cover, precisely:** the body of this method. The test
+    /// double overrides `populateMenu` outright, so deleting the `super` call below
+    /// leaves both tests green — verified by mutation. Nothing here is checked except
+    /// that `willOpenMenu` routes through this method before removing anything.
+    /// Proving `super` is reached needs a live page and a real right-click, which is
+    /// a UI test target this project does not have. So: two invariants are held by
+    /// this comment rather than by a test — that the line below stays, and that
+    /// `willOpenMenu` keeps calling this instead of `super` directly.
     func populateMenu(_ menu: NSMenu, with event: NSEvent) {
         super.willOpenMenu(menu, with: event)
     }

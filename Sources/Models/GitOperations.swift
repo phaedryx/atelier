@@ -324,6 +324,19 @@ extension Git {
         /// merge-base cannot be computed (e.g. non-repo, unborn HEAD, git failure).
         static func mergeBase(worktreePath: String, projectPath: String) -> String? {
             let base = defaultBranch(at: projectPath)
+            // `defaultBranch` hands back the literal "HEAD" when it resolves
+            // nothing, and `git merge-base HEAD HEAD` answers with HEAD's own SHA —
+            // exit 0, non-empty, straight past the guard below. That base means
+            // "compare this branch against itself", so Branch mode showed only
+            // uncommitted work and dropped every commit on the branch. An
+            // unresolvable base is no base at all.
+            //
+            // Same sentinel already guarded in `worktreeDetail` and
+            // `hasBranchCommits`, and for the same reason this is not the
+            // `BaseBranchSetting` migration those three sites share: which branch
+            // is compared does not change here, only whether an unresolved one is
+            // reported as a successful comparison.
+            guard base != "HEAD" else { return nil }
             guard let sha = run(args: ["merge-base", base, "HEAD"], in: worktreePath)?
                 .trimmingCharacters(in: .whitespacesAndNewlines),
                 !sha.isEmpty
