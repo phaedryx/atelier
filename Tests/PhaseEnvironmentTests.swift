@@ -142,4 +142,32 @@ final class PhaseEnvironmentTests: XCTestCase {
         XCTAssertEqual(child["PATH"], "/inherited")
         XCTAssertEqual(child["ATELIER_PORT"], "5000")
     }
+
+    /// The same question as `testADeclaredPathCannotDisplaceTheLoginPath`, but on
+    /// the branch that had no answer. `if let loginPath` meant a failed login-shell
+    /// lookup left the *workstream's* PATH standing — the one outcome the doc
+    /// comment says cannot happen. The test above it passes either way, because it
+    /// never puts a declared PATH in the way.
+    func testADeclaredPathCannotSurviveAFailedLoginShellLookup() {
+        let child = ProcessCompose.PhaseExecutor.childEnvironment(
+            workstreamEnvironment: ["PATH": "/attacker/bin"],
+            loginPath: nil,
+            baseEnvironment: ["PATH": "/inherited"]
+        )
+
+        XCTAssertEqual(child["PATH"], "/inherited")
+    }
+
+    /// And with nothing to fall back to, the child gets no PATH at all rather than
+    /// the declared one.
+    func testNoPathAtAllBeatsADeclaredOneWhenNothingCanBeInherited() {
+        let child = ProcessCompose.PhaseExecutor.childEnvironment(
+            workstreamEnvironment: ["PATH": "/attacker/bin"],
+            loginPath: nil,
+            baseEnvironment: ["HOME": "/h"]
+        )
+
+        XCTAssertNil(child["PATH"])
+        XCTAssertEqual(child["HOME"], "/h")
+    }
 }

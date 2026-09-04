@@ -158,9 +158,13 @@ extension Git {
 
 extension Git {
     enum Operations {
-        private static var gitPath: String? {
-            CommandLineTools.path(for: "git")
-        }
+        /// Resolved once per process. `CommandLineTools.path(for:)` stats each PATH
+        /// entry until it hits, and `listWorktreesWithInfo` spawns three git
+        /// processes per worktree — a 12-worktree project paid that lookup ~37
+        /// times per render. A `static let` is lazy and thread-safe, and matches
+        /// `CommandLineTools`' own once-per-process shell PATH cache: git moving
+        /// mid-session is not a case either of them tries to follow.
+        private static let gitPath: String? = CommandLineTools.path(for: "git")
 
         /// Check if a directory is a git repository.
         static func isGitRepo(at path: String) -> Bool {
@@ -557,12 +561,15 @@ extension Git {
             // Ask git where the file lives rather than assuming `.git` is a
             // directory — in a worktree, and in the .bare container layout, it is a
             // file pointing elsewhere, and the hardcoded path silently goes nowhere.
-            let excludeURL: URL = if let gitPath = run(args: ["rev-parse", "--git-path", "info/exclude"], in: repoPath)?
-                .trimmingCharacters(in: .whitespacesAndNewlines), !gitPath.isEmpty
+            // `excludePath`, not `gitPath`: the static `gitPath` above is the git
+            // *binary*, and shadowing it here with the info/exclude path made two
+            // unrelated things share one name in one file.
+            let excludeURL: URL = if let excludePath = run(args: ["rev-parse", "--git-path", "info/exclude"], in: repoPath)?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !excludePath.isEmpty
             {
-                gitPath.hasPrefix("/")
-                    ? URL(fileURLWithPath: gitPath)
-                    : URL(fileURLWithPath: repoPath).appendingPathComponent(gitPath).standardized
+                excludePath.hasPrefix("/")
+                    ? URL(fileURLWithPath: excludePath)
+                    : URL(fileURLWithPath: repoPath).appendingPathComponent(excludePath).standardized
             } else {
                 URL(fileURLWithPath: repoPath).appendingPathComponent(".git/info/exclude")
             }

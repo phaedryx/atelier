@@ -224,9 +224,13 @@ extension GitHub.PR.ChecksRollup {
 
 extension GitHub {
     enum Operations {
-        private static var gitPath: String? {
-            CommandLineTools.path(for: "git")
-        }
+        /// Resolved once per process. `CommandLineTools.path(for:)` stats each PATH
+        /// entry until it hits, and `listWorktreesWithInfo` spawns three git
+        /// processes per worktree — a 12-worktree project paid that lookup ~37
+        /// times per render. A `static let` is lazy and thread-safe, and matches
+        /// `CommandLineTools`' own once-per-process shell PATH cache: git moving
+        /// mid-session is not a case either of them tries to follow.
+        private static let gitPath: String? = CommandLineTools.path(for: "git")
 
         /// The `--json` field set every PR query requests. Kept in one place so a field added for
         /// one call site cannot silently go missing from another and decode as its default.

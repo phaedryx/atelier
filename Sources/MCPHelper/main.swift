@@ -69,6 +69,10 @@ final class IPCTransport {
             sent += written
         }
 
+        // Hoisted: allocating and zeroing 64 KiB per iteration is pure waste, and
+        // `recv` overwrites exactly what it fills.
+        var chunk = [UInt8](repeating: 0, count: 65_536)
+
         while true {
             let (lines, remainder) = IPC.Framing.lines(from: buffer)
             buffer = remainder
@@ -78,7 +82,6 @@ final class IPCTransport {
                 }
             }
 
-            var chunk = [UInt8](repeating: 0, count: 65_536)
             let read = recv(fd, &chunk, chunk.count, 0)
             // 0 is a closed socket; -1 with EAGAIN is the timeout above. Both
             // mean "no answer is coming", which the caller turns into a
@@ -111,7 +114,9 @@ let toolDefinitions: [ToolDefinition] = [
     ToolDefinition(
         tool: .registerPeer,
         description: """
-        Register yourself so other agents can reach you. Call this once, before         anything else. Calling it again renames you rather than creating a         second identity.
+        Register yourself so other agents can reach you. Call this once, before
+        anything else. Calling it again renames you rather than creating a
+        second identity.
         """,
         properties: [
             "name": ["type": "string", "description": "Short handle other agents will address you by. Defaults to your workstream name."],
@@ -122,7 +127,9 @@ let toolDefinitions: [ToolDefinition] = [
     ToolDefinition(
         tool: .listPeers,
         description: """
-        List the other agents currently reachable, with how long ago each was         last heard from and how many messages are waiting for it. Only agents         working in the same project are listed.
+        List the other agents currently reachable, with how long ago each was
+        last heard from and how many messages are waiting for it. Only agents
+        working in the same project are listed.
         """,
         properties: [:],
         required: []
@@ -130,7 +137,9 @@ let toolDefinitions: [ToolDefinition] = [
     ToolDefinition(
         tool: .sendMessage,
         description: """
-        Put a message in another agent's inbox. Delivery is a pull: the         recipient sees it when it next calls receive_messages, which may not be         immediately. Do not block waiting for a reply.
+        Put a message in another agent's inbox. Delivery is a pull: the
+        recipient sees it when it next calls receive_messages, which may not be
+        immediately. Do not block waiting for a reply.
         """,
         properties: [
             "to": ["type": "string", "description": "Peer id from list_peers."],
@@ -141,7 +150,11 @@ let toolDefinitions: [ToolDefinition] = [
     ToolDefinition(
         tool: .receiveMessages,
         description: """
-        Take everything waiting in your inbox. Messages are deleted as they are         returned, so act on what you get. Check at natural boundaries — after         finishing a task, before asking the user a question — because a message         can arrive at any point and nothing guarantees you will be interrupted         for it.
+        Take everything waiting in your inbox. Messages are deleted as they are
+        returned, so act on what you get. Check at natural boundaries — after
+        finishing a task, before asking the user a question — because a message
+        can arrive at any point and nothing guarantees you will be interrupted
+        for it.
         """,
         properties: [:],
         required: []
@@ -149,7 +162,8 @@ let toolDefinitions: [ToolDefinition] = [
     ToolDefinition(
         tool: .broadcast,
         description: """
-        Send one message to every other agent in this project. Use it sparingly;         prefer send_message when you know who you need.
+        Send one message to every other agent in this project. Use it sparingly;
+        prefer send_message when you know who you need.
         """,
         properties: [
             "content": ["type": "string", "description": "The message."],
@@ -267,8 +281,30 @@ final class IPCBridge {
     ///
     /// Called on every incoming MCP message, so a session that starts before
     /// Atelier is listening still lands as soon as it is. Claude Code sends
-    /// `initialize` and `tools/list` at startup, so this costs nothing extra.
+    /// `initialize` and `tools/list` at startup, and one message per tool call
+    /// after that, so the endpoint re-read below is a handful of small file reads
+    /// over a session.
+    ///
+    /// That re-read is what lets this notice a *restart*. Atelier regenerates its
+    /// token on every start, so a different endpoint on disk means the socket we
+    /// hold points at a process that is gone — and nothing else here would notice:
+    /// `connect()` short-circuits while `endpoint` is non-nil, and the guard below
+    /// returns early while `peerID` is set. Only a real tool call recovered, so
+    /// between a restart and the agent's next call this session was missing from
+    /// the new app's peer store and invisible to everyone else's `list_peers`.
+    ///
+    /// A *failed* read is not a restart — the app may simply not be running, and
+    /// tearing down a working connection over a transient read would be worse than
+    /// the gap this closes. Only a successful, different endpoint counts.
     func ensureRegistered() {
+        if let current = endpoint,
+           let onDisk = IPC.Endpoint.read(),
+           onDisk.port != current.port || onDisk.token != current.token
+        {
+            transport.disconnect()
+            endpoint = nil
+            peerID = nil
+        }
         guard peerID == nil, connect() == nil else { return }
         _ = attempt(tool: .registerPeer, arguments: registration ?? [:])
     }
@@ -329,7 +365,15 @@ final class IPCBridge {
         return nil
     }
 
-    private func attempt(tool: IPC.Tool, arguments: [String: String]) -> Attempt {
+    /// - Parameter afterReregister: set on the two recursive calls below, so the
+    ///   re-registration dance is attempted once and never re-entered. Without it
+    ///   an app that keeps answering "belongs to another session" — to the retry
+    ///   *or* to the `register_peer` inside it — recursed without bound.
+    private func attempt(
+        tool: IPC.Tool,
+        arguments: [String: String],
+        afterReregister: Bool = false
+    ) -> Attempt {
         guard let endpoint else { return .disconnected }
 
         let identity = IPC.ClientIdentity.fromEnvironment(peerID: peerID)
@@ -341,14 +385,20 @@ final class IPCBridge {
             // socket's close. Treated as final, that wedges the session for
             // good: `ensureRegistered` no-ops while `peerID` is set, so nothing
             // would ever ask again. Drop the identity and re-register instead.
-            if error.contains("belongs to another session") {
+            if error.contains("belongs to another session"), !afterReregister {
                 peerID = nil
-                if case let .ok(payload) = attempt(tool: .registerPeer, arguments: registration ?? [:]),
-                   case .peer = payload
-                {
-                    return attempt(tool: tool, arguments: arguments)
+                if case let .ok(payload) = attempt(
+                    tool: .registerPeer,
+                    arguments: registration ?? [:],
+                    afterReregister: true
+                ), case .peer = payload {
+                    return attempt(tool: tool, arguments: arguments, afterReregister: true)
                 }
             }
+            // Bounded out, or the re-registration failed: report what the app
+            // said. Not `.disconnected` — the connection is fine, the app
+            // refused, and `call()` treats disconnection as "reconnect and
+            // replay", which would spin the same refusal again.
             return .refused(error)
         }
 

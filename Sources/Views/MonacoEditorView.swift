@@ -25,12 +25,7 @@ final class MonacoResourceSchemeHandler: NSObject, WKURLSchemeHandler {
             return
         }
 
-        // Strip leading slash from path to get relative path within MonacoEditor/
-        let relativePath = String(url.path.dropFirst())
-        let fileURL = baseURL.appendingPathComponent(relativePath).standardized
-
-        // Reject path traversal attempts that escape the base directory
-        guard fileURL.path.hasPrefix(baseURL.standardized.path) else {
+        guard let fileURL = Self.resolve(requestPath: url.path, in: baseURL) else {
             urlSchemeTask.didFailWithError(URLError(.badURL))
             return
         }
@@ -57,7 +52,31 @@ final class MonacoResourceSchemeHandler: NSObject, WKURLSchemeHandler {
 
     func webView(_: WKWebView, stop _: any WKURLSchemeTask) {}
 
-    private static func mimeType(for ext: String) -> String {
+    /// The bundle file a request names, or nil if it does not resolve to one
+    /// *inside* the bundle.
+    ///
+    /// Containment is checked on path *components*, not with `hasPrefix` on the
+    /// bare path: a prefix match is true for any sibling whose name merely starts
+    /// with the base's, so `.../MonacoEditor-evil/payload.js` passed a guard meant
+    /// to allow only `.../MonacoEditor/...`.
+    ///
+    /// Internal so the containment rule can be tested without a `WKURLSchemeTask`.
+    static func resolve(requestPath: String, in baseURL: URL) -> URL? {
+        // Strip leading slash to get the path relative to MonacoEditor/
+        let relativePath = String(requestPath.dropFirst())
+        let fileURL = baseURL.appendingPathComponent(relativePath).standardized
+        let base = baseURL.standardized.pathComponents
+        let candidate = fileURL.pathComponents
+        // A served file lives *under* the base, so it has strictly more
+        // components — the base directory itself is not a file to serve.
+        guard candidate.count > base.count, Array(candidate.prefix(base.count)) == base else {
+            return nil
+        }
+        return fileURL
+    }
+
+    /// Internal so the table can be checked against the rename that mangled it.
+    static func mimeType(for ext: String) -> String {
         switch ext.lowercased() {
         case "html": "text/html"
         case "js", "mjs": "text/javascript"
@@ -66,7 +85,10 @@ final class MonacoResourceSchemeHandler: NSObject, WKURLSchemeHandler {
         case "wasm": "application/wasm"
         case "ttf": "font/ttf"
         case "woff": "font/woff"
-        case "woatelier": "font/woatelier"
+        // Was `"woatelier": "font/woatelier"` — collateral from a project-wide
+        // "ff" → "atelier" rename that ate the middle of `woff2`. WebKit rejects
+        // the invalid type, so Monaco's fonts never loaded.
+        case "woff2": "font/woff2"
         case "svg": "image/svg+xml"
         case "png": "image/png"
         default: "application/octet-stream"
