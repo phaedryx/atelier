@@ -76,7 +76,16 @@ struct WorktreeDetailSheet: View {
                         }
                     }
 
-                    if detail.changes.isEmpty, detail.unmergedCommits.isEmpty {
+                    // A failed probe reports nothing, which is the same shape as a
+                    // clean worktree. Saying "nothing found" for both told the user
+                    // there was nothing to lose at the one moment the check had not
+                    // run — with Force Remove sitting right below it.
+                    if !detail.isFullyLoaded {
+                        Section {
+                            Label(unavailableMessage(for: detail), systemImage: "exclamationmark.triangle")
+                                .foregroundStyle(.orange)
+                        }
+                    } else if detail.changes.isEmpty, detail.unmergedCommits.isEmpty {
                         Section {
                             Text("No uncommitted changes or unmerged commits found.")
                                 .foregroundStyle(.secondary)
@@ -120,7 +129,14 @@ struct WorktreeDetailSheet: View {
                 forceRemove()
             }
         } message: {
-            Text("This will permanently discard all uncommitted changes and unmerged commits in this worktree.")
+            // The reassuring version of this sentence is only honest when both probes
+            // ran. If one didn't, the sheet above it is showing a warning, and this
+            // must not contradict it by enumerating what will be lost as if it knew.
+            if let detail, !detail.isFullyLoaded {
+                Text("This worktree's contents could not be read, so what would be discarded is unknown. This permanently removes it either way.")
+            } else {
+                Text("This will permanently discard all uncommitted changes and unmerged commits in this worktree.")
+            }
         }
         .alert("Discard All Changes", isPresented: $showDiscardConfirm) {
             Button("Cancel", role: .cancel) {}
@@ -132,6 +148,24 @@ struct WorktreeDetailSheet: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text("The worktree directory is still on disk. Close anything using it and try again.")
+        }
+    }
+
+    /// Names which check didn't run, so the user knows what the sheet is silent about
+    /// rather than only that something went wrong.
+    ///
+    /// `LocalizedStringKey`, not `String`: `Label` takes a plain `String` through its
+    /// `StringProtocol` overload, which does not localize.
+    private func unavailableMessage(for detail: Worktree.Detail) -> LocalizedStringKey {
+        switch (detail.changesUnavailable, detail.unmergedCommitsUnavailable) {
+        case (true, true):
+            "This worktree's state could not be read. It may hold uncommitted changes or unmerged commits."
+        case (true, false):
+            "Uncommitted changes could not be read. This worktree may still hold some."
+        case (false, true):
+            "Unmerged commits could not be read — no base branch to compare against. This worktree may still hold some."
+        case (false, false):
+            ""
         }
     }
 

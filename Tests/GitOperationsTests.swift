@@ -1300,6 +1300,82 @@ final class GitOperationsTests: XCTestCase {
         return (String(data: data, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    // MARK: - worktreeDetail availability
+
+    /// The sheet renders an empty `changes` + empty `unmergedCommits` as
+    /// "No uncommitted changes or unmerged commits found." directly above a Force
+    /// Remove button. A failed probe produced exactly that shape, so the user was
+    /// told there was nothing to lose at the one moment the check had not run.
+    func testWorktreeDetailMarksBothProbesUnavailableOutsideARepository() throws {
+        let plainDir = tempDir.appendingPathComponent("not-a-repo")
+        try FileManager.default.createDirectory(at: plainDir, withIntermediateDirectories: true)
+
+        let detail = Git.Operations.worktreeDetail(at: plainDir.path, mainRepoPath: plainDir.path)
+
+        XCTAssertTrue(detail.changes.isEmpty)
+        XCTAssertTrue(detail.unmergedCommits.isEmpty)
+        XCTAssertTrue(detail.changesUnavailable, "git status failed here; empty is for want of an answer")
+        XCTAssertTrue(detail.unmergedCommitsUnavailable, "no base branch resolves outside a repository")
+        XCTAssertFalse(detail.isFullyLoaded)
+    }
+
+    /// The positive control for the flags above. Without it an inverted or
+    /// always-true flag ships and puts a "could not be read" banner on every clean
+    /// worktree — a worse regression than the bug being fixed.
+    func testWorktreeDetailReportsACleanTreeAsCheckedAndClean() throws {
+        let repoDir = tempDir.appendingPathComponent("clean-repo")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        XCTAssertTrue(git(["init", "-b", "main"], in: repoDir))
+        XCTAssertTrue(git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+                           "commit", "--allow-empty", "-m", "init"], in: repoDir))
+
+        let detail = Git.Operations.worktreeDetail(at: repoDir.path, mainRepoPath: repoDir.path)
+
+        XCTAssertTrue(detail.changes.isEmpty)
+        XCTAssertTrue(detail.unmergedCommits.isEmpty)
+        XCTAssertFalse(detail.changesUnavailable, "git status ran and found a clean tree")
+        XCTAssertFalse(detail.unmergedCommitsUnavailable, "main resolved, so base..HEAD is a real comparison")
+        XCTAssertTrue(detail.isFullyLoaded)
+    }
+
+    /// `defaultBranch` falls back to the literal "HEAD" when it can resolve nothing
+    /// (see `testDefaultBranchReturnsHEADWhenNeitherMainNorMasterExist`). `git log
+    /// HEAD..HEAD` is a valid empty range that exits 0, so the failure arrived as a
+    /// successful "no unmerged commits" rather than as an error. `develop` is one of
+    /// `BaseBranchSetting`'s own options, so this is not a contrived repository.
+    func testWorktreeDetailMarksCommitsUnavailableWhenTheBaseBranchDoesNotResolve() throws {
+        let repoDir = tempDir.appendingPathComponent("develop-repo")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        XCTAssertTrue(git(["init", "-b", "develop"], in: repoDir))
+        XCTAssertTrue(git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+                           "commit", "--allow-empty", "-m", "init"], in: repoDir))
+        XCTAssertEqual(Git.Operations.defaultBranch(at: repoDir.path), "HEAD", "precondition")
+
+        let detail = Git.Operations.worktreeDetail(at: repoDir.path, mainRepoPath: repoDir.path)
+
+        XCTAssertFalse(detail.changesUnavailable, "git status still ran; only the base branch is missing")
+        XCTAssertTrue(
+            detail.unmergedCommitsUnavailable,
+            "HEAD..HEAD is a comparison against itself, not a check that found nothing"
+        )
+    }
+
+    /// A tree with real changes still has to report them, and report them as read.
+    func testWorktreeDetailReportsChangesFromAReadableTree() throws {
+        let repoDir = tempDir.appendingPathComponent("dirty-repo")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        XCTAssertTrue(git(["init", "-b", "main"], in: repoDir))
+        XCTAssertTrue(git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+                           "commit", "--allow-empty", "-m", "init"], in: repoDir))
+        try "hello".write(to: repoDir.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+
+        let detail = Git.Operations.worktreeDetail(at: repoDir.path, mainRepoPath: repoDir.path)
+
+        XCTAssertEqual(detail.changes.map(\.path), ["new.txt"])
+        XCTAssertFalse(detail.changesUnavailable)
+        XCTAssertFalse(detail.unmergedCommitsUnavailable)
+    }
+
     // MARK: - Porcelain rename parsing
 
     /// `worktreeDetail` used to keep the whole `old -> new` field as the path, so the
