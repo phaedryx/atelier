@@ -64,11 +64,13 @@ func commandKeyNotification(charactersIgnoringModifiers: String?, modifierFlags:
     guard flags.contains(.command), !flags.contains(.option), !flags.contains(.control) else { return nil }
     let hasShift = flags.contains(.shift)
 
+    // charactersIgnoringModifiers strips every modifier except Shift, so the
+    // shifted brackets arrive as "{" / "}" — matching "[" / "]" there never fired.
     switch (charactersIgnoringModifiers, hasShift) {
     case ("[", false): return .prevWorkstream
     case ("]", false): return .nextWorkstream
-    case ("[", true): return .prevTab
-    case ("]", true): return .nextTab
+    case ("{", true): return .prevTab
+    case ("}", true): return .nextTab
     case ("w", false): return .closeTerminal
     default: return nil
     }

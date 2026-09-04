@@ -281,7 +281,11 @@ final class MonacoDiffBridge: ObservableObject {
     // MARK: - Coordinator
 
     final class Coordinator: NSObject, WKScriptMessageHandler, @unchecked Sendable {
-        private let bridge: MonacoDiffBridge
+        /// Weak: the bridge owns this coordinator, and the WKUserContentController it
+        /// is registered on is reachable from the bridge's own WKWebView. A strong
+        /// reference back would keep the bridge — and its ~17 MB WebView — alive for
+        /// the process's lifetime, long after the workstream that owned it is gone.
+        private weak var bridge: MonacoDiffBridge?
 
         init(bridge: MonacoDiffBridge) {
             self.bridge = bridge
@@ -292,17 +296,18 @@ final class MonacoDiffBridge: ObservableObject {
             didReceive message: WKScriptMessage
         ) {
             Task { @MainActor in
-                guard let body = message.body as? [String: Any],
+                guard let bridge = self.bridge,
+                      let body = message.body as? [String: Any],
                       let type = body["type"] as? String else { return }
 
                 switch type {
                 case "ready":
-                    self.bridge.markReady()
+                    bridge.markReady()
                 case "contentReady":
-                    self.bridge.contentReady()
+                    bridge.contentReady()
                 case "loadFile":
                     if let filePath = body["filePath"] as? String {
-                        self.bridge.handleLoadFile(filePath)
+                        bridge.handleLoadFile(filePath)
                     }
                 case "copyPath":
                     if let filePath = body["filePath"] as? String {
@@ -315,7 +320,7 @@ final class MonacoDiffBridge: ObservableObject {
                     }
                 case "commentAdded", "commentEdited", "commentDeleted":
                     if let event = ReviewCommentEvent.parse(body) {
-                        self.bridge.onCommentEvent?(event)
+                        bridge.onCommentEvent?(event)
                     }
                 default:
                     break

@@ -479,7 +479,10 @@ struct ProjectSidebar: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .terminalActivity)) { notification in
             guard let wsID = notification.object as? UUID else { return }
-            guard let (pi, wi) = cachedWorkstreamIndex[wsID] else { return }
+            guard let (pi, wi) = cachedWorkstreamIndex[wsID],
+                  projects.indices.contains(pi),
+                  projects[pi].workstreams.indices.contains(wi)
+            else { return }
             let now = Date()
             projects[pi].lastAccessedAt = now
             projects[pi].workstreams[wi].lastAccessedAt = now
@@ -821,6 +824,11 @@ struct ProjectSidebar: View {
             }
         }
         projects.removeAll { $0.id == id }
+        // The cached (project, workstream) index pairs are positional, so they have to be
+        // rebuilt here rather than left to `onChange(of: projects.count)`: a `.terminalActivity`
+        // notification arriving in between would index into the array with a stale pair.
+        cachedSortedIDs = recomputeSortedIDs()
+        rebuildIndices()
         if case let .project(pid) = selection, pid == id {
             selection = nil
         }

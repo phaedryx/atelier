@@ -117,6 +117,10 @@
 "Prune %d clean worktrees" = "Prune %d clean worktrees";
 "Remove %d clean worktree with no uncommitted changes?" = "Remove %d clean worktree with no uncommitted changes?";
 "Remove %d clean worktrees with no uncommitted changes?" = "Remove %d clean worktrees with no uncommitted changes?";
+"Prune failed" = "Prune failed";
+"Removed %1$d of %2$d worktrees. The rest could not be removed." = "Removed %1$d of %2$d worktrees. The rest could not be removed.";
+"Could Not Remove Worktree" = "Could Not Remove Worktree";
+"The worktree directory is still on disk. Close anything using it and try again." = "The worktree directory is still on disk. Close anything using it and try again.";
 "Remove \"%@\" from the list? Files in %@ will not be deleted." = "Remove \"%@\" from the list? Files in %@ will not be deleted.";
 
 /* Projects */
