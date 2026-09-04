@@ -45,8 +45,16 @@ extension Workstream {
         /// describing what would be lost, or nil if it is safe to purge.
         static func purgeWarning(for workstream: Workstream) -> String? {
             guard let path = workstream.worktreePath else { return nil }
+            // A probe that did not run must not read as "nothing here": this warning
+            // is the only thing between the user and a --force removal.
+            guard let uncommitted = Git.Operations.hasUncommittedChanges(at: path) else {
+                return NSLocalizedString(
+                    "This workstream's contents could not be read, so anything unsaved in it would be lost.",
+                    comment: "Purge warning when the git probe failed"
+                )
+            }
             var warnings: [String] = []
-            if Git.Operations.hasUncommittedChanges(at: path) {
+            if uncommitted {
                 warnings.append(NSLocalizedString("uncommitted changes", comment: ""))
             }
             if Git.Operations.hasUnpushedCommits(at: path) {
@@ -268,8 +276,14 @@ extension Workstream {
         /// Warning describing what work would be lost if the orphan worktree at `path`
         /// is purged, or nil if it is safe to purge.
         static func orphanPurgeWarning(at path: String) -> String? {
+            guard let uncommitted = Git.Operations.hasUncommittedChanges(at: path) else {
+                return NSLocalizedString(
+                    "This worktree's contents could not be read, so anything unsaved in it would be lost.",
+                    comment: "Orphan purge warning when the git probe failed"
+                )
+            }
             var warnings: [String] = []
-            if Git.Operations.hasUncommittedChanges(at: path) {
+            if uncommitted {
                 warnings.append(NSLocalizedString("uncommitted changes", comment: ""))
             }
             if Git.Operations.hasUnpushedCommits(at: path) {

@@ -341,9 +341,13 @@ final class AppEnvironment: ObservableObject {
         let projectDir = projectDirectory
         Task.detached {
             let state = Worktree.State(
-                hasUncommittedChanges: Git.Operations.hasUncommittedChanges(at: path),
+                // Advisory UI only — this drives which quick action is offered.
+                // Unknown leans toward offering Commit (a user who declines loses
+                // nothing) and away from offering Create PR (which dead-ends on a
+                // branch with no commits).
+                hasUncommittedChanges: Git.Operations.hasUncommittedChanges(at: path) ?? true,
                 hasUnpushedCommits: Git.Operations.hasUnpushedCommits(at: path),
-                hasBranchCommits: Git.Operations.hasBranchCommits(at: path, projectPath: projectDir),
+                hasBranchCommits: Git.Operations.hasBranchCommits(at: path, projectPath: projectDir) ?? false,
                 hasRemote: Git.Operations.hasRemote(at: path)
             )
             await self.deferWorktreeStateUpdate(state, for: path)
@@ -454,9 +458,13 @@ final class AppEnvironment: ObservableObject {
                 for (path, projectDir) in worktreeToProject {
                     group.addTask {
                         let state = Worktree.State(
-                            hasUncommittedChanges: Git.Operations.hasUncommittedChanges(at: path),
+                            // Advisory UI only — this drives which quick action is offered.
+                            // Unknown leans toward offering Commit (a user who declines loses
+                            // nothing) and away from offering Create PR (which dead-ends on a
+                            // branch with no commits).
+                            hasUncommittedChanges: Git.Operations.hasUncommittedChanges(at: path) ?? true,
                             hasUnpushedCommits: Git.Operations.hasUnpushedCommits(at: path),
-                            hasBranchCommits: Git.Operations.hasBranchCommits(at: path, projectPath: projectDir),
+                            hasBranchCommits: Git.Operations.hasBranchCommits(at: path, projectPath: projectDir) ?? false,
                             hasRemote: Git.Operations.hasRemote(at: path)
                         )
                         return (path, state)

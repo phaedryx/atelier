@@ -574,3 +574,7 @@
 "The GitHub CLI (gh) was not found on PATH." = "The GitHub CLI (gh) was not found on PATH.";
 "This workstream has no branch to close a PR for." = "This workstream has no branch to close a PR for.";
 "No prompt is defined for this action." = "No prompt is defined for this action.";
+
+/* Purge warnings when the git probe failed — an unrun check must not read as "safe" */
+"This workstream's contents could not be read, so anything unsaved in it would be lost." = "This workstream's contents could not be read, so anything unsaved in it would be lost.";
+"This worktree's contents could not be read, so anything unsaved in it would be lost." = "This worktree's contents could not be read, so anything unsaved in it would be lost.";
