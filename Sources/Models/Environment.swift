@@ -341,11 +341,14 @@ final class AppEnvironment: ObservableObject {
         let projectDir = projectDirectory
         Task.detached {
             let state = Worktree.State(
-                // Advisory UI only — this drives which quick action is offered.
-                // Unknown leans toward offering Commit (a user who declines loses
-                // nothing) and away from offering Create PR (which dead-ends on a
-                // branch with no commits).
-                hasUncommittedChanges: Git.Operations.hasUncommittedChanges(at: path) ?? true,
+                // Advisory UI only — this picks which quick action is offered, and
+                // unknown offers nothing. Both actions gated on these spawn work rather
+                // than a dialog: `.commit` runs `claude -p "Stage and commit all
+                // changes"`, so suggesting it on a tree that may be clean spends an agent
+                // run to find nothing — and it sits ahead of push and openPR in the
+                // chain, so it would keep doing that. Not surfacing a shortcut costs the
+                // user a menu; nothing is lost or hidden.
+                hasUncommittedChanges: Git.Operations.hasUncommittedChanges(at: path) ?? false,
                 hasUnpushedCommits: Git.Operations.hasUnpushedCommits(at: path),
                 hasBranchCommits: Git.Operations.hasBranchCommits(at: path, projectPath: projectDir) ?? false,
                 hasRemote: Git.Operations.hasRemote(at: path)
@@ -458,11 +461,14 @@ final class AppEnvironment: ObservableObject {
                 for (path, projectDir) in worktreeToProject {
                     group.addTask {
                         let state = Worktree.State(
-                            // Advisory UI only — this drives which quick action is offered.
-                            // Unknown leans toward offering Commit (a user who declines loses
-                            // nothing) and away from offering Create PR (which dead-ends on a
-                            // branch with no commits).
-                            hasUncommittedChanges: Git.Operations.hasUncommittedChanges(at: path) ?? true,
+                            // Advisory UI only — this picks which quick action is offered, and
+                            // unknown offers nothing. Both actions gated on these spawn work rather
+                            // than a dialog: `.commit` runs `claude -p "Stage and commit all
+                            // changes"`, so suggesting it on a tree that may be clean spends an agent
+                            // run to find nothing — and it sits ahead of push and openPR in the
+                            // chain, so it would keep doing that. Not surfacing a shortcut costs the
+                            // user a menu; nothing is lost or hidden.
+                            hasUncommittedChanges: Git.Operations.hasUncommittedChanges(at: path) ?? false,
                             hasUnpushedCommits: Git.Operations.hasUnpushedCommits(at: path),
                             hasBranchCommits: Git.Operations.hasBranchCommits(at: path, projectPath: projectDir) ?? false,
                             hasRemote: Git.Operations.hasRemote(at: path)
