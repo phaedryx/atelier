@@ -287,6 +287,14 @@ extension IPC {
 
         // MARK: - Test Helpers
 
+        /// `pinned` is private and a removed peer's id can never be re-registered, so
+        /// a stale pin has no observable consequence through the public API — which is
+        /// why `test_removingAPeer_dropsItsPin` could only assert the peer was gone,
+        /// something that held whether or not the pin was cleaned up.
+        func _testIsPinned(peerId: UUID) -> Bool {
+            pinned.contains(peerId)
+        }
+
         func _testSetPeerLastSeen(peerId: UUID, date: Date) {
             peers[peerId]?.lastSeen = date
         }

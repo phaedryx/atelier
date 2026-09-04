@@ -52,6 +52,15 @@ final class BranchNameValidationTests: XCTestCase {
         }
     }
 
+    /// `"double//slash"` above is rejected, but on its own that is also what a rule
+    /// banning slashes outright would do — and slashes are how every branch here is
+    /// named. The contrast belongs next to the rejection rather than inferred from
+    /// `testValidBranchNames` in another test.
+    func testRejectsAnEmptyPathComponentWithoutRejectingSlashes() {
+        XCTAssertTrue(Git.Operations.isValidBranchName("feature/one"))
+        XCTAssertFalse(Git.Operations.isValidBranchName("feature//one"))
+    }
+
     func testRejectsLeadingHyphenAndTrailingPunctuation() {
         XCTAssertFalse(Git.Operations.isValidBranchName("-leading"))
         XCTAssertFalse(Git.Operations.isValidBranchName("trailing."))

@@ -49,8 +49,12 @@ final class FileTreeTests: XCTestCase {
 
         let models = try XCTUnwrap(sources.children?.first { $0.name == "Models" })
         XCTAssertEqual(childNames(models), ["Git.swift"])
-        XCTAssertTrue(try XCTUnwrap(models.children?.first?.diffFile) != nil)
-        XCTAssertFalse(try XCTUnwrap(models.children?.first?.isDirectory))
+        // `XCTAssertTrue(try XCTUnwrap(x) != nil)` was a tautology: XCTUnwrap already
+        // throws on nil, so the comparison could only ever be true. Assert the value.
+        let leaf = try XCTUnwrap(models.children?.first)
+        let leafDiff = try XCTUnwrap(leaf.diffFile, "a leaf must carry the DiffFile it was built from")
+        XCTAssertEqual(leafDiff.relativePath, "Sources/Models/Git.swift")
+        XCTAssertFalse(leaf.isDirectory)
 
         let views = try XCTUnwrap(sources.children?.first { $0.name == "Views" })
         XCTAssertEqual(childNames(views), ["ChangesView.swift"])
@@ -142,6 +146,12 @@ final class FileTreeTests: XCTestCase {
         let deep = try XCTUnwrap(tree.children?.first)
         XCTAssertTrue(deep.isDirectory)
         XCTAssertNil(deep.diffFile)
-        XCTAssertNil(deep.children?.first?.diffFile) // "nested" dir
+        let nested = try XCTUnwrap(deep.children?.first)
+        XCTAssertTrue(nested.isDirectory)
+        XCTAssertNil(nested.diffFile)
+        // Every assertion above is about absence, so a builder that dropped every
+        // DiffFile passed. The leaf has to prove the other half.
+        let leaf = try XCTUnwrap(nested.children?.first)
+        XCTAssertEqual(try XCTUnwrap(leaf.diffFile).relativePath, "deep/nested/file.txt")
     }
 }

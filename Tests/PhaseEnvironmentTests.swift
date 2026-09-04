@@ -92,11 +92,21 @@ final class PhaseEnvironmentTests: XCTestCase {
     }
 
     /// No `ports.yaml` at all is the ordinary case, and it is not an error.
-    func testNoPortsFileStillExportsTheAtelierVariables() {
+    ///
+    /// `XCTAssertNotNil(vars["ATELIER_PORT"])` was vacuous: `WorkstreamEnvironment`
+    /// seeds that key unconditionally, so it held for any implementation of the
+    /// no-file path. What that path actually has to get right is that the seeded port
+    /// is a real port, that its `FF_` mirror agrees with it, and that nothing
+    /// declared leaks in from somewhere else.
+    func testNoPortsFileStillExportsTheAtelierVariables() throws {
         let vars = variables()
 
         XCTAssertEqual(vars["ATELIER_WORKTREE_DIR"], worktree.path)
-        XCTAssertNotNil(vars["ATELIER_PORT"])
+
+        let port = try XCTUnwrap(try Int(XCTUnwrap(vars["ATELIER_PORT"])))
+        XCTAssertTrue((1024 ... 65535).contains(port), "seeded port is out of range: \(port)")
+        XCTAssertEqual(vars["FF_PORT"], vars["ATELIER_PORT"], "the FF_ mirror must not lag the seeded value")
+        XCTAssertNil(vars["BFF_PORT"], "nothing was declared, so nothing declared may appear")
     }
 
     // MARK: - What the child actually receives

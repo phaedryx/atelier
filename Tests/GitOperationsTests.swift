@@ -7,10 +7,12 @@ import XCTest
 final class GitOperationsTests: XCTestCase {
     private var tempDir: URL!
 
-    override func setUp() {
-        super.setUp()
+    override func setUpWithError() throws {
+        try super.setUpWithError()
         tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try! FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        // `try!` aborted the whole runner when the temp directory could not be made,
+        // instead of failing this one test.
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
     }
 
     override func tearDown() {
@@ -1244,20 +1246,42 @@ final class GitOperationsTests: XCTestCase {
         return container
     }
 
+    /// Every git-backed test in this file goes through here, so a discarded launch
+    /// error was the difference between a real suite and a green one. `try?` swallowed
+    /// it, and a `Process` that never launched reports `terminationStatus == 0` — so a
+    /// missing or unlaunchable git made this return success, and every assertion
+    /// downstream then held against an empty filesystem. Fail loudly instead.
     @discardableResult
-    private func git(_ args: [String], in dir: URL) -> Bool {
+    private func git(
+        _ args: [String],
+        in dir: URL,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> Bool {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.arguments = args
         process.currentDirectoryURL = dir
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        try? process.run()
+        do {
+            try process.run()
+        } catch {
+            XCTFail("could not launch git \(args.joined(separator: " ")): \(error)", file: file, line: line)
+            return false
+        }
         process.waitUntilExit()
         return process.terminationStatus == 0
     }
 
-    private func gitOutput(_ args: [String], in dir: URL) -> String {
+    /// Same contract as `git(_:in:)`: an unlaunchable git is a test failure, not an
+    /// empty string that reads like a successful command with no output.
+    private func gitOutput(
+        _ args: [String],
+        in dir: URL,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> String {
         let process = Process()
         let pipe = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
@@ -1265,7 +1289,12 @@ final class GitOperationsTests: XCTestCase {
         process.currentDirectoryURL = dir
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
-        try? process.run()
+        do {
+            try process.run()
+        } catch {
+            XCTFail("could not launch git \(args.joined(separator: " ")): \(error)", file: file, line: line)
+            return ""
+        }
         process.waitUntilExit()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         return (String(data: data, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)

@@ -90,8 +90,37 @@ final class ShortcutStoryCacheTests: XCTestCase {
         env.registerShortcutStory(id: 1, for: "/tmp/reused")
         env.pruneShortcutStories(keeping: [])
 
+        // Nothing was staged for id 2, so the old `XCTAssertNil` was the expected
+        // result whether or not story 1 resurrected — the assertion could not fail.
+        // Staging id 2 makes the path resolve to *something* either way, and which
+        // story it is is the actual contract.
+        env.stageShortcutStory(makeStory(id: 2))
         env.registerShortcutStory(id: 2, for: "/tmp/reused")
-        XCTAssertNil(env.shortcutStory(for: "/tmp/reused"), "story 1 must not come back on a reused path")
+        XCTAssertEqual(env.shortcutStory(for: "/tmp/reused")?.id, 2,
+                       "story 1 must not come back on a reused path")
+    }
+
+    /// `shortcutStateName` has no positive case through `AppEnvironment`: the workflow
+    /// list is private and only the network path fills it, and adding an injection
+    /// point to production for one test is not worth it (the same call this file's
+    /// `ProcessComposeSettings` sibling makes about search paths). The lookup is where
+    /// the logic lives — a state id is unique workspace-wide, not per workflow, so it
+    /// has to search all of them rather than only the first.
+    func testStateNameSearchesEveryWorkflowForTheStateID() {
+        let workflows = [
+            Shortcut.Workflow(id: 1, name: "Design", states: [
+                Shortcut.Workflow.State(id: 500_000_010, name: "Sketching", type: "started"),
+            ]),
+            Shortcut.Workflow(id: 2, name: "Engineering", states: [
+                Shortcut.Workflow.State(id: 500_000_020, name: "Ready for Dev", type: "unstarted"),
+                Shortcut.Workflow.State(id: 500_000_030, name: "In Progress", type: "started"),
+            ]),
+        ]
+
+        XCTAssertEqual(workflows.stateName(for: 500_000_030), "In Progress",
+                       "a state in the second workflow must still resolve")
+        XCTAssertEqual(workflows.stateName(for: 500_000_010), "Sketching")
+        XCTAssertNil(workflows.stateName(for: 500_000_999))
     }
 
     func testRepeatedRegistrationIsStable() {

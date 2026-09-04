@@ -1376,10 +1376,18 @@ final class IPCStoreTests: XCTestCase {
         let store = makeStore()
         let peer = await store.registerPeer(name: "gone", role: "")
         await store.pin(peer.id)
+        let pinnedBeforeRemoval = await store._testIsPinned(peerId: peer.id)
+        XCTAssertTrue(pinnedBeforeRemoval, "precondition: the pin was taken")
+
         await store.removePeer(id: peer.id)
 
-        // Re-registering with the same id is impossible, but a stale pin would
-        // resurrect any peer that later happened to reuse it.
+        // Asserting only that `listPeers` came back empty held whether or not the pin
+        // was cleaned up — `removePeer` drops the peer either way. The pin set is the
+        // thing under test, and nothing observable through the public API reflects it:
+        // a removed peer's id can never be re-registered, so a leaked pin sits there
+        // inert until an id is reused. Read it directly.
+        let stillPinned = await store._testIsPinned(peerId: peer.id)
+        XCTAssertFalse(stillPinned)
         let listed = await store.listPeers()
         XCTAssertTrue(listed.isEmpty)
     }

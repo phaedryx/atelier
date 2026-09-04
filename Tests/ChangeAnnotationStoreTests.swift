@@ -123,11 +123,19 @@ final class ChangeAnnotationStoreTests: XCTestCase {
         XCTAssertEqual(store.comments.first?.line, 2)
     }
 
+    /// The old fixture's `modified` did not contain the anchor at all, so an
+    /// implementation that searched the modified side and fell back to the original
+    /// passed it too. Here the anchor sits on *both* sides at different lines: only
+    /// reading `original` yields 2.
     func testReanchorOldSideMatchesAgainstOriginalText() throws {
         let store = ChangeAnnotationStore()
         _ = addComment(store, side: .old, line: 1, lineText: "removed line")
-        store.reanchor(mode: .uncommitted, texts: ["a.swift": (original: "header\nremoved line", modified: "header")], presentPaths: ["a.swift"])
-        XCTAssertEqual(store.comments.first?.line, 2)
+        store.reanchor(
+            mode: .uncommitted,
+            texts: ["a.swift": (original: "header\nremoved line", modified: "removed line\nheader\ntail")],
+            presentPaths: ["a.swift"]
+        )
+        XCTAssertEqual(store.comments.first?.line, 2, "the old side resolves against original, where the anchor is line 2")
         XCTAssertFalse(try XCTUnwrap(store.comments.first?.isOrphaned))
     }
 

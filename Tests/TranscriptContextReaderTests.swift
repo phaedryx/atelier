@@ -26,6 +26,21 @@ final class TranscriptContextReaderTests: XCTestCase {
         XCTAssertEqual(usage?.limitTokens, 1_000_000)
     }
 
+    /// The case `testLastAssistantEntryWins` cannot reach: every assistant line there
+    /// carries `usage`, so "last assistant line with usage" and "last assistant line,
+    /// else nil" agree. A trailing assistant line *without* usage separates them, and
+    /// it is the ordinary shape of a live transcript — the final turn is appended
+    /// before its usage totals are.
+    func testATrailingAssistantLineWithoutUsageDoesNotDiscardTheLastKnownUsage() {
+        let noUsage = #"{"type":"assistant","message":{"model":"claude-opus-4-1[1m]"}}"#
+        let contents = [userLine, sonnetLine, noUsage].joined(separator: "\n")
+
+        let usage = TranscriptContextReader.usage(contents: contents)
+
+        XCTAssertEqual(usage?.usedTokens, 4 + 123 + 45000, "the last line carrying usage is the sonnet one")
+        XCTAssertEqual(usage?.limitTokens, 200_000, "the limit must come from that same entry, not the later model")
+    }
+
     func testMissingCacheFieldsDefaultToZero() {
         let line = #"{"type":"assistant","message":{"model":"claude-sonnet-4-5","usage":{"input_tokens":42}}}"#
         let usage = TranscriptContextReader.usage(contents: line)

@@ -7,10 +7,12 @@ import XCTest
 final class BareRepoCloneTests: XCTestCase {
     private var tempDir: URL!
 
-    override func setUp() {
-        super.setUp()
+    override func setUpWithError() throws {
+        try super.setUpWithError()
         tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try! FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        // `try!` aborted the whole runner when the temp directory could not be made,
+        // instead of failing this one test.
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
     }
 
     override func tearDown() {
@@ -251,8 +253,18 @@ final class BareRepoCloneTests: XCTestCase {
     }
 
     /// Runs git and returns trimmed stdout, or nil when the command fails.
+    ///
+    /// The launch error used to be discarded with `try?`, and a `Process` that never
+    /// launched reports `terminationStatus == 0` — so an unlaunchable git returned
+    /// empty stdout as a *success*, and the clone tests asserted against a filesystem
+    /// nothing had touched. A launch failure is a test failure.
     @discardableResult
-    private func git(_ args: [String], in directory: URL) -> String? {
+    private func git(
+        _ args: [String],
+        in directory: URL,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> String? {
         let process = Process()
         let pipe = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -260,7 +272,12 @@ final class BareRepoCloneTests: XCTestCase {
         process.currentDirectoryURL = directory
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
-        try? process.run()
+        do {
+            try process.run()
+        } catch {
+            XCTFail("could not launch git \(args.joined(separator: " ")): \(error)", file: file, line: line)
+            return nil
+        }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else { return nil }
