@@ -149,4 +149,46 @@ final class ShortcutBranchNameTests: XCTestCase {
     func testStorageKeyIsStable() {
         XCTAssertEqual(Shortcut.Settings.branchTemplateKey, "atelier.shortcutBranchTemplate")
     }
+
+    // MARK: - Empty variables in the middle of a template
+
+    /// `trim` only reaches the edges, so an empty variable between two others
+    /// left the pair of separators around it: `123--fix-…`.
+    func testAnEmptyVariableInTheMiddleDoesNotDoubleTheSeparator() {
+        let name = Shortcut.BranchName.render(
+            "${STORY_ID}-${TYPE}-${SLUG}",
+            story: story(id: 123, name: "Fix the thing", type: "")
+        )
+
+        XCTAssertEqual(name, "123-fix-the-thing")
+    }
+
+    /// The same hole with `/`, which git rejects outright rather than merely
+    /// rendering badly.
+    func testAnEmptyVariableDoesNotProduceADoubleSlash() {
+        let name = Shortcut.BranchName.render(
+            "${MENTION}/${TYPE}/${SLUG}",
+            story: story(id: 123, name: "Fix the thing", type: "", branchName: "you/sc-123/fix-the-thing")
+        )
+
+        XCTAssertEqual(name, "you/fix-the-thing")
+    }
+
+    /// A template of nothing but variables, all empty, collapses and trims to
+    /// "" — which is not a branch name. Fall back the way an empty template does.
+    func testAnAllEmptyRenderFallsBackToShortcutsOwnName() {
+        let subject = story(id: 123, name: "", type: "", branchName: "you/sc-123/fix-the-thing")
+
+        let name = Shortcut.BranchName.render("${TYPE}-${SLUG}", story: subject)
+
+        XCTAssertEqual(name, subject.branchName)
+    }
+
+    /// Collapsing must not touch a template that was already well formed.
+    func testAWellFormedTemplateIsUnchanged() {
+        XCTAssertEqual(
+            Shortcut.BranchName.render("tad@sc-${STORY_ID}-${SLUG}", story: story(id: 9, name: "Fix login")),
+            "tad@sc-9-fix-login"
+        )
+    }
 }

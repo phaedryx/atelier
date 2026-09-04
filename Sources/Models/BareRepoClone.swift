@@ -48,6 +48,11 @@ enum BareRepoClone {
                 isCancelled = true
                 return running
             }
+            // `track` registers the process before `run()`, so a cancel landing in
+            // that window sees a `Process` with no PID — `terminate()` on one of
+            // those raises NSInvalidArgumentException. The launch site re-checks
+            // `cancelled` after `run()`, so nothing is stranded by skipping it here.
+            guard process?.isRunning == true else { return }
             process?.terminate()
         }
 
@@ -278,6 +283,13 @@ enum BareRepoClone {
             try process.run()
         } catch {
             return (false, "", error.localizedDescription)
+        }
+
+        // Closes the window `track` opens: a `cancel()` between tracking and
+        // launch could not terminate a process that had no PID yet, so it only
+        // set the flag. Now that there is a PID, honour it.
+        if cancellation?.cancelled == true {
+            process.terminate()
         }
 
         // Drain the two pipes CONCURRENTLY. Reading one to EOF — which only

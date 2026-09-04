@@ -250,4 +250,43 @@ final class PortsConfigTests: XCTestCase {
             XCTAssertThrowsError(try ProcessCompose.PortsConfig.load(from: dir.path), "\(name) must be refused")
         }
     }
+
+    // MARK: - A file that declares nothing
+
+    /// A `ports.yaml` that exists but declares nothing is a project with no
+    /// ports, not a broken file. `ports` used to be a required key, so all three
+    /// of these surfaced as `.malformed`.
+    func testAnEmptyFileDeclaresNoPorts() throws {
+        try write("")
+
+        let config = try ProcessCompose.PortsConfig.load(from: dir.path)
+        XCTAssertEqual(config?.entries, [])
+    }
+
+    func testACommentOnlyFileDeclaresNoPorts() throws {
+        try write("# nothing here yet\n# see the README\n")
+
+        let config = try ProcessCompose.PortsConfig.load(from: dir.path)
+        XCTAssertEqual(config?.entries, [])
+    }
+
+    func testAnEmptyPortsKeyDeclaresNoPorts() throws {
+        try write("ports:\n")
+
+        let config = try ProcessCompose.PortsConfig.load(from: dir.path)
+        XCTAssertEqual(config?.entries, [])
+    }
+
+    /// Distinct from the three above: no file at all is nil, not an empty config.
+    func testNoFileAtAllIsStillNil() throws {
+        XCTAssertNil(try ProcessCompose.PortsConfig.load(from: dir.path))
+    }
+
+    /// A malformed file must still be refused — the fix above must not have
+    /// turned every parse failure into "no ports declared".
+    func testAFileThatIsNotAMappingIsStillMalformed() throws {
+        try write("just a bare string")
+
+        XCTAssertThrowsError(try ProcessCompose.PortsConfig.load(from: dir.path))
+    }
 }

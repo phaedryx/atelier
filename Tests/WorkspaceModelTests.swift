@@ -240,6 +240,64 @@ final class WorkspaceModelTests: XCTestCase {
         let first = model.annotationStore
         XCTAssertTrue(first === model.annotationStore)
     }
+
+    // MARK: - Permanent tabs
+
+    /// Info and Agent are permanent. `removeTab` used to splice the tab out
+    /// before its per-kind switch ran, so passing one removed it and only the
+    /// state cleanup was skipped — the "callers must pass closeable tabs only"
+    /// contract was enforced by nothing.
+    func testRemoveTabRefusesInfo() {
+        let model = makeModel()
+
+        XCTAssertFalse(model.removeTab(.info))
+        XCTAssertEqual(model.tabs, [.info, .agent, .changes])
+    }
+
+    func testRemoveTabRefusesAgent() {
+        let model = makeModel(activeTab: .agent)
+
+        XCTAssertFalse(model.removeTab(.agent))
+        XCTAssertEqual(model.tabs, [.info, .agent, .changes])
+        XCTAssertEqual(model.activeTab, .agent)
+    }
+
+    /// The refusal must not leak into the closeable singletons, which look
+    /// similar (no instance UUID) but close like any terminal.
+    func testRemoveTabStillClosesChanges() {
+        let model = makeModel()
+
+        XCTAssertTrue(model.removeTab(.changes))
+        XCTAssertEqual(model.tabs, [.info, .agent])
+    }
+
+    /// `activeTab` is not optional, so the old `!tabs.isEmpty` guard left it
+    /// pointing at the tab that had just been removed when it was the last one.
+    /// Agent is the fallback, matching `reconcile` — it is not in `tabs` either,
+    /// because a workspace with no tabs at all has nothing live to point at. The
+    /// `isCloseable` guard makes this unreachable in production, where Info and
+    /// Agent cannot be removed; this pins the fallback for a restored snapshot
+    /// that never had them.
+    func testRemovingTheLastTabFallsBackToAgentRatherThanTheRemovedTab() {
+        let snapshot = WorkspaceTabSnapshot(
+            tabs: [.changes],
+            terminalCount: 0,
+            browserCount: 0,
+            editorCount: 0,
+            activeTab: .changes,
+            browserTitles: [:],
+            terminalTitles: [:],
+            editorFilePaths: [:],
+            runStarted: false,
+            runStoppedManually: false
+        )
+        let model = WorkspaceModel(workstreamID: UUID(), snapshot: snapshot)
+
+        XCTAssertTrue(model.removeTab(.changes))
+        XCTAssertTrue(model.tabs.isEmpty)
+        XCTAssertNotEqual(model.activeTab, .changes)
+        XCTAssertEqual(model.activeTab, .agent)
+    }
 }
 
 @MainActor

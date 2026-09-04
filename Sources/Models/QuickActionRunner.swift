@@ -104,18 +104,42 @@ extension QuickAction {
 
             switch action {
             case .commit, .createPR:
-                guard let claudePath else { return }
+                guard let claudePath else {
+                    return fail(action: action, reason: NSLocalizedString("Claude Code was not found on PATH.", comment: "Quick action refused: claude missing"))
+                }
                 runClaudeAction(action: action, claudePath: claudePath, workingDirectory: workingDirectory)
             case .push:
                 runPush(workingDirectory: workingDirectory)
             case .closePR:
-                guard let ghPath, let branchName else { return }
+                guard let ghPath else {
+                    return fail(action: action, reason: NSLocalizedString("The GitHub CLI (gh) was not found on PATH.", comment: "Quick action refused: gh missing"))
+                }
+                guard let branchName else {
+                    return fail(action: action, reason: NSLocalizedString("This workstream has no branch to close a PR for.", comment: "Quick action refused: no branch"))
+                }
                 runClosePR(ghPath: ghPath, branchName: branchName, workingDirectory: workingDirectory)
             }
         }
 
+        /// Ends a run that never got as far as spawning anything.
+        ///
+        /// `state` is already `.running` by the time the preconditions are checked,
+        /// and a bare `return` left it there: no process to finish, nothing to set it
+        /// back, so the spinner ran forever. A missing `claude` or `gh` is an ordinary
+        /// state, not an impossible one, so it lands in `.failed` with a reason in the
+        /// log — the same shape every other failure takes.
+        private func fail(action: QuickAction, reason: String) {
+            appendLog(action: action, command: action.label)
+            updateLog(output: reason, exitCode: 1)
+            logger.error("Quick action \(action.rawValue) refused: \(reason)")
+            state = .failed(action)
+            scheduleDismiss()
+        }
+
         private func runClaudeAction(action: QuickAction, claudePath: String, workingDirectory: String) {
-            guard let prompt = action.prompt else { return }
+            guard let prompt = action.prompt else {
+                return fail(action: action, reason: NSLocalizedString("No prompt is defined for this action.", comment: "Quick action refused: no prompt"))
+            }
 
             var args: [String] = []
             args.append(claudePath)

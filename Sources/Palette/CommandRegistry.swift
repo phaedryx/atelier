@@ -7,7 +7,12 @@ import Foundation
 final class CommandRegistry: ObservableObject {
     private static let usageKey = "atelier.paletteUsage"
 
-    private(set) var commands: [PaletteCommand] = []
+    /// `@Published`, not a plain property: `ContentView` holds the registry as a
+    /// `@StateObject` and the palette renders from `search`, so a `sync` that
+    /// rebuilt the stored-prompt family while the palette was open changed the
+    /// results with nothing to redraw them. The `ObservableObject` conformance
+    /// was declared and published nothing.
+    @Published private(set) var commands: [PaletteCommand] = []
     private var usage: [String: Int]
     private let defaults: UserDefaults
 
@@ -40,7 +45,12 @@ final class CommandRegistry: ObservableObject {
     /// prompts) that are rebuilt whenever their source of truth changes; usage
     /// frequency survives because it is keyed by id, and a prompt's id is
     /// stable across edits.
+    ///
+    /// An empty prefix is refused: `hasPrefix("")` is true for every id, so it
+    /// would clear the whole registry — static commands included — and `sync`
+    /// has no way to put those back. A family is identified by its prefix.
     func sync(idPrefix: String, with newCommands: [PaletteCommand]) {
+        guard !idPrefix.isEmpty else { return }
         commands.removeAll { $0.id.hasPrefix(idPrefix) }
         for command in newCommands {
             register(command)

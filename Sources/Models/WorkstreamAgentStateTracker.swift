@@ -342,8 +342,13 @@ extension Workstream {
             if !force, let last = lastContextReadAt[wsID], now.timeIntervalSince(last) < Self.contextReadInterval {
                 return
             }
-            lastContextReadAt[wsID] = now
             guard let parsed = TranscriptContextReader.usage(transcriptPath: transcriptPath) else { return }
+            // Stamped only on a read that produced something. Stamping first burned
+            // the whole interval on a failure, so a transcript that was mid-write
+            // when it was first sampled stayed unread for another full interval —
+            // and the doc comment above promises only that a failure *keeps* the
+            // previous value, not that it suppresses the next attempt.
+            lastContextReadAt[wsID] = now
             contextUsage[wsID] = ContextUsage(usedTokens: parsed.usedTokens, limitTokens: parsed.limitTokens)
         }
 

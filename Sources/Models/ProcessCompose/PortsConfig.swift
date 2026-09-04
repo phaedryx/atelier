@@ -57,7 +57,10 @@ extension ProcessCompose {
                 let browser: Bool?
             }
 
-            let ports: [String: Entry]
+            /// Optional: a file that exists but declares nothing is a project with no
+            /// ports, not a malformed file. Requiring the key made `ports:` with an
+            /// empty body — and a file holding only comments — surface as `.malformed`.
+            let ports: [String: Entry]?
         }
 
         /// Names Atelier owns. A declaration may not take one of these.
@@ -129,6 +132,15 @@ extension ProcessCompose {
                 throw LoadError.malformed(error.localizedDescription)
             }
 
+            // An empty or comment-only file has no YAML document for Yams to decode
+            // at all, so it cannot be distinguished from a broken one further down.
+            // Answer it here: nothing declared is a valid way to declare nothing.
+            let hasDocument = text.split(separator: "\n").contains { line in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                return !trimmed.isEmpty && !trimmed.hasPrefix("#")
+            }
+            guard hasDocument else { return ProcessCompose.PortsConfig(entries: []) }
+
             let file: File
             do {
                 file = try YAMLDecoder().decode(File.self, from: text)
@@ -137,9 +149,9 @@ extension ProcessCompose {
             }
 
             var entries: [ProcessCompose.PortEntry] = []
-            for name in file.ports.keys.sorted() {
-                // Force-unwrap is safe: the key came from this dictionary.
-                let entry = file.ports[name]!
+            // Sorting the pairs, rather than the keys and then subscripting, is what
+            // removes the force-unwrap; it also puts the sort invariant in one place.
+            for (name, entry) in (file.ports ?? [:]).sorted(by: { $0.key < $1.key }) {
                 let kind: ProcessCompose.PortEntry.Kind
                 switch (entry.assigned, entry.fixed) {
                 case (true, nil):

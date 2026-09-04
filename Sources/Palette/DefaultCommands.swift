@@ -39,6 +39,14 @@ func defaultPaletteCommands() -> [PaletteCommand] {
                        isAvailable: workstream, action: post(.toggleBrowser)),
         PaletteCommand(id: "tab.newEditor", title: NSLocalizedString("New Editor", comment: ""), category: tabs,
                        isAvailable: workstream, action: post(.toggleEditor)),
+        // Gated on a workstream only, deliberately, even though the active tab
+        // may be Info or Agent and therefore not closeable. That is this file's
+        // consistent split: availability answers "is there a workspace to act
+        // on", and the receiver answers "is there something to act on right
+        // now" — `.closeTerminal`'s handler already checks `isCloseable`, the
+        // same way `.rerunScript`'s checks for a resolved run command. Narrowing
+        // this one would need the active tab plumbed into `PaletteContext`,
+        // which `ContentView` cannot see, and would leave the rest inconsistent.
         PaletteCommand(id: "tab.close", title: NSLocalizedString("Close Tab", comment: ""), category: tabs,
                        shortcut: "⌘W", isAvailable: workstream, action: post(.closeTerminal)),
 
@@ -90,6 +98,19 @@ func defaultPaletteCommands() -> [PaletteCommand] {
 /// dropped on the store's first emission.
 let storedPromptCommandPrefix = "prompt."
 
+/// The one canonical spelling of a stored prompt's identity in the palette: the
+/// part of the command id after `storedPromptCommandPrefix`, and the whole of
+/// the `.runStoredPrompt` payload.
+///
+/// The two used to be derived separately and disagreed on case — the id
+/// lowercased the UUID, the payload used `uuidString`, which is uppercase. It
+/// went unnoticed because the sole receiver reparses the payload as a `UUID`
+/// and `UUID(uuidString:)` is case-insensitive; anything correlating a posted
+/// notification back to its command by string comparison missed every time.
+func storedPromptCommandKey(_ promptID: UUID) -> String {
+    promptID.uuidString.lowercased()
+}
+
 /// Palette commands for the user's stored prompts, rebuilt whenever the store
 /// changes (`CommandRegistry.sync`). Each command posts the prompt's id;
 /// the active `TerminalContainerView` resolves it, switches to the Agent tab,
@@ -101,12 +122,15 @@ func promptPaletteCommands(for prompts: [StoredPrompt]) -> [PaletteCommand] {
     let category = NSLocalizedString("Prompts", comment: "Palette category")
     return prompts.map { prompt in
         PaletteCommand(
-            id: "\(storedPromptCommandPrefix)\(prompt.id.uuidString.lowercased())",
+            id: "\(storedPromptCommandPrefix)\(storedPromptCommandKey(prompt.id))",
             title: prompt.label,
             category: category,
             isAvailable: { $0.workstreamActive && $0.agentCanReceivePrompt },
             action: {
-                NotificationCenter.default.post(name: .runStoredPrompt, object: prompt.id.uuidString)
+                NotificationCenter.default.post(
+                    name: .runStoredPrompt,
+                    object: storedPromptCommandKey(prompt.id)
+                )
             }
         )
     }

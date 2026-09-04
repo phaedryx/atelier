@@ -2,6 +2,7 @@
 // ABOUTME: registry sync, and the PromptInjector turn-state policy.
 
 @testable import Atelier
+import Combine
 import XCTest
 
 @MainActor
@@ -187,11 +188,24 @@ final class PromptPaletteCommandTests: XCTestCase {
         let prompt = StoredPrompt(label: "Commit", text: "Commit the changes.")
         let command = promptPaletteCommands(for: [prompt])[0]
 
+        // The payload is the same string as the id's suffix. It used to be the
+        // uppercase `uuidString` against a lowercased id, which only survived
+        // because the sole receiver reparses it as a case-insensitive `UUID`.
         let posted = expectation(forNotification: .runStoredPrompt, object: nil) { note in
-            note.object as? String == prompt.id.uuidString
+            note.object as? String == storedPromptCommandKey(prompt.id)
         }
         command.action()
         wait(for: [posted], timeout: 1)
+
+        XCTAssertEqual(
+            command.id,
+            storedPromptCommandPrefix + storedPromptCommandKey(prompt.id)
+        )
+        XCTAssertEqual(
+            command.id.dropFirst(storedPromptCommandPrefix.count),
+            Substring(storedPromptCommandKey(prompt.id)),
+            "a posted payload must be correlatable back to its command id by string"
+        )
     }
 }
 
@@ -224,6 +238,40 @@ final class CommandRegistrySyncTests: XCTestCase {
         registry.sync(idPrefix: "prompt.", with: [])
 
         XCTAssertEqual(registry.commands.map(\.id), ["tab.info"])
+    }
+
+    /// `hasPrefix("")` is true for every id, so an empty prefix used to clear the
+    /// entire registry — every built-in command included, with no way back.
+    func testSyncWithAnEmptyPrefixIsRefused() throws {
+        let registry = try CommandRegistry(
+            commands: [command(id: "tab.info"), command(id: "prompt.a")],
+            defaults: XCTUnwrap(UserDefaults(suiteName: "CommandRegistrySyncTests"))
+        )
+
+        registry.sync(idPrefix: "", with: [])
+
+        XCTAssertEqual(registry.commands.map(\.id).sorted(), ["prompt.a", "tab.info"])
+    }
+
+    /// The registry declares `ObservableObject` and `ContentView` holds it as a
+    /// `@StateObject`, but nothing was `@Published`, so a rebuilt prompt family
+    /// never redrew an open palette.
+    func testSyncNotifiesObservers() throws {
+        let registry = try CommandRegistry(
+            commands: [command(id: "prompt.old")],
+            defaults: XCTUnwrap(UserDefaults(suiteName: "CommandRegistrySyncTests"))
+        )
+        // Counted rather than fulfilled once: `sync` mutates `commands` more than
+        // once (the removal, then each registration), and every mutation of an
+        // `@Published` property publishes. What matters is that it publishes at
+        // all — before the fix it published nothing.
+        var notifications = 0
+        let token = registry.objectWillChange.sink { _ in notifications += 1 }
+
+        registry.sync(idPrefix: "prompt.", with: [command(id: "prompt.new")])
+        token.cancel()
+
+        XCTAssertGreaterThan(notifications, 0, "an ObservableObject that publishes nothing cannot redraw the palette")
     }
 }
 

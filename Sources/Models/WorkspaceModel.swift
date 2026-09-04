@@ -206,14 +206,18 @@ final class WorkspaceModel: ObservableObject {
     /// if the removed tab was active. Returns false when the tab is not open,
     /// so callers can skip their own teardown.
     ///
-    /// Callers must pass closeable tabs only — Info and Agent are permanent,
-    /// and like the original closeTab contract this method does not guard
-    /// against them. Changes and Environment are ordinary closeable tabs: they
-    /// carry no per-tab state to clear, and everything durable behind them (the
-    /// diff bridge, the annotation store, the dev server) belongs to the
-    /// workstream rather than the tab, so closing one frees nothing.
+    /// Info and Agent are permanent and are refused here, the same way a tab
+    /// that is not open is. That used to be a doc-comment contract enforced by
+    /// nothing: the splice below ran ahead of the per-kind switch, so passing
+    /// `.info` removed the tab and the `case .info, .agent` arm only skipped the
+    /// per-tab state cleanup — the tab was gone either way. Changes and
+    /// Environment are ordinary closeable tabs: they carry no per-tab state to
+    /// clear, and everything durable behind them (the diff bridge, the
+    /// annotation store, the dev server) belongs to the workstream rather than
+    /// the tab, so closing one frees nothing.
     @discardableResult
     func removeTab(_ tab: WorkspaceTab) -> Bool {
+        guard tab.kind.isCloseable else { return false }
         guard let index = tabs.firstIndex(of: tab) else { return false }
         tabs.remove(at: index)
 
@@ -229,8 +233,11 @@ final class WorkspaceModel: ObservableObject {
             break
         }
 
-        if activeTab == tab, !tabs.isEmpty {
-            activeTab = tabs[min(index, tabs.count - 1)]
+        if activeTab == tab {
+            // The `!tabs.isEmpty` form left `activeTab` pointing at the tab that
+            // was just removed when it was the last one. Agent is the fallback
+            // `reconcile` already uses for the same situation.
+            activeTab = tabs.isEmpty ? .agent : tabs[min(index, tabs.count - 1)]
         }
         return true
     }
