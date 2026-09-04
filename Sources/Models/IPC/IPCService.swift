@@ -220,7 +220,20 @@ extension IPC {
         /// app afterwards, and pinned peers would otherwise outlive their sockets.
         func releaseAll() async {
             await store.cleanup()
+
+            // Same reason `release(peerID:)` clears it: a surface left in the tracker
+            // keeps reporting whatever its agent last said — usually .idle — and a
+            // later nudge would type into a pane whose agent has gone. Shutdown drops
+            // every peer at once, so it has the same exposure for all of them.
+            let surfaceIDs = contexts.values.compactMap(\.surfaceID)
             contexts.removeAll()
+            if !surfaceIDs.isEmpty {
+                await MainActor.run {
+                    for surfaceID in surfaceIDs {
+                        Workstream.AgentStateTracker.shared.clear(surfaceID: surfaceID)
+                    }
+                }
+            }
         }
 
         // MARK: - Nudging

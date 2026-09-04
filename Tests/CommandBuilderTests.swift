@@ -162,9 +162,14 @@ final class CommandBuilderTests: XCTestCase {
         XCTAssertTrue(result.contains("\\\"hello\\\""), "Double quotes must be escaped for Fish")
     }
 
-    func testShellQuoteForFishEscapesBackticks() {
+    func testShellQuoteForFishLeavesBackticksAlone() {
         let result = CommandBuilder.shellQuote("run `cmd`", forShell: "/opt/homebrew/bin/fish")
-        XCTAssertTrue(result.contains("\\`cmd\\`"), "Backticks must be escaped for Fish")
+        XCTAssertEqual(result, "\"run `cmd`\"", "Backticks are literal inside Fish double quotes; escaping them injects a stray backslash")
+    }
+
+    func testShellQuoteForFishLeavesParenthesesAlone() {
+        let result = CommandBuilder.shellQuote("a || (b; c)", forShell: "/opt/homebrew/bin/fish")
+        XCTAssertEqual(result, "\"a || (b; c)\"", "Parens are literal inside Fish double quotes; escaping them breaks the sh subshell that reads the payload")
     }
 
     func testShellQuoteForFishSimpleStringStaysUnquoted() {
@@ -230,6 +235,39 @@ final class CommandBuilderTests: XCTestCase {
             throw XCTSkip("Fish not installed at \(fishPath)")
         }
         try assertShellCanParse(fallbackCommand(shell: fishPath))
+    }
+
+    /// `testWithFallbackParsesInFish` uses `fish -n`, which validates *fish* syntax and
+    /// never looks inside the nested `sh -c` string — so it stayed green while the
+    /// fallback branch was printing `sh: (echo: command not found`. This one runs the
+    /// command and reads its output.
+    func testWithFallbackActuallyRunsTheFallbackUnderFish() throws {
+        let fishPath = "/opt/homebrew/bin/fish"
+        guard FileManager.default.fileExists(atPath: fishPath) else {
+            throw XCTSkip("Fish not installed at \(fishPath)")
+        }
+
+        let command = CommandBuilder.withFallback(
+            "false", "echo FELL-BACK",
+            message: "it's retrying",
+            shell: fishPath
+        )
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", command]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try process.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let output = String(data: data, encoding: .utf8) ?? ""
+
+        XCTAssertTrue(output.contains("it's retrying"), "Expected the fallback message, got: \(output)")
+        XCTAssertTrue(output.contains("FELL-BACK"), "Expected the fallback command to run, got: \(output)")
+        XCTAssertFalse(output.contains("command not found"), "Payload reached sh mangled: \(output)")
+        XCTAssertFalse(output.contains("FELL-BACK)"), "Subshell grouping was destroyed: \(output)")
     }
 
     // MARK: - Real-world command patterns

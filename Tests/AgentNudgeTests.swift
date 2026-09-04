@@ -93,4 +93,48 @@ final class AgentNudgeTests: XCTestCase {
 
         XCTAssertNil(tracker.state(forSurface: surface), "a retired peer's surface must stop reporting a finished turn")
     }
+
+    /// `releaseAll` is the shutdown path for the same teardown `release(peerID:)` does
+    /// one peer at a time. It used to drop the store and the contexts and leave every
+    /// surface behind in the tracker, still reporting its dead agent's last state.
+    func test_releasingEveryPeer_clearsEverySurfaceTheyOccupied() async {
+        let tracker = Workstream.AgentStateTracker.shared
+        tracker.resetForTesting()
+        defer { tracker.resetForTesting() }
+
+        let workstream = UUID()
+        tracker.workstreamLookup = { _ in workstream }
+
+        let service = IPC.Service()
+        var surfaces: [UUID] = []
+        for name in ["first", "second"] {
+            let surface = UUID()
+            surfaces.append(surface)
+
+            var finished = AgentEvent.idle(agentId: "main")
+            finished.surfaceID = surface.uuidString
+            tracker.handle(projectDir: "/tmp/atelier-nudge-test", event: finished)
+            XCTAssertEqual(tracker.state(forSurface: surface), .idle)
+
+            _ = await service._testRegister(
+                name: name,
+                role: "",
+                context: IPC.Service.PeerContext(
+                    workstreamID: workstream.uuidString,
+                    workstreamName: "bold-crimson-parser",
+                    projectDirectory: "/repos/atelier",
+                    surfaceID: surface
+                )
+            )
+        }
+
+        await service.releaseAll()
+
+        for surface in surfaces {
+            XCTAssertNil(
+                tracker.state(forSurface: surface),
+                "shutdown must not leave a dead agent's surface reporting a state"
+            )
+        }
+    }
 }

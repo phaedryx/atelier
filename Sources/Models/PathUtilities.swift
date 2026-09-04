@@ -1,21 +1,33 @@
 // ABOUTME: Shared path and UUID utilities used across the app.
 // ABOUTME: Provides path abbreviation and deterministic UUID derivation.
 
+import CryptoKit
 import Foundation
 
 /// Deterministic UUID derived from a base UUID and a salt string.
-/// Uses simple byte-folding to produce fully deterministic output (no random bytes).
+///
+/// The same `(base, salt)` always yields the same UUID, and different inputs are
+/// expected not to collide. That second half is the whole point — these are surface
+/// identities, and two tabs sharing one would make the app address the wrong pane.
+///
+/// This used to fold input bytes with `bytes[i % 16] &+= byte &+ UInt8(i & 0xFF)`,
+/// which is not a hash: swapping two characters exactly 16 apart lands both in the
+/// same bucket with the same index contribution and produces an identical UUID, and
+/// the `i & 0xFF` term makes positions *k* and *k + 256* indistinguishable. SHA-256
+/// truncated to 16 bytes has neither property.
+///
+/// Tagged version 8 (RFC 9562, "custom") because that is what this is. The old code
+/// stamped version 4 and called itself random in a comment, which it never was.
 func derivedUUID(from base: UUID, salt: String) -> UUID {
-    // Build a deterministic byte sequence from the base UUID and salt
-    let input = "\(base.uuidString)-\(salt)"
-    // Simple deterministic hash using all characters
-    var bytes: [UInt8] = Array(repeating: 0, count: 16)
-    for (i, byte) in input.utf8.enumerated() {
-        bytes[i % 16] = bytes[i % 16] &+ byte &+ UInt8(i & 0xFF)
-    }
-    // Set version 4 and variant bits for valid UUID format
-    bytes[6] = (bytes[6] & 0x0F) | 0x40 // version 4
-    bytes[8] = (bytes[8] & 0x3F) | 0x80 // variant 1
+    var hasher = SHA256()
+    withUnsafeBytes(of: base.uuid) { hasher.update(bufferPointer: $0) }
+    // A length-prefixed separator so ("ab", "c") and ("a", "bc") cannot hash alike.
+    hasher.update(data: Data([0xFF]))
+    hasher.update(data: Data(salt.utf8))
+
+    var bytes = Array(hasher.finalize().prefix(16))
+    bytes[6] = (bytes[6] & 0x0F) | 0x80 // version 8 — custom/deterministic
+    bytes[8] = (bytes[8] & 0x3F) | 0x80 // variant 1 (RFC 4122/9562)
     return UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3],
                        bytes[4], bytes[5], bytes[6], bytes[7],
                        bytes[8], bytes[9], bytes[10], bytes[11],

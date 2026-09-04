@@ -645,6 +645,16 @@ extension Git {
         }
 
         /// Get detailed changes and unmerged commits for a worktree.
+        /// The destination half of a `git status --porcelain` path field.
+        ///
+        /// Renames and copies are reported as `old -> new`; every other status reports a
+        /// bare path. Callers want the path that exists on disk now, which is the
+        /// destination. Shared so the two parsers of this output cannot drift apart.
+        static func renamedDestination(in pathField: String) -> String {
+            guard let arrow = pathField.range(of: " -> ") else { return pathField }
+            return String(pathField[arrow.upperBound...]).trimmingCharacters(in: .whitespaces)
+        }
+
         static func worktreeDetail(at worktreePath: String, mainRepoPath: String) -> Worktree.Detail {
             var changes: [Worktree.Detail.FileChange] = []
 
@@ -655,7 +665,10 @@ extension Git {
 
                     let indexStatus = trimmed[trimmed.startIndex]
                     let workTreeStatus = trimmed[trimmed.index(after: trimmed.startIndex)]
-                    let filePath = String(trimmed.dropFirst(3))
+                    // Renames and copies render as "R  old -> new". The destination is
+                    // the path that exists on disk and the one `fileStatuses` records,
+                    // so both parsers of this output agree on it.
+                    let filePath = renamedDestination(in: String(trimmed.dropFirst(3)))
 
                     if indexStatus == "?" {
                         changes.append(.init(status: .untracked, path: filePath, isStaged: false))
@@ -1049,13 +1062,7 @@ extension Git {
                 } else if xy == "??" {
                     result[filePath] = .untracked
                 } else {
-                    // Handle renames/copies: "R  old -> new" or "C  old -> new"
-                    if let arrowRange = filePath.range(of: " -> ") {
-                        let newPath = String(filePath[arrowRange.upperBound...]).trimmingCharacters(in: .whitespaces)
-                        result[newPath] = .modified
-                    } else {
-                        result[filePath] = .modified
-                    }
+                    result[renamedDestination(in: filePath)] = .modified
                 }
             }
             return result

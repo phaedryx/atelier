@@ -1270,4 +1270,31 @@ final class GitOperationsTests: XCTestCase {
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         return (String(data: data, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    // MARK: - Porcelain rename parsing
+
+    /// `worktreeDetail` used to keep the whole `old -> new` field as the path, so the
+    /// worktree detail sheet listed a renamed file as the literal string
+    /// "old.swift -> new.swift" while `fileStatuses` — parsing the same output —
+    /// recorded just "new.swift".
+    func testRenamedDestinationTakesTheNewPath() {
+        XCTAssertEqual(Git.Operations.renamedDestination(in: "old.swift -> new.swift"), "new.swift")
+    }
+
+    func testRenamedDestinationLeavesABarePathAlone() {
+        XCTAssertEqual(Git.Operations.renamedDestination(in: "Sources/App.swift"), "Sources/App.swift")
+    }
+
+    func testRenamedDestinationHandlesQuotedPathsWithSpaces() {
+        XCTAssertEqual(
+            Git.Operations.renamedDestination(in: "\"old name.swift\" -> \"new name.swift\""),
+            "\"new name.swift\""
+        )
+    }
+
+    /// Git writes the separator once, so the first arrow is the separator. A path
+    /// odd enough to contain " -> " itself is quoted by git, which keeps it on one side.
+    func testRenamedDestinationSplitsOnTheFirstArrow() {
+        XCTAssertEqual(Git.Operations.renamedDestination(in: "a.swift -> b -> c.swift"), "b -> c.swift")
+    }
 }
