@@ -10,7 +10,7 @@ final class SwiftConcurrencySendableTests: XCTestCase {
         assertSendable(Workstream(name: "workstream"))
         assertSendable(Project.SortOrder.recent)
         assertSendable(Git.RepoInfo(isRepo: true, branch: "main", remoteURL: nil, commitCount: 1, isDirty: false, isDirtyUnknown: false))
-        assertSendable(Worktree.Info(path: "/tmp/project", branch: "main", isDirty: false, isMain: true, hasUnpushedCommits: false, hasBranchCommits: false, cleanlinessUnknown: false))
+        assertSendable(Worktree.Info(path: "/tmp/project", branch: "main", isDirty: false, isMain: true, hasUnpushedCommits: false, hasBranchCommits: false, isProtected: true, cleanlinessUnknown: false))
         assertSendable(GitHub.RepoInfo(name: "repo", url: "https://example.com", description: nil, stars: 1, forks: 2, openIssues: 3))
         assertSendable(GitHub.PR(number: 1, title: "Title", state: "OPEN", branch: "main", url: "https://example.com/pr/1"))
         assertSendable(ToolStatus())
