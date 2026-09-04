@@ -104,11 +104,6 @@ struct InlineTextField: NSViewRepresentable {
             }
         }
 
-        /// Test seam for tearing down a monitor a test installed itself.
-        func removeClickMonitorForTesting() {
-            removeClickMonitor()
-        }
-
         private func removeClickMonitor() {
             if let monitor = clickMonitor {
                 NSEvent.removeMonitor(monitor)

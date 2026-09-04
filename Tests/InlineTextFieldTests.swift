@@ -11,9 +11,10 @@ final class InlineTextFieldTests: XCTestCase {
     }
 
     func testInstallsAMonitorWhileEditingIsStillOpen() {
+        // The monitor this installs is torn down by the coordinator's `deinit`
+        // when `sut` goes out of scope.
         let sut = coordinator()
         sut.installClickMonitor()
-        defer { sut.removeClickMonitorForTesting() }
 
         XCTAssertTrue(sut.hasClickMonitor)
     }

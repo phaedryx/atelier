@@ -1,5 +1,5 @@
 // ABOUTME: Handles atomic file writes for JSON persistence.
-// ABOUTME: Writes to a temp file, fsyncs it, then renames — atomic and durable.
+// ABOUTME: Writes a temp file, flushes it, renames, then flushes the directory.
 
 import Foundation
 
@@ -14,7 +14,8 @@ enum FilePersistence {
     ///   had already been renamed away.
     /// - Without the `fsync` the rename can be durable while the bytes it points
     ///   at are still only in the page cache. That is atomicity, not crash
-    ///   safety, and this header used to promise the latter.
+    ///   safety, and this file used to promise the latter. The directory is
+    ///   flushed after the rename for the other half of the same reason.
     ///
     /// `.usingNewMetadataOnly` is what makes the permissions stick: `replaceItemAt`
     /// otherwise carries the *original* file's metadata across, so replacing a
@@ -42,10 +43,24 @@ enum FilePersistence {
                 withItemAt: tempURL,
                 options: [.usingNewMetadataOnly]
             )
+            // The file's own fsync covers its contents, not the directory entry
+            // the rename created. Both halves are needed for the rename to be
+            // there after a crash.
+            syncDirectory(directory)
         } catch {
             // Clean up temp file on failure
             try? FileManager.default.removeItem(at: tempURL)
             throw error
         }
+    }
+
+    /// fsync a directory. `FileHandle` will not open one, so this goes through
+    /// `open(2)` directly. Best-effort: the write has already landed, and a
+    /// failure here costs durability rather than correctness.
+    private static func syncDirectory(_ directory: URL) {
+        let descriptor = open(directory.path, O_RDONLY)
+        guard descriptor >= 0 else { return }
+        defer { close(descriptor) }
+        _ = fsync(descriptor)
     }
 }

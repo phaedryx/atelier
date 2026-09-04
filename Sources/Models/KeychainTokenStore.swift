@@ -56,16 +56,15 @@ struct KeychainTokenStore {
         guard status == errSecSuccess else {
             return .failed(status)
         }
-        guard let data = item as? Data,
-              let token = String(data: data, encoding: .utf8),
-              !token.isEmpty
-        else {
-            // Present but unusable is the same thing to every caller as absent —
-            // `write` clears rather than storing an empty credential, so this is
-            // only reachable for an item some other tool wrote.
-            return .absent
+        // A match that comes back as something other than decodable data is a
+        // keychain anomaly, not an empty store — which is the distinction this
+        // whole type exists to keep, so it goes to `.failed` rather than to
+        // `.absent`. Only an item some other tool wrote can reach it: `write`
+        // clears rather than storing an empty credential.
+        guard let data = item as? Data, let token = String(data: data, encoding: .utf8) else {
+            return .failed(errSecDecode)
         }
-        return .token(token)
+        return token.isEmpty ? .absent : .token(token)
     }
 
     /// Writes the token, replacing any existing one. An empty or whitespace-only
@@ -84,12 +83,7 @@ struct KeychainTokenStore {
         guard !trimmed.isEmpty else { return delete() }
 
         let data = Data(trimmed.utf8)
-        // Set on the update path too, so an item written by an earlier build is
-        // migrated rather than left on whatever the default was then.
-        let attributes = [
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: accessibility,
-        ] as [String: Any]
+        let attributes = [kSecValueData as String: data]
         let updated = SecItemUpdate(baseQuery as CFDictionary, attributes as CFDictionary)
         if updated == errSecSuccess {
             return errSecSuccess
@@ -101,7 +95,6 @@ struct KeychainTokenStore {
 
         var insert = baseQuery
         insert[kSecValueData as String] = data
-        insert[kSecAttrAccessible as String] = accessibility
         return SecItemAdd(insert as CFDictionary, nil)
     }
 
@@ -112,24 +105,17 @@ struct KeychainTokenStore {
         return status == errSecItemNotFound ? errSecSuccess : status
     }
 
-    /// Stated rather than inherited, though it does nothing *here*.
+    /// **No `kSecAttrAccessible`, deliberately.** It is a data-protection-keychain
+    /// attribute, and these items land in the macOS *file* keychain, which accepts
+    /// it, ignores it, and does not return it — the attributes that come back are
+    /// `cdat`, `class`, `labl`, `mdat`, `svce` and nothing else. What governs
+    /// access here is the login keychain's own lock state. Setting an inert
+    /// attribute would only look like protection.
     ///
-    /// This store lands in the macOS **file** keychain (the login keychain), and
-    /// `kSecAttrAccessible` is a data-protection-keychain concept: the file
-    /// keychain accepts the attribute, ignores it, and does not return it —
-    /// verified by reading the attributes back, which come out as `cdat`, `class`,
-    /// `labl`, `mdat`, `svce` and nothing else. What actually governs access is
-    /// the login keychain's own lock state.
-    ///
-    /// It is set anyway so that a move to `kSecUseDataProtectionKeychain` cannot
-    /// silently land an unprotected item. That move is *not* made here: the
-    /// two keychains are separate stores, so switching without a migration would
-    /// hide every already-saved token and read as "your Shortcut token vanished".
-    ///
-    /// Not on `baseQuery`: that dictionary is also the *search* query, and an
-    /// attribute there would stop matching items written before this was set.
-    private let accessibility = kSecAttrAccessibleWhenUnlocked
-
+    /// Passing `kSecUseDataProtectionKeychain` *would* make it mean something,
+    /// but the two keychains are separate stores: switching without a migration
+    /// hides every already-saved token, which is exactly the "your Shortcut token
+    /// vanished" story `readOutcome` exists to avoid telling.
     private var baseQuery: [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
