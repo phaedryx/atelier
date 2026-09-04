@@ -887,6 +887,16 @@ private struct RepoChangesPopover: View {
                 } message: {
                     Text("This will permanently discard all uncommitted changes, including staged files and untracked files.")
                 }
+            } else if let detail, detail.changesUnavailable {
+                // Empty changes and an unread tree are the same value here too. This
+                // popover only ever shows `changes`, so only that probe matters.
+                Label(
+                    "Changes could not be read. This repository may still have some.",
+                    systemImage: "exclamationmark.triangle"
+                )
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .padding(16)
             } else if detail != nil {
                 Text("No changes found.")
                     .font(.caption)

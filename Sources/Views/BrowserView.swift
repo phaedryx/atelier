@@ -11,10 +11,23 @@ extension Notification.Name {
 
 /// Hides the "Open Link in New Window" context menu item since the app is single-window.
 class BrowserWebView: WKWebView {
-    override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
-        // super populates the menu from the responder chain, so the removal has to
-        // come after it. Removing first ran against an empty menu and did nothing.
+    /// Fills `menu` from the responder chain. Split out of `willOpenMenu` for one
+    /// reason: it is the only seam that makes the ordering below testable. A
+    /// `WKWebView` with no loaded page contributes no items here, so a unit test that
+    /// populates the menu itself passes whichever order the two steps run in — which
+    /// is how the removal-first bug shipped. Overriding this substitutes a population
+    /// step that does add items, the way a live page does.
+    ///
+    /// Anything that calls `super.willOpenMenu` from `willOpenMenu` directly goes back
+    /// to being untested: the override below must route through here.
+    func populateMenu(_ menu: NSMenu, with event: NSEvent) {
         super.willOpenMenu(menu, with: event)
+    }
+
+    override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
+        // Population fills the menu from the responder chain, so the removal has to
+        // come after it. Removing first ran against an empty menu and did nothing.
+        populateMenu(menu, with: event)
         menu.items.removeAll { $0.identifier?.rawValue == "WKMenuItemIdentifierOpenLinkInNewWindow" }
     }
 }

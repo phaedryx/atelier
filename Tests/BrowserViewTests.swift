@@ -64,14 +64,9 @@ final class BrowserViewTests: XCTestCase {
     /// it. This drives the override instead, and pins two things that were unasserted
     /// — the identifier the removal matches on, and that it removes *only* that item.
     ///
-    /// What it deliberately does not cover: the ordering bug that shipped here (the
-    /// removal running ahead of `super.willOpenMenu`, which is what populates the menu
-    /// from the responder chain). It cannot. The menu below is populated by the test,
-    /// not by `super`, so on a `WKWebView` with no loaded page and a synthetic event
-    /// `super` contributes nothing and both orderings pass — verified by reverting the
-    /// fix and watching this test stay green. Observing the ordering needs a live page
-    /// and a real right-click, which is a UI test, not this. The ordering is held by
-    /// the comment at the call site.
+    /// It does not pin the ordering; the menu here is populated by the test rather
+    /// than by the population step, so both orderings pass it. That is
+    /// `testWillOpenMenuRemovesItemsThePopulationStepAdded`'s job.
     func testWillOpenMenuRemovesOnlyTheOpenLinkInNewWindowItem() throws {
         let webView = BrowserWebView()
         let menu = NSMenu()
@@ -79,7 +74,55 @@ final class BrowserViewTests: XCTestCase {
         menu.addItem(menuItem(title: "Copy", identifier: "WKMenuItemIdentifierCopy"))
         menu.addItem(menuItem(title: "Reload", identifier: "WKMenuItemIdentifierReload"))
 
-        let event = try XCTUnwrap(NSEvent.mouseEvent(
+        try webView.willOpenMenu(menu, with: rightClick())
+
+        XCTAssertEqual(
+            menu.items.compactMap(\.identifier?.rawValue),
+            ["WKMenuItemIdentifierCopy", "WKMenuItemIdentifierReload"],
+            "only the new-window item goes"
+        )
+    }
+
+    /// The bug that shipped here ran the removal *before* the menu was populated, so
+    /// it filtered an empty menu and the item survived into the real context menu.
+    /// Nothing caught it: on a `WKWebView` with no loaded page `super.willOpenMenu`
+    /// contributes no items, so a test that populates the menu itself passes either
+    /// way. `populateMenu` exists so the population step can be substituted for one
+    /// that does add an item — which is what `super` does against a live page — and
+    /// the ordering becomes observable without a UI test target.
+    func testWillOpenMenuRemovesItemsThePopulationStepAdded() throws {
+        let webView = PopulatingBrowserWebView()
+        let menu = NSMenu()
+        menu.addItem(menuItem(title: "Copy", identifier: "WKMenuItemIdentifierCopy"))
+
+        try webView.willOpenMenu(menu, with: rightClick())
+
+        XCTAssertTrue(webView.didPopulate, "precondition: the substituted population step ran")
+        XCTAssertEqual(
+            menu.items.compactMap(\.identifier?.rawValue),
+            ["WKMenuItemIdentifierCopy", "WKMenuItemIdentifierReload"],
+            "the removal has to run after the menu is populated, or it filters an empty menu"
+        )
+    }
+
+    /// Stands in for a `WKWebView` with a live page under the cursor: the population
+    /// step adds the items the removal is supposed to act on.
+    private final class PopulatingBrowserWebView: BrowserWebView {
+        private(set) var didPopulate = false
+
+        override func populateMenu(_ menu: NSMenu, with _: NSEvent) {
+            didPopulate = true
+            let newWindow = NSMenuItem(title: "Open Link in New Window", action: nil, keyEquivalent: "")
+            newWindow.identifier = NSUserInterfaceItemIdentifier("WKMenuItemIdentifierOpenLinkInNewWindow")
+            menu.addItem(newWindow)
+            let reload = NSMenuItem(title: "Reload", action: nil, keyEquivalent: "")
+            reload.identifier = NSUserInterfaceItemIdentifier("WKMenuItemIdentifierReload")
+            menu.addItem(reload)
+        }
+    }
+
+    private func rightClick(file: StaticString = #filePath, line: UInt = #line) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.mouseEvent(
             with: .rightMouseDown,
             location: .zero,
             modifierFlags: [],
@@ -89,14 +132,7 @@ final class BrowserViewTests: XCTestCase {
             eventNumber: 0,
             clickCount: 1,
             pressure: 1
-        ))
-        webView.willOpenMenu(menu, with: event)
-
-        XCTAssertEqual(
-            menu.items.compactMap(\.identifier?.rawValue),
-            ["WKMenuItemIdentifierCopy", "WKMenuItemIdentifierReload"],
-            "only the new-window item goes, and it goes after super has populated the menu"
-        )
+        ), file: file, line: line)
     }
 
     private func menuItem(title: String, identifier: String) -> NSMenuItem {

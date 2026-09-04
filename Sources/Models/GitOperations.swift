@@ -116,6 +116,22 @@ extension Worktree {
 
         let changes: [FileChange]
         let unmergedCommits: [UnmergedCommit]
+
+        /// `git status` did not run — git is missing, timed out, or exited non-zero.
+        /// `changes` is then empty for want of an answer, not because the tree is
+        /// clean, and callers must not present it as the latter: the worktree detail
+        /// sheet says "nothing to lose" directly above a Force Remove button.
+        let changesUnavailable: Bool
+
+        /// The unmerged-commit log did not run: either `git log` failed, or the base
+        /// branch did not resolve, which turns the comparison into `HEAD..HEAD` — a
+        /// valid empty range that exits 0 and reports every commit as merged.
+        let unmergedCommitsUnavailable: Bool
+
+        /// Both probes ran. Only then does an empty detail mean "nothing here".
+        var isFullyLoaded: Bool {
+            !changesUnavailable && !unmergedCommitsUnavailable
+        }
     }
 }
 
@@ -673,7 +689,8 @@ extension Git {
         static func worktreeDetail(at worktreePath: String, mainRepoPath: String) -> Worktree.Detail {
             var changes: [Worktree.Detail.FileChange] = []
 
-            if let status = run(args: ["status", "--porcelain"], in: worktreePath) {
+            let status = run(args: ["status", "--porcelain"], in: worktreePath)
+            if let status {
                 for line in status.components(separatedBy: "\n") where !line.isEmpty {
                     let trimmed = line
                     guard trimmed.count >= 3 else { continue }
@@ -702,7 +719,16 @@ extension Git {
 
             var commits: [Worktree.Detail.UnmergedCommit] = []
             let baseBranch = defaultBranch(at: mainRepoPath)
-            if let log = run(args: ["log", "\(baseBranch)..HEAD", "--oneline"], in: worktreePath) {
+            // `defaultBranch` falls back to the literal "HEAD" when it resolves
+            // nothing. `git log HEAD..HEAD` is a valid empty range that exits 0, so
+            // that failure used to arrive as a confident "no unmerged commits". It is
+            // an unrun check, not an empty result. Handled here rather than in
+            // `defaultBranch`: `mergeBase` and `hasBranchCommits` share that fallback
+            // and are out of scope.
+            let log = baseBranch == "HEAD"
+                ? nil
+                : run(args: ["log", "\(baseBranch)..HEAD", "--oneline"], in: worktreePath)
+            if let log {
                 for line in log.components(separatedBy: "\n") where !line.isEmpty {
                     let parts = line.split(separator: " ", maxSplits: 1)
                     guard parts.count == 2 else { continue }
@@ -710,7 +736,12 @@ extension Git {
                 }
             }
 
-            return Worktree.Detail(changes: changes, unmergedCommits: commits)
+            return Worktree.Detail(
+                changes: changes,
+                unmergedCommits: commits,
+                changesUnavailable: status == nil,
+                unmergedCommitsUnavailable: log == nil
+            )
         }
 
         /// Force-remove a git worktree by path, discarding uncommitted changes.
