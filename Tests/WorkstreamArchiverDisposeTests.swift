@@ -115,13 +115,31 @@ final class WorkstreamArchiverDisposeTests: XCTestCase {
     /// it too — the bypass that `isRepositoryProvided` alone missed.
     func testDisposeIsRefusedForAWorktreeOverrideBesideAUserConfig() throws {
         _ = try writeConfig(in: project)
-        _ = try writeConfig(in: worktree, named: "process-compose.override.yml")
+        let override = try writeConfig(in: worktree, named: "process-compose.override.yml")
+
+        // Which file fired the gate. "have not been approved" reads the same whichever
+        // one it was, so asserting only the message would have passed just as well if
+        // the user's own project-directory config had been the file gated — the exact
+        // over-reach this test is named for.
+        let config = try XCTUnwrap(
+            ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path)
+        )
+        XCTAssertEqual(config.repositoryProvidedFiles, [override],
+                       "only the worktree override is repository content here")
 
         let plan = Workstream.Archiver.disposePlan(
             worktreePath: worktree.path, projectDirectory: project.path
         )
-
         XCTAssertEqual(note(plan)?.contains("have not been approved"), true, String(describing: plan))
+
+        // And that it was that file: approving it alone clears the refusal.
+        ScriptTrust.approve(configFiles: [override], for: project.path)
+        let approved = Workstream.Archiver.disposePlan(
+            worktreePath: worktree.path, projectDirectory: project.path
+        )
+        guard case .run = approved else {
+            return XCTFail("approving the override alone must clear the refusal, got \(approved)")
+        }
     }
 
     func testDisposeNeedsNoApprovalForTheUsersOwnConfig() throws {

@@ -46,9 +46,14 @@ final class ProcessComposeSettingsTests: XCTestCase {
         XCTAssertFalse(ProcessCompose.Settings.isEnabled)
     }
 
+    /// Only `true` was written and read back, so a setter that ignored its argument
+    /// passed. Both values have to round-trip.
     func testEnabledRoundTrips() {
         ProcessCompose.Settings.isEnabled = true
         XCTAssertTrue(ProcessCompose.Settings.isEnabled)
+
+        ProcessCompose.Settings.isEnabled = false
+        XCTAssertFalse(ProcessCompose.Settings.isEnabled)
     }
 
     func testConfiguredBinaryWins() {
@@ -96,9 +101,25 @@ final class ProcessComposeSettingsTests: XCTestCase {
 
     /// A whitespace-only path is not a configured path: it must not be handed to
     /// `isExecutableFile` as-is, and it must never resolve to itself.
+    ///
+    /// `XCTAssertNotEqual(resolveBinary(), "   ")` held for `nil` too — which is what
+    /// this returns on any host without process-compose in the three search paths —
+    /// so it could not fail. Asserting that a blank path resolves *identically to an
+    /// unset one* states the same contract and is load-bearing wherever the search
+    /// can actually find something; CI installs process-compose for exactly that
+    /// reason, so that is where this discriminates.
     func testAWhitespaceOnlyPathIsNeverReturned() {
+        clearSettings()
+        let unset = ProcessCompose.Settings.resolveBinary()
+
         ProcessCompose.Settings.binaryPath = "   "
+
         XCTAssertNotEqual(ProcessCompose.Settings.resolveBinary(), "   ")
+        XCTAssertEqual(
+            ProcessCompose.Settings.resolveBinary(),
+            unset,
+            "a blank path must fall through to the search, exactly as an unset one does"
+        )
     }
 
     // MARK: - Configured path hygiene

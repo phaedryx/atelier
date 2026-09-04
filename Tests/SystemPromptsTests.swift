@@ -25,8 +25,22 @@ final class SystemPromptsTests: XCTestCase {
         XCTAssertTrue(SystemPrompts.agentIPCPrompt(workstreamName: "x").contains("[Atelier]"))
     }
 
-    func test_restrictToWorktreePrompt_namesTheDirectoryItConstrains() {
+    /// Asserting only that the path appears would pass just as well for a prompt that
+    /// told the agent it may work anywhere, including that path. The constraint and
+    /// the path have to arrive in the same clause.
+    func test_restrictToWorktreePrompt_forbidsWritesOutsideTheDirectoryItNames() {
         let prompt = SystemPrompts.restrictToWorktreePrompt(worktreePath: "/repos/atelier/tad@feature")
-        XCTAssertTrue(prompt.contains("/repos/atelier/tad@feature"))
+
+        XCTAssertTrue(
+            prompt.contains(
+                "MUST NOT create, edit, delete, or modify any files outside of the following "
+                    + "directory: /repos/atelier/tad@feature"
+            ),
+            "the prohibition must name the directory it excludes: \(prompt)"
+        )
+        XCTAssertTrue(
+            prompt.contains("All file operations MUST target paths within /repos/atelier/tad@feature"),
+            "the positive restatement is the half an agent acts on: \(prompt)"
+        )
     }
 }

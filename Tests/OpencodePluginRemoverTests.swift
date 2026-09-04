@@ -43,10 +43,22 @@ final class OpencodePluginRemoverTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: path))
     }
 
-    func testMissingPluginIsANoOp() {
+    /// The absent file's own non-existence holds whatever `uninstall` did with it, so
+    /// asserting it proved nothing. What "no-op" actually means here is that a path
+    /// holding nothing leaves the rest of the directory alone.
+    func testMissingPluginIsANoOp() throws {
+        let neighbour = directory.appendingPathComponent("other.js")
+        try "export const Other = {}".write(to: neighbour, atomically: true, encoding: .utf8)
         let path = directory.appendingPathComponent("absent.js").path
+
         OpencodePluginRemover.uninstall(at: path)
+
         XCTAssertFalse(FileManager.default.fileExists(atPath: path))
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted(),
+            ["other.js"],
+            "uninstall must not touch anything but the path it was given"
+        )
     }
 
     /// Launch calls this unconditionally, so a second pass must not error.

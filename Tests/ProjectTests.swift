@@ -40,6 +40,14 @@ final class ProjectTests: XCTestCase {
         var set: Set<Project> = []
         set.insert(a)
         XCTAssertTrue(set.contains(b))
+
+        // Equality alone passed for a conformance that called everything equal, which
+        // would silently collapse a project list into one entry.
+        let other = Project(name: "test", directory: "/test")
+        XCTAssertNotEqual(a, other, "a distinct id is a distinct project, same name and directory or not")
+        XCTAssertFalse(set.contains(other))
+        set.insert(other)
+        XCTAssertEqual(set.count, 2)
     }
 
     func testMutableProperties() {

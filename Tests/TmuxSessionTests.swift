@@ -50,7 +50,16 @@ final class TmuxSessionTests: XCTestCase {
         XCTAssertTrue(command.contains("-e \"ATELIER_PROJECT=My Project\""))
     }
 
-    func testWrapCommandQuotesEnvVarValuesWithSpecialChars() {
+    /// Inverse of the POSIX single-quote escaping both wrapping layers apply
+    /// (`'` -> `'\''`). Unwrapping is what makes an exact assertion possible: a
+    /// `contains` check on a fragment holds for any nesting that happens to include
+    /// the substring, including one that mangled the layering.
+    private func posixUnquoted(_ quoted: String) -> String? {
+        guard quoted.count >= 2, quoted.hasPrefix("'"), quoted.hasSuffix("'") else { return nil }
+        return quoted.dropFirst().dropLast().replacingOccurrences(of: "'\\''", with: "'")
+    }
+
+    func testWrapCommandQuotesEnvVarValuesWithSpecialChars() throws {
         let command = TmuxSession.wrapCommand(
             tmuxPath: "/opt/homebrew/bin/tmux",
             sessionName: "proj/ws/agent",
@@ -59,13 +68,25 @@ final class TmuxSessionTests: XCTestCase {
             shell: "/bin/zsh"
         )
 
-        // Single quotes, double quotes, and dollar signs must survive nested quoting.
-        // The two-layer shell wrapping (login shell -> sh) applies shellEscape twice,
-        // so we verify the key and double-quote-escaped value appear at the inner level.
-        XCTAssertTrue(command.contains("ATELIER_PROJECT"))
-        XCTAssertTrue(command.contains("client"))
-        XCTAssertTrue(command.contains("best"))
-        XCTAssertTrue(command.contains("\\$project"))
+        // Four `contains` checks — for "ATELIER_PROJECT", "client", "best" and
+        // "\$project" — passed for any command that merely mentioned those pieces,
+        // which a broken double layer still does. Peel the two POSIX quote layers the
+        // wrapper applies (login shell -> `sh -c`) and assert the exact flag tmux is
+        // handed. This is the same nested-quoting territory as the fish bug in
+        // `CommandBuilder.withFallback`, where `fish -n` validated the outer shell and
+        // said nothing about the inner payload.
+        let outerPrefix = "/bin/zsh -lic "
+        XCTAssertTrue(command.hasPrefix(outerPrefix), command)
+        let shCmd = try XCTUnwrap(posixUnquoted(String(command.dropFirst(outerPrefix.count))), command)
+
+        let innerPrefix = "exec sh -c "
+        XCTAssertTrue(shCmd.hasPrefix(innerPrefix), shCmd)
+        let innerCmd = try XCTUnwrap(posixUnquoted(String(shCmd.dropFirst(innerPrefix.count))), shCmd)
+
+        XCTAssertTrue(
+            innerCmd.contains(#"-e "ATELIER_PROJECT=client's \"best\" \$project""#),
+            "the flag tmux receives must carry the value double-quote-escaped exactly once: \(innerCmd)"
+        )
     }
 
     func testWrapCommandFishUsesDoubleQuotes() {
