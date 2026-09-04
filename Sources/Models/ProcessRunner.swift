@@ -143,7 +143,7 @@ enum ProcessRunner {
             return nil
         }
 
-        return Output(status: process.terminationStatus, stdout: outBox.take(), stderr: errBox.take())
+        return Output(status: process.terminationStatus, stdout: outBox.read(), stderr: errBox.read())
     }
 
     /// Runs `executable` and returns its stdout, or nil if it could not be
@@ -208,7 +208,10 @@ enum ProcessRunner {
             data = value
         }
 
-        func take() -> Data {
+        /// Reads; it does not take. See `ProcessCompose.PhaseExecutor.OutputBox.read()`
+        /// — these two boxes cross-reference each other, so renaming one and not
+        /// the other would put the misnomer straight back.
+        func read() -> Data {
             lock.lock()
             defer { lock.unlock() }
             return data

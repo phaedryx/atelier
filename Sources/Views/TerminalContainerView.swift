@@ -2527,20 +2527,61 @@ final class TerminalSurfaceCache: ObservableObject {
         creationTimes.removeValue(forKey: id)
     }
 
+    /// Every surface id this workstream can have created, derived from the
+    /// counters that produced them.
+    ///
+    /// The counters are the bound, not a fixed ceiling. The previous sweep ran
+    /// `0 ... 99` per prefix, and `WorkspaceModel`'s per-kind counters are
+    /// monotonic *and* persisted in `WorkspaceTabSnapshot` — they must never
+    /// rewind, or a reused salt would collide with a live surface. So a workstream
+    /// that had opened its 101st terminal tab held a surface at `terminal-100`
+    /// that archiving could not reach, and a ghostty surface with a live shell
+    /// under it survived for the rest of the process. `runGeneration` is not
+    /// persisted, and Start/Stop/Restart each remove the outgoing generation's
+    /// surface before incrementing, so only the current one can be live — it is
+    /// swept from zero anyway, because being thorough here costs a hash.
+    ///
+    /// `env-setup` is not swept: nothing derives that salt. It outlived whatever
+    /// created it and only ever cost 100 hashes per archive.
+    ///
+    /// Internal and static so the enumeration can be tested without a terminal.
+    static func derivedSurfaceIDs(
+        for workstreamID: UUID,
+        terminalCount: Int,
+        browserCount: Int,
+        editorCount: Int,
+        runGeneration: Int
+    ) -> Set<UUID> {
+        var ids = Set<UUID>()
+        for (prefix, highest) in [
+            ("terminal", terminalCount),
+            ("browser", browserCount),
+            ("editor", editorCount),
+            ("env-run", runGeneration),
+        ] {
+            for index in 0 ... max(0, highest) {
+                ids.insert(derivedUUID(from: workstreamID, salt: "\(prefix)-\(index)"))
+            }
+        }
+        return ids
+    }
+
     func removeWorkstreamSurfaces(for workstreamID: UUID) {
+        // Captured before the model goes: its counters are what bound the sweep.
+        let model = workspaceModels[workstreamID]
         workspaceModels.removeValue(forKey: workstreamID)
         if let runner = quickActionRunners.removeValue(forKey: workstreamID) {
             runner.cancel()
         }
         // Remove agent surface
         removeSurface(for: workstreamID)
-        // Build a set of all possible derived IDs and remove matches
-        var derivedIDs = Set<UUID>()
-        for prefix in ["terminal", "browser", "editor", "env-setup", "env-run"] {
-            for i in 0 ... 99 {
-                derivedIDs.insert(derivedUUID(from: workstreamID, salt: "\(prefix)-\(i)"))
-            }
-        }
+        let derivedIDs = Self.derivedSurfaceIDs(
+            for: workstreamID,
+            terminalCount: model?.terminalCount ?? 0,
+            browserCount: model?.browserCount ?? 0,
+            editorCount: model?.editorCount ?? 0,
+            runGeneration: model?.runGeneration ?? 0
+        )
         for id in derivedIDs {
             if surfaces[id] != nil {
                 removeSurface(for: id)

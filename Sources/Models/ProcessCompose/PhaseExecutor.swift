@@ -159,7 +159,7 @@ extension ProcessCompose {
                 logger.warning("\(phase.namespace, privacy: .public) did not exit after down; it will be killed at its deadline")
             }
 
-            return outcome(for: phase, poll: poll, output: captured.take())
+            return outcome(for: phase, poll: poll, output: captured.read())
         }
 
         // MARK: - Environment
@@ -185,9 +185,12 @@ extension ProcessCompose {
         ) -> [String: String] {
             var environment = baseEnvironment
             environment.merge(workstreamEnvironment) { _, workstream in workstream }
-            if let loginPath {
-                environment["PATH"] = loginPath
-            }
+            // Assigned unconditionally, which is the whole claim above. `if let`
+            // left the *workstream's* PATH standing whenever the login-shell
+            // lookup failed — the one outcome this layering exists to prevent.
+            // With nothing to fall back to, the child gets no PATH rather than a
+            // declared one; assigning nil removes the key.
+            environment["PATH"] = loginPath ?? baseEnvironment["PATH"]
             return environment
         }
 
@@ -492,7 +495,11 @@ extension ProcessCompose {
                 value = output
             }
 
-            func take() -> ProcessRunner.Output? {
+            /// Reads; it does not take. Named `take()` until the name promised a
+            /// hand-off it never performed — a second call returns the same output
+            /// rather than nil, which would have been a silent bug the day anyone
+            /// relied on it. `ProcessRunner.DataBox` carried the same misnomer.
+            func read() -> ProcessRunner.Output? {
                 lock.lock()
                 defer { lock.unlock() }
                 return value
