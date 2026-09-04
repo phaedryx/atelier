@@ -120,4 +120,18 @@ extension UsageProbeTests {
     func testKeepsTheInheritedPathWhenNoShellIsSet() {
         XCTAssertEqual(environment(base: ["PATH": "/usr/bin"])["PATH"], "/usr/bin")
     }
+
+    // MARK: - Fractional percentages
+
+    func testFractionalPercentageKeepsTheWholeNumber() {
+        // `\d+%` matched with `.regularExpression` backtracks: against "63.5%"
+        // every offset from 0 fails until it lands on "5%", so the meter reported 5.
+        let report = Usage.Probe.parseText("Current session: 63.5% used · resets Aug 30 at 1:10am")
+        XCTAssertEqual(report?.session?.percentUsed, 63)
+    }
+
+    func testFractionalWeeklyPercentageKeepsTheWholeNumber() {
+        let report = Usage.Probe.parseText("Current week (all models): 8.75% used · resets Aug 31 at 8pm")
+        XCTAssertEqual(report?.week?.percentUsed, 8)
+    }
 }

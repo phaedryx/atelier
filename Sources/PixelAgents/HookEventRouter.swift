@@ -60,7 +60,12 @@ final class HookEventRouter: @unchecked Sendable {
 
     // MARK: - Path Normalization
 
+    /// Resolves symlinks as well as collapsing `.`/`..`, and must keep doing
+    /// both: `Workstream.AgentStateTracker.normalize` answers the same question
+    /// about the same hook-payload paths, and a router that stopped one step
+    /// short matched no handler for any project reached through a symlink — so
+    /// its events were dropped in silence.
     static func normalizePath(_ path: String) -> String {
-        URL(fileURLWithPath: path).standardized.path
+        URL(fileURLWithPath: path).resolvingSymlinksInPath().standardized.path
     }
 }

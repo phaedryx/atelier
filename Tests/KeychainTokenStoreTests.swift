@@ -15,7 +15,7 @@ final class KeychainTokenStoreTests: XCTestCase {
     }
 
     override func tearDown() {
-        store.delete()
+        _ = store.delete()
         store = nil
         super.tearDown()
     }
@@ -25,33 +25,33 @@ final class KeychainTokenStoreTests: XCTestCase {
     }
 
     func testStoreThenRead() {
-        store.write("secret-token")
+        _ = store.write("secret-token")
         XCTAssertEqual(store.read(), "secret-token")
     }
 
     func testWriteOverwritesExistingToken() {
-        store.write("first")
-        store.write("second")
+        _ = store.write("first")
+        _ = store.write("second")
         XCTAssertEqual(store.read(), "second", "a second write must replace, not duplicate or fail")
     }
 
     func testDeleteRemovesToken() {
-        store.write("secret-token")
-        store.delete()
+        _ = store.write("secret-token")
+        _ = store.delete()
         XCTAssertNil(store.read())
     }
 
     func testDeleteIsIdempotent() {
-        store.delete()
-        store.delete()
+        _ = store.delete()
+        _ = store.delete()
         XCTAssertNil(store.read())
     }
 
     func testWritingEmptyStringClearsToken() {
         // The settings field is a SecureField; clearing it should read as "no token"
         // rather than storing an empty credential the client would send as a header.
-        store.write("secret-token")
-        store.write("")
+        _ = store.write("secret-token")
+        _ = store.write("")
         XCTAssertNil(store.read())
     }
 
@@ -69,9 +69,31 @@ final class KeychainTokenStoreTests: XCTestCase {
 
     func testHasTokenReflectsStoredState() {
         XCTAssertFalse(store.hasToken)
-        store.write("secret-token")
+        _ = store.write("secret-token")
         XCTAssertTrue(store.hasToken)
-        store.delete()
+        _ = store.delete()
         XCTAssertFalse(store.hasToken)
+    }
+
+    // MARK: - Absent vs failed
+
+    /// `read()` collapsed every failure into nil, so a locked keychain or a
+    /// denied prompt presented as "your Shortcut token vanished". The outcome
+    /// keeps the two apart; `read()` stays the convenience over it.
+    func testReadOutcomeIsAbsentWhenNothingStored() {
+        XCTAssertEqual(store.readOutcome(), .absent)
+        XCTAssertNil(store.read())
+    }
+
+    func testReadOutcomeCarriesTheStoredToken() {
+        _ = store.write("secret-token")
+        XCTAssertEqual(store.readOutcome(), .token("secret-token"))
+        XCTAssertEqual(store.read(), "secret-token")
+    }
+
+    func testAnEmptyStoredValueReadsAsAbsentRatherThanAsAToken() {
+        _ = store.write("secret-token")
+        _ = store.write("   ")
+        XCTAssertEqual(store.readOutcome(), .absent)
     }
 }

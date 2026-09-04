@@ -121,10 +121,21 @@ extension Usage {
             return report.isEmpty ? nil : report
         }
 
-        /// First integer immediately followed by `%`.
+        /// The whole-number part of the first percentage in the line.
+        ///
+        /// The fraction has to be in the pattern even though `/usage` only emits
+        /// integers today: `\d+%` matched with `.regularExpression` *backtracks*,
+        /// so against "63.5% used" it failed at every earlier offset and matched
+        /// "5%" — reporting 5. A missing number shows as a blank meter; a wrong
+        /// one shows as a confident lie. `(?<!\d)` keeps it anchored to the start
+        /// of the run of digits.
         private static func firstPercent(in line: String) -> Int? {
-            guard let range = line.range(of: #"\d+%"#, options: .regularExpression) else { return nil }
-            return Int(line[range].dropLast())
+            guard let range = line.range(
+                of: #"(?<!\d)\d+(\.\d+)?%"#,
+                options: .regularExpression
+            ) else { return nil }
+            let number = line[range].dropLast()
+            return Int(number.prefix { $0.isNumber })
         }
 
         /// Text after "resets ", trimmed and stripped of a trailing timezone parenthetical.

@@ -32,11 +32,26 @@ extension ProcessCompose {
         /// because silently running a different binary than the one named is worse
         /// than reporting that the named one is gone.
         static func resolveBinary() -> String? {
-            let configured = binaryPath.trimmingCharacters(in: .whitespaces)
+            // `.whitespacesAndNewlines`, because a path pasted out of a terminal
+            // carries a trailing newline and `.whitespaces` leaves it on — which
+            // resolved to nil with no diagnostic, the one thing the paragraph
+            // above says this does not do.
+            let configured = binaryPath.trimmingCharacters(in: .whitespacesAndNewlines)
             if !configured.isEmpty {
-                return FileManager.default.isExecutableFile(atPath: configured) ? configured : nil
+                return isExecutableBinary(configured) ? configured : nil
             }
-            return searchPaths.first { FileManager.default.isExecutableFile(atPath: $0) }
+            return searchPaths.first(where: isExecutableBinary)
+        }
+
+        /// `isExecutableFile` is true for a *searchable directory* as well as for
+        /// a program, so pointing the setting at `/usr/local/bin` instead of the
+        /// binary inside it passed the check and failed at spawn time.
+        private static func isExecutableBinary(_ path: String) -> Bool {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
+                  !isDirectory.boolValue
+            else { return false }
+            return FileManager.default.isExecutableFile(atPath: path)
         }
     }
 }

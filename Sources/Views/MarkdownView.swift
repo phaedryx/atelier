@@ -104,7 +104,16 @@ struct SelfSizingMarkdownView: View {
 
 // MARK: - cmark-gfm rendering
 
-private func renderMarkdownToHTML(_ markdown: String) -> String {
+/// Markdown → HTML, in cmark-gfm's **safe** mode.
+///
+/// Safe is the default since cmark-gfm 0.29 — raw HTML blocks and inline HTML
+/// become a placeholder comment, and `javascript:`/`vbscript:`/`file:`/`data:`
+/// links become empty strings — and this passes `CMARK_OPT_DEFAULT`, so the
+/// header's "strips raw HTML" is true. Do not add `CMARK_OPT_UNSAFE`: the
+/// markdown rendered here is a Shortcut story description, i.e. remote text, and
+/// `allowsContentJavaScript = false` would still leave `<iframe>`/`<object>`
+/// parsing inside the WKWebView. `Tests/MarkdownRenderingTests.swift` pins it.
+func renderMarkdownToHTML(_ markdown: String) -> String {
     cmark_gfm_core_extensions_ensure_registered()
 
     guard let parser = cmark_parser_new(CMARK_OPT_DEFAULT) else { return escapeHTML(markdown) }

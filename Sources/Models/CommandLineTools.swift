@@ -8,9 +8,7 @@ enum CommandLineTools {
         for name: String,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) },
-        resolveFromPath: (String, [String: String]) -> String? = { name, environment in
-            pathFromEnvironment(named: name, environment: environment)
-        },
+        resolveFromPath: ((String, [String: String]) -> String?)? = nil,
         resolveFromShellPath: (String) -> String? = { shell in
             loginShellPath(shell: shell)
         }
@@ -29,8 +27,17 @@ enum CommandLineTools {
             }
         }
 
-        // Fall back to the process PATH (minimal launchd PATH for GUI apps)
-        if let found = resolveFromPath(name, environment) {
+        // Fall back to the process PATH (minimal launchd PATH for GUI apps).
+        // The default cannot be written as a default argument, because it has to
+        // close over `isExecutable`: spelling it inline used to hardcode
+        // `FileManager`, so this one lookup ignored the injected check that the
+        // rest of the function honours.
+        let fromPath = if let resolveFromPath {
+            resolveFromPath(name, environment)
+        } else {
+            pathFromEnvironment(named: name, environment: environment, isExecutable: isExecutable)
+        }
+        if let found = fromPath {
             return found
         }
 
@@ -90,20 +97,35 @@ enum CommandLineTools {
                 arguments: ["-lic", "printenv PATH"],
                 timeout: timeout
             )
-            guard let data else { return nil }
-            let result = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let data, let output = String(data: data, encoding: .utf8) else { return nil }
+            let result = CommandLineTools.parseShellPathOutput(output)
             storage.path = result
             return result
         }
     }
 
-    private static func pathFromEnvironment(named name: String, environment: [String: String]) -> String? {
+    /// The PATH out of `$SHELL -lic 'printenv PATH'`.
+    ///
+    /// The last non-empty line, not the whole buffer trimmed: an rc file that
+    /// echoes anything — a version-manager notice, a welcome banner — puts its
+    /// text ahead of the PATH, and trimming glued it onto the first entry.
+    static func parseShellPathOutput(_ output: String) -> String? {
+        output
+            .split(whereSeparator: { $0 == "\n" || $0 == "\r" })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .last { !$0.isEmpty }
+    }
+
+    private static func pathFromEnvironment(
+        named name: String,
+        environment: [String: String],
+        isExecutable: (String) -> Bool
+    ) -> String? {
         guard let rawPath = environment["PATH"], !rawPath.isEmpty else { return nil }
 
         for directory in rawPath.split(separator: ":") {
             let candidate = URL(fileURLWithPath: String(directory)).appendingPathComponent(name).path
-            if FileManager.default.isExecutableFile(atPath: candidate) {
+            if isExecutable(candidate) {
                 return candidate
             }
         }

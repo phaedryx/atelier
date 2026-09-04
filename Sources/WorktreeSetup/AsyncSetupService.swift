@@ -217,24 +217,60 @@ actor AsyncSetupService {
     /// server exits, the spawned `up` follows, and the `defer` in
     /// `runBackgroundSetup` clears the claim. The poll below reads that claim
     /// rather than the process, so it observes the real end of the work.
-    func cancelBootstrap(for workstreamID: UUID, binary: String?, worktreePath: String) async {
-        guard runningBootstraps.contains(workstreamID) else { return }
+    /// Why `cancelBootstrap` stopped waiting. Reported rather than only logged,
+    /// because "the bootstrap stopped" and "we gave up on it" are different
+    /// answers to the archive that asked.
+    enum CancelOutcome: Equatable {
+        /// Nothing was in flight.
+        case notRunning
+        /// `down` was sent and the bootstrap cleared.
+        case stopped
+        /// No process-compose binary, so there was nothing to send `down` to.
+        case noBinary
+        /// The task waiting was cancelled.
+        case cancelled
+        /// Still running when the wait ran out; the archive proceeds anyway.
+        case timedOut
+    }
+
+    @discardableResult
+    func cancelBootstrap(for workstreamID: UUID, binary: String?, worktreePath: String) async -> CancelOutcome {
+        guard runningBootstraps.contains(workstreamID) else { return .notRunning }
         logger.info("Archive is waiting for bootstrap of \(worktreePath, privacy: .public)")
-        if let binary {
-            ProcessCompose.PhaseExecutor.shutDown(
-                binary: binary,
-                socketPath: ProcessCompose.PhaseRunner.socketPath(for: workstreamID, phase: .bootstrap),
-                workingDirectory: worktreePath
-            )
+        guard let binary else {
+            // `shutDown` is the only thing that can make the bootstrap stop, so
+            // with no binary the poll below cannot change its answer — it just
+            // burned the full 30s before archiving anyway.
+            logger.warning("No process-compose binary; archiving \(worktreePath, privacy: .public) without waiting")
+            return .noBinary
         }
+        ProcessCompose.PhaseExecutor.shutDown(
+            binary: binary,
+            socketPath: ProcessCompose.PhaseRunner.socketPath(for: workstreamID, phase: .bootstrap),
+            workingDirectory: worktreePath
+        )
         // Capped, because a bootstrap wedged in a way `down` cannot reach must
         // not block the archive forever. Proceeding is then the lesser evil:
         // the user asked for this worktree to go.
         for _ in 0 ..< 300 {
-            guard runningBootstraps.contains(workstreamID) else { return }
-            try? await Task.sleep(nanoseconds: 100_000_000)
+            guard runningBootstraps.contains(workstreamID) else { return .stopped }
+            do {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            } catch {
+                // `try?` here swallowed CancellationError, which makes every
+                // remaining sleep return instantly — so a cancelled wait spun
+                // through all 300 iterations as fast as the CPU allowed.
+                return .cancelled
+            }
         }
         logger.warning("Bootstrap for \(worktreePath, privacy: .public) did not stop; archiving anyway")
+        return .timedOut
+    }
+
+    /// Test seam. `runningBootstraps` is otherwise only reachable by launching a
+    /// real bootstrap, which needs a process-compose binary and a worktree.
+    func _markBootstrapRunning(_ workstreamID: UUID) {
+        runningBootstraps.insert(workstreamID)
     }
 
     func clearState(for workstreamID: UUID) {

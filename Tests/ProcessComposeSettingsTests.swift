@@ -100,4 +100,44 @@ final class ProcessComposeSettingsTests: XCTestCase {
         ProcessCompose.Settings.binaryPath = "   "
         XCTAssertNotEqual(ProcessCompose.Settings.resolveBinary(), "   ")
     }
+
+    // MARK: - Configured path hygiene
+
+    func testAcceptsAPathWithATrailingNewline() throws {
+        // A path pasted out of a terminal carries one. `.whitespaces` does not
+        // strip it, so the check ran against "<path>\n" and reported the binary
+        // as gone — the one outcome `resolveBinary` documents it will not do
+        // silently.
+        let binary = try makeExecutable(named: "process-compose")
+        ProcessCompose.Settings.binaryPath = binary + "\n"
+
+        XCTAssertEqual(ProcessCompose.Settings.resolveBinary(), binary)
+    }
+
+    func testRejectsAConfiguredPathThatIsADirectory() throws {
+        // `isExecutableFile` is true for a searchable directory, so pointing the
+        // setting at /usr/local/bin instead of the binary inside it passed.
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pc-bin-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        ProcessCompose.Settings.binaryPath = directory.path
+
+        XCTAssertNil(ProcessCompose.Settings.resolveBinary())
+    }
+
+    private func makeExecutable(named name: String) throws -> String {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pc-bin-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let binary = directory.appendingPathComponent(name)
+        FileManager.default.createFile(
+            atPath: binary.path,
+            contents: Data("#!/bin/sh\n".utf8),
+            attributes: [.posixPermissions: 0o755]
+        )
+        return binary.path
+    }
 }

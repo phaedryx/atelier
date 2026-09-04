@@ -629,7 +629,24 @@ private struct IntegrationsSettingsPane: View {
         }
         .formStyle(.grouped)
         .onAppear {
-            savedToken = store.read() ?? ""
+            switch store.readOutcome() {
+            case let .token(stored):
+                savedToken = stored
+            case .absent:
+                savedToken = ""
+            case let .failed(status):
+                // A keychain that refuses to answer is not an empty keychain.
+                // Reading it as one showed a blank field over a token that is
+                // still there, and Save would then have cleared it.
+                savedToken = ""
+                testResult = .failure(String(
+                    format: NSLocalizedString(
+                        "Could not read the Keychain (error %d). Any saved token is still there.",
+                        comment: "Keychain read failure"
+                    ),
+                    Int(status)
+                ))
+            }
             token = savedToken
         }
     }

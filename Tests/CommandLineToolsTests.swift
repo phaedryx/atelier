@@ -120,4 +120,50 @@ final class CommandLineToolsTests: XCTestCase {
 
         XCTAssertEqual(resolved, "/usr/local/bin/git")
     }
+
+    // MARK: - Login-shell PATH output
+
+    func testTakesTheLastLineOfShellOutput() {
+        // A .zshrc / config.fish that echoes a banner puts its text ahead of the
+        // PATH. Trimming the whole buffer left the banner glued to the first entry.
+        let parsed = CommandLineTools.parseShellPathOutput("""
+        Welcome back!
+        nvm: using v22
+        /opt/homebrew/bin:/usr/bin
+        """)
+
+        XCTAssertEqual(parsed, "/opt/homebrew/bin:/usr/bin")
+    }
+
+    func testIgnoresTrailingBlankLines() {
+        XCTAssertEqual(
+            CommandLineTools.parseShellPathOutput("/usr/bin:/bin\n\n  \n"),
+            "/usr/bin:/bin"
+        )
+    }
+
+    func testEmptyShellOutputIsNoPath() {
+        XCTAssertNil(CommandLineTools.parseShellPathOutput("  \n\n"))
+    }
+
+    // MARK: - Process PATH fallback
+
+    func testProcessPathFallbackUsesTheInjectedExecutableCheck() {
+        // The default `resolveFromPath` used to hardcode FileManager, so this
+        // lookup reached the real filesystem in tests and in every caller that
+        // passed an `isExecutable` of its own.
+        var probed: [String] = []
+        let resolved = CommandLineTools.path(
+            for: "mytool",
+            environment: ["PATH": "/custom/bin:/other/bin"],
+            isExecutable: { path in
+                probed.append(path)
+                return path == "/other/bin/mytool"
+            },
+            resolveFromShellPath: { _ in nil }
+        )
+
+        XCTAssertEqual(resolved, "/other/bin/mytool")
+        XCTAssertEqual(Array(probed.prefix(2)), ["/custom/bin/mytool", "/other/bin/mytool"])
+    }
 }

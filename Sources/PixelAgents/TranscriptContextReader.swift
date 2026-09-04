@@ -18,9 +18,29 @@ enum TranscriptContextReader {
             let size = try handle.seekToEnd()
             let start = size > UInt64(tailByteCount) ? size - UInt64(tailByteCount) : 0
             try handle.seek(toOffset: start)
-            guard let data = try handle.read(upToCount: tailByteCount),
-                  let contents = String(data: data, encoding: .utf8)
-            else { return nil }
+
+            // `read(upToCount:)` is one read(2) and may come back short, so keep
+            // asking until the file dries up.
+            var data = Data()
+            while data.count < tailByteCount,
+                  let chunk = try handle.read(upToCount: tailByteCount - data.count),
+                  !chunk.isEmpty
+            {
+                data.append(chunk)
+            }
+
+            // The seek lands on an arbitrary byte, which is mid-codepoint the
+            // moment the tail carries an emoji or a box-drawing character — and
+            // `String(data:encoding:.utf8)` then returns nil for the *whole*
+            // window rather than for the broken prefix, so the meter showed
+            // nothing at all. The content is JSONL, so a partial first line is
+            // unusable anyway: skip to the first newline.
+            if start > 0 {
+                guard let newline = data.firstIndex(of: UInt8(ascii: "\n")) else { return nil }
+                data = data[data.index(after: newline)...]
+            }
+
+            guard let contents = String(data: data, encoding: .utf8) else { return nil }
             return usage(contents: contents)
         } catch {
             return nil

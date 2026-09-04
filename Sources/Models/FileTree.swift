@@ -18,7 +18,7 @@ struct FileNode: Identifiable {
 
     /// Build a shallow tree (root level only). Directory children are nil (lazy).
     static func buildShallowTree(rootPath: String) -> [FileNode] {
-        buildShallowChildren(at: rootPath, relativeTo: rootPath)
+        buildShallowChildren(at: rootPath, relativeTo: rootPath) ?? []
     }
 
     /// Load immediate children of a single directory. Directories get children = nil (lazy).
@@ -26,7 +26,7 @@ struct FileNode: Identifiable {
         let dirPath = relativePath.isEmpty
             ? rootPath
             : (rootPath as NSString).appendingPathComponent(relativePath)
-        return buildShallowChildren(at: dirPath, relativeTo: rootPath)
+        return buildShallowChildren(at: dirPath, relativeTo: rootPath) ?? []
     }
 
     /// Insert loaded children at a specific path in the tree, returning the updated tree.
@@ -61,7 +61,11 @@ struct FileNode: Identifiable {
 
     /// Refresh all previously-loaded nodes, preserving lazy structure for unloaded directories.
     static func refreshLoadedNodes(in nodes: [FileNode], rootPath: String) -> [FileNode] {
-        let freshRoot = buildShallowChildren(at: rootPath, relativeTo: rootPath)
+        // A root that cannot be read right now is not an empty root; keeping what
+        // is already on screen is the honest answer.
+        guard let freshRoot = buildShallowChildren(at: rootPath, relativeTo: rootPath) else {
+            return nodes
+        }
         return mergeNodes(fresh: freshRoot, existing: nodes, rootPath: rootPath)
     }
 
@@ -81,10 +85,15 @@ struct FileNode: Identifiable {
         return nil
     }
 
-    private static func buildShallowChildren(at directoryPath: String, relativeTo rootPath: String) -> [FileNode] {
+    /// Immediate children of one directory, or **nil when the directory could not
+    /// be read** — permission denied, or a path that blinked out from under a
+    /// background refresh. The two used to answer the same `[]`, and `mergeNodes`
+    /// mapped that straight onto the node, so one transient failure collapsed a
+    /// subtree the user had expanded. Absent is not empty.
+    private static func buildShallowChildren(at directoryPath: String, relativeTo rootPath: String) -> [FileNode]? {
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(atPath: directoryPath) else {
-            return []
+            return nil
         }
 
         var dirs: [FileNode] = []
@@ -127,9 +136,12 @@ struct FileNode: Identifiable {
                let existingNode = existingByID[freshNode.id],
                existingNode.isLoaded
             {
-                // Previously loaded — refresh its children recursively
+                // Previously loaded — refresh its children recursively. A read
+                // that fails leaves the loaded subtree exactly as it was.
                 let dirPath = (rootPath as NSString).appendingPathComponent(freshNode.id)
-                let freshChildren = buildShallowChildren(at: dirPath, relativeTo: rootPath)
+                guard let freshChildren = buildShallowChildren(at: dirPath, relativeTo: rootPath) else {
+                    return existingNode
+                }
                 let mergedChildren = mergeNodes(
                     fresh: freshChildren,
                     existing: existingNode.children ?? [],
@@ -148,15 +160,56 @@ struct FileNode: Identifiable {
 /// Watches a directory tree for changes using macOS FSEventStream.
 /// Calls `onChange` on the main thread when files are created, deleted, or renamed.
 final class DirectoryWatcher: @unchecked Sendable {
+    /// What the FSEvents context points at.
+    ///
+    /// Not `self`: the context holds a raw pointer, the stream can have a
+    /// callback already in flight when the watcher is released — from any
+    /// thread, since nothing pins this type to one — and
+    /// `Unmanaged.passUnretained(self)` gave that callback a dangling pointer to
+    /// resurrect. The stream owns this box instead (retained into the context,
+    /// released by the context's own release callback), so it outlives the
+    /// watcher, and `disarm()` is what makes a stopped watcher silent.
+    private final class Callback: @unchecked Sendable {
+        private let lock = NSLock()
+        private var onChange: (() -> Void)?
+
+        init(_ onChange: @escaping () -> Void) {
+            self.onChange = onChange
+        }
+
+        func disarm() {
+            lock.lock()
+            onChange = nil
+            lock.unlock()
+        }
+
+        /// Read on the main queue, not at the FSEvents callback: a `stop()` that
+        /// lands between the two then suppresses the hop that is already queued.
+        func fire() {
+            DispatchQueue.main.async { [self] in
+                lock.lock()
+                let handler = onChange
+                lock.unlock()
+                handler?()
+            }
+        }
+    }
+
+    private let lock = NSLock()
     private var stream: FSEventStreamRef?
-    private let onChange: () -> Void
+    private let callbackBox: Callback
 
     init(path: String, onChange: @escaping () -> Void) {
-        self.onChange = onChange
+        let box = Callback(onChange)
+        callbackBox = box
 
         let pathsToWatch = [path] as CFArray
         var context = FSEventStreamContext()
-        context.info = Unmanaged.passUnretained(self).toOpaque()
+        context.info = Unmanaged.passRetained(box).toOpaque()
+        context.release = { pointer in
+            guard let pointer else { return }
+            Unmanaged<Callback>.fromOpaque(pointer).release()
+        }
 
         let flags = UInt32(
             kFSEventStreamCreateFlagUseCFTypes |
@@ -172,7 +225,14 @@ final class DirectoryWatcher: @unchecked Sendable {
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
             1.0, // 1 second coalescing latency
             FSEventStreamCreateFlags(flags)
-        ) else { return }
+        ) else {
+            // No stream means nothing will ever call the context's release, so
+            // the retain above is ours to undo.
+            if let info = context.info {
+                Unmanaged<Callback>.fromOpaque(info).release()
+            }
+            return
+        }
 
         self.stream = stream
         FSEventStreamScheduleWithRunLoop(stream, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
@@ -180,11 +240,15 @@ final class DirectoryWatcher: @unchecked Sendable {
     }
 
     func stop() {
+        callbackBox.disarm()
+        lock.lock()
+        let stream = stream
+        self.stream = nil
+        lock.unlock()
         guard let stream else { return }
         FSEventStreamStop(stream)
         FSEventStreamInvalidate(stream)
         FSEventStreamRelease(stream)
-        self.stream = nil
     }
 
     deinit {
@@ -194,9 +258,6 @@ final class DirectoryWatcher: @unchecked Sendable {
     private static let callback: FSEventStreamCallback = {
         _, clientCallBackInfo, _, _, _, _ in
         guard let info = clientCallBackInfo else { return }
-        let watcher = Unmanaged<DirectoryWatcher>.fromOpaque(info).takeUnretainedValue()
-        DispatchQueue.main.async {
-            watcher.onChange()
-        }
+        Unmanaged<Callback>.fromOpaque(info).takeUnretainedValue().fire()
     }
 }
