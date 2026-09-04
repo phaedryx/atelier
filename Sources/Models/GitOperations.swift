@@ -35,6 +35,14 @@ extension Worktree {
         let hasUnpushedCommits: Bool
         let hasBranchCommits: Bool
 
+        /// `isDirty` and/or `hasBranchCommits` are `false` because a probe did not
+        /// run, not because the answer is no. Anything that acts on "this worktree
+        /// is clean" — Prune, above all — has to treat it as not-clean.
+        ///
+        /// No default value on purpose: a `= false` here would let a future
+        /// construction site claim both checks ran when it never asked.
+        let cleanlinessUnknown: Bool
+
         var id: String {
             path
         }
@@ -654,9 +662,16 @@ extension Git {
             }
         }
 
-        /// Check if a worktree has uncommitted changes (staged, unstaged, or untracked files).
-        static func hasUncommittedChanges(at path: String) -> Bool {
-            guard let status = run(args: ["status", "--porcelain", "--ignore-submodules=dirty"], in: path) else { return false }
+        /// Whether a worktree has uncommitted changes (staged, unstaged, or untracked
+        /// files) — or `nil` when the probe did not run.
+        ///
+        /// This used to return `false` on failure, which every caller read as "clean".
+        /// `updateDefaultBranch` gates `git reset --hard` on it, so a failed probe
+        /// discarded work that has no branch, no reflog entry, and no way back; and
+        /// `purgeWarning` gates the only warning shown before a `--force` removal.
+        /// A probe that could not look must not answer "no".
+        static func hasUncommittedChanges(at path: String) -> Bool? {
+            guard let status = run(args: ["status", "--porcelain", "--ignore-submodules=dirty"], in: path) else { return nil }
             return !status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
 
@@ -767,10 +782,21 @@ extension Git {
             return !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
 
-        /// Check if the current branch has commits ahead of the default branch.
-        static func hasBranchCommits(at path: String, projectPath: String) -> Bool {
+        /// Whether this branch holds commits the base branch does not — or `nil` when
+        /// the comparison never happened.
+        ///
+        /// `defaultBranch` falls back to the literal "HEAD" when it resolves nothing,
+        /// and `git log HEAD..HEAD` is a valid empty range that exits 0, so an
+        /// unresolvable base used to report "no commits" with full confidence.
+        ///
+        /// This does not change *which* branch is compared against, so it is not the
+        /// `BaseBranchSetting` migration CLAUDE.md holds all-or-none across this
+        /// function, `mergeBase`, and the worktree detail log. That question is
+        /// untouched here.
+        static func hasBranchCommits(at path: String, projectPath: String) -> Bool? {
             let base = defaultBranch(at: projectPath)
-            guard let output = run(args: ["log", "\(base)..HEAD", "--oneline"], in: path) else { return false }
+            guard base != "HEAD" else { return nil }
+            guard let output = run(args: ["log", "\(base)..HEAD", "--oneline"], in: path) else { return nil }
             return !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
 
@@ -821,10 +847,18 @@ extension Git {
             func flush() {
                 guard let path = currentPath, !currentIsBare else { return }
                 let isMain = URL(fileURLWithPath: path).standardizedFileURL.path == mainPath
-                let dirty = !isMain && hasUncommittedChanges(at: path)
+                let dirtyProbe = isMain ? false : hasUncommittedChanges(at: path)
                 let unpushed = !isMain && hasUnpushedCommits(at: path)
-                let branchCommits = !isMain && hasBranchCommits(at: path, projectPath: projectPath)
-                results.append(Worktree.Info(path: path, branch: currentBranch, isDirty: dirty, isMain: isMain, hasUnpushedCommits: unpushed, hasBranchCommits: branchCommits))
+                let branchCommitsProbe = isMain ? false : hasBranchCommits(at: path, projectPath: projectPath)
+                results.append(Worktree.Info(
+                    path: path,
+                    branch: currentBranch,
+                    isDirty: dirtyProbe ?? false,
+                    isMain: isMain,
+                    hasUnpushedCommits: unpushed,
+                    hasBranchCommits: branchCommitsProbe ?? false,
+                    cleanlinessUnknown: dirtyProbe == nil || branchCommitsProbe == nil
+                ))
             }
 
             for line in output.components(separatedBy: "\n") {
@@ -846,23 +880,32 @@ extension Git {
 
         /// Remove clean worktrees (no uncommitted changes and no unmerged branch commits).
         /// When `onlyPaths` is provided, only those worktree paths are considered.
+        /// Removes the worktrees that are known to be clean, and returns the
+        /// standardized paths of the ones git actually removed.
+        ///
+        /// The return used to be a count, which the caller could not map back to
+        /// paths — so it dropped every *attempted* worktree from the project's
+        /// workstream list, including ones git had refused to remove.
         @discardableResult
-        static func pruneCleanWorktrees(at projectPath: String, onlyPaths: Set<String>? = nil) -> Int {
+        static func pruneCleanWorktrees(at projectPath: String, onlyPaths: Set<String>? = nil) -> Set<String> {
             let worktrees = listWorktreesWithInfo(at: projectPath)
             let allowedPaths = onlyPaths.map { paths in
                 Set(paths.map { path in
                     URL(fileURLWithPath: path).standardizedFileURL.path
                 })
             }
-            var pruned = 0
-            for wt in worktrees where !wt.isMain && !wt.isDirty && !wt.hasBranchCommits {
+            var pruned: Set<String> = []
+            // `cleanlinessUnknown` fails closed: a worktree whose checks did not run
+            // is not a clean worktree, whatever the caller asked for.
+            for wt in worktrees where !wt.isMain && !wt.isDirty && !wt.hasBranchCommits && !wt.cleanlinessUnknown {
                 let standardizedPath = URL(fileURLWithPath: wt.path).standardizedFileURL.path
                 if let allowedPaths, !allowedPaths.contains(standardizedPath) {
                     continue
                 }
-                let result = runOnWholeTree(args: ["worktree", "remove", wt.path], in: projectPath)
-                if result != nil {
-                    pruned += 1
+                // No --force: git refuses to remove a worktree holding modified or
+                // untracked files, which is the backstop behind the checks above.
+                if runOnWholeTree(args: ["worktree", "remove", wt.path], in: projectPath) != nil {
+                    pruned.insert(standardizedPath)
                 }
             }
             // Clean up stale entries
@@ -1058,12 +1101,14 @@ extension Git {
                 return
             }
 
-            // Reset the working tree only if it is clean
-            if !hasUncommittedChanges(at: path) {
+            // Reset the working tree only if it is *known* to be clean. `== false`
+            // rather than `!`: a nil means the status probe did not run, and
+            // `reset --hard` on an unread tree destroys work nothing can recover.
+            if hasUncommittedChanges(at: path) == false {
                 _ = runOnWholeTree(args: ["reset", "--hard", "--quiet"], in: path)
                 logger.info("[Atelier] Updated \(branch, privacy: .public) to latest")
             } else {
-                logger.info("[Atelier] Updated \(branch, privacy: .public) ref but working tree has local changes, skipping reset")
+                logger.info("[Atelier] Updated \(branch, privacy: .public) ref but the working tree is dirty or unreadable, skipping reset")
             }
         }
 

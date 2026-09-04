@@ -401,7 +401,10 @@ struct ProjectOverviewView: View {
 
     private var prunableWorktrees: [Worktree.Info] {
         worktrees.filter { worktree in
-            guard !worktree.isMain, !worktree.isDirty, !worktree.hasBranchCommits else { return false }
+            // `cleanlinessUnknown` fails closed. Offering a worktree for pruning
+            // means asserting it is clean, and an unrun check has asserted nothing.
+            guard !worktree.isMain, !worktree.isDirty, !worktree.hasBranchCommits,
+                  !worktree.cleanlinessUnknown else { return false }
             return !workstreamPaths.contains(Self.standardizedPath(worktree.path))
         }
     }
@@ -498,8 +501,8 @@ struct ProjectOverviewView: View {
         let dir = project.directory
         let pathsToPrune = prunablePaths
         Task.detached {
-            let pruned = Git.Operations.pruneCleanWorktrees(at: dir, onlyPaths: pathsToPrune)
-            await applyPrunedWorktrees(pathsToPrune, pruned: pruned)
+            let removed = Git.Operations.pruneCleanWorktrees(at: dir, onlyPaths: pathsToPrune)
+            await applyPrunedWorktrees(attempted: pathsToPrune, removed: removed)
         }
     }
 
@@ -514,24 +517,28 @@ struct ProjectOverviewView: View {
     }
 
     @MainActor
-    private func applyPrunedWorktrees(_ prunablePaths: Set<String>, pruned: Int) {
+    private func applyPrunedWorktrees(attempted: Set<String>, removed: Set<String>) {
+        // `removed`, not `attempted`: a worktree git refused to remove is still on
+        // disk, and dropping its workstream here made it vanish from the sidebar
+        // while its directory stayed — `project.workstreams` is UserDefaults-backed,
+        // so `refreshWorktrees()` below does not bring it back.
         project.workstreams.removeAll { ws in
             guard let path = ws.worktreePath else { return false }
-            return prunablePaths.contains(Self.standardizedPath(path))
+            return removed.contains(Self.standardizedPath(path))
         }
         onProjectChanged()
         isPruning = false
-        // pruneCleanWorktrees returns how many it actually removed. Discarding that
+        // pruneCleanWorktrees reports which ones it actually removed. Discarding that
         // turned a failed `git worktree remove` into a silent no-op: the spinner
         // stopped and the same worktrees reappeared in the refreshed list.
-        if pruned < prunablePaths.count {
+        if removed.count < attempted.count {
             pruneErrorMessage = String(
                 format: NSLocalizedString(
                     "Removed %1$d of %2$d worktrees. The rest could not be removed.",
                     comment: "Shown when git could not remove every worktree the prune asked for"
                 ),
-                pruned,
-                prunablePaths.count
+                removed.count,
+                attempted.count
             )
             showPruneError = true
         }

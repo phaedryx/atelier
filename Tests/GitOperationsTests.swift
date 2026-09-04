@@ -395,9 +395,219 @@ final class GitOperationsTests: XCTestCase {
             onlyPaths: Set([worktreeA.path])
         )
 
-        XCTAssertEqual(pruned, 1)
+        XCTAssertEqual(pruned, Set([worktreeA.standardizedFileURL.path]))
         XCTAssertFalse(FileManager.default.fileExists(atPath: worktreeA.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: worktreeB.path))
+    }
+
+    /// `applyPrunedWorktrees` used to drop every *attempted* path from the project's
+    /// workstream list, so a worktree git refused to remove vanished from the sidebar
+    /// while its directory sat on disk. It can only drop the right ones if this
+    /// returns which ones actually went.
+    func testPruneCleanWorktreesReportsOnlyTheOnesItRemoved() throws {
+        let repoDir = tempDir.appendingPathComponent("prune-partial")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        XCTAssertTrue(git(["init", "-b", "main"], in: repoDir))
+        XCTAssertTrue(git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+                           "commit", "--allow-empty", "-m", "init"], in: repoDir))
+
+        let clean = tempDir.appendingPathComponent("prune-clean")
+        let locked = tempDir.appendingPathComponent("prune-locked")
+        XCTAssertTrue(git(["worktree", "add", "-b", "feature/clean", clean.path], in: repoDir))
+        XCTAssertTrue(git(["worktree", "add", "-b", "feature/locked", locked.path], in: repoDir))
+        // A *locked* worktree, not a dirty one. A dirty worktree is filtered out by
+        // `isDirty` before removal is ever attempted, so it would exercise the
+        // selection rather than the reporting, and this test would pass whether or
+        // not the return distinguishes attempted from removed — confirmed by
+        // mutation. A locked worktree is clean to `git status` and still refused by
+        // `git worktree remove`, which is the case that actually reaches the branch.
+        XCTAssertTrue(git(["worktree", "lock", locked.path], in: repoDir))
+
+        let pruned = Git.Operations.pruneCleanWorktrees(
+            at: repoDir.path,
+            onlyPaths: Set([clean.path, locked.path])
+        )
+
+        XCTAssertEqual(pruned, Set([clean.standardizedFileURL.path]), "only the one git actually removed")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: clean.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: locked.path), "git refused; the directory stays")
+    }
+
+    /// Prune selects on "clean", so a worktree whose cleanliness never got
+    /// established must not be selected — regardless of what the caller asked for.
+    func testPruneCleanWorktreesSkipsWorktreesItCouldNotVet() throws {
+        let repoDir = tempDir.appendingPathComponent("prune-unknown")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        // `develop` resolves to no base branch, so hasBranchCommits cannot tell.
+        XCTAssertTrue(git(["init", "-b", "develop"], in: repoDir))
+        XCTAssertTrue(git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+                           "commit", "--allow-empty", "-m", "init"], in: repoDir))
+        let worktree = tempDir.appendingPathComponent("prune-unvetted")
+        XCTAssertTrue(git(["worktree", "add", "-b", "feature/unvetted", worktree.path], in: repoDir))
+
+        let pruned = Git.Operations.pruneCleanWorktrees(at: repoDir.path, onlyPaths: Set([worktree.path]))
+
+        XCTAssertTrue(pruned.isEmpty, "cleanliness was never established, so this is not a clean worktree")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: worktree.path))
+    }
+
+    // MARK: - Probes that must not report "clean" when they could not look
+
+    /// The destructive one. `updateDefaultBranch` runs `git reset --hard` behind
+    /// `!hasUncommittedChanges`, so a status probe that fails reads as "clean" and
+    /// the reset discards work that is not recoverable from anywhere — no branch
+    /// ref, no reflog entry, nothing.
+    ///
+    /// The fixture breaks `git status` *specifically*: `status.showUntrackedFiles`
+    /// set to a bad value makes status exit 128 while `fetch`, `merge-base`,
+    /// `update-ref` and `reset --hard` all still succeed. That precision is the
+    /// whole point — a corrupt `.git/index` also fails status, but it fails
+    /// `reset --hard` too, so the file would survive whether or not this is fixed
+    /// and the test would pass for the wrong reason.
+    func testUpdateDefaultBranchDoesNotResetAWorkingTreeItCouldNotRead() throws {
+        let (remote, local) = try makeCloneWithOrigin(named: "unreadable-status")
+        _ = remote
+
+        try "LOCAL EDIT".write(to: local.appendingPathComponent("tracked.txt"), atomically: true, encoding: .utf8)
+        // Breaks `git status` and nothing else.
+        XCTAssertTrue(git(["config", "status.showUntrackedFiles", "bogus"], in: local))
+        XCTAssertNil(
+            Git.Operations.hasUncommittedChanges(at: local.path),
+            "precondition: the status probe has to actually fail for this test to mean anything"
+        )
+
+        Git.Operations.updateDefaultBranch(at: local.path)
+
+        XCTAssertEqual(
+            try String(contentsOf: local.appendingPathComponent("tracked.txt"), encoding: .utf8),
+            "LOCAL EDIT",
+            "an unreadable working tree must not be reset — the edit is unrecoverable"
+        )
+    }
+
+    /// The positive control. Without it the test above passes on a fixture that
+    /// never reached the reset at all, which would make it worthless.
+    func testUpdateDefaultBranchStillResetsAReadableCleanWorkingTree() throws {
+        let (remote, local) = try makeCloneWithOrigin(named: "readable-status")
+        _ = remote
+
+        // Committed to origin after the clone, so the local branch fast-forwards and
+        // the reset has something to bring in.
+        try "LOCAL EDIT".write(to: local.appendingPathComponent("tracked.txt"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(Git.Operations.hasUncommittedChanges(at: local.path), true, "precondition")
+
+        // Now make it genuinely clean, and prove the reset path is live.
+        XCTAssertTrue(git(["checkout", "--", "tracked.txt"], in: local))
+        XCTAssertEqual(Git.Operations.hasUncommittedChanges(at: local.path), false, "precondition")
+
+        Git.Operations.updateDefaultBranch(at: local.path)
+
+        XCTAssertEqual(
+            try String(contentsOf: local.appendingPathComponent("tracked.txt"), encoding: .utf8),
+            "original",
+            "a readable clean tree still gets updated; the fix must not disable this path"
+        )
+    }
+
+    func testHasUncommittedChangesSaysItCouldNotTellRatherThanClean() throws {
+        let plainDir = tempDir.appendingPathComponent("not-a-repo-status")
+        try FileManager.default.createDirectory(at: plainDir, withIntermediateDirectories: true)
+
+        XCTAssertNil(Git.Operations.hasUncommittedChanges(at: plainDir.path))
+    }
+
+    func testHasUncommittedChangesDistinguishesCleanFromDirty() throws {
+        let repoDir = tempDir.appendingPathComponent("status-states")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        XCTAssertTrue(git(["init", "-b", "main"], in: repoDir))
+        XCTAssertTrue(git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+                           "commit", "--allow-empty", "-m", "init"], in: repoDir))
+
+        XCTAssertEqual(Git.Operations.hasUncommittedChanges(at: repoDir.path), false)
+
+        try "x".write(to: repoDir.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(Git.Operations.hasUncommittedChanges(at: repoDir.path), true)
+    }
+
+    /// Same `"HEAD"` sentinel `worktreeDetail` guards against: `git log HEAD..HEAD`
+    /// is a valid empty range that exits 0, so an unresolvable base branch used to
+    /// report "no branch commits" with full confidence.
+    func testHasBranchCommitsSaysItCouldNotTellWhenTheBaseDoesNotResolve() throws {
+        let repoDir = tempDir.appendingPathComponent("develop-only")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        XCTAssertTrue(git(["init", "-b", "develop"], in: repoDir))
+        XCTAssertTrue(git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+                           "commit", "--allow-empty", "-m", "init"], in: repoDir))
+        XCTAssertEqual(Git.Operations.defaultBranch(at: repoDir.path), "HEAD", "precondition")
+
+        XCTAssertNil(Git.Operations.hasBranchCommits(at: repoDir.path, projectPath: repoDir.path))
+    }
+
+    func testHasBranchCommitsDistinguishesNoneFromSome() throws {
+        let repoDir = tempDir.appendingPathComponent("branch-commits")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        XCTAssertTrue(git(["init", "-b", "main"], in: repoDir))
+        XCTAssertTrue(git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+                           "commit", "--allow-empty", "-m", "init"], in: repoDir))
+
+        let worktree = tempDir.appendingPathComponent("wt-commits")
+        XCTAssertTrue(git(["worktree", "add", "-b", "feature", worktree.path], in: repoDir))
+        XCTAssertEqual(Git.Operations.hasBranchCommits(at: worktree.path, projectPath: repoDir.path), false)
+
+        XCTAssertTrue(git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+                           "commit", "--allow-empty", "-m", "ahead"], in: worktree))
+        XCTAssertEqual(Git.Operations.hasBranchCommits(at: worktree.path, projectPath: repoDir.path), true)
+    }
+
+    /// Prune has to fail closed: a worktree whose cleanliness could not be
+    /// established is not a clean worktree.
+    func testListWorktreesMarksCleanlinessUnknownWhenABaseBranchDoesNotResolve() throws {
+        let repoDir = tempDir.appendingPathComponent("unknown-cleanliness")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        XCTAssertTrue(git(["init", "-b", "develop"], in: repoDir))
+        XCTAssertTrue(git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+                           "commit", "--allow-empty", "-m", "init"], in: repoDir))
+        let worktree = tempDir.appendingPathComponent("wt-unknown")
+        XCTAssertTrue(git(["worktree", "add", "-b", "feature/unknown", worktree.path], in: repoDir))
+
+        let infos = Git.Operations.listWorktreesWithInfo(at: repoDir.path)
+        let linked = try XCTUnwrap(infos.first { !$0.isMain })
+
+        XCTAssertTrue(linked.cleanlinessUnknown, "the base branch did not resolve, so 'no commits' was never established")
+    }
+
+    func testListWorktreesReportsKnownCleanlinessForAnOrdinaryRepository() throws {
+        let repoDir = tempDir.appendingPathComponent("known-cleanliness")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        XCTAssertTrue(git(["init", "-b", "main"], in: repoDir))
+        XCTAssertTrue(git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+                           "commit", "--allow-empty", "-m", "init"], in: repoDir))
+        let worktree = tempDir.appendingPathComponent("wt-known")
+        XCTAssertTrue(git(["worktree", "add", "-b", "feature/known", worktree.path], in: repoDir))
+
+        let infos = Git.Operations.listWorktreesWithInfo(at: repoDir.path)
+        let linked = try XCTUnwrap(infos.first { !$0.isMain })
+
+        XCTAssertFalse(linked.cleanlinessUnknown, "both probes ran here; an always-true flag would make Prune useless")
+        XCTAssertFalse(linked.isDirty)
+        XCTAssertFalse(linked.hasBranchCommits)
+    }
+
+    /// A clone with a real `origin`, one tracked file, and a branch that can
+    /// fast-forward — the preconditions `updateDefaultBranch` walks before it
+    /// reaches the reset.
+    private func makeCloneWithOrigin(named name: String) throws -> (remote: URL, local: URL) {
+        let remote = tempDir.appendingPathComponent("\(name)-remote")
+        try FileManager.default.createDirectory(at: remote, withIntermediateDirectories: true)
+        XCTAssertTrue(git(["init", "-b", "main"], in: remote))
+        try "original".write(to: remote.appendingPathComponent("tracked.txt"), atomically: true, encoding: .utf8)
+        XCTAssertTrue(git(["add", "tracked.txt"], in: remote))
+        XCTAssertTrue(git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+                           "commit", "-m", "seed"], in: remote))
+
+        let local = tempDir.appendingPathComponent("\(name)-local")
+        XCTAssertTrue(git(["clone", remote.path, local.path], in: tempDir))
+        return (remote, local)
     }
 
     // MARK: - uncommittedDiffFiles (Changes tab tracer)
