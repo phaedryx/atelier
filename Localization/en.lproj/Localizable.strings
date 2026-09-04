@@ -593,3 +593,7 @@
 "Unmerged commits could not be read. This worktree may still hold some." = "Unmerged commits could not be read. This worktree may still hold some.";
 "Changes could not be read" = "Changes could not be read";
 "State unknown" = "State unknown";
+
+/* Project overview - opens the worktree detail sheet */
+"Details" = "Details";
+"Inspect uncommitted changes and unmerged commits" = "Inspect uncommitted changes and unmerged commits";
