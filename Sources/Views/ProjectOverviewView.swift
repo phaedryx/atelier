@@ -254,7 +254,8 @@ struct ProjectOverviewView: View {
                                 isWorkstream: workstreamPaths.contains(Self.standardizedPath(wt.path)),
                                 isPurging: purgingPaths.contains(Self.standardizedPath(wt.path)),
                                 onAdopt: { adoptWorktree(wt) },
-                                onPurge: { confirmPurgeWorktree(wt) }
+                                onPurge: { confirmPurgeWorktree(wt) },
+                                onInspect: { selectedWorktreeForDetail = wt }
                             )
                         }
 
@@ -561,6 +562,12 @@ private struct WorktreeInfoRow: View {
     let onAdopt: () -> Void
     var onPurge: (() -> Void)?
 
+    /// Opens `WorktreeDetailSheet`. Not optional and not defaulted: the sheet spent
+    /// five months unreachable because its presenter was dropped in a merge while
+    /// its `@State` and `.popover` survived, which compiles clean and fails silently.
+    /// Requiring the callback means a future call site cannot omit it by accident.
+    let onInspect: () -> Void
+
     @EnvironmentObject var appEnv: AppEnvironment
 
     private var pr: GitHub.PR? {
@@ -651,13 +658,16 @@ private struct WorktreeInfoRow: View {
                 Text("main")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            } else if !isWorkstream, !isPurging {
+            } else if !isPurging {
                 HStack(spacing: 6) {
-                    Button(action: onAdopt) {
+                    // Available for adopted workstreams too: "what is in this worktree"
+                    // is a question you ask whether or not it is one, and it is the
+                    // only route to the changes/unmerged-commits list and Force Remove.
+                    Button(action: onInspect) {
                         HStack(spacing: 4) {
-                            Image(systemName: "plus.rectangle.on.folder")
+                            Image(systemName: "list.bullet.rectangle")
                                 .font(.system(size: 12))
-                            Text("Open")
+                            Text("Details")
                                 .font(.caption)
                         }
                         .foregroundStyle(.secondary)
@@ -667,25 +677,43 @@ private struct WorktreeInfoRow: View {
                         .clipShape(RoundedRectangle(cornerRadius: 4))
                     }
                     .buttonStyle(.plain)
-                    if let onPurge {
-                        // Purge stays merged-only. A closed-unmerged PR now renders honestly
-                        // but does not imply the branch is safe to discard.
-                        let isMerged = pr?.status == .merged
-                        Button(action: onPurge) {
+                    .help("Inspect uncommitted changes and unmerged commits")
+
+                    if !isWorkstream {
+                        Button(action: onAdopt) {
                             HStack(spacing: 4) {
-                                Image(systemName: "trash")
+                                Image(systemName: "plus.rectangle.on.folder")
                                     .font(.system(size: 12))
-                                Text("Purge")
+                                Text("Open")
                                     .font(.caption)
                             }
-                            .foregroundStyle(isMerged ? .white : .red)
+                            .foregroundStyle(.secondary)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
-                            .background(isMerged ? Color.red : Color.red.opacity(0.12))
+                            .background(Color.primary.opacity(0.08))
                             .clipShape(RoundedRectangle(cornerRadius: 4))
                         }
                         .buttonStyle(.plain)
-                        .help(isMerged ? "PR is merged — safe to purge" : "Remove worktree and delete branch")
+                        if let onPurge {
+                            // Purge stays merged-only. A closed-unmerged PR now renders honestly
+                            // but does not imply the branch is safe to discard.
+                            let isMerged = pr?.status == .merged
+                            Button(action: onPurge) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "trash")
+                                        .font(.system(size: 12))
+                                    Text("Purge")
+                                        .font(.caption)
+                                }
+                                .foregroundStyle(isMerged ? .white : .red)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(isMerged ? Color.red : Color.red.opacity(0.12))
+                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                            }
+                            .buttonStyle(.plain)
+                            .help(isMerged ? "PR is merged — safe to purge" : "Remove worktree and delete branch")
+                        }
                     }
                 }
             }
