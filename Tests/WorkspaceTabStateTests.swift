@@ -62,18 +62,25 @@ final class WorkspaceTabStateTests: XCTestCase {
             commandKeyNotification(charactersIgnoringModifiers: "]", modifierFlags: [.command]),
             .nextWorkstream
         )
+        // AppKit reports the shifted brackets as "{" / "}" — charactersIgnoringModifiers
+        // drops every modifier except Shift, so these are the characters that arrive.
         XCTAssertEqual(
-            commandKeyNotification(charactersIgnoringModifiers: "[", modifierFlags: [.command, .shift]),
+            commandKeyNotification(charactersIgnoringModifiers: "{", modifierFlags: [.command, .shift]),
             .prevTab
         )
         XCTAssertEqual(
-            commandKeyNotification(charactersIgnoringModifiers: "]", modifierFlags: [.command, .shift]),
+            commandKeyNotification(charactersIgnoringModifiers: "}", modifierFlags: [.command, .shift]),
             .nextTab
         )
         XCTAssertEqual(
             commandKeyNotification(charactersIgnoringModifiers: "w", modifierFlags: [.command]),
             .closeTerminal
         )
+    }
+
+    func testShiftedBracketsAreNotReportedAsUnshiftedBrackets() {
+        XCTAssertNil(commandKeyNotification(charactersIgnoringModifiers: "[", modifierFlags: [.command, .shift]))
+        XCTAssertNil(commandKeyNotification(charactersIgnoringModifiers: "]", modifierFlags: [.command, .shift]))
     }
 
     func testCommandBracketShortcutsIgnoreOptionAndControlChords() {

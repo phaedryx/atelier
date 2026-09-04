@@ -28,6 +28,8 @@ struct ProjectOverviewView: View {
     @State private var isPulling = false
     @State private var pullErrorMessage: String?
     @State private var showPullError = false
+    @State private var pruneErrorMessage: String?
+    @State private var showPruneError = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -359,6 +361,13 @@ struct ProjectOverviewView: View {
         } message: {
             Text(String(format: NSLocalizedString(prunableCount == 1 ? "Remove %d clean worktree with no uncommitted changes?" : "Remove %d clean worktrees with no uncommitted changes?", comment: ""), prunableCount))
         }
+        // On the outer view rather than the Prune button: that button is replaced by the
+        // spinner while a prune runs, and an alert hung off it goes away with it.
+        .alert("Prune failed", isPresented: $showPruneError, presenting: pruneErrorMessage) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { msg in
+            Text(msg)
+        }
         .alert(
             "Purge Worktree",
             isPresented: Binding(
@@ -489,8 +498,8 @@ struct ProjectOverviewView: View {
         let dir = project.directory
         let pathsToPrune = prunablePaths
         Task.detached {
-            Git.Operations.pruneCleanWorktrees(at: dir, onlyPaths: pathsToPrune)
-            await applyPrunedWorktrees(pathsToPrune)
+            let pruned = Git.Operations.pruneCleanWorktrees(at: dir, onlyPaths: pathsToPrune)
+            await applyPrunedWorktrees(pathsToPrune, pruned: pruned)
         }
     }
 
@@ -505,13 +514,27 @@ struct ProjectOverviewView: View {
     }
 
     @MainActor
-    private func applyPrunedWorktrees(_ prunablePaths: Set<String>) {
+    private func applyPrunedWorktrees(_ prunablePaths: Set<String>, pruned: Int) {
         project.workstreams.removeAll { ws in
             guard let path = ws.worktreePath else { return false }
             return prunablePaths.contains(Self.standardizedPath(path))
         }
         onProjectChanged()
         isPruning = false
+        // pruneCleanWorktrees returns how many it actually removed. Discarding that
+        // turned a failed `git worktree remove` into a silent no-op: the spinner
+        // stopped and the same worktrees reappeared in the refreshed list.
+        if pruned < prunablePaths.count {
+            pruneErrorMessage = String(
+                format: NSLocalizedString(
+                    "Removed %1$d of %2$d worktrees. The rest could not be removed.",
+                    comment: "Shown when git could not remove every worktree the prune asked for"
+                ),
+                pruned,
+                prunablePaths.count
+            )
+            showPruneError = true
+        }
         refreshWorktrees()
     }
 
@@ -550,14 +573,20 @@ private struct WorktreeInfoRow: View {
                 if !worktree.isMain {
                     HStack(spacing: 8) {
                         if let pr, !isPurging {
-                            Link(destination: URL(string: pr.url)!) {
-                                HStack(spacing: 3) {
-                                    Image(systemName: pr.status.symbolName)
-                                        .font(.system(size: 10))
-                                    Text(verbatim: "#\(pr.number)")
-                                        .font(.caption)
-                                }
-                                .foregroundStyle(pr.status.color)
+                            let badge = HStack(spacing: 3) {
+                                Image(systemName: pr.status.symbolName)
+                                    .font(.system(size: 10))
+                                Text(verbatim: "#\(pr.number)")
+                                    .font(.caption)
+                            }
+                            .foregroundStyle(pr.status.color)
+
+                            // Same shape as PRBadge below: a malformed URL costs the link,
+                            // not the process.
+                            if let destination = URL(string: pr.url) {
+                                Link(destination: destination) { badge }
+                            } else {
+                                badge
                             }
                             if pr.checks != .none {
                                 Image(systemName: pr.checks.symbolName)

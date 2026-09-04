@@ -46,7 +46,7 @@ struct WorkstreamInfoView: View {
 
             // Markdown content fills remaining space when a doc is selected
             if let selected = selectedDoc,
-               let doc = docFiles.first(where: { $0.name == selected })
+               let doc = displayedDocs.first(where: { $0.name == selected })
             {
                 Divider()
                 MarkdownContentView(markdown: doc.content)
@@ -54,10 +54,10 @@ struct WorkstreamInfoView: View {
             }
 
             // Doc tabs pinned to bottom
-            if !docFiles.isEmpty {
+            if !displayedDocs.isEmpty {
                 Divider()
                 HStack(spacing: 0) {
-                    ForEach(docFiles) { doc in
+                    ForEach(displayedDocs) { doc in
                         DocTabButton(
                             name: doc.name,
                             isActive: selectedDoc == doc.name,

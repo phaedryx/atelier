@@ -12,8 +12,10 @@ extension Notification.Name {
 /// Hides the "Open Link in New Window" context menu item since the app is single-window.
 class BrowserWebView: WKWebView {
     override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
-        menu.items.removeAll { $0.identifier?.rawValue == "WKMenuItemIdentifierOpenLinkInNewWindow" }
+        // super populates the menu from the responder chain, so the removal has to
+        // come after it. Removing first ran against an empty menu and did nothing.
         super.willOpenMenu(menu, with: event)
+        menu.items.removeAll { $0.identifier?.rawValue == "WKMenuItemIdentifierOpenLinkInNewWindow" }
     }
 }
 

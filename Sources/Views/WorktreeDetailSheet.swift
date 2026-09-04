@@ -14,6 +14,7 @@ struct WorktreeDetailSheet: View {
     @State private var isLoading = true
     @State private var showForceRemoveConfirm = false
     @State private var showDiscardConfirm = false
+    @State private var showForceRemoveFailed = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -127,6 +128,11 @@ struct WorktreeDetailSheet: View {
         } message: {
             Text("This will permanently discard all uncommitted changes, including staged files and untracked files.")
         }
+        .alert("Could Not Remove Worktree", isPresented: $showForceRemoveFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("The worktree directory is still on disk. Close anything using it and try again.")
+        }
     }
 
     private func loadDetail() {
@@ -158,7 +164,16 @@ struct WorktreeDetailSheet: View {
         let projectDir = projectDirectory
         Task.detached {
             Git.Operations.forceRemoveWorktreeByPath(worktreePath: path, projectPath: projectDir)
+            // That call returns nothing and falls back to deleting the directory itself,
+            // so whether the directory survived is the only honest signal there is.
+            // Reporting success unconditionally made the parent drop a worktree from its
+            // model while it was still on disk.
+            let removed = !FileManager.default.fileExists(atPath: path)
             await MainActor.run {
+                guard removed else {
+                    showForceRemoveFailed = true
+                    return
+                }
                 onForceRemove()
                 dismiss()
             }
