@@ -22,7 +22,6 @@ struct ProjectOverviewView: View {
     @AppStorage("atelier.defaultTerminal") private var defaultTerminal: String = ""
     @State private var docFiles: [DocFile] = []
     @State private var selectedDoc: String?
-    @State private var selectedWorktreeForDetail: Worktree.Info?
     @State private var showRepoChanges = false
     @State private var repoDetail: Worktree.Detail?
     @State private var isPulling = false
@@ -343,20 +342,6 @@ struct ProjectOverviewView: View {
         .onReceive(NotificationCenter.default.publisher(for: Workstream.Archiver.archivingDidStart)) { _ in
             purgingPaths = Workstream.Archiver.archivingPaths
             refreshWorktrees()
-        }
-        .popover(item: $selectedWorktreeForDetail, arrowEdge: .trailing) { wt in
-            WorktreeDetailSheet(
-                worktree: wt,
-                projectDirectory: project.directory,
-                defaultTerminal: defaultTerminal
-            ) {
-                // Remove associated workstream if any
-                if let idx = project.workstreams.firstIndex(where: { $0.worktreePath == wt.path }) {
-                    project.workstreams.remove(at: idx)
-                }
-                onProjectChanged()
-                refreshWorktrees()
-            }
         }
         .alert("Prune Worktrees", isPresented: $showingPruneConfirm) {
             Button("Cancel", role: .cancel) {}
