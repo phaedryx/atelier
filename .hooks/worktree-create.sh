@@ -12,9 +12,21 @@ if [ -d "$CLAUDE_PROJECT_DIR/ghostty" ]; then
     if [ ! -e "$WORKTREE_DIR/ghostty/include" ]; then
         git -C "$WORKTREE_DIR" -c protocol.file.allow=always submodule update --init --reference "$CLAUDE_PROJECT_DIR/ghostty" ghostty
     fi
-    # Symlink build artifacts (zig-out, xcframework) that aren't in git
-    ln -sfn "$CLAUDE_PROJECT_DIR/ghostty/macos/GhosttyKit.xcframework" "$WORKTREE_DIR/ghostty/macos/GhosttyKit.xcframework"
-    ln -sfn "$CLAUDE_PROJECT_DIR/ghostty/zig-out" "$WORKTREE_DIR/ghostty/zig-out"
+    # Symlink build artifacts (zig-out, xcframework) that aren't in git.
+    # They live in `.shared/` beside the bare repo — see
+    # docs/ghostty-xcframework-build.md. Link there directly rather than at the
+    # main checkout's own links into it, so a worktree survives main being
+    # removed. Fall back to the main checkout in a layout with no `.shared/`.
+    SHARED_DIR="$(dirname "$(git -C "$WORKTREE_DIR" rev-parse --path-format=absolute --git-common-dir)")/.shared"
+    if [ -d "$SHARED_DIR" ]; then
+        XCFRAMEWORK="$SHARED_DIR/GhosttyKit.xcframework"
+        ZIG_OUT="$SHARED_DIR/zig-out"
+    else
+        XCFRAMEWORK="$CLAUDE_PROJECT_DIR/ghostty/macos/GhosttyKit.xcframework"
+        ZIG_OUT="$CLAUDE_PROJECT_DIR/ghostty/zig-out"
+    fi
+    ln -sfn "$XCFRAMEWORK" "$WORKTREE_DIR/ghostty/macos/GhosttyKit.xcframework"
+    ln -sfn "$ZIG_OUT" "$WORKTREE_DIR/ghostty/zig-out"
 fi
 
 # Build so SourceKit can resolve symbols across files in the worktree.

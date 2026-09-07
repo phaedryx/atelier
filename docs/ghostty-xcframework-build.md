@@ -17,6 +17,55 @@ xcode-select --print-path
 # If not: sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
 ```
 
+## Where the artifacts live
+
+The build produces two things that are **not in git** and are **not built per worktree**:
+
+| Artifact | What it holds |
+|----------|---------------|
+| `GhosttyKit.xcframework/` | `libghostty.a` (~135MB) and its headers — what the linker needs |
+| `zig-out/share/` | terminfo and shell-integration files — what `scripts/dev.sh` checks for before building |
+
+In the README's bare-repo layout they are built once and stored in a **`.shared/`
+directory beside the bare repo**, outside every worktree:
+
+```
+/repos/atelier/
+├── .bare/                       # the bare repo
+├── .shared/                     # built once, shared by every worktree
+│   ├── GhosttyKit.xcframework/
+│   └── zig-out/
+├── main/                        # a worktree
+│   └── ghostty/
+│       ├── zig-out              -> ../../.shared/zig-out
+│       └── macos/GhosttyKit.xcframework -> ../../../.shared/GhosttyKit.xcframework
+└── my-feature/                  # another worktree, linked the same way
+```
+
+`.hooks/worktree-create.sh` creates those two symlinks on worktree creation, along
+with the submodule checkout. **A worktree created outside that hook — a bare
+`git worktree add`, say — has neither, and fails to link** with
+`ld: library 'ghostty' not found`, or refuses to start with
+`error: Ghostty resources not found at ghostty/zig-out/share/`. The fix is to make
+the same two links by hand, not to rebuild:
+
+```bash
+cd <worktree>
+git -c protocol.file.allow=always submodule update --init ghostty
+SHARED="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/.shared"
+ln -sfn "$SHARED/zig-out" ghostty/zig-out
+ln -sfn "$SHARED/GhosttyKit.xcframework" ghostty/macos/GhosttyKit.xcframework
+```
+
+Rebuilding for a new worktree is wasted work: the submodule is pinned to a release
+tag, so every worktree on the same pin wants a byte-identical artifact. Rebuild only
+when the submodule pin changes — then rebuild into `.shared/` once and every worktree
+picks it up.
+
+Outside the bare-repo layout (an ordinary clone with no `.shared/`) the artifacts sit
+directly at `ghostty/zig-out/` and `ghostty/macos/GhosttyKit.xcframework/`, and the
+hook falls back to linking against the main checkout.
+
 ## Standard Build (macOS 15 and earlier)
 
 ```bash
@@ -24,9 +73,8 @@ cd ghostty
 zig build -Demit-xcframework=true -Dxcframework-target=native -Doptimize=ReleaseFast
 ```
 
-The xcframework is output to `macos/GhosttyKit.xcframework/`.
-
-Then copy `macos/GhosttyKit.xcframework/` to your project's `ghostty/macos/` directory.
+The xcframework is output to `macos/GhosttyKit.xcframework/` and the resources to
+`zig-out/share/`. Install both as described in [Step 3](#step-3-install-the-artifacts).
 
 ## macOS 26 (Tahoe) Workaround
 
@@ -139,18 +187,32 @@ Zig's `zig build` produces `libghostty.a` plus ~15 dependency `.a` files in `.zi
    nm /tmp/libghostty-final.a | grep " T _zig_os_log_with_type"  # Zig runtime
    ```
 
-### Step 3: Install into the project
+### Step 3: Install the artifacts
+
+Install into `.shared/` beside the bare repo, so every worktree gets them through
+its symlinks (see [Where the artifacts live](#where-the-artifacts-live)):
 
 ```bash
-mkdir -p ~/Desktop/atelier/ghostty/macos/GhosttyKit.xcframework/macos-arm64_x86_64
+cd <any worktree>
+SHARED="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/.shared"
+
+mkdir -p "$SHARED/GhosttyKit.xcframework/macos-arm64_x86_64"
 cp /tmp/libghostty-final.a \
-   ~/Desktop/atelier/ghostty/macos/GhosttyKit.xcframework/macos-arm64_x86_64/libghostty.a
+   "$SHARED/GhosttyKit.xcframework/macos-arm64_x86_64/libghostty.a"
+cp -R /tmp/ghostty-1.3.1/zig-out/. "$SHARED/zig-out/"
 ```
+
+The `Info.plist` and `Headers/` in the xcframework come from the Zig build's own
+`macos/GhosttyKit.xcframework/`; copy them across if you are populating `.shared/`
+from scratch rather than replacing the library in an existing one.
+
+In an ordinary clone with no `.shared/`, install to `ghostty/macos/GhosttyKit.xcframework/`
+and `ghostty/zig-out/` in the checkout instead.
 
 ### Step 4: Build Atelier
 
 ```bash
-cd ~/Desktop/atelier
+cd <worktree>
 xcodegen generate
 ./scripts/dev.sh build
 ```
