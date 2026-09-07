@@ -72,11 +72,13 @@ release and re-uploads the DMG with `--clobber`.
 
 ## Required secrets
 
-None. The workflow uses the automatic `GITHUB_TOKEN` for the release.
+None, and there is no optional one either. The workflow uses the automatic
+`GITHUB_TOKEN` for the release and reads no other secret.
 
-`SENTRY_AUTH_TOKEN` (with the `SENTRY_ORG` / `SENTRY_PROJECT` variables) is
-optional: set it to upload dSYMs for crash symbolication. That step warns and
-continues when it is missing, so it never fails a release.
+This used to describe an optional `SENTRY_AUTH_TOKEN` that uploaded dSYMs for
+crash symbolication. Sentry was removed in #24 and that step went with it, so
+crashes are not symbolicated anywhere off the machine — a stack trace has to come
+from the user's own crash report.
 
 ## Local release (manual)
 
