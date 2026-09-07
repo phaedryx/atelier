@@ -11,7 +11,10 @@ build/
 DerivedData/
 *.xcuserdata
 
-# Ghostty build output (rebuild with `zig build`)
+# Ghostty build output. In the bare-repo layout these are symlinks into
+# `.shared/` beside the bare repo, created by `.hooks/worktree-create.sh`; the
+# artifacts themselves are built once with zig, not per worktree.
+# See docs/ghostty-xcframework-build.md.
 ghostty/zig-out/
 ghostty/.zig-cache/
 

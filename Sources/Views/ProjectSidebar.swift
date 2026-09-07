@@ -1078,8 +1078,8 @@ private struct ProjectHeaderRow: View {
 
             Spacer()
 
-            // 4pt, not 8, so the third button fits without crowding the project
-            // name and path. Below 4 the buttons' hover backgrounds touch.
+            // 4pt, not 8, so both buttons fit without crowding the project name
+            // and path. Below 4 the buttons' hover backgrounds touch.
             HStack(spacing: 4) {
                 if showShortcutButton {
                     SidebarIconButton(image: "shortcut", action: onAddFromShortcut)
@@ -1097,8 +1097,6 @@ private struct ProjectHeaderRow: View {
                             }
                         }
                 }
-                SidebarIconButton(icon: "trash", action: onDelete)
-                    .accessibilityLabel("Remove project")
             }
             .opacity(isHovering ? 1 : 0)
         }
@@ -1129,6 +1127,10 @@ private struct ProjectHeaderRow: View {
                 copyTextToPasteboard(project.directory)
             } label: {
                 Label("Copy project path", systemImage: "doc.on.doc")
+            }
+            Divider()
+            Button(role: .destructive, action: onDelete) {
+                Label("Remove Project", systemImage: "trash")
             }
         }
     }
