@@ -155,6 +155,9 @@
 "Repository default" = "Repository default";
 
 /* Settings - Coding Agent */
+"Notify when an agent needs approval" = "Notify when an agent needs approval";
+"A blocked agent stops until someone answers it. When enabled, Atelier sends a desktop notification naming the workstream — unless you are already looking at that workstream's pane. Clicking the notification selects it. Only applies to Claude Code." = "A blocked agent stops until someone answers it. When enabled, Atelier sends a desktop notification naming the workstream — unless you are already looking at that workstream's pane. Clicking the notification selects it. Only applies to Claude Code.";
+"Waiting for approval — %@" = "Waiting for approval — %@";
 "Auto-rename branch" = "Auto-rename branch";
 "On the first request, the agent renames the branch to match the task and writes a short description visible in the sidebar." = "On the first request, the agent renames the branch to match the task and writes a short description visible in the sidebar.";
 "External Browser" = "External Browser";

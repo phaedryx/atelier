@@ -52,6 +52,15 @@ extension Workstream {
                     false
                 }
             }
+
+            /// Whether the agent has stopped and will not move until someone
+            /// answers its permission prompt.
+            var isAwaitingPermission: Bool {
+                if case .needsAttention(.permission) = self {
+                    return true
+                }
+                return false
+            }
         }
 
         /// One live agent (main or subagent) inside a workstream.
@@ -172,6 +181,8 @@ extension Workstream {
 
         /// Drops all tracked state for a workstream (called when it is removed).
         func clear(workstreamID: UUID) {
+            let wasAwaitingPermission = states[workstreamID]?.isAwaitingPermission ?? false
+            defer { postPermissionEdge(wsID: workstreamID, wasAwaitingPermission: wasAwaitingPermission) }
             states.removeValue(forKey: workstreamID)
             rosters.removeValue(forKey: workstreamID)
             liveSessionIDs.remove(workstreamID)
@@ -353,6 +364,9 @@ extension Workstream {
         }
 
         private func updateMainState(wsID: UUID, event: AgentEvent) {
+            let wasAwaitingPermission = states[wsID]?.isAwaitingPermission ?? false
+            defer { postPermissionEdge(wsID: wsID, wasAwaitingPermission: wasAwaitingPermission) }
+
             switch event.type {
             case .agentWaiting:
                 states[wsID] = .working
@@ -380,6 +394,26 @@ extension Workstream {
             case .agentCreated, .agentRemoved:
                 break
             }
+        }
+
+        /// Announces a change in whether the workstream is blocked on a
+        /// permission prompt, so the desktop notification can be shown and
+        /// withdrawn.
+        ///
+        /// An edge, not a level: Claude's `Notification` hook fires repeatedly
+        /// while one prompt sits unanswered, and posting on each would give a
+        /// banner every few seconds for a single question. A `NotificationCenter`
+        /// post rather than a callback because the receiver needs the
+        /// workstream's name and the current selection, which live in
+        /// `ContentView` — a closure installed from there would capture a
+        /// snapshot of both and go stale.
+        private func postPermissionEdge(wsID: UUID, wasAwaitingPermission: Bool) {
+            let isAwaitingPermission = states[wsID]?.isAwaitingPermission ?? false
+            guard isAwaitingPermission != wasAwaitingPermission else { return }
+            NotificationCenter.default.post(
+                name: isAwaitingPermission ? .agentBlockedOnPermission : .agentPermissionResolved,
+                object: wsID
+            )
         }
 
         /// Mirrors `updateMainState` for a single surface.
