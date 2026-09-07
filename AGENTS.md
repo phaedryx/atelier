@@ -164,8 +164,10 @@ carries the `-dev` marker.
 2. Workspace view: only Info (Cmd+I) and Agent (Cmd+Return) are permanent; Changes and Environment open by default but close, reopen, and reorder like terminals/browsers, which are added on demand
 3. Tmux mode: wraps Coding Agent only in `tmux new-session -A` on socket `-L atelier`
 4. Terminal tabs: close on shell exit (Ctrl+D). Agent respawns.
-5. Ending a workstream: **two different operations**, and `Workstream.Archiver`
-   exports both. Do not treat them as one.
+5. Ending a workstream: two operations, not one — see below.
+
+### Remove vs purge
+`Workstream.Archiver` exports both, and they are not the same thing.
 
 | | `Archiver.remove` | `Archiver.purge` |
 |---|---|---|
@@ -176,18 +178,17 @@ carries the `-dev` marker.
 | Also | kills tmux sessions, evicts surfaces, drops `IPC.Config` and the launch log | same, plus cancels a running `bootstrap` and stops the dev stack first |
 | Guarded by | nothing — it destroys nothing | `purgeWarning` / `destroyableWorktreePath` |
 
-   The naming is not self-consistent and reading it as such is the trap: the
-   *menu* says "Archive", its *alert* says "Remove", and the one that actually
-   deletes work is neither. `purge` is the destructive path, and everything in
-   this document about `dispose` running at the end of a workstream's life
-   describes `purge` alone.
+The naming is not self-consistent and reading it as such is the trap: the *menu*
+says "Archive", its *alert* says "Remove", and the one that actually deletes work
+is neither. `purge` is the destructive path, and everything in this document
+about `dispose` running at the end of a workstream's life describes `purge`
+alone.
 
-   `destroyableWorktreePath` returns nil when the resolved path is the project
-   directory itself, and every destructive step is scoped to it. The `?? projectDir`
-   fallback that used to stand there reached `removeWorktree`, `deleteLocalBranch`
-   and `dispose` against the user's main checkout. `purgeOrphanWorktree` is the
-   same operation for a worktree no workstream owns, with its own
-   `orphanPurgeWarning`.
+`destroyableWorktreePath` returns nil when the resolved path is the project
+directory itself, and every destructive step is scoped to it. The `?? projectDir`
+fallback that used to stand there reached `removeWorktree`, `deleteLocalBranch`
+and `dispose` against the user's main checkout. `purgeOrphanWorktree` is the same
+operation for a worktree no workstream owns, with its own `orphanPurgeWarning`.
 
 ### Base branch
 `BaseBranchSetting` (`atelier.baseBranch`, Settings → General) chooses the branch new worktrees
