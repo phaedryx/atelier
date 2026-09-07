@@ -67,8 +67,10 @@ Developer account, and a free Apple ID cannot notarize. Ad-hoc signing is still
 mandatory (arm64 binaries will not run without it); what is missing is an
 identity, so a *downloaded* DMG is refused on first launch until quarantine is
 cleared. A locally built app is unaffected, because Gatekeeper acts on the
-quarantine attribute that only downloads carry. The workflow needs no secrets;
-`SENTRY_AUTH_TOKEN` is optional and its step warns rather than fails.
+quarantine attribute that only downloads carry. The workflow needs no secrets at
+all — it uses the automatic `GITHUB_TOKEN` and nothing else. (Sentry went in #24,
+so there is no dSYM upload step and no `SENTRY_AUTH_TOKEN`; do not add one back
+on the assumption that crash symbolication is wired up.)
 See `docs/distribution.md`.
 
 The tag is the single source of truth for the version; `project.yml` is only
@@ -162,7 +164,30 @@ carries the `-dev` marker.
 2. Workspace view: only Info (Cmd+I) and Agent (Cmd+Return) are permanent; Changes and Environment open by default but close, reopen, and reorder like terminals/browsers, which are added on demand
 3. Tmux mode: wraps Coding Agent only in `tmux new-session -A` on socket `-L atelier`
 4. Terminal tabs: close on shell exit (Ctrl+D). Agent respawns.
-5. Archiving: runs the project's `dispose` namespace, then `git worktree remove` + `tmux kill-session`
+5. Ending a workstream: **two different operations**, and `Workstream.Archiver`
+   exports both. Do not treat them as one.
+
+| | `Archiver.remove` | `Archiver.purge` |
+|---|---|---|
+| Alert | "Remove Workstream" | "Purge Workstream" |
+| Reached by | ⌘⇧W, the menu's "Archive Workstream", the palette, the sidebar context menu's "Remove" | the sidebar context menu's "Purge", and the Purge button on `WorkstreamInfoView`'s merged-PR banner |
+| Runs `dispose`? | no | yes, before the worktree goes |
+| Files on disk | **kept** | `git worktree remove`, local branch deleted, default branch re-fetched |
+| Also | kills tmux sessions, evicts surfaces, drops `IPC.Config` and the launch log | same, plus cancels a running `bootstrap` and stops the dev stack first |
+| Guarded by | nothing — it destroys nothing | `purgeWarning` / `destroyableWorktreePath` |
+
+   The naming is not self-consistent and reading it as such is the trap: the
+   *menu* says "Archive", its *alert* says "Remove", and the one that actually
+   deletes work is neither. `purge` is the destructive path, and everything in
+   this document about `dispose` running at the end of a workstream's life
+   describes `purge` alone.
+
+   `destroyableWorktreePath` returns nil when the resolved path is the project
+   directory itself, and every destructive step is scoped to it. The `?? projectDir`
+   fallback that used to stand there reached `removeWorktree`, `deleteLocalBranch`
+   and `dispose` against the user's main checkout. `purgeOrphanWorktree` is the
+   same operation for a worktree no workstream owns, with its own
+   `orphanPurgeWarning`.
 
 ### Base branch
 `BaseBranchSetting` (`atelier.baseBranch`, Settings → General) chooses the branch new worktrees
@@ -175,15 +200,25 @@ It has **exactly one production reader**: `Git.Operations.createWorktree`, via
 branch that is fetched and the branch the worktree is cut from are the same one — swapping the
 selection without that gave "pick develop, fetch main".
 
-**Known limitation, deliberate and unfixed:** three comparison sites in `Git.Operations` —
-`mergeBase` (the Changes tab's diff base), the unmerged-commit log in the worktree detail, and
-`hasBranchCommits` (the ahead count) — call `defaultBranch(at:)` directly and do *not* consult
-this setting. So with the setting on `develop` in a repository whose git default is `main`, a
-worktree is cut from `develop` while its diff and its ahead count are measured against `main`.
+**Known limitation, deliberate and unfixed:** three comparison sites in `Git.Operations` call
+`defaultBranch(at:)` directly and do *not* consult this setting — `mergeBase` (the Changes tab's
+diff base), `hasBranchCommits` (the ahead count), and the unmerged-commit log inside
+`worktreeDetail`. So with the setting on `develop` in a repository whose git default is `main`,
+a worktree is cut from `develop` while its diff and its ahead count are measured against `main`.
 Two reviewers disagreed on whether those sites should follow the setting — a diff base and a
 creation base are arguably different questions — so it stays a follow-up rather than a
 half-migration finished in the dark. Do not "fix" one of the three; either all of them move or
 none do.
+
+**Only two of the three are visible to anyone.** `worktreeDetail` still computes
+`unmergedCommits`, but the view that rendered them — `WorktreeDetailSheet` — was deleted in
+2e6f2f8, and no view reads the field now. `worktreeDetail` itself is still live:
+`ProjectOverviewView` calls it for the project's own repository, and uses the file changes, not
+the commit log. So the wrong-base symptom a user can actually hit is the diff base and the ahead
+count. Do not take that as licence to migrate those two and leave the third — the all-or-none
+rule is about keeping one question answered one way, and a dead field is the cheapest of the
+three to move. Either delete `unmergedCommits` or move all three; do not quietly drop it from
+the count.
 
 `defaultBranch(at:)` is also read to export `ATELIER_DEFAULT_BRANCH` (`TerminalContainerView`,
 and `ProcessCompose.PhaseEnvironment`'s two callers). Those are *not* part of that follow-up: the variable
@@ -427,6 +462,16 @@ concatenated into a single string before passing to the CLI.
 Active prompts (combined when multiple are enabled):
 - **Restrict to worktree** (default: on, setting: `atelier.allowOutsideWorktree`): constrains file writes to the worktree directory.
 - **Auto-rename branch** (setting: `atelier.autoRenameBranch`): renames the git branch to match the task on first request.
+- **Agent IPC** (default: off, setting: `atelier.agentIPC`): tells the agent it has
+  peers and how to reach them through the `atelier-ipc` MCP server. This one is
+  **not** gated on the setting directly — it is gated on `IPC.Config.write`
+  having returned a path, the same condition that adds `--mcp-config`. An agent
+  told it has peers but handed no server would call tools that do not exist, so
+  the prompt and the config must appear and disappear together. Keep any new
+  gate on the written config, not on the setting.
+
+There are three, and the list above is the whole of it. Two of them were once the
+whole of it, which is why `SystemPrompts.swift` is worth reading before assuming.
 
 ## Localization
 

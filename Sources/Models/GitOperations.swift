@@ -856,9 +856,11 @@ extension Git {
         /// unresolvable base used to report "no commits" with full confidence.
         ///
         /// This does not change *which* branch is compared against, so it is not the
-        /// `BaseBranchSetting` migration CLAUDE.md holds all-or-none across this
-        /// function, `mergeBase`, and the worktree detail log. That question is
-        /// untouched here.
+        /// `BaseBranchSetting` migration AGENTS.md holds all-or-none across this
+        /// function, `mergeBase`, and `worktreeDetail`'s unmerged-commit log. That
+        /// question is untouched here. (The commit log has had no reader since
+        /// `WorktreeDetailSheet` was deleted in 2e6f2f8; it still counts toward the
+        /// all-or-none rule until it is either wired up again or removed.)
         static func hasBranchCommits(at path: String, projectPath: String) -> Bool? {
             let base = defaultBranch(at: projectPath)
             guard base != "HEAD" else { return nil }
