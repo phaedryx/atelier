@@ -81,6 +81,10 @@ extension Workstream {
             var activity: String?
             let startedAt: Date
             var lastEventAt: Date
+            /// Set between `PreCompact` and `PostCompact`. Compaction is one long
+            /// silent operation — no tool events for as long as it runs — so the
+            /// stall sweep has to be told the difference between that and a wedge.
+            var isCompacting: Bool = false
         }
 
         /// Context-window consumption of a workstream's main session.
@@ -93,6 +97,11 @@ extension Workstream {
         }
 
         static let stallThreshold: TimeInterval = 45
+        /// How long a run may sit compacting before the stall sweep treats it as
+        /// wedged anyway. Generous, because compacting a full context window is
+        /// slow; bounded, because a `PostCompact` that never arrives — the agent
+        /// was killed mid-compaction — must not suppress the sweep forever.
+        static let compactStallGrace: TimeInterval = 300
         private static let sweepInterval: TimeInterval = 15
         private static let contextReadInterval: TimeInterval = 5
 
@@ -248,8 +257,23 @@ extension Workstream {
                 if let surfaceID = event.surfaceID.flatMap(UUID.init(uuidString:)) {
                     updateSurfaceState(surfaceID: surfaceID, wsID: wsID, event: event)
                 }
-                if let transcriptPath = event.transcriptPath {
-                    refreshContextUsage(wsID: wsID, transcriptPath: transcriptPath, force: event.type == .agentIdle)
+                switch event.type {
+                case .agentSessionStarted, .agentSessionEnded:
+                    // A session's context window goes with the session. Reading
+                    // the transcript here would put the totals we just dropped
+                    // straight back — the payload still names the old file — and a
+                    // fill level means nothing once there is nothing filling it.
+                    contextUsage.removeValue(forKey: wsID)
+                    lastContextReadAt.removeValue(forKey: wsID)
+                default:
+                    if let transcriptPath = event.transcriptPath {
+                        // Forced at turn end and again once compaction finishes:
+                        // both are the moments the number changes by a lot, and the
+                        // read throttle would otherwise leave the pre-compaction
+                        // figure on screen for the rest of the interval.
+                        let force = event.type == .agentIdle || event.status == "compacted"
+                        refreshContextUsage(wsID: wsID, transcriptPath: transcriptPath, force: force)
+                    }
                 }
             }
         }
@@ -331,8 +355,31 @@ extension Workstream {
 
             case .agentStatus:
                 // Permission prompts don't change the roster; the sweep skips
-                // workstreams whose main agent is awaiting the user.
-                break
+                // workstreams whose main agent is awaiting the user. Compaction
+                // does carry an activity — and takes it away again — but only for
+                // a run that already exists: a status is not evidence that an
+                // agent is running, and inventing a run from one would put a card
+                // on screen that no stop hook ever removes.
+                guard let idx = list.firstIndex(where: { $0.id == event.agentId }) else { break }
+                switch event.status {
+                case "compacting":
+                    list[idx].activity = event.activity
+                    list[idx].isCompacting = true
+                    list[idx].lastEventAt = now
+                case "compacted":
+                    list[idx].activity = nil
+                    list[idx].isCompacting = false
+                    list[idx].lastEventAt = now
+                default:
+                    break
+                }
+
+            case .agentSessionStarted, .agentSessionEnded:
+                // Both end a whole session rather than a turn, so every run goes —
+                // subagents included. `agentIdle` cannot stand in for this: it
+                // leaves the workstream looking like an agent that finished, when
+                // in one case it has been replaced and in the other it is gone.
+                list.removeAll()
             }
 
             if list.isEmpty {
@@ -382,6 +429,12 @@ extension Workstream {
                 if event.status == "permissionRequired" {
                     states[wsID] = .needsAttention(.permission)
                 }
+                // Compaction is the agent busy. Worth saying explicitly because a
+                // manual `/compact` starts from an idle row, and leaving it idle
+                // would invite typing into a session that cannot answer yet.
+                if event.status == "compacting" {
+                    states[wsID] = .working
+                }
 
             case .agentToolStart, .agentToolDone:
                 // Tool activity while we were awaiting permission means the user
@@ -390,6 +443,12 @@ extension Workstream {
                 if case .needsAttention(.permission) = states[wsID] {
                     states[wsID] = .working
                 }
+
+            case .agentSessionStarted, .agentSessionEnded:
+                // Not `.needsAttention(.justFinished)`, which is the blue "come
+                // look at what your agent did" state: a session that has been
+                // replaced or has exited has nothing waiting to be read.
+                states[wsID] = .idle
 
             case .agentCreated, .agentRemoved:
                 break
@@ -437,6 +496,22 @@ extension Workstream {
                 if event.status == "permissionRequired" {
                     surfaceStates[surfaceID] = .needsAttention(.permission)
                 }
+                if event.status == "compacting" {
+                    surfaceStates[surfaceID] = .working
+                }
+
+            case .agentSessionStarted:
+                surfaceStates[surfaceID] = .idle
+
+            case .agentSessionEnded:
+                // Cleared rather than set to `.idle`, which would read as "the
+                // turn ended, the pane is at an agent prompt" — and `.idle` is
+                // what `AgentNudge` and `PromptInjector` check before typing into
+                // it. The agent is gone, so the honest report is no evidence at
+                // all, the same thing `clear(surfaceID:)` does when a peer
+                // retires.
+                surfaceStates.removeValue(forKey: surfaceID)
+                surfaceWorkstream.removeValue(forKey: surfaceID)
 
             case .agentToolStart, .agentToolDone:
                 // A running tool is proof of an active turn, so this sets .working
@@ -478,6 +553,16 @@ extension Workstream {
                     guard updated[idx].state == .working, updated[idx].lastEventAt < cutoff else { continue }
                     // Waiting on the user isn't stalling.
                     if case .needsAttention(.permission) = rowState {
+                        continue
+                    }
+                    // Neither is compacting: it emits nothing between PreCompact
+                    // and PostCompact, and a full context window takes longer than
+                    // `stallThreshold` to compact often enough that the yellow dot
+                    // would be routine and wrong. Bounded by `compactStallGrace`
+                    // so a compaction that never reports finishing still stalls.
+                    if updated[idx].isCompacting,
+                       now.timeIntervalSince(updated[idx].lastEventAt) < Self.compactStallGrace
+                    {
                         continue
                     }
                     updated[idx].state = .stalled

@@ -8,6 +8,12 @@ private let logger = Logger(subsystem: "atelier", category: "hook-installer")
 
 enum HookInstaller {
     /// Hook event types that atelier-hook should be registered for.
+    ///
+    /// The session and compaction events are here because the roster is
+    /// otherwise only ever *inferred* to be over. `SessionEnd` is the one
+    /// report that an agent is actually gone; without it a killed session
+    /// leaves its runs on screen until the stall sweep downgrades them to
+    /// yellow, which says "wedged" about something that simply exited.
     private static let hookEvents = [
         "PreToolUse",
         "PostToolUse",
@@ -16,6 +22,10 @@ enum HookInstaller {
         "SubagentStop",
         "UserPromptSubmit",
         "Notification",
+        "SessionStart",
+        "SessionEnd",
+        "PreCompact",
+        "PostCompact",
     ]
 
     /// Path to the Claude Code user settings file.

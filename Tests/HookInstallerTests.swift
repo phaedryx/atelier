@@ -13,6 +13,7 @@ final class HookInstallerTests: XCTestCase {
     private let events = [
         "PreToolUse", "PostToolUse", "Stop", "SubagentStart",
         "SubagentStop", "UserPromptSubmit", "Notification",
+        "SessionStart", "SessionEnd", "PreCompact", "PostCompact",
     ]
 
     override func setUpWithError() throws {
@@ -90,6 +91,23 @@ final class HookInstallerTests: XCTestCase {
         HookInstaller.install(hookScriptPath: "/new/location/atelier-hook", at: settingsPath)
 
         XCTAssertEqual(try commands(for: "Stop", in: read()), ["/old/location/atelier-hook"])
+    }
+
+    /// The upgrade path: a settings.json written by a build that registered
+    /// fewer events must gain the new ones, without a second entry appearing
+    /// under the events it already had.
+    func testAddsEventsThatAPreviousInstallDidNotRegister() throws {
+        let path = "/Apps/Atelier.app/atelier-hook"
+        let stale = ["matcher": "", "hooks": [["type": "command", "command": path, "timeout": 5]]] as [String: Any]
+        try write(["hooks": ["PreToolUse": [stale], "Stop": [stale]]])
+
+        HookInstaller.install(hookScriptPath: path, at: settingsPath)
+
+        let settings = try read()
+        XCTAssertEqual(try Set(hooks(in: settings).keys), Set(events))
+        for event in events {
+            XCTAssertEqual(try commands(for: event, in: settings), [path], "duplicate entry under \(event)")
+        }
     }
 
     func testPreservesForeignHooksAndUnrelatedSettings() throws {

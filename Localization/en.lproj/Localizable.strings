@@ -396,6 +396,7 @@
 "Browsing" = "Browsing";
 "Planning" = "Planning";
 "Delegating" = "Delegating";
+"Compacting context" = "Compacting context";
 "Sub-agent" = "Sub-agent";
 "+%d more" = "+%d more";
 "Stalled" = "Stalled";

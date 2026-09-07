@@ -525,4 +525,148 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         XCTAssertNil(tracker.reportedState(for: UUID()))
         XCTAssertEqual(tracker.state(for: UUID()), .idle, "the sidebar default is unchanged")
     }
+
+    // MARK: - Session lifecycle
+
+    func test_sessionEnd_clearsTheWholeRosterIncludingSubagents() {
+        handle(.waiting(agentId: "main"))
+        handle(.created(agentId: "sub-1", name: "Explore", parentAgentId: "main"))
+        XCTAssertEqual(tracker.activeRunCount(for: wsID), 2)
+
+        handle(.sessionEnded())
+
+        XCTAssertEqual(tracker.activeRunCount(for: wsID), 0, "the agent is gone, not between turns")
+        XCTAssertEqual(tracker.state(for: wsID), .idle)
+    }
+
+    /// Without `SessionEnd` the only thing that removed a killed agent's runs was
+    /// the stall sweep, which paints them yellow first — "wedged" said about
+    /// something that simply exited.
+    func test_sessionEnd_isNotReportedAsSomethingToLookAt() {
+        handle(.waiting(agentId: "main"))
+        handle(.sessionEnded())
+        XCTAssertEqual(tracker.state(for: wsID), .idle)
+        XCTAssertNotEqual(tracker.state(for: wsID), .needsAttention(.justFinished))
+    }
+
+    func test_sessionStart_clearsARosterLeftBehindByThePreviousSession() {
+        handle(.waiting(agentId: "main"))
+        handle(.toolStart(agentId: "main", tool: "Bash"))
+        handle(.created(agentId: "sub-1", name: "Explore", parentAgentId: "main"))
+        XCTAssertEqual(tracker.state(for: wsID), .working)
+
+        handle(.sessionStarted())
+
+        XCTAssertEqual(tracker.activeRunCount(for: wsID), 0)
+        XCTAssertEqual(tracker.state(for: wsID), .idle)
+    }
+
+    func test_sessionEnd_leavesNoSurfaceEvidenceBehind() {
+        let pane = UUID()
+        handle(fromSurface(pane, .waiting(agentId: "main")))
+        XCTAssertEqual(tracker.state(forSurface: pane), .working)
+
+        handle(fromSurface(pane, .sessionEnded()))
+
+        XCTAssertNil(
+            tracker.state(forSurface: pane),
+            "a pane whose agent has exited must read as no evidence, not as an idle agent prompt"
+        )
+    }
+
+    func test_sessionStart_leavesTheSurfaceIdle() {
+        let pane = UUID()
+        handle(fromSurface(pane, .toolStart(agentId: "main", tool: "Bash")))
+        handle(fromSurface(pane, .sessionStarted()))
+        XCTAssertEqual(tracker.state(forSurface: pane), .idle, "a fresh session is at its prompt")
+    }
+
+    func test_sessionEnd_dropsContextUsage() throws {
+        let url = tempTranscriptURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try writeTranscript(url: url, usedTokens: 1234)
+        handle(.waiting(agentId: "main", transcriptPath: url.path))
+        XCTAssertNotNil(tracker.contextUsage[wsID])
+
+        // The payload still names the transcript of the session that just ended,
+        // so a re-read here would put the meter straight back.
+        handle(.sessionEnded(transcriptPath: url.path))
+
+        XCTAssertNil(tracker.contextUsage[wsID])
+    }
+
+    // MARK: - Compaction
+
+    func test_compaction_showsAsActivityOnTheMainRunAndThenClears() {
+        handle(.waiting(agentId: "main"))
+
+        handle(.compacting())
+        XCTAssertEqual(tracker.runs(for: wsID).first?.activity, "Compacting context")
+        XCTAssertEqual(tracker.state(for: wsID), .working)
+
+        handle(.compacted())
+        XCTAssertNil(tracker.runs(for: wsID).first?.activity)
+    }
+
+    func test_compaction_doesNotInventARunOfItsOwn() {
+        handle(.compacting())
+        XCTAssertEqual(tracker.activeRunCount(for: wsID), 0, "a status is not evidence that an agent is running")
+    }
+
+    /// A manual `/compact` starts from an idle row. Leaving it idle would invite
+    /// typing into a session that cannot answer yet.
+    func test_compaction_movesAnIdleRowToWorking() {
+        // Selected, so the finished turn settles on `.idle` rather than on the
+        // blue "come look at this" state an unwatched workstream gets.
+        tracker.currentSelection = wsID
+        handle(.waiting(agentId: "main"))
+        handle(.idle(agentId: "main"))
+        XCTAssertEqual(tracker.state(for: wsID), .idle)
+
+        handle(.compacting())
+        XCTAssertEqual(tracker.state(for: wsID), .working)
+    }
+
+    func test_compactingRun_isNotSweptAsStalled() {
+        handle(.waiting(agentId: "main"))
+        handle(.compacting())
+        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.stallThreshold * 2)
+
+        tracker.sweepForStalls()
+
+        XCTAssertEqual(
+            tracker.runs(for: wsID).first?.state,
+            .working,
+            "compaction emits nothing while it runs; silence there is not a wedge"
+        )
+    }
+
+    func test_compactingRun_stallsOnceTheGraceExpires() {
+        handle(.waiting(agentId: "main"))
+        handle(.compacting())
+        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.compactStallGrace + 60)
+
+        tracker.sweepForStalls()
+
+        XCTAssertEqual(
+            tracker.runs(for: wsID).first?.state,
+            .stalled,
+            "a PostCompact that never arrives must not suppress the sweep forever"
+        )
+    }
+
+    func test_compactionFinishing_rereadsTheTranscriptThroughTheThrottle() throws {
+        let url = tempTranscriptURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try writeTranscript(url: url, usedTokens: 150_000)
+        handle(.waiting(agentId: "main", transcriptPath: url.path))
+        XCTAssertEqual(tracker.contextUsage[wsID]?.usedTokens, 150_000)
+
+        // Compaction is exactly when the number changes by a lot, and it lands
+        // well inside the five-second read throttle.
+        try writeTranscript(url: url, usedTokens: 20000)
+        handle(.compacted(transcriptPath: url.path))
+
+        XCTAssertEqual(tracker.contextUsage[wsID]?.usedTokens, 20000)
+    }
 }

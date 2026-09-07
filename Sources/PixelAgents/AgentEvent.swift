@@ -30,6 +30,13 @@ struct AgentEvent: Codable {
         case agentToolDone
         case agentIdle
         case agentWaiting
+        /// A Claude session began in this workstream. Distinct from `agentIdle`,
+        /// which ends a *turn*: this ends a whole previous session, so anything
+        /// the last one left behind is stale rather than merely finished.
+        case agentSessionStarted
+        /// A Claude session ended. The only event that reports an agent is gone
+        /// rather than between turns.
+        case agentSessionEnded
     }
 
     enum CodingKeys: String, CodingKey {
@@ -75,5 +82,32 @@ struct AgentEvent: Codable {
 
     static func waiting(agentId: String, transcriptPath: String? = nil) -> AgentEvent {
         AgentEvent(type: .agentWaiting, agentId: agentId, transcriptPath: transcriptPath)
+    }
+
+    static func sessionStarted(transcriptPath: String? = nil) -> AgentEvent {
+        AgentEvent(type: .agentSessionStarted, agentId: "main", transcriptPath: transcriptPath)
+    }
+
+    static func sessionEnded(transcriptPath: String? = nil) -> AgentEvent {
+        AgentEvent(type: .agentSessionEnded, agentId: "main", transcriptPath: transcriptPath)
+    }
+
+    /// Compaction is modelled as a status carrying an activity rather than as a
+    /// state of its own: it means the main agent is busy, which `.working`
+    /// already says, and a new `AgentRunState` case would ripple into
+    /// `turnHasEnded`, both state switches, the stall sweep and every
+    /// exhaustive switch in the views to say nothing new.
+    static func compacting(transcriptPath: String? = nil) -> AgentEvent {
+        AgentEvent(
+            type: .agentStatus,
+            agentId: "main",
+            activity: NSLocalizedString("Compacting context", comment: "Agent is compacting its context window"),
+            status: "compacting",
+            transcriptPath: transcriptPath
+        )
+    }
+
+    static func compacted(transcriptPath: String? = nil) -> AgentEvent {
+        AgentEvent(type: .agentStatus, agentId: "main", status: "compacted", transcriptPath: transcriptPath)
     }
 }
