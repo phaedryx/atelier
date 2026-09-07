@@ -121,6 +121,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         completionHandler([.banner, .sound])
     }
 
+    /// A clicked notification brings Atelier forward, and — when the banner
+    /// named a workstream — selects it. Only the blocked-agent notification
+    /// carries a workstream; the terminal's bell notifications do not, and for
+    /// those the activation is the whole response.
+    nonisolated func userNotificationCenter(
+        _: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        // The conformance has to stay `nonisolated`, so the payload is decoded
+        // here — `userInfo` is `[AnyHashable: Any]` and not `Sendable` — and
+        // only the `UUID?` crosses onto the main actor. `completionHandler` is
+        // not `Sendable` either, which is why it is called on this side rather
+        // than at the end of the hop.
+        let workstreamID = Workstream.PermissionNotifier.workstreamID(
+            fromUserInfo: response.notification.request.content.userInfo
+        )
+        DispatchQueue.main.async {
+            // Only the banners that name a workstream take the window forward.
+            // Clicking one already activates Atelier the ordinary way, and the
+            // terminal's bell notifications — which name nothing — keep exactly
+            // the behaviour they had before this delegate method existed.
+            guard Workstream.PermissionNotifier.handleClick(workstreamID: workstreamID) else { return }
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        completionHandler()
+    }
+
     func applicationWillTerminate(_: Notification) {
         guard !isRunningXCTest() else { return }
         HookEventReceiver.shared.stop()

@@ -153,6 +153,17 @@ carries the `-dev` marker.
   `AppEnvironment.refreshBranchName(for:)`. The 15s poll stays as the backstop; the watcher only
   makes the common case instant. The callback fires on any git activity in the worktree, so
   anything hung off it must stay cheap and no-op when the branch has not changed.
+- **Blocked-agent notification**: `Workstream.AgentStateTracker` posts
+  `.agentBlockedOnPermission` / `.agentPermissionResolved` on the *edges* into and out of
+  `.needsAttention(.permission)` — an edge because Claude's `Notification` hook repeats while one
+  prompt sits unanswered. `ContentView` receives them, because the banner needs the workstream's
+  name and the current selection and the tracker knows workstreams only by id; a closure
+  installed from there would capture a stale snapshot of both.
+  `Workstream.PermissionNotifier` decides whether to show (suppressed only when the workstream is
+  selected *and* the app is frontmost), keys the request by the workstream's UUID so a second
+  prompt replaces the banner rather than stacking one, and withdraws it when the block clears.
+  Clicking it goes back through `AppDelegate`'s `didReceive` as `.focusWorkstream`, which selects
+  that workstream. Gated by `atelier.notifyOnPermission`, which **defaults on**.
 - **Tool detection** runs at startup in `AppEnvironment.refresh()`
 - **Sidebar state** (selection, expanded sections) stored in UserDefaults (`atelier.selection`, `atelier.expandedProjects`)
 - **Process-compose approval** stored in UserDefaults (`atelier.approvedConfigFiles`), keyed by project directory against a SHA-256 of every repository-provided file the config will load

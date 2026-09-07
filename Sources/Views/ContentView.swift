@@ -13,6 +13,14 @@ extension Notification.Name {
     static let workstreamCreationFailed = Notification.Name("atelier.workstreamCreationFailed")
     static let projectCreated = Notification.Name("atelier.projectCreated")
     static let purgeWorkstream = Notification.Name("atelier.purgeWorkstream")
+    /// object: the workstream's `UUID`. Posted by `Workstream.AgentStateTracker`
+    /// on the edges into and out of a permission block; received here, where the
+    /// workstream's name and the current selection are known.
+    static let agentBlockedOnPermission = Notification.Name("atelier.agentBlockedOnPermission")
+    static let agentPermissionResolved = Notification.Name("atelier.agentPermissionResolved")
+    /// object: the workstream's `UUID`. Posted when a blocked-agent notification
+    /// is clicked, so the sidebar selects the workstream that was waiting.
+    static let focusWorkstream = Notification.Name("atelier.focusWorkstream")
 }
 
 final class ProjectList: ObservableObject {
@@ -102,6 +110,7 @@ struct ContentView: View {
     /// immediately. Built once here and reconciled by `syncHeadWatcher`.
     @State private var headWatcher: Worktree.HeadWatcher?
     @AppStorage("atelier.editorTabActive") private var editorTabActive: Bool = false
+    @AppStorage(Workstream.PermissionNotifier.enabledKey) private var notifyOnPermission: Bool = true
 
     private var paletteContext: PaletteContext {
         PaletteContext(
@@ -453,6 +462,20 @@ struct ContentView: View {
                 selection = .project(project.id)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .agentBlockedOnPermission)) { notification in
+            guard let wsID = notification.object as? UUID else { return }
+            notifyAgentBlocked(wsID)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .agentPermissionResolved)) { notification in
+            guard let wsID = notification.object as? UUID else { return }
+            Workstream.PermissionNotifier.shared.withdraw(workstreamID: wsID)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .focusWorkstream)) { notification in
+            guard let wsID = notification.object as? UUID,
+                  projects.contains(where: { $0.workstreams.contains(where: { $0.id == wsID }) })
+            else { return }
+            selection = .workstream(wsID)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .nextWorkstream)) { _ in
             cycleWorkstream(direction: 1)
         }
@@ -595,6 +618,35 @@ struct ContentView: View {
         agentStateTracker.workstreamLookup = { projectDir in
             index[Workstream.AgentStateTracker.normalize(projectDir)]
         }
+    }
+
+    /// Shows the "waiting for approval" banner for a workstream that just
+    /// blocked, unless its pane is already in front of the user.
+    ///
+    /// The name and subtitle come from the live `projects` here rather than from
+    /// the tracker, which knows workstreams only by id.
+    private func notifyAgentBlocked(_ wsID: UUID) {
+        guard Workstream.PermissionNotifier.shouldNotify(
+            enabled: notifyOnPermission,
+            isAppActive: NSApp.isActive,
+            selection: selection,
+            workstreamID: wsID
+        ),
+            let project = projects.first(where: { $0.workstreams.contains(where: { $0.id == wsID }) }),
+            let workstream = project.workstreams.first(where: { $0.id == wsID })
+        else { return }
+
+        Workstream.PermissionNotifier.shared.notify(
+            workstreamID: wsID,
+            title: workstream.name,
+            body: String(
+                format: NSLocalizedString(
+                    "Waiting for approval — %@",
+                    comment: "Blocked-agent notification body; %@ is the project and branch"
+                ),
+                workstreamSubtitle(project: project, workstream: workstream)
+            )
+        )
     }
 
     private func workstreamSubtitle(project: Project, workstream: Workstream) -> String {

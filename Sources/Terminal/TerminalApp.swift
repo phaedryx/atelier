@@ -7,15 +7,6 @@ import UserNotifications
 
 private let logger = Logger(subsystem: "atelier", category: "terminal-app")
 
-protocol NotificationRequestAdding {
-    func add(
-        _ request: UNNotificationRequest,
-        withCompletionHandler completionHandler: (@Sendable (Error?) -> Void)?
-    )
-}
-
-extension UNUserNotificationCenter: NotificationRequestAdding {}
-
 private func handleTerminalWakeup(_ userdata: UnsafeMutableRawPointer?) {
     guard let userdata else { return }
     let userdataBits = UInt(bitPattern: userdata)

@@ -305,6 +305,7 @@ private struct CodingAgentSettingsPane: View {
     @AppStorage("atelier.bypassPermissions") private var bypassPermissions: Bool = false
     @AppStorage("atelier.allowOutsideWorktree") private var allowOutsideWorktree: Bool = false
     @AppStorage("atelier.autoRenameBranch") private var autoRenameBranch: Bool = false
+    @AppStorage(Workstream.PermissionNotifier.enabledKey) private var notifyOnPermission: Bool = true
     @AppStorage(IPC.AgentSettings.enabledKey) private var agentIPC: Bool = false
     @AppStorage(IPC.AgentSettings.nudgeKey) private var agentIPCNudge: Bool = false
     @AppStorage("atelier.defaultTerminal") private var defaultTerminal: String = ""
@@ -327,6 +328,12 @@ private struct CodingAgentSettingsPane: View {
                     isOn: $allowOutsideWorktree,
                     description: "When enabled, the coding agent can modify files anywhere on disk. When disabled, writes are restricted to the worktree directory.",
                     descriptionStyle: allowOutsideWorktree ? .warning : .secondary
+                )
+
+                SettingToggle(
+                    "Notify when an agent needs approval",
+                    isOn: $notifyOnPermission,
+                    description: "A blocked agent stops until someone answers it. When enabled, Atelier sends a desktop notification naming the workstream — unless you are already looking at that workstream's pane. Clicking the notification selects it. Only applies to Claude Code."
                 )
 
                 SettingToggle(
