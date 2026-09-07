@@ -264,6 +264,31 @@ final class WorkstreamPermissionNotifierTests: XCTestCase {
         XCTAssertEqual(recorder.blocked, [recorder.wsID, recorder.wsID])
         XCTAssertEqual(recorder.resolved, [recorder.wsID])
     }
+
+    /// Answering in Atelier's own banner resolves the block as surely as a tool
+    /// starting does. It reaches the tracker by a different door —
+    /// `permissionAnswered`, not a hook event — and a banner that outlives its
+    /// prompt sends the user to a pane with nothing waiting on it.
+    func testAnsweringInTheAppResolvesTheBlock() {
+        let recorder = EdgeRecorder()
+
+        recorder.handle(.status(agentId: "main", status: "permissionRequired"))
+        XCTAssertEqual(recorder.blocked, [recorder.wsID])
+
+        recorder.tracker.permissionAnswered(workstreamID: recorder.wsID)
+
+        XCTAssertEqual(recorder.resolved, [recorder.wsID])
+    }
+
+    func testAnsweringAWorkstreamThatWasNotBlockedPostsNothing() {
+        let recorder = EdgeRecorder()
+
+        recorder.handle(.waiting(agentId: "main"))
+        recorder.tracker.permissionAnswered(workstreamID: recorder.wsID)
+
+        XCTAssertEqual(recorder.blocked, [])
+        XCTAssertEqual(recorder.resolved, [], "an edge, not a level — nothing changed")
+    }
 }
 
 /// Drives the shared tracker with hook events and records the permission edges

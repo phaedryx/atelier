@@ -35,6 +35,11 @@ extension Workstream {
                     }
                 }
             }
+            // Before the surfaces go: an agent here may be stopped on a
+            // permission request, and the banner that would answer it is about
+            // to stop existing. Releasing hands it back to Claude Code instead
+            // of leaving it to wait out a hold nothing will service.
+            PermissionApprovalStore.shared.releaseAll(workstreamID: workstreamID)
             surfaceCache.removeWorkstreamSurfaces(for: workstreamID)
             IPC.Config.remove(for: workstreamID)
             LaunchLogger.removeLog(for: workstreamID)

@@ -182,6 +182,46 @@ extension Workstream {
             liveSessionIDs.contains(id)
         }
 
+        /// Records that a permission prompt was answered *in Atelier*.
+        ///
+        /// Two things happen here, and both are needed. The row stops reporting
+        /// that it is waiting on the user: after an allow the tool's
+        /// `PreToolUse` would do that a moment later anyway, but after a **deny**
+        /// no tool runs, and nothing else would clear the state until the turn
+        /// ended. And every run's clock is restarted, because the stall sweep
+        /// *skips* a workstream whose row is awaiting permission — so a run
+        /// released after a 90-second hold is already past `stallThreshold` the
+        /// instant it stops being skipped, and the very next sweep would paint it
+        /// yellow for having been answered slowly. Every run is stamped, not just
+        /// the main one: nothing in the workstream could emit an event while they
+        /// were all blocked behind the same prompt.
+        ///
+        /// Deliberately *not* called when a hold expires. The user is still being
+        /// asked then — in the terminal instead of here — so the row is still
+        /// telling the truth and the sweep should still skip it.
+        func permissionAnswered(workstreamID: UUID) {
+            let wasAwaitingPermission = states[workstreamID]?.isAwaitingPermission ?? false
+            if case .needsAttention(.permission) = states[workstreamID] {
+                states[workstreamID] = .working
+            }
+            // The same edge a hook-driven resolution posts. Without it, answering
+            // here would clear the row while leaving the desktop banner up,
+            // sending the user to a pane with nothing waiting on it — which is
+            // the one thing `PermissionNotifier.withdraw` exists to prevent.
+            postPermissionEdge(wsID: workstreamID, wasAwaitingPermission: wasAwaitingPermission)
+            for (surfaceID, owner) in surfaceWorkstream where owner == workstreamID {
+                if case .needsAttention(.permission) = surfaceStates[surfaceID] {
+                    surfaceStates[surfaceID] = .working
+                }
+            }
+            guard var list = rosters[workstreamID] else { return }
+            let now = Date()
+            for idx in list.indices {
+                list[idx].lastEventAt = now
+            }
+            rosters[workstreamID] = list
+        }
+
         /// Context usage of the workstream's main session, read from the Claude
         /// Code transcript tail. Returns nil until a transcript has been parsed.
         func mainContextUsage(for id: UUID) -> ContextUsage? {

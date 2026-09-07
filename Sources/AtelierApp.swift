@@ -151,6 +151,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationWillTerminate(_: Notification) {
         guard !isRunningXCTest() else { return }
+        // Before the listener goes: an agent blocked on a permission this app is
+        // no longer around to answer has to be handed back to Claude Code, not
+        // left waiting out a hold nothing will service.
+        MainActor.assumeIsolated {
+            PermissionApprovalStore.shared.releaseEverything()
+        }
         HookEventReceiver.shared.stop()
         // `ToolStatus.detect()` would do — but it spawns five probes including
         // `gh auth status`, which reaches the network, and this runs on the main
@@ -207,6 +213,33 @@ struct AtelierApp: App {
             HookEventRouter.shared.route(projectDir: projectDir, event: event)
             MainActor.assumeIsolated {
                 Workstream.AgentStateTracker.shared.handle(projectDir: projectDir, event: event)
+            }
+        }
+        // A permission request is the one hook Atelier answers rather than
+        // records, and the agent that sent it is stopped until it does. So the
+        // handler's whole job is to find the owning workstream and hand the
+        // request to the store — and to reply *immediately* in every case where
+        // nobody here can decide.
+        HookEventReceiver.shared.onPermissionRequest = { projectDir, request, respond in
+            MainActor.assumeIsolated {
+                // `workstreamLookup` is nil until ContentView installs it, and a
+                // nil lookup has to mean "not ours", never "hold until one turns
+                // up". This hook is registered in the user's global
+                // settings.json, so during launch that would be every Claude
+                // session on the machine, blocked on a window that has not
+                // drawn yet.
+                guard PermissionApprovalSettings.isEnabled,
+                      let workstreamID = Workstream.AgentStateTracker.shared.workstreamLookup?(projectDir)
+                else {
+                    respond(nil)
+                    return
+                }
+                PermissionApprovalStore.shared.enqueue(request, in: workstreamID, resolve: respond)
+            }
+        }
+        MainActor.assumeIsolated {
+            PermissionApprovalStore.shared.onAnswered = { workstreamID in
+                Workstream.AgentStateTracker.shared.permissionAnswered(workstreamID: workstreamID)
             }
         }
         HookEventReceiver.shared.start()

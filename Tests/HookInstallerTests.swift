@@ -14,7 +14,12 @@ final class HookInstallerTests: XCTestCase {
         "PreToolUse", "PostToolUse", "Stop", "SubagentStart",
         "SubagentStop", "UserPromptSubmit", "Notification",
         "SessionStart", "SessionEnd", "PreCompact", "PostCompact",
+        "PermissionRequest",
     ]
+
+    /// The one event registered with an argument, because its invocation blocks
+    /// waiting for an answer instead of posting and exiting.
+    private let decidingEvent = "PermissionRequest"
 
     override func setUpWithError() throws {
         try super.setUpWithError()
@@ -62,14 +67,51 @@ final class HookInstallerTests: XCTestCase {
 
     // MARK: - Install
 
+    /// The command a given event should end up registered with.
+    private func expectedCommand(for event: String, path: String) -> String {
+        event == decidingEvent ? "\(path) --permission" : path
+    }
+
+    private func timeouts(for event: String, in settings: [String: Any]) throws -> [Int] {
+        try entries(for: event, in: settings).flatMap { entry -> [Int] in
+            (entry["hooks"] as? [[String: Any]] ?? []).compactMap { $0["timeout"] as? Int }
+        }
+    }
+
     func testInstallsIntoEveryEventWhenSettingsDoNotExist() throws {
-        HookInstaller.install(hookScriptPath: "/Apps/Atelier.app/atelier-hook", at: settingsPath)
+        let path = "/Apps/Atelier.app/atelier-hook"
+        HookInstaller.install(hookScriptPath: path, at: settingsPath)
 
         let settings = try read()
         XCTAssertEqual(try Set(hooks(in: settings).keys), Set(events))
         for event in events {
-            XCTAssertEqual(try commands(for: event, in: settings), ["/Apps/Atelier.app/atelier-hook"])
+            XCTAssertEqual(try commands(for: event, in: settings), [expectedCommand(for: event, path: path)])
         }
+    }
+
+    /// The blocking invocation is chosen by a flag on the registered command, so
+    /// the `sh` script never has to find `hook_event_name` in the harness's JSON.
+    func testOnlyPermissionRequestIsRegisteredToWaitForADecision() throws {
+        let path = "/Apps/Atelier.app/atelier-hook"
+        HookInstaller.install(hookScriptPath: path, at: settingsPath)
+
+        let settings = try read()
+        XCTAssertEqual(try commands(for: decidingEvent, in: settings), ["\(path) --permission"])
+        for event in events where event != decidingEvent {
+            XCTAssertEqual(try commands(for: event, in: settings), [path], "\(event) must not block")
+        }
+    }
+
+    /// A hook killed mid-wait loses an answer the user is halfway through
+    /// giving, so the deciding entry has to outlast the longest hold the app
+    /// will take — and the reporting entries must not inherit that patience.
+    func testTheDecidingEntryOutlastsTheLongestHold() throws {
+        HookInstaller.install(hookScriptPath: "/Apps/Atelier.app/atelier-hook", at: settingsPath)
+
+        let settings = try read()
+        let deciding = try XCTUnwrap(timeouts(for: decidingEvent, in: settings).first)
+        XCTAssertGreaterThan(TimeInterval(deciding), PermissionApprovalSettings.maximumHold)
+        XCTAssertEqual(try timeouts(for: "Stop", in: settings), [5])
     }
 
     /// The property the ABOUTME claims: installing twice must not double up.
@@ -106,8 +148,47 @@ final class HookInstallerTests: XCTestCase {
         let settings = try read()
         XCTAssertEqual(try Set(hooks(in: settings).keys), Set(events))
         for event in events {
-            XCTAssertEqual(try commands(for: event, in: settings), [path], "duplicate entry under \(event)")
+            XCTAssertEqual(
+                try commands(for: event, in: settings),
+                [expectedCommand(for: event, path: path)],
+                "duplicate entry under \(event)"
+            )
         }
+    }
+
+    /// The upgrade path. A build that predates in-app approval registered a
+    /// plain entry under PermissionRequest; left in place beside the new one,
+    /// Claude Code would run the hook twice and the extra run is the one that
+    /// answers nothing.
+    func testReplacesAPlainEntryLeftUnderPermissionRequest() throws {
+        let path = "/Apps/Atelier.app/atelier-hook"
+        try write(["hooks": ["PermissionRequest": [foreignEntry(command: path)]]])
+
+        HookInstaller.install(hookScriptPath: path, at: settingsPath)
+
+        XCTAssertEqual(try commands(for: "PermissionRequest", in: read()), ["\(path) --permission"])
+    }
+
+    /// And the same in reverse, so a reordering of the event list cannot leave a
+    /// blocking invocation registered against an event that only reports.
+    func testReplacesADecidingEntryLeftUnderAReportingEvent() throws {
+        let path = "/Apps/Atelier.app/atelier-hook"
+        try write(["hooks": ["Stop": [foreignEntry(command: "\(path) --permission")]]])
+
+        HookInstaller.install(hookScriptPath: path, at: settingsPath)
+
+        XCTAssertEqual(try commands(for: "Stop", in: read()), [path])
+    }
+
+    /// Replacing a wrong-shaped entry must not turn into replacing someone
+    /// else's: the path stays out of the comparison, so another copy of Atelier
+    /// keeps managing its own entry.
+    func testAnotherPathsEntryOfTheRightShapeIsLeftAlone() throws {
+        try write(["hooks": ["PermissionRequest": [foreignEntry(command: "/old/atelier-hook --permission")]]])
+
+        HookInstaller.install(hookScriptPath: "/new/atelier-hook", at: settingsPath)
+
+        XCTAssertEqual(try commands(for: "PermissionRequest", in: read()), ["/old/atelier-hook --permission"])
     }
 
     func testPreservesForeignHooksAndUnrelatedSettings() throws {
