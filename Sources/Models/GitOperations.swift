@@ -821,35 +821,6 @@ extension Git {
             )
         }
 
-        /// Force-remove a git worktree by path, discarding uncommitted changes.
-        ///
-        /// Carries `removeWorktree`'s guard, and for the same reason: git refuses to
-        /// remove a main working tree, but the `removeItem` below never asked, and
-        /// that is how a user's checkout got deleted once already. Symlinks are
-        /// resolved before comparing, because the same directory reaches here under
-        /// different spellings (`/tmp` vs `/private/tmp`) and `removeItem` follows a
-        /// symlinked parent to the real directory.
-        static func forceRemoveWorktreeByPath(worktreePath: String, projectPath: String) {
-            let resolvedWorktree = URL(fileURLWithPath: worktreePath)
-                .standardizedFileURL.resolvingSymlinksInPath().path
-            let resolvedProject = URL(fileURLWithPath: projectPath)
-                .standardizedFileURL.resolvingSymlinksInPath().path
-            guard resolvedWorktree != resolvedProject else {
-                logger.error(
-                    "[Atelier] Refusing to force-remove \(resolvedProject, privacy: .public): that is the project directory, not a worktree of it"
-                )
-                return
-            }
-
-            _ = runOnWholeTree(args: ["worktree", "remove", "--force", worktreePath], in: projectPath)
-
-            let fm = FileManager.default
-            if fm.fileExists(atPath: worktreePath) {
-                try? fm.removeItem(atPath: worktreePath)
-                _ = run(args: ["worktree", "prune"], in: projectPath)
-            }
-        }
-
         /// Discard all uncommitted changes: reset staged, checkout unstaged, clean untracked.
         static func discardAllChanges(at path: String) {
             _ = run(args: ["reset", "HEAD"], in: path)

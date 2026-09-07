@@ -500,45 +500,6 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertFalse(info.isDirtyUnknown)
     }
 
-    /// `removeWorktree` grew a guard after it deleted a user's checkout: git refuses
-    /// to remove a main working tree, but the `removeItem` fallback never asked.
-    /// `forceRemoveWorktreeByPath` performs the same `removeItem` and had no guard.
-    func testForceRemoveByPathRefusesToDeleteTheProjectDirectoryItself() throws {
-        let repoDir = tempDir.appendingPathComponent("force-remove-guard")
-        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
-        XCTAssertTrue(git(["init", "-b", "main"], in: repoDir))
-        XCTAssertTrue(git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
-                           "commit", "--allow-empty", "-m", "init"], in: repoDir))
-        try "precious".write(to: repoDir.appendingPathComponent("work.txt"), atomically: true, encoding: .utf8)
-
-        Git.Operations.forceRemoveWorktreeByPath(worktreePath: repoDir.path, projectPath: repoDir.path)
-
-        XCTAssertTrue(
-            FileManager.default.fileExists(atPath: repoDir.appendingPathComponent("work.txt").path),
-            "that path is the project directory, not a worktree of it"
-        )
-    }
-
-    /// The guard compares resolved paths, because the same directory arrives under
-    /// different spellings — a stored worktree path and a picked project directory
-    /// need not agree on /tmp vs /private/tmp.
-    func testForceRemoveByPathRefusesTheProjectDirectoryUnderAnotherSpelling() throws {
-        let repoDir = tempDir.appendingPathComponent("force-remove-guard-spelling")
-        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
-        XCTAssertTrue(git(["init", "-b", "main"], in: repoDir))
-        try "precious".write(to: repoDir.appendingPathComponent("work.txt"), atomically: true, encoding: .utf8)
-
-        Git.Operations.forceRemoveWorktreeByPath(
-            worktreePath: repoDir.path + "/./",
-            projectPath: repoDir.path
-        )
-
-        XCTAssertTrue(
-            FileManager.default.fileExists(atPath: repoDir.appendingPathComponent("work.txt").path),
-            "same directory, different spelling — the guard resolves before comparing"
-        )
-    }
-
     // MARK: - Probes that must not report "clean" when they could not look
 
     /// The destructive one. `updateDefaultBranch` runs `git reset --hard` behind
