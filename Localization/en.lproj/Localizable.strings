@@ -402,6 +402,20 @@
 "Stalled" = "Stalled";
 "Working" = "Working";
 "Waiting for approval" = "Waiting for approval";
+
+/* Permission approval */
+"Claude wants to run %@" = "Claude wants to run %@";
+"Permission requested for %@" = "Permission requested for %@";
+"from another pane" = "from another pane";
+"+%d waiting" = "+%d waiting";
+"Allow" = "Allow";
+"Deny" = "Deny";
+"Claude Code asks in %@" = "Claude Code asks in %@";
+"If nobody answers here, Atelier stops holding the agent and Claude Code shows its own prompt in the terminal." = "If nobody answers here, Atelier stops holding the agent and Claude Code shows its own prompt in the terminal.";
+"Approve tool permissions in Atelier" = "Approve tool permissions in Atelier";
+"When the agent asks to run a tool, Atelier shows the request above its terminal with Allow and Deny. The agent is stopped while it waits. If nobody answers within the hold below, Atelier lets go and Claude Code asks in the terminal as usual." = "When the agent asks to run a tool, Atelier shows the request above its terminal with Allow and Deny. The agent is stopped while it waits. If nobody answers within the hold below, Atelier lets go and Claude Code asks in the terminal as usual.";
+"Hold the agent for" = "Hold the agent for";
+"seconds" = "seconds";
 "Done" = "Done";
 "Idle" = "Idle";
 "Context: %1$lld tokens · %2$lld%%" = "Context: %1$lld tokens · %2$lld%%";

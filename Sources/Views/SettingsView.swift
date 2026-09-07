@@ -308,6 +308,8 @@ private struct CodingAgentSettingsPane: View {
     @AppStorage(Workstream.PermissionNotifier.enabledKey) private var notifyOnPermission: Bool = true
     @AppStorage(IPC.AgentSettings.enabledKey) private var agentIPC: Bool = false
     @AppStorage(IPC.AgentSettings.nudgeKey) private var agentIPCNudge: Bool = false
+    @AppStorage(PermissionApprovalSettings.enabledKey) private var permissionApproval: Bool = false
+    @AppStorage(PermissionApprovalSettings.holdKey) private var permissionHold: Double = PermissionApprovalSettings.defaultHold
     @AppStorage("atelier.defaultTerminal") private var defaultTerminal: String = ""
     @AppStorage("atelier.defaultBrowser") private var defaultBrowser: String = ""
 
@@ -335,6 +337,39 @@ private struct CodingAgentSettingsPane: View {
                     isOn: $notifyOnPermission,
                     description: "A blocked agent stops until someone answers it. When enabled, Atelier sends a desktop notification naming the workstream — unless you are already looking at that workstream's pane. Clicking the notification selects it. Only applies to Claude Code."
                 )
+
+                SettingToggle(
+                    "Approve tool permissions in Atelier",
+                    isOn: $permissionApproval,
+                    description: NSLocalizedString(
+                        "When the agent asks to run a tool, Atelier shows the request above its terminal with Allow and Deny. The agent is stopped while it waits. If nobody answers within the hold below, Atelier lets go and Claude Code asks in the terminal as usual.",
+                        comment: "In-app permission approval setting description"
+                    )
+                )
+
+                if permissionApproval {
+                    HStack {
+                        Text("Hold the agent for")
+                        TextField(
+                            "",
+                            value: $permissionHold,
+                            format: .number.precision(.fractionLength(0))
+                        )
+                        .labelsHidden()
+                        .frame(width: 52)
+                        .multilineTextAlignment(.trailing)
+                        Stepper(
+                            "",
+                            value: $permissionHold,
+                            in: PermissionApprovalSettings.minimumHold ... PermissionApprovalSettings.maximumHold,
+                            step: 15
+                        )
+                        .labelsHidden()
+                        Text("seconds")
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.callout)
+                }
 
                 SettingToggle(
                     "Auto-rename branch",

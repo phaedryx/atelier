@@ -780,13 +780,19 @@ struct TerminalContainerView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let claudeCommand = cachedClaudeCommand {
-                SingleTerminalView(
-                    surfaceID: claudeID,
-                    workingDirectory: workingDirectory,
-                    command: claudeCommand,
-                    isFocused: true,
-                    environmentVars: envVars
-                )
+                VStack(spacing: 0) {
+                    // Above the terminal rather than over it: what is being
+                    // approved is often a command, and covering the output that
+                    // led to it is the wrong thing to hide.
+                    PermissionRequestBannerHost(workstreamID: workstreamID, agentSurfaceID: claudeID)
+                    SingleTerminalView(
+                        surfaceID: claudeID,
+                        workingDirectory: workingDirectory,
+                        command: claudeCommand,
+                        isFocused: true,
+                        environmentVars: envVars
+                    )
+                }
             } else {
                 terminalLoadingView(message: "Preparing Coding Agent...")
             }

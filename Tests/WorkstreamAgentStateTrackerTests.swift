@@ -669,4 +669,74 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
 
         XCTAssertEqual(tracker.contextUsage[wsID]?.usedTokens, 20000)
     }
+
+    // MARK: - Answering a permission prompt in Atelier
+
+    private func awaitPermission(surface: UUID? = nil) {
+        let waiting = AgentEvent.waiting(agentId: "main")
+        let asking = AgentEvent.status(agentId: "main", status: "permissionRequired")
+        if let surface {
+            handle(fromSurface(surface, waiting))
+            handle(fromSurface(surface, asking))
+        } else {
+            handle(waiting)
+            handle(asking)
+        }
+    }
+
+    func test_permissionAnswered_stopsTheRowReportingThatItIsWaiting() {
+        awaitPermission()
+        XCTAssertEqual(tracker.state(for: wsID), .needsAttention(.permission))
+
+        tracker.permissionAnswered(workstreamID: wsID)
+
+        XCTAssertEqual(
+            tracker.state(for: wsID),
+            .working,
+            "a denial runs no tool, so nothing else clears this until the turn ends"
+        )
+    }
+
+    func test_permissionAnswered_clearsThePaneToo() {
+        let pane = UUID()
+        awaitPermission(surface: pane)
+        XCTAssertEqual(tracker.state(forSurface: pane), .needsAttention(.permission))
+
+        tracker.permissionAnswered(workstreamID: wsID)
+
+        XCTAssertEqual(tracker.state(forSurface: pane), .working)
+    }
+
+    /// The sweep already skips a workstream awaiting permission — so a run
+    /// released after a 90-second hold is past `stallThreshold` the instant it
+    /// stops being skipped, and the next sweep would paint it yellow for having
+    /// been answered slowly.
+    func test_permissionAnswered_restartsTheStallClock() {
+        awaitPermission()
+        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.stallThreshold * 2)
+
+        tracker.permissionAnswered(workstreamID: wsID)
+        tracker.sweepForStalls()
+
+        XCTAssertEqual(tracker.runs(for: wsID).first?.state, .working)
+    }
+
+    /// The other half of that pair: while the prompt is still unanswered, a
+    /// silent run is waiting on a human, not wedged.
+    func test_aHeldPermissionIsNotSweptAsStalled() {
+        awaitPermission()
+        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.stallThreshold * 2)
+
+        tracker.sweepForStalls()
+
+        XCTAssertEqual(tracker.runs(for: wsID).first?.state, .working)
+    }
+
+    func test_permissionAnswered_forAnotherWorkstreamChangesNothingHere() {
+        awaitPermission()
+
+        tracker.permissionAnswered(workstreamID: UUID())
+
+        XCTAssertEqual(tracker.state(for: wsID), .needsAttention(.permission))
+    }
 }

@@ -12,7 +12,174 @@ final class HookEventReceiverTests: XCTestCase {
 
     override func tearDown() {
         receiver.onEvent = nil
+        receiver.onPermissionRequest = nil
         super.tearDown()
+    }
+
+    // MARK: - Permission requests
+
+    /// POSTs to `/permission` and returns the response *body* — which for this
+    /// one route is the decision document, so the reply is the thing under test
+    /// rather than an acknowledgement of it.
+    private func postPermission(
+        toolName: String = "Bash",
+        toolInput: [String: Any] = ["command": "ls"],
+        readTimeout: TimeInterval = 10
+    ) throws -> String {
+        receiver.start()
+
+        let deadline = Date().addingTimeInterval(10)
+        var port: UInt16?
+        while Date() < deadline, port == nil {
+            port = receiver.boundPort
+            if port == nil {
+                usleep(20_000)
+            }
+        }
+        let resolved = try XCTUnwrap(port, "hook receiver did not bind a port")
+
+        let envelope: [String: Any] = [
+            "event_input": [
+                "hook_event_name": "PermissionRequest",
+                "tool_name": toolName,
+                "tool_input": toolInput,
+            ],
+            "project_dir": "/tmp/atelier-hook-test",
+            "surface_id": "",
+        ]
+        let payload = try JSONSerialization.data(withJSONObject: envelope)
+        let head = "POST /permission HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: \(payload.count)\r\n\r\n"
+        var request = Data(head.utf8)
+        request.append(payload)
+
+        // Off the main thread, deliberately. `hold` hands the request to the app
+        // with `DispatchQueue.main.async`, so a test that sat on the main thread
+        // waiting for the reply would deadlock against the very handler it is
+        // testing — and then read back an empty body, which is *also* a
+        // legitimate answer, so the hang would show up as a wrong result rather
+        // than as a hang. `wait(for:)` keeps the main runloop turning instead.
+        var body = ""
+        let received = expectation(description: "permission response")
+        DispatchQueue.global().async {
+            body = Self.exchange(port: resolved, request: request, readTimeout: readTimeout)
+            received.fulfill()
+        }
+        wait(for: [received], timeout: readTimeout + 10)
+        return body
+    }
+
+    /// Sends one request and reads the whole response, returning its body.
+    private static func exchange(port: UInt16, request: Data, readTimeout: TimeInterval) -> String {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        defer { close(fd) }
+
+        // Without a receive timeout the read below never returns when the app
+        // does not answer at all, which is one of the failures these tests exist
+        // to report rather than hang on.
+        var timeout = timeval(tv_sec: Int(readTimeout), tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian
+        address.sin_addr.s_addr = INADDR_LOOPBACK.bigEndian
+        let connected = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard connected == 0 else { return "" }
+        let length = request.count
+        _ = request.withUnsafeBytes { Darwin.send(fd, $0.baseAddress!, length, 0) }
+
+        var response = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let read = Darwin.recv(fd, &buffer, buffer.count, 0)
+            guard read > 0 else { break }
+            response.append(contentsOf: buffer[0 ..< read])
+        }
+
+        let text = String(decoding: response, as: UTF8.self)
+        guard let separator = text.range(of: "\r\n\r\n") else { return "" }
+        return String(text[separator.upperBound...])
+    }
+
+    func test_permissionRequest_repliesWithTheDecisionTheAppGives() throws {
+        receiver.onPermissionRequest = { _, _, respond in respond(.allow) }
+        XCTAssertEqual(try postPermission(), HookEventReceiver.decisionBody(.allow))
+    }
+
+    func test_permissionRequest_repliesWithADenial() throws {
+        receiver.onPermissionRequest = { _, _, respond in respond(.deny) }
+        let body = try postPermission()
+        XCTAssertTrue(body.contains("\"behavior\":\"deny\""))
+    }
+
+    /// Empty is not a degenerate case, it is the fallback: the hook script only
+    /// echoes a body containing `hookSpecificOutput`, so nothing reaches Claude
+    /// Code's stdin parser and it asks in the terminal as it always would.
+    func test_permissionRequest_withNoDecision_repliesEmpty() throws {
+        receiver.onPermissionRequest = { _, _, respond in respond(nil) }
+        XCTAssertEqual(try postPermission(), "")
+    }
+
+    /// The state during launch: the app is up, the listener is bound, and
+    /// nothing has installed a handler yet. Every Claude session on the machine
+    /// reaches this path, so it has to answer rather than queue.
+    func test_permissionRequest_withNoHandler_repliesEmptyRatherThanHanging() throws {
+        receiver.onPermissionRequest = nil
+        XCTAssertEqual(try postPermission(readTimeout: 5), "")
+    }
+
+    func test_permissionRequest_carriesTheToolAndItsInput() throws {
+        var seen: PendingPermission?
+        receiver.onPermissionRequest = { _, request, respond in
+            seen = request
+            respond(nil)
+        }
+        _ = try postPermission(toolName: "Bash", toolInput: ["command": "rm -rf build"])
+
+        XCTAssertEqual(seen?.toolName, "Bash")
+        XCTAssertEqual(seen?.detail, "rm -rf build", "the whole point is not having to grep a phrase for this")
+    }
+
+    func test_permissionRequest_alsoReportsThatSomethingIsWaiting() throws {
+        var events: [AgentEvent] = []
+        let reported = expectation(description: "status routed")
+        reported.assertForOverFulfill = false
+        receiver.onEvent = { _, event in
+            events.append(event)
+            reported.fulfill()
+        }
+        receiver.onPermissionRequest = { _, _, respond in respond(nil) }
+
+        _ = try postPermission()
+        wait(for: [reported], timeout: 10)
+
+        // `contains` rather than an exact match: the receiver is a singleton and
+        // routes on the main queue, so an event from a neighbouring case can
+        // still be in flight. What is under test is that this one is produced.
+        XCTAssertTrue(
+            events.contains { $0.status == "permissionRequired" },
+            "the row must light up even when nobody here can answer"
+        )
+    }
+
+    /// The regression this pairs with: a held connection is taken out of
+    /// `connections` precisely so the half-open reaper cannot cancel it. Left in,
+    /// it was killed `connectionTimeout` into a hold that may run for 90 seconds,
+    /// with the banner still on screen.
+    func test_aHeldPermissionSurvivesTheReadDeadline() throws {
+        let previous = HookEventReceiver.connectionTimeout
+        HookEventReceiver.connectionTimeout = 0.3
+        addTeardownBlock { HookEventReceiver.connectionTimeout = previous }
+
+        receiver.onPermissionRequest = { _, _, respond in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { respond(.allow) }
+        }
+
+        XCTAssertEqual(try postPermission(), HookEventReceiver.decisionBody(.allow))
     }
 
     /// POSTs one hook envelope over a raw socket — the same shape `atelier-hook`

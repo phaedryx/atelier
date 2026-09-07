@@ -36,6 +36,24 @@ final class HookEventReceiver: @unchecked Sendable {
     private let onEventLock = NSLock()
     private var storedOnEvent: ((String, AgentEvent) -> Void)?
 
+    /// Called on the main queue with (projectDir, request, resolve) when an
+    /// agent is blocked on a tool permission.
+    ///
+    /// The handler **must** call `resolve` exactly once. `nil` means "no
+    /// decision", which sends an empty body and leaves Claude Code to ask in the
+    /// terminal — the behaviour of no hook at all. Leaving it uncalled leaves a
+    /// real agent stopped until Claude Code kills the script.
+    ///
+    /// Unset is a valid state and is handled: with no handler wired the request
+    /// resolves to `nil` immediately, which is what happens for every hook event
+    /// that arrives during launch before `ContentView` has hooked things up.
+    var onPermissionRequest: ((String, PendingPermission, @escaping @Sendable (PendingPermission.Decision?) -> Void) -> Void)? {
+        get { onEventLock.withLock { storedOnPermissionRequest } }
+        set { onEventLock.withLock { storedOnPermissionRequest = newValue } }
+    }
+
+    private var storedOnPermissionRequest: ((String, PendingPermission, @escaping @Sendable (PendingPermission.Decision?) -> Void) -> Void)?
+
     /// How many connections are open right now. Test-facing.
     var connectionCount: Int {
         queue.sync { connections.count }
@@ -208,19 +226,27 @@ final class HookEventReceiver: @unchecked Sendable {
     // MARK: - HTTP Request Processing
 
     private func processHTTPRequest(_ data: Data, on connection: NWConnection) {
-        defer { removeConnection(connection) }
+        /// Not `defer`: the permission path below keeps its connection open past
+        /// the end of this function, and unhooking it from `connections` is that
+        /// path's own first act. Every other exit removes it here.
+        func done() {
+            removeConnection(connection)
+        }
 
         // Extract JSON body after \r\n\r\n
         guard let headerEnd = findHeaderEnd(in: data) else {
             sendResponse(on: connection, status: "400 Bad Request", body: "{\"error\":\"no headers\"}")
+            done()
             return
         }
 
+        let target = requestTarget(in: data[..<headerEnd])
         let bodyData = data[headerEnd...]
         guard !bodyData.isEmpty,
               let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any]
         else {
             sendResponse(on: connection, status: "400 Bad Request", body: "{\"error\":\"invalid json\"}")
+            done()
             return
         }
 
@@ -229,12 +255,14 @@ final class HookEventReceiver: @unchecked Sendable {
         guard let projectDir = json["project_dir"] as? String else {
             logger.warning("Hook event missing project_dir")
             sendResponse(on: connection, status: "200 OK", body: "{\"ok\":true}")
+            done()
             return
         }
 
         guard let eventInput = json["event_input"] as? [String: Any] else {
             logger.warning("Hook event missing event_input")
             sendResponse(on: connection, status: "200 OK", body: "{\"ok\":true}")
+            done()
             return
         }
 
@@ -263,7 +291,108 @@ final class HookEventReceiver: @unchecked Sendable {
             }
         }
 
+        // The one request that is not answered on the spot: the reply *is* the
+        // decision, and the agent is stopped until it arrives.
+        if target == "/permission", hookEventName == "PermissionRequest" {
+            hold(
+                connection,
+                eventInput: eventInput,
+                projectDir: projectDir,
+                surfaceID: surfaceID
+            )
+            return
+        }
+
         sendResponse(on: connection, status: "200 OK", body: "{\"ok\":true}")
+        done()
+    }
+
+    // MARK: - Permission Requests
+
+    /// Keeps a connection open until the app decides, then replies with the
+    /// decision document Claude Code reads off the hook's stdout.
+    ///
+    /// The connection is unhooked from `connections` first, and deliberately.
+    /// The read deadline that reaps half-open requests cancels anything still in
+    /// that list after `connectionTimeout` — it would otherwise kill this
+    /// connection 15 seconds in, mid-hold, with the banner still on screen. What
+    /// bounds this one instead is the app's own hold, which always resolves;
+    /// `PermissionApprovalStore` exists to guarantee that.
+    private func hold(
+        _ connection: NWConnection,
+        eventInput: [String: Any],
+        projectDir: String,
+        surfaceID: String?
+    ) {
+        removeConnection(connection)
+
+        let toolName = eventInput["tool_name"] as? String ?? "unknown"
+        let request = PendingPermission(
+            id: UUID(),
+            toolName: toolName,
+            detail: PendingPermission.detail(
+                toolName: toolName,
+                toolInput: eventInput["tool_input"] as? [String: Any]
+            ),
+            surfaceID: surfaceID.flatMap(UUID.init(uuidString:)),
+            receivedAt: Date(),
+            expiresAt: Date().addingTimeInterval(PermissionApprovalSettings.hold)
+        )
+
+        // Resolvable exactly once. Two callers can race here — a click landing at
+        // the moment the hold expires — and answering twice would write a second
+        // response onto a cancelled connection.
+        let resolved = OSAllocatedUnfairLock(initialState: false)
+        let respond: @Sendable (PendingPermission.Decision?) -> Void = { [weak self] decision in
+            let first = resolved.withLock { alreadyResolved -> Bool in
+                defer { alreadyResolved = true }
+                return !alreadyResolved
+            }
+            guard first, let self else { return }
+            queue.async {
+                self.sendResponse(on: connection, status: "200 OK", body: Self.decisionBody(decision))
+            }
+        }
+
+        logger.info("Permission requested for \(toolName, privacy: .public) in \(projectDir, privacy: .public)")
+
+        DispatchQueue.main.async { [weak self] in
+            guard let handler = self?.onPermissionRequest else {
+                // Nothing is wired up yet — the app is still launching, or this
+                // build has no approval UI. Hand it straight back rather than
+                // queueing against a handler that may never appear.
+                respond(nil)
+                return
+            }
+            handler(projectDir, request, respond)
+        }
+    }
+
+    /// The body Claude Code's `PermissionRequest` hook expects on stdout.
+    ///
+    /// An empty body for "no decision" is load-bearing: the hook script only
+    /// echoes a body containing `hookSpecificOutput`, so this prints nothing and
+    /// Claude Code asks in the terminal exactly as it would with no hook at all.
+    static func decisionBody(_ decision: PendingPermission.Decision?) -> String {
+        switch decision {
+        case .allow:
+            #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#
+        case .deny:
+            #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"Denied in Atelier."}}}"#
+        case nil:
+            ""
+        }
+    }
+
+    /// The request target from an HTTP request line, e.g. "/permission".
+    /// Defaults to "/hook", which is what every caller before this one sent.
+    private func requestTarget(in headerData: Data) -> String {
+        guard let header = String(data: headerData, encoding: .utf8),
+              let requestLine = header.components(separatedBy: "\r\n").first
+        else { return "/hook" }
+        let fields = requestLine.split(separator: " ")
+        guard fields.count >= 2 else { return "/hook" }
+        return String(fields[1])
     }
 
     // MARK: - Event Mapping
@@ -396,10 +525,25 @@ final class HookEventReceiver: @unchecked Sendable {
             logger.info("Hook PostCompact: compaction finished")
             return [AgentEvent.compacted()]
 
+        case "PermissionRequest":
+            // Emitted whether or not the app is allowed to *answer*: the row has
+            // to show that something is waiting on the user either way, and this
+            // payload says so with a tool name instead of a phrase to grep.
+            let toolName = eventInput["tool_name"] as? String ?? "unknown"
+            logger.info("Hook PermissionRequest: \(toolName, privacy: .public)")
+            return [AgentEvent.status(agentId: "main", status: "permissionRequired")]
+
         case "Notification":
             // Claude Code emits Notification for permission prompts and idle
             // reminders. The message field is the only signal we have; over-
             // reporting permission is preferable to under-reporting.
+            //
+            // Kept now that `PermissionRequest` reports the same thing properly,
+            // because the two do not cover the same ground: a prompt Claude Code
+            // resolves from its own allowlist, or raises while Atelier is down,
+            // reaches us here and nowhere else. This is the lossy fallback and
+            // `PermissionRequest` is the authoritative path; they set the same
+            // state, so arriving by both routes is harmless.
             let message = (eventInput["message"] as? String) ?? ""
             let lower = message.lowercased()
             let isPermission = lower.contains("permission") || lower.contains("approval")
