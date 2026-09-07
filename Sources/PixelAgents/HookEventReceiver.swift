@@ -370,6 +370,32 @@ final class HookEventReceiver: @unchecked Sendable {
             logger.info("Hook SubagentStop: \(aid, privacy: .public)")
             return [AgentEvent.removed(agentId: aid)]
 
+        case "SessionStart":
+            // `source` says why the session started: "startup" and "clear" are
+            // genuinely new sessions, while "resume" and "compact" continue one
+            // that is already running — and compaction in particular fires
+            // mid-turn, where wiping the roster would erase live subagents and
+            // reset a working row to idle. Only the first two clear.
+            let source = eventInput["source"] as? String ?? ""
+            guard source == "startup" || source == "clear" else {
+                logger.info("Hook SessionStart: continuing session (source=\(source, privacy: .public)), roster kept")
+                return []
+            }
+            logger.info("Hook SessionStart: new session (source=\(source, privacy: .public))")
+            return [AgentEvent.sessionStarted()]
+
+        case "SessionEnd":
+            logger.info("Hook SessionEnd: session over, roster cleared")
+            return [AgentEvent.sessionEnded()]
+
+        case "PreCompact":
+            logger.info("Hook PreCompact: main agent compacting")
+            return [AgentEvent.compacting()]
+
+        case "PostCompact":
+            logger.info("Hook PostCompact: compaction finished")
+            return [AgentEvent.compacted()]
+
         case "Notification":
             // Claude Code emits Notification for permission prompts and idle
             // reminders. The message field is the only signal we have; over-
