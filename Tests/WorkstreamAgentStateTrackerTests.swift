@@ -521,9 +521,8 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.state(forSurface: paneB), .idle)
     }
 
-    func test_reportedState_isNilBeforeAnyEvent() {
-        XCTAssertNil(tracker.reportedState(for: UUID()))
-        XCTAssertEqual(tracker.state(for: UUID()), .idle, "the sidebar default is unchanged")
+    func test_state_defaultsToIdleForAWorkstreamThatHasReportedNothing() {
+        XCTAssertEqual(tracker.state(for: UUID()), .idle, "the sidebar row still has something to draw")
     }
 
     // MARK: - Session lifecycle

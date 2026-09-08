@@ -150,11 +150,6 @@ extension Worktree {
         /// branch did not resolve, which turns the comparison into `HEAD..HEAD` — a
         /// valid empty range that exits 0 and reports every commit as merged.
         let unmergedCommitsUnavailable: Bool
-
-        /// Both probes ran. Only then does an empty detail mean "nothing here".
-        var isFullyLoaded: Bool {
-            !changesUnavailable && !unmergedCommitsUnavailable
-        }
     }
 }
 

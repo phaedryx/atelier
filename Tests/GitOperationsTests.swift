@@ -1566,7 +1566,6 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertTrue(detail.unmergedCommits.isEmpty)
         XCTAssertTrue(detail.changesUnavailable, "git status failed here; empty is for want of an answer")
         XCTAssertTrue(detail.unmergedCommitsUnavailable, "no base branch resolves outside a repository")
-        XCTAssertFalse(detail.isFullyLoaded)
     }
 
     /// The positive control for the flags above. Without it an inverted or
@@ -1585,7 +1584,6 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertTrue(detail.unmergedCommits.isEmpty)
         XCTAssertFalse(detail.changesUnavailable, "git status ran and found a clean tree")
         XCTAssertFalse(detail.unmergedCommitsUnavailable, "main resolved, so base..HEAD is a real comparison")
-        XCTAssertTrue(detail.isFullyLoaded)
     }
 
     /// `defaultBranch` falls back to the literal "HEAD" when it can resolve nothing
