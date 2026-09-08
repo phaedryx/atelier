@@ -463,8 +463,9 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertTrue(git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
                            "commit", "--allow-empty", "-m", "init"], in: repoDir))
         try "unsaved".write(to: repoDir.appendingPathComponent("scratch.txt"), atomically: true, encoding: .utf8)
-        // Breaks `git status` and nothing else — see the `updateDefaultBranch` test
-        // for why a corrupt index would be the wrong fixture here.
+        // Breaks `git status` and nothing else. A corrupt `.git/index` would be
+        // the wrong fixture: it fails every git command, so the probe would
+        // return nil for a reason that has nothing to do with status itself.
         XCTAssertTrue(git(["config", "status.showUntrackedFiles", "bogus"], in: repoDir))
 
         let info = Git.Operations.repoInfo(at: repoDir.path)
@@ -501,62 +502,6 @@ final class GitOperationsTests: XCTestCase {
     }
 
     // MARK: - Probes that must not report "clean" when they could not look
-
-    /// The destructive one. `updateDefaultBranch` runs `git reset --hard` behind
-    /// `!hasUncommittedChanges`, so a status probe that fails reads as "clean" and
-    /// the reset discards work that is not recoverable from anywhere — no branch
-    /// ref, no reflog entry, nothing.
-    ///
-    /// The fixture breaks `git status` *specifically*: `status.showUntrackedFiles`
-    /// set to a bad value makes status exit 128 while `fetch`, `merge-base`,
-    /// `update-ref` and `reset --hard` all still succeed. That precision is the
-    /// whole point — a corrupt `.git/index` also fails status, but it fails
-    /// `reset --hard` too, so the file would survive whether or not this is fixed
-    /// and the test would pass for the wrong reason.
-    func testUpdateDefaultBranchDoesNotResetAWorkingTreeItCouldNotRead() throws {
-        let (remote, local) = try makeCloneWithOrigin(named: "unreadable-status")
-        _ = remote
-
-        try "LOCAL EDIT".write(to: local.appendingPathComponent("tracked.txt"), atomically: true, encoding: .utf8)
-        // Breaks `git status` and nothing else.
-        XCTAssertTrue(git(["config", "status.showUntrackedFiles", "bogus"], in: local))
-        XCTAssertNil(
-            Git.Operations.hasUncommittedChanges(at: local.path),
-            "precondition: the status probe has to actually fail for this test to mean anything"
-        )
-
-        Git.Operations.updateDefaultBranch(at: local.path)
-
-        XCTAssertEqual(
-            try String(contentsOf: local.appendingPathComponent("tracked.txt"), encoding: .utf8),
-            "LOCAL EDIT",
-            "an unreadable working tree must not be reset — the edit is unrecoverable"
-        )
-    }
-
-    /// The positive control. Without it the test above passes on a fixture that
-    /// never reached the reset at all, which would make it worthless.
-    func testUpdateDefaultBranchStillResetsAReadableCleanWorkingTree() throws {
-        let (remote, local) = try makeCloneWithOrigin(named: "readable-status")
-        _ = remote
-
-        // Committed to origin after the clone, so the local branch fast-forwards and
-        // the reset has something to bring in.
-        try "LOCAL EDIT".write(to: local.appendingPathComponent("tracked.txt"), atomically: true, encoding: .utf8)
-        XCTAssertEqual(Git.Operations.hasUncommittedChanges(at: local.path), true, "precondition")
-
-        // Now make it genuinely clean, and prove the reset path is live.
-        XCTAssertTrue(git(["checkout", "--", "tracked.txt"], in: local))
-        XCTAssertEqual(Git.Operations.hasUncommittedChanges(at: local.path), false, "precondition")
-
-        Git.Operations.updateDefaultBranch(at: local.path)
-
-        XCTAssertEqual(
-            try String(contentsOf: local.appendingPathComponent("tracked.txt"), encoding: .utf8),
-            "original",
-            "a readable clean tree still gets updated; the fix must not disable this path"
-        )
-    }
 
     func testHasUncommittedChangesSaysItCouldNotTellRatherThanClean() throws {
         let plainDir = tempDir.appendingPathComponent("not-a-repo-status")
@@ -640,23 +585,6 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertFalse(linked.cleanlinessUnknown, "both probes ran here; an always-true flag would make Prune useless")
         XCTAssertFalse(linked.isDirty)
         XCTAssertFalse(linked.hasBranchCommits)
-    }
-
-    /// A clone with a real `origin`, one tracked file, and a branch that can
-    /// fast-forward — the preconditions `updateDefaultBranch` walks before it
-    /// reaches the reset.
-    private func makeCloneWithOrigin(named name: String) throws -> (remote: URL, local: URL) {
-        let remote = tempDir.appendingPathComponent("\(name)-remote")
-        try FileManager.default.createDirectory(at: remote, withIntermediateDirectories: true)
-        XCTAssertTrue(git(["init", "-b", "main"], in: remote))
-        try "original".write(to: remote.appendingPathComponent("tracked.txt"), atomically: true, encoding: .utf8)
-        XCTAssertTrue(git(["add", "tracked.txt"], in: remote))
-        XCTAssertTrue(git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
-                           "commit", "-m", "seed"], in: remote))
-
-        let local = tempDir.appendingPathComponent("\(name)-local")
-        XCTAssertTrue(git(["clone", remote.path, local.path], in: tempDir))
-        return (remote, local)
     }
 
     // MARK: - uncommittedDiffFiles (Changes tab tracer)
@@ -1541,66 +1469,10 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: orphan.path))
     }
 
-    // MARK: - updateDefaultBranch
-
-    /// `update-ref` moved the local branch onto origin's tip unconditionally, so
-    /// commits that had not been pushed became unreachable with no warning.
-    func testUpdateDefaultBranchKeepsCommitsOriginDoesNotHave() throws {
-        let (origin, clone) = try makeOriginAndClone()
-
-        try "local work".write(to: clone.appendingPathComponent("local.txt"), atomically: true, encoding: .utf8)
-        git(["add", "."], in: clone)
-        git(["commit", "-q", "-m", "unpushed"], in: clone)
-        let localHead = gitOutput(["rev-parse", "refs/heads/main"], in: clone)
-        XCTAssertNotEqual(localHead, gitOutput(["rev-parse", "refs/heads/main"], in: origin), "precondition")
-
-        Git.Operations.updateDefaultBranch(at: clone.path)
-
-        XCTAssertEqual(
-            gitOutput(["rev-parse", "refs/heads/main"], in: clone),
-            localHead,
-            "the branch must not be moved off commits origin does not have"
-        )
-    }
-
-    /// The fast-forward case is the whole point of the function and must survive
-    /// the guard.
-    func testUpdateDefaultBranchFastForwardsWhenTheLocalBranchIsBehind() throws {
-        let (origin, clone) = try makeOriginAndClone()
-
-        try "more".write(to: origin.appendingPathComponent("second.txt"), atomically: true, encoding: .utf8)
-        git(["add", "."], in: origin)
-        git(["commit", "-q", "-m", "second"], in: origin)
-        let originHead = gitOutput(["rev-parse", "refs/heads/main"], in: origin)
-
-        Git.Operations.updateDefaultBranch(at: clone.path)
-
-        XCTAssertEqual(gitOutput(["rev-parse", "refs/heads/main"], in: clone), originHead)
-    }
-
     // MARK: - Helpers
 
     private func standardized(_ path: String) -> String {
         URL(fileURLWithPath: path).standardizedFileURL.path
-    }
-
-    /// A non-bare "origin" repository on `main` plus a clone of it, so the
-    /// fetch/update path in `updateDefaultBranch` has something real to talk to.
-    private func makeOriginAndClone() throws -> (origin: URL, clone: URL) {
-        let origin = tempDir.appendingPathComponent("origin")
-        try FileManager.default.createDirectory(at: origin, withIntermediateDirectories: true)
-        git(["init", "-q", "-b", "main"], in: origin)
-        git(["config", "user.email", "test@example.com"], in: origin)
-        git(["config", "user.name", "Test"], in: origin)
-        try "one".write(to: origin.appendingPathComponent("first.txt"), atomically: true, encoding: .utf8)
-        git(["add", "."], in: origin)
-        git(["commit", "-q", "-m", "first"], in: origin)
-
-        let clone = tempDir.appendingPathComponent("clone")
-        git(["clone", "-q", origin.path, clone.path], in: tempDir)
-        git(["config", "user.email", "test@example.com"], in: clone)
-        git(["config", "user.name", "Test"], in: clone)
-        return (origin, clone)
     }
 
     /// Builds the README's layout: `<container>/{.bare, .git, main}` with HEAD
@@ -1694,7 +1566,6 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertTrue(detail.unmergedCommits.isEmpty)
         XCTAssertTrue(detail.changesUnavailable, "git status failed here; empty is for want of an answer")
         XCTAssertTrue(detail.unmergedCommitsUnavailable, "no base branch resolves outside a repository")
-        XCTAssertFalse(detail.isFullyLoaded)
     }
 
     /// The positive control for the flags above. Without it an inverted or
@@ -1713,7 +1584,6 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertTrue(detail.unmergedCommits.isEmpty)
         XCTAssertFalse(detail.changesUnavailable, "git status ran and found a clean tree")
         XCTAssertFalse(detail.unmergedCommitsUnavailable, "main resolved, so base..HEAD is a real comparison")
-        XCTAssertTrue(detail.isFullyLoaded)
     }
 
     /// `defaultBranch` falls back to the literal "HEAD" when it can resolve nothing

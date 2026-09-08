@@ -1361,17 +1361,6 @@ final class IPCStoreTests: XCTestCase {
         XCTAssertNotNil(status)
     }
 
-    func test_unpinnedPeer_expiresAgain() async {
-        let store = makeStore()
-        let peer = await store.registerPeer(name: "departing", role: "")
-        await store.pin(peer.id)
-        await store.unpin(peer.id)
-        await store._testSetPeerLastSeen(peerId: peer.id, date: Date().addingTimeInterval(-3600))
-
-        let listed = await store.listPeers()
-        XCTAssertTrue(listed.isEmpty)
-    }
-
     func test_removingAPeer_dropsItsPin() async {
         let store = makeStore()
         let peer = await store.registerPeer(name: "gone", role: "")

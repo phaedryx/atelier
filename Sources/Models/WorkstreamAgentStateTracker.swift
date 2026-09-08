@@ -142,16 +142,6 @@ extension Workstream {
             states[id] ?? .idle
         }
 
-        /// The workstream's turn state only when something has actually reported it.
-        ///
-        /// `state(for:)` above defaults to `.idle` so a sidebar row has something to
-        /// draw. That default is wrong for anything that acts on the state: it makes
-        /// "no hook has ever arrived" — hooks not installed, or failing — read as
-        /// "the agent finished its turn".
-        func reportedState(for id: UUID) -> AgentRunState? {
-            states[id]
-        }
-
         /// Turn state of one terminal surface, or nil if no agent has ever reported
         /// from it. Nil is meaningful: it means there is no evidence about this
         /// pane, not that the pane is idle.

@@ -13,6 +13,15 @@ Thank you for your interest in contributing to Atelier! This document covers the
 
 ### Building
 
+One command does the whole first-time setup — ghostty submodule, prek hooks,
+`xcodegen generate`, and a debug build:
+
+```bash
+./scripts/setup.sh
+```
+
+Or run the steps yourself:
+
 ```bash
 xcodegen generate              # Generate the Xcode project from project.yml
 ./scripts/dev.sh build         # Debug build

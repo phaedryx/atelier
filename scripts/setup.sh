@@ -14,7 +14,7 @@ if [ -d "$REPO_ROOT/ghostty" ] && [ ! -e ghostty/include ]; then
 fi
 
 # Pre-commit hooks
-if [ -f .pre-commit-config.yaml ] && command -v uv >/dev/null 2>&1; then
+if [ -f prek.toml ] && command -v uv >/dev/null 2>&1; then
     if git -C . config --get core.hooksPath >/dev/null 2>&1; then
         git config --local --unset-all core.hooksPath 2>/dev/null || true
     fi

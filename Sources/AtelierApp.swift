@@ -23,7 +23,6 @@ extension Notification.Name {
     static let switchToProject = Notification.Name("atelier.switchToProject")
     static let toggleSidebar = Notification.Name("atelier.toggleSidebar")
     static let switchByNumber = Notification.Name("atelier.switchByNumber") // object: Int (1-9)
-    static let dismissOverlay = Notification.Name("atelier.dismissOverlay")
     static let openExternalBrowser = Notification.Name("atelier.openExternalBrowser")
     static let clearProjects = Notification.Name("atelier.clearProjects")
     static let openExternalTerminal = Notification.Name("atelier.openExternalTerminal")

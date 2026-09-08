@@ -132,10 +132,6 @@ extension IPC {
             pinned.insert(id)
         }
 
-        func unpin(_ id: UUID) {
-            pinned.remove(id)
-        }
-
         /// Every alive peer, lazily purging the rest.
         func listPeers() -> [Peer] {
             var result: [Peer] = []
