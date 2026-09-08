@@ -743,10 +743,9 @@ extension Git {
         /// files) — or `nil` when the probe did not run.
         ///
         /// This used to return `false` on failure, which every caller read as "clean".
-        /// `updateDefaultBranch` gates `git reset --hard` on it, so a failed probe
-        /// discarded work that has no branch, no reflog entry, and no way back; and
-        /// `purgeWarning` gates the only warning shown before a `--force` removal.
-        /// A probe that could not look must not answer "no".
+        /// `purgeWarning` gates the only warning shown before a `--force` removal on
+        /// it, so a failed probe hid the last thing standing between the user and
+        /// losing work. A probe that could not look must not answer "no".
         static func hasUncommittedChanges(at path: String) -> Bool? {
             guard let status = run(args: ["status", "--porcelain", "--ignore-submodules=dirty"], in: path) else { return nil }
             return !status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1151,59 +1150,6 @@ extension Git {
         /// Delete a local branch by name.
         static func deleteLocalBranch(at path: String, branchName: String) {
             _ = run(args: ["branch", "-D", branchName], in: path)
-        }
-
-        /// Fetch the default branch from origin, fast-forward the local ref to match,
-        /// and reset the working tree if it is clean. Fails silently when there is no
-        /// remote, the network is unreachable, or the working tree has local changes.
-        static func updateDefaultBranch(at path: String) {
-            guard run(args: ["remote", "get-url", "origin"], in: path) != nil else { return }
-
-            let branch: String
-            if let ref = run(args: ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], in: path) {
-                branch = ref.trimmingCharacters(in: .whitespacesAndNewlines)
-                    .replacingOccurrences(of: "origin/", with: "")
-            } else if run(args: ["rev-parse", "--verify", "refs/heads/main"], in: path) != nil {
-                branch = "main"
-            } else if run(args: ["rev-parse", "--verify", "refs/heads/master"], in: path) != nil {
-                branch = "master"
-            } else {
-                return
-            }
-
-            // Fetch with timeout so we don't block the UI
-            guard runWithTimeout(args: ["fetch", "origin", branch, "--no-tags"], in: path, timeout: 5) != nil else {
-                return
-            }
-
-            // Move the local ref to match origin — but only when that is a
-            // fast-forward. `update-ref` does not care what it is overwriting, so
-            // pointing the branch at origin's tip while the local branch holds
-            // commits origin has never seen makes them unreachable: no warning, no
-            // conflict, and nothing in the UI that would send the user looking in
-            // the reflog. `merge-base --is-ancestor` exits non-zero — and `run`
-            // returns nil — exactly when that would happen.
-            let localRef = "refs/heads/\(branch)"
-            let originRef = "refs/remotes/origin/\(branch)"
-            guard run(args: ["merge-base", "--is-ancestor", localRef, originRef], in: path) != nil else {
-                logger.info(
-                    "[Atelier] \(branch, privacy: .public) has commits origin does not, leaving it where it is"
-                )
-                return
-            }
-            guard run(args: ["update-ref", localRef, originRef], in: path) != nil else {
-                return
-            }
-
-            // Reset the working tree only if it is *known* to be clean. `== false`
-            // rather than `!`: a nil means the status probe did not run, and
-            // `reset --hard` on an unread tree destroys work nothing can recover.
-            if hasUncommittedChanges(at: path) == false {
-                _ = runOnWholeTree(args: ["reset", "--hard", "--quiet"], in: path)
-                logger.info("[Atelier] Updated \(branch, privacy: .public) to latest")
-            } else {
-                logger.info("[Atelier] Updated \(branch, privacy: .public) ref but the working tree is dirty or unreadable, skipping reset")
-            }
         }
 
         /// Per-file git status for the file tree (modified, untracked, ignored).
