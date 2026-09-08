@@ -103,41 +103,6 @@ enum TmuxSession {
         return "\(shell) -lic \(CommandBuilder.shellQuote(shCmd, forShell: shell))"
     }
 
-    /// Build a script that can be `source`d directly into an interactive shell (zsh).
-    /// No `sh -c` wrapping — commands run in the current shell to preserve terminal capabilities.
-    static func sourceableScript(tmuxPath: String, sessionName: String, command: String, environmentVars: [String: String] = [:]) -> String {
-        let socket = shellEscape(socketName)
-        let conf = shellEscape(configPath)
-        let escaped = shellEscape(sessionName)
-        let logFile = shellEscape(stderrLogPath)
-
-        // Both halves escaped. The key was not, and keys come from
-        // `ports.yaml` — repository content in an ordinary clone — so a name
-        // containing a quote or `$(…)` was an ungated path from a repository
-        // into `sh -c` whenever tmux mode was on. `ProcessCompose.PortsConfig.validateName`
-        // now restricts names to variable-name characters; this is the second
-        // line of that defence, not a substitute for it.
-        let envFlags = environmentVars
-            .map { "-e \"\(doubleQuoteEscape($0.key))=\(doubleQuoteEscape($0.value))\"" }
-            .joined(separator: " ")
-
-        var lines: [String] = []
-        lines.append("\(tmuxPath) -L \(socket) start-server 2>>\(logFile) || true")
-        lines.append("\(tmuxPath) -L \(socket) source-file \(conf) 2>>\(logFile)")
-        lines.append("\(tmuxPath) -L \(socket) set-hook -gu pane-died 2>>\(logFile) || true")
-
-        var tmuxCmd = "exec \(tmuxPath) -L \(socket) -f \(conf) new-session -A -s \(escaped)"
-        if !envFlags.isEmpty {
-            tmuxCmd += " \(envFlags)"
-        }
-        // tmux new-session doesn't interpret shell operators (||, 2>), so wrap in sh -c.
-        // This sh -c runs inside tmux's pseudo-terminal, not the outer interactive shell.
-        tmuxCmd += " sh -c \(shellEscape(command))"
-        lines.append(tmuxCmd)
-
-        return lines.joined(separator: "\n")
-    }
-
     /// Kill a tmux session by name.
     ///
     /// Bounded, like every tmux call here: these are local and near-instant, so

@@ -616,18 +616,6 @@ struct ChangesView: View {
 
     // MARK: - Payload builder
 
-    /// Build the `setFiles` payload for ALL changed files in the given mode.
-    /// Runs on a background queue (nonisolated, captures no @State). Decides each
-    /// file's class (binary / deferred / normal) before reading content so that
-    /// git show and disk reads are skipped for binary and deferred files.
-    nonisolated static func buildPayload(
-        workDir: String,
-        projDir: String,
-        mode: ChangesMode
-    ) -> [[String: Any]] {
-        buildContents(workDir: workDir, projDir: projDir, mode: mode).payload
-    }
-
     /// Build both the JS `setFiles` payload AND the structured, tree-ordered
     /// list of changed files in one pass. The sidebar tree is built from `files`
     /// while the diff webview renders `payload` in that same tree order; sharing

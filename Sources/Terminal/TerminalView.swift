@@ -253,14 +253,6 @@ final class TerminalView: NSView {
         super.updateTrackingAreas()
     }
 
-    func setFocused(_ focused: Bool) {
-        guard let surface else { return }
-        ghostty_surface_set_focus(surface, focused)
-        if focused {
-            window?.makeFirstResponder(self)
-        }
-    }
-
     func setVisible(_ visible: Bool) {
         guard let surface else { return }
         ghostty_surface_set_occlusion(surface, visible)

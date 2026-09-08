@@ -42,13 +42,6 @@ enum QuickAction: String, CaseIterable, Identifiable {
         }
     }
 
-    var requiresGitHubRemote: Bool {
-        switch self {
-        case .createPR, .closePR: true
-        case .commit, .push: false
-        }
-    }
-
     var prompt: String? {
         switch self {
         case .commit:
@@ -305,10 +298,6 @@ extension QuickAction {
             runningProcess?.terminate()
             runningProcess = nil
             state = .idle
-        }
-
-        func clearLog() {
-            log.removeAll()
         }
 
         private nonisolated static func parseSuccess(output: String, exitCode: Int32) -> Bool {

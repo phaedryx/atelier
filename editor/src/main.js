@@ -132,11 +132,6 @@ window.editorAPI = {
     }
   },
 
-  // Focus the editor.
-  focus() {
-    editor.focus()
-  },
-
   // Force a layout pass (call after reparenting the WKWebView into a new container).
   layout() {
     editor.layout()

@@ -42,23 +42,6 @@ struct FileNode: Identifiable {
         }
     }
 
-    /// Ensure all ancestor directories for a file path are loaded. Returns the updated tree.
-    static func ensureAncestorsLoaded(for filePath: String, in nodes: [FileNode], rootPath: String) -> [FileNode] {
-        let components = filePath.split(separator: "/").map(String.init)
-        guard components.count > 1 else { return nodes }
-
-        var result = nodes
-        var current = ""
-        for component in components.dropLast() {
-            current = current.isEmpty ? component : current + "/" + component
-            if let node = findNode(atPath: current, in: result), node.isDirectory, !node.isLoaded {
-                let children = loadChildren(atRelativePath: current, rootPath: rootPath)
-                result = insertChildren(children, atPath: current, in: result)
-            }
-        }
-        return result
-    }
-
     /// Refresh all previously-loaded nodes, preserving lazy structure for unloaded directories.
     static func refreshLoadedNodes(in nodes: [FileNode], rootPath: String) -> [FileNode] {
         // A root that cannot be read right now is not an empty root; keeping what
