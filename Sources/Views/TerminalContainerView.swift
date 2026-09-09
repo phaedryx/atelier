@@ -2273,6 +2273,17 @@ private enum PrimaryAction: Equatable, Identifiable {
     }
 }
 
+/// Names the tab strip's ScrollView frame, so the content's `minX` measured against it says
+/// how far the strip has been scrolled rather than where it sits on screen. A file-level
+/// constant because `ScrollableTabStrip` is generic, and a generic type cannot hold a static
+/// stored property.
+private let tabStripScrollSpace = "workspaceTabStrip"
+
+/// A pixel of slack at each end of the tab strip. The reported offset settles on fractional
+/// values, so comparing against a bare zero leaves the left arrow drawn at rest and the
+/// right arrow drawn at the far end.
+private let tabStripScrollEpsilon: CGFloat = 1
+
 private struct ScrollableTabStrip<TabContent: View>: View {
     let tabs: [WorkspaceTab]
     let activeTab: WorkspaceTab
@@ -2284,11 +2295,11 @@ private struct ScrollableTabStrip<TabContent: View>: View {
     @State private var viewportWidth: CGFloat = 0
 
     private var canScrollLeft: Bool {
-        scrollOffset > 0
+        scrollOffset > tabStripScrollEpsilon
     }
 
     private var canScrollRight: Bool {
-        scrollOffset < contentWidth - viewportWidth
+        scrollOffset < contentWidth - viewportWidth - tabStripScrollEpsilon
     }
 
     var body: some View {
@@ -2306,12 +2317,26 @@ private struct ScrollableTabStrip<TabContent: View>: View {
                         }
                     }
                     .background(GeometryReader { geo in
-                        Color.clear.preference(key: ContentWidthKey.self, value: geo.size.width)
+                        Color.clear
+                            .preference(key: ContentWidthKey.self, value: geo.size.width)
+                            // How far the content has been dragged out of the viewport's
+                            // leading edge. Nothing wrote `scrollOffset` before this, so
+                            // it sat at its initial 0 for the life of the view: the left
+                            // arrow never appeared at any scroll position and the right
+                            // arrow never went away at the end of the strip.
+                            .preference(
+                                key: ScrollOffsetKey.self,
+                                value: -geo.frame(in: .named(tabStripScrollSpace)).minX
+                            )
                     })
                 }
+                .coordinateSpace(name: tabStripScrollSpace)
                 .onPreferenceChange(ContentWidthKey.self) { width in
                     contentWidth = width
                     checkOverflow()
+                }
+                .onPreferenceChange(ScrollOffsetKey.self) { offset in
+                    scrollOffset = offset
                 }
                 .background(GeometryReader { geo in
                     Color.clear
@@ -2352,6 +2377,13 @@ private struct ScrollableTabStrip<TabContent: View>: View {
 }
 
 private struct ContentWidthKey: PreferenceKey {
+    nonisolated(unsafe) static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+private struct ScrollOffsetKey: PreferenceKey {
     nonisolated(unsafe) static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
