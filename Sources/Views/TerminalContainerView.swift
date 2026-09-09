@@ -21,6 +21,11 @@ extension Notification.Name {
     static let toggleChanges = Notification.Name("atelier.toggleChanges")
     static let submitChangeReview = Notification.Name("atelier.submitChangeReview")
     static let toggleEnvironment = Notification.Name("atelier.toggleEnvironment")
+    /// Runs the active workstream's `bootstrap` namespace again. Declared here
+    /// rather than beside `.asyncSetupStateChanged`, which `AsyncSetupService`
+    /// posts: like `.rerunScript`, this one is posted by the palette and named
+    /// in the file whose view receives it.
+    static let rerunBootstrap = Notification.Name("atelier.rerunBootstrap")
     static let saveEditor = Notification.Name("atelier.saveEditor")
     static let saveEditorAs = Notification.Name("atelier.saveEditorAs")
     static let toggleFileFinder = Notification.Name("atelier.toggleFileFinder")
@@ -733,7 +738,8 @@ struct TerminalContainerView: View {
                 configApproved: configApproved,
                 setupState: setupState,
                 onReviewConfig: { isReviewingConfig = true },
-                onRevokeConfig: revokeProcessConfig
+                onRevokeConfig: revokeProcessConfig,
+                onRerunBootstrap: rerunBootstrap
             )
         case .changes:
             if let bridge = model.diffBridge {
@@ -923,6 +929,16 @@ struct TerminalContainerView: View {
             .onReceive(NotificationCenter.default.publisher(for: .toggleEnvironment)) { _ in
                 guard isActive else { return }
                 model.activateSingleton(.environment)
+            }
+            // On `mainContent`, which is mounted whatever the active tab is, so
+            // the palette reaches this from the Agent tab and not only from
+            // Info where the button lives. The availability question splits the
+            // way the rest of this file's palette commands split it:
+            // `DefaultCommands` asks whether there is a workspace to act on,
+            // and the receiver asks whether there is something to do right now.
+            .onReceive(NotificationCenter.default.publisher(for: .rerunBootstrap)) { _ in
+                guard isActive, canRerunBootstrap(setupState) else { return }
+                rerunBootstrap()
             }
             .onReceive(NotificationCenter.default.publisher(for: .closeTerminal)) { _ in
                 guard isActive else { return }
@@ -1882,6 +1898,26 @@ struct TerminalContainerView: View {
         // nothing has been trusted. Do not run anything on the strength of a
         // button press that did not take.
         guard configApproved else { return }
+        rerunBootstrap()
+    }
+
+    /// Run the project's `bootstrap` namespace against this worktree again.
+    ///
+    /// Two callers, and deliberately no preconditions of its own.
+    /// `approveProcessConfig` calls it to recover the bootstrap its approval
+    /// was too late for; the Info tab's Rerun button and the palette's Rerun
+    /// Bootstrap call it because the user asked.
+    ///
+    /// In particular this is **not** behind `configApproved`.
+    /// `approveProcessConfig` checks that before calling, because there the
+    /// guard is asking whether the approval it just wrote actually took — an
+    /// unreadable file has no fingerprint, so `approve` was a no-op. A manual
+    /// rerun has no approval to doubt, and every reason bootstrap might do
+    /// nothing is `PhasePolicy.plan`'s to decide and report as a
+    /// `.completedWithNote` the Info row renders. Guarding here would trade
+    /// that explanation for a button that silently does nothing, in the one
+    /// state where the user most needs to be told why.
+    private func rerunBootstrap() {
         let id = workstreamID
         let project = projectDirectory
         let worktree = workingDirectory
