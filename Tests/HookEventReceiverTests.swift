@@ -16,6 +16,49 @@ final class HookEventReceiverTests: XCTestCase {
         super.tearDown()
     }
 
+    /// Blocks until the listener reports a port, or the deadline passes.
+    private func waitForBoundPort(timeout: TimeInterval = 10) -> UInt16? {
+        let deadline = Date().addingTimeInterval(timeout)
+        var port: UInt16?
+        while Date() < deadline, port == nil {
+            port = receiver.boundPort
+            if port == nil {
+                usleep(20_000)
+            }
+        }
+        return port
+    }
+
+    // MARK: - Isolation from the machine
+
+    /// This suite binds a *real* listener. `hook-port` is the single rendezvous
+    /// every Claude Code session on the machine reads — `atelier-hook` is
+    /// installed globally in `~/.claude/settings.json` and cannot know which
+    /// process wrote the file — so a test process that publishes its port there
+    /// is handed the live traffic of every running session.
+    ///
+    /// That is not hypothetical. It is what made the `isIgnored` cases fail at
+    /// random: `agentToolStart`/`agentToolDone` from a real session, for the
+    /// developer's own checkout, arrived inside an inverted expectation's window.
+    /// Worse than the flake, the permission cases here install handlers that
+    /// answer `.allow` and `.deny`, so a real permission prompt could be decided
+    /// by a test — and `stop()` then deletes the app's port file on the way out.
+    ///
+    /// Nothing here needs the file; every helper reads `boundPort` directly.
+    func test_aTestProcessDoesNotPublishItsPortToTheSharedFile() throws {
+        let path = NSString(string: "~/Library/Caches/atelier/hook-port").expandingTildeInPath
+
+        receiver.start()
+        let port = try XCTUnwrap(waitForBoundPort(), "hook receiver did not bind a port")
+
+        let published = (try? String(contentsOfFile: path, encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertNotEqual(
+            published, String(port),
+            "the suite advertised its own listener as the app's; live hook traffic will land in these tests"
+        )
+    }
+
     // MARK: - Permission requests
 
     /// POSTs to `/permission` and returns the response *body* — which for this

@@ -577,7 +577,22 @@ final class HookEventReceiver: @unchecked Sendable {
         return cacheDir.appendingPathComponent("hook-port").path
     }
 
+    /// Publishing is skipped under XCTest. There is exactly one port file, and
+    /// `Resources/Scripts/atelier-hook` is installed globally in
+    /// `~/.claude/settings.json`, so it cannot know which process wrote it: a
+    /// test process that advertises its own listener here collects the hook
+    /// traffic of every Claude Code session on the machine. That is what made
+    /// `HookEventReceiverTests`'s inverted expectations fail at random — real
+    /// `agentToolStart` events landing inside a window that asserts silence —
+    /// and the permission cases in that suite answer `.allow`/`.deny`, so a real
+    /// prompt could have been decided by a test. Nothing in the suite reads the
+    /// file; tests take the port from `boundPort`.
+    ///
+    /// The path is deliberately *not* `AppConstants.cacheDirectory`, which
+    /// separates debug from release. One global hook script means one rendezvous,
+    /// so whichever build is running owns it.
     private func writePortFile(port: UInt16) {
+        guard !isRunningXCTest() else { return }
         let cacheDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Caches/atelier")
         try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
@@ -586,7 +601,10 @@ final class HookEventReceiver: @unchecked Sendable {
         logger.info("Wrote port \(port) to \(self.portFilePath)")
     }
 
+    /// Skipped under XCTest for the same reason as `writePortFile`: a suite that
+    /// never published the port must not delete the running app's.
     private func removePortFile() {
+        guard !isRunningXCTest() else { return }
         try? FileManager.default.removeItem(atPath: portFilePath)
     }
 }
