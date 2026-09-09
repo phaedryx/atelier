@@ -182,6 +182,28 @@ carries the `-dev` marker.
 4. Terminal tabs: close on shell exit (Ctrl+D). Agent respawns.
 5. Ending a workstream: two operations, not one — see below.
 
+### Two ways to create a worktree, and they are not interchangeable
+`Git.Operations.createWorktree` cuts a **new** branch from `BaseBranchSetting`. The GitHub
+button on a project row goes through `createWorktreeTrackingRemote` instead, which checks out a
+branch that already exists on origin. Do not merge them or reroute one through the other:
+`createWorktree` runs `worktree add -b <name> <dir> <base>`, so handing it a branch that lives
+only as `origin/<name>` **succeeds** and produces a worktree named for that branch while holding
+the base branch's code — and its `-b`-less fallback only rescues a *local* branch of the name.
+
+`createWorktreeTrackingRemote` fetches the branch, then `worktree add --track -b <branch> <dir>
+origin/<branch>`. **In the `.bare` container layout the `-b` always fails and the fallback is the
+ordinary path**, which is the non-obvious part: `git clone --bare` writes every branch into
+`refs/heads`, and the refspec `BareRepoClone` configures afterwards only ever updates
+`refs/remotes/origin/*`. So for every branch the clone captured, `refs/heads/<branch>` exists,
+carries no upstream, and is as old as the clone. `adoptRemoteBranch` is what stops that becoming
+"the worktree says `renovate/x` and holds three-week-old code": it sets the upstream and runs
+`merge --ff-only origin/<branch>`, which advances a branch that is merely behind and refuses to
+move one carrying unpushed commits. Do not "simplify" that to a `reset --hard`.
+
+`remoteBranchTip` and `worktreePath(forBranch:)` are the dialog's pre-flight, and they run before
+anything is created on purpose: git reports a missing branch and an already-checked-out branch as
+ordinary failures, which arrive after the optimistic sidebar row is already drawn.
+
 ### Remove vs purge
 `Workstream.Archiver` exports both, and they are not the same thing.
 

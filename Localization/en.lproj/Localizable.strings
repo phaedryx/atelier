@@ -206,7 +206,6 @@
 
 /* GitHub - new workstream from a branch that already exists on origin */
 "New Workstream from GitHub" = "New Workstream from GitHub";
-"Branch" = "Branch";
 "The branch must already exist on origin. The workstream takes its name." = "The branch must already exist on origin. The workstream takes its name.";
 "Enter a branch name." = "Enter a branch name.";
 "That's a pull request. Enter the name of its branch instead." = "That's a pull request. Enter the name of its branch instead.";

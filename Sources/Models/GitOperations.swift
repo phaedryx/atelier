@@ -1419,10 +1419,8 @@ extension Git {
         /// an `origin/` prefix if present since `git fetch origin <ref>` wants
         /// the bare name.
         static func fetchDefaultBranch(at path: String, branch: String? = nil) {
-            // Check if origin remote exists first (fast, no network)
-            guard run(args: ["remote", "get-url", "origin"], in: path) != nil else { return }
-
-            // Determine which branch to fetch
+            // Determine which branch to fetch. `fetchBranch` makes the no-remote check, so
+            // there is no guard here — asking twice was one git spawn per call for nothing.
             let branchToFetch: String = if let branch {
                 branch.hasPrefix("origin/") ? String(branch.dropFirst("origin/".count)) : branch
             } else if let ref = run(args: ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], in: path) {
