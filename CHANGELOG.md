@@ -4,7 +4,7 @@ Atelier was forked from [Factory Floor](https://github.com/alltuner/factoryfloor
 at v0.1.79. Everything below that release is Factory Floor's history; those links
 point at the upstream repository.
 
-## Unreleased
+## [0.2.1](https://github.com/phaedryx/atelier/compare/v0.2.0...v0.2.1) (2026-09-09)
 
 ### ⚠ BREAKING CHANGES
 
