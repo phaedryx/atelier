@@ -10,6 +10,25 @@ from Factory Floor, but a cask is only worth maintaining for an app people can
 install without fighting Gatekeeper — see below. There is no update checking of
 any kind either; see [Auto-update (not shipped)](#auto-update-not-shipped).
 
+## Apple Silicon only
+
+The DMG is an **arm64 build**, not a universal binary. It does not run on an
+Intel Mac.
+
+That is worth stating plainly because the deployment target does not say so:
+`MACOSX_DEPLOYMENT_TARGET` is 14.0, a version Intel Macs run, so nothing stops
+an Intel user downloading the DMG, clearing quarantine as the release note
+instructs, and still getting a binary that cannot execute. The release body
+leads with the architecture for that reason.
+
+The release workflow builds libghostty with `-Dxcframework-target=native` on an
+Apple Silicon runner and pins the app to `ARCHS=arm64`. Both halves are
+required: a Release build otherwise takes `ARCHS_STANDARD` (arm64 + x86_64) and
+its x86_64 slice fails to link against a `native` xcframework. Building
+universal is a supported option — `-Dxcframework-target=universal` plus dropping
+the `ARCHS` override — and costs a second zig build for a slice that, for a
+personal project shipped to Apple Silicon machines, nothing installs.
+
 ## Builds are not notarized
 
 Releases are **ad-hoc signed and not notarized**. This is a personal project and
