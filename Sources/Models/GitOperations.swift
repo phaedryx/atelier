@@ -380,14 +380,27 @@ extension Git {
 
         // MARK: - Diff fingerprint (cache invalidation)
 
-        /// Fast (~10ms) cache key for the Changes view: HEAD SHA plus a hash of
-        /// `git diff --stat` and the untracked-file list (both modes). Reads no file
-        /// contents. Tolerates an unborn/empty HEAD and non-repo paths by returning a
-        /// stable (non-empty) string rather than crashing.
+        /// Cache key for the Changes view: HEAD SHA plus a hash of `git diff --stat`, the
+        /// untracked-file list, and a content hash of every file whose working-tree copy
+        /// the SHA does not already pin (both modes). Tolerates an unborn/empty HEAD and
+        /// non-repo paths by returning a stable (non-empty) string rather than crashing.
         ///
         /// Both modes fold in `ls-files --others --exclude-standard` so that adding
         /// or removing an untracked file moves the fingerprint — matching the diff
         /// listing, which unions untracked files in for both modes (Hardening 1).
+        ///
+        /// **`--stat` alone is blind to any edit that leaves the line counts alone**, which
+        /// is what `dirtyContentHashes` is here for. Renaming an identifier, rewriting a
+        /// line, reordering two lines — none of it moves an insertion/deletion count, so
+        /// the Changes tab went on rendering the pre-edit diff until the user pressed
+        /// Refresh. A rename sweep is far too ordinary a shape to be outside what "just
+        /// enough to detect changes between tab visits" has to cover.
+        ///
+        /// The content hashes are additive: everything the old fingerprint distinguished it
+        /// still distinguishes. What they cost is reading the changed files — but only the
+        /// ones git already names as changed, and `buildContents` (the work this cache
+        /// exists to skip) reads all of them plus formats and parses the diff, so the check
+        /// stays cheaper than the thing it guards.
         static func diffFingerprint(worktreePath: String, projectPath: String, mode: String) -> String {
             let head = run(args: ["rev-parse", "HEAD"], in: worktreePath)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -400,11 +413,67 @@ extension Git {
                 tracked = run(args: ["diff", "--stat", "HEAD"], in: worktreePath) ?? ""
             }
             let untracked = run(args: ["ls-files", "--others", "--exclude-standard"], in: worktreePath) ?? ""
-            let stat = tracked + untracked
+            let stat = tracked + untracked + dirtyContentHashes(at: worktreePath)
 
             // Not cryptographic — just enough to detect changes between tab visits.
             return "\(head)|\(stat.count)|\(stat.hashValue)"
         }
+
+        /// `git hash-object` over every path whose working-tree content is not already
+        /// pinned by the HEAD SHA: tracked files modified in the index or the working tree,
+        /// plus untracked files. Committed content needs no entry here — the SHA is an
+        /// exact fingerprint of it, and of the base side of a branch-mode diff.
+        ///
+        /// Returns "" when there is nothing dirty, and also when the hashing fails, which
+        /// degrades this to exactly the `--stat`-only fingerprint that came before rather
+        /// than to a fingerprint that moves at random.
+        ///
+        /// Three details are load-bearing:
+        ///
+        /// - **`-z` on both listings.** Without it git quotes any path holding a space or a
+        ///   non-ASCII byte, and a quoted path handed to `hash-object` as an argument names
+        ///   a file that does not exist — failing the whole spawn over one oddly-named file.
+        /// - **Deleted paths are filtered out.** `diff --name-only` lists a file staged or
+        ///   removed for deletion, and `hash-object` exits non-zero on a path it cannot
+        ///   open, taking every other hash in the batch with it. The deletion still moves
+        ///   the fingerprint, through `--stat`.
+        /// - **Batched.** Arguments and environment share a 1MB ceiling on macOS, and a
+        ///   large enough uncommitted sweep would blow it. Batching keeps the result exact
+        ///   instead of trading correctness for a single spawn.
+        private static func dirtyContentHashes(at worktreePath: String) -> String {
+            func nulSeparatedPaths(_ args: [String]) -> [String] {
+                (run(args: args, in: worktreePath) ?? "")
+                    .split(separator: "\0")
+                    .map(String.init)
+            }
+
+            let modified = nulSeparatedPaths(["diff", "--name-only", "-z", "HEAD"])
+            let untracked = nulSeparatedPaths(["ls-files", "--others", "--exclude-standard", "-z"])
+
+            let fileManager = FileManager.default
+            let paths = (modified + untracked).filter { path in
+                var isDirectory: ObjCBool = false
+                let exists = fileManager.fileExists(atPath: worktreePath + "/" + path, isDirectory: &isDirectory)
+                return exists && !isDirectory.boolValue
+            }
+            guard !paths.isEmpty else { return "" }
+
+            var hashes = ""
+            for batch in stride(from: 0, to: paths.count, by: hashObjectBatchSize) {
+                let slice = Array(paths[batch ..< min(batch + hashObjectBatchSize, paths.count)])
+                guard let output = run(
+                    args: ["hash-object", "--no-filters", "--"] + slice,
+                    in: worktreePath
+                ) else { return "" }
+                hashes += output
+            }
+            return hashes
+        }
+
+        /// Paths per `hash-object` spawn. 256 paths of even a very long name stay two
+        /// orders of magnitude inside the 1MB argument ceiling, and one batch covers any
+        /// working tree a person is actually editing.
+        private static let hashObjectBatchSize = 256
 
         // MARK: - Diff listing helpers
 
