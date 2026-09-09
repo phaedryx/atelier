@@ -4,6 +4,16 @@
 import Foundation
 
 enum TranscriptContextReader {
+    /// One transcript entry's context signals. The limit is not resolved here:
+    /// the transcript's `model` cannot distinguish a 1M session from a 200k one
+    /// on its own, so the caller pairs it with the harness model selection
+    /// (see `ContextLimits`).
+    struct Reading: Equatable {
+        let usedTokens: Int
+        /// `message.model` — the resolved model, e.g. "claude-opus-5".
+        let model: String?
+    }
+
     /// Usage lines are appended to the transcript as turns progress, so the
     /// newest assistant entry is always near the end. Parsing only the last
     /// ~256KB keeps huge sessions cheap to poll.
@@ -11,7 +21,7 @@ enum TranscriptContextReader {
 
     /// Reads the tail of a Claude Code transcript and extracts context usage.
     /// Returns nil when the file is missing, unreadable, or has no usable line.
-    static func usage(transcriptPath: String) -> (usedTokens: Int, limitTokens: Int)? {
+    static func usage(transcriptPath: String) -> Reading? {
         guard let handle = FileHandle(forReadingAtPath: transcriptPath) else { return nil }
         defer { try? handle.close() }
         do {
@@ -48,10 +58,11 @@ enum TranscriptContextReader {
     }
 
     /// Pure variant over JSONL contents: finds the LAST assistant line carrying
-    /// `message.usage` and sums its input-side token counts (missing → 0).
+    /// `message.usage` and sums its input-side token counts (missing → 0). The
+    /// model comes from that same entry, never a later one.
     /// Malformed lines are skipped; never throws. Returns nil when no usable line.
-    static func usage(contents: String) -> (usedTokens: Int, limitTokens: Int)? {
-        var latest: (usedTokens: Int, limitTokens: Int)?
+    static func usage(contents: String) -> Reading? {
+        var latest: Reading?
         for line in contents.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let data = String(line).data(using: .utf8),
                   let entry = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -62,7 +73,7 @@ enum TranscriptContextReader {
             let used = int(usageDict, "input_tokens")
                 + int(usageDict, "cache_creation_input_tokens")
                 + int(usageDict, "cache_read_input_tokens")
-            latest = (used, ContextLimits.limitTokens(forModel: message["model"] as? String))
+            latest = Reading(usedTokens: used, model: message["model"] as? String)
         }
         return latest
     }

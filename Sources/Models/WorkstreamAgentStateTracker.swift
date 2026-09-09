@@ -302,7 +302,12 @@ extension Workstream {
                         // read throttle would otherwise leave the pre-compaction
                         // figure on screen for the rest of the interval.
                         let force = event.type == .agentIdle || event.status == "compacted"
-                        refreshContextUsage(wsID: wsID, transcriptPath: transcriptPath, force: force)
+                        refreshContextUsage(
+                            wsID: wsID,
+                            projectDir: projectDir,
+                            transcriptPath: transcriptPath,
+                            force: force
+                        )
                     }
                 }
             }
@@ -425,19 +430,31 @@ extension Workstream {
         /// `contextReadInterval` — except at turn end (idle), where the final
         /// totals must land even if a read just happened. A failed read keeps any
         /// previous value.
-        private func refreshContextUsage(wsID: UUID, transcriptPath: String, force: Bool) {
+        private func refreshContextUsage(wsID: UUID, projectDir: String, transcriptPath: String, force: Bool) {
             let now = Date()
             if !force, let last = lastContextReadAt[wsID], now.timeIntervalSince(last) < Self.contextReadInterval {
                 return
             }
-            guard let parsed = TranscriptContextReader.usage(transcriptPath: transcriptPath) else { return }
+            guard let reading = TranscriptContextReader.usage(transcriptPath: transcriptPath) else { return }
             // Stamped only on a read that produced something. Stamping first burned
             // the whole interval on a failure, so a transcript that was mid-write
             // when it was first sampled stayed unread for another full interval —
             // and the doc comment above promises only that a failure *keeps* the
             // previous value, not that it suppresses the next attempt.
             lastContextReadAt[wsID] = now
-            contextUsage[wsID] = ContextUsage(usedTokens: parsed.usedTokens, limitTokens: parsed.limitTokens)
+            // The window is not in the transcript: Claude Code records the
+            // resolved model ("claude-opus-5") whether or not the 1M beta is
+            // on, so the model selection in its settings has to supply the
+            // "[1m]" part. Resolved from `projectDir` — the hook's
+            // `CLAUDE_PROJECT_DIR`, which is the root Claude Code itself reads
+            // project settings from — rather than the transcript's `cwd`, which
+            // follows the session as it wanders between directories.
+            let limit = ContextLimits.limitTokens(
+                transcriptModel: reading.model,
+                configuredModel: ClaudeCodeSettings.configuredModel(cwd: projectDir),
+                usedTokens: reading.usedTokens
+            )
+            contextUsage[wsID] = ContextUsage(usedTokens: reading.usedTokens, limitTokens: limit)
         }
 
         private func updateMainState(wsID: UUID, event: AgentEvent) {

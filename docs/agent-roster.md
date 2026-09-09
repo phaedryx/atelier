@@ -77,7 +77,8 @@ worktree paths match.
 | `Sources/PixelAgents/HookInstaller.swift` | Idempotent install/uninstall of hook entries in `~/.claude/settings.json`. |
 | `Sources/PixelAgents/AgentEvent.swift` | Event model: `agentCreated`, `agentRemoved`, `agentStatus`, `agentToolStart`, `agentToolDone`, `agentIdle`, `agentWaiting`. |
 | `Sources/PixelAgents/TranscriptContextReader.swift` | Extracts context-window usage from Claude Code transcript tails. |
-| `Sources/PixelAgents/ContextLimits.swift` | Maps model IDs to context-window limits (200k default, 1M extended). |
+| `Sources/PixelAgents/ContextLimits.swift` | Resolves the context-window limit (200k default, 1M extended) from the transcript model plus the harness model selection. |
+| `Sources/PixelAgents/ClaudeCodeSettings.swift` | Reads Claude Code's `model` selection out of its settings files — the only place the `[1m]` marker survives. |
 | `Sources/Models/WorkstreamAgentStateTracker.swift` | Per-workstream roster + row-level state machine + stall sweep + live-session tracking + context usage. |
 | `Sources/Views/WorkstreamAgentRosterView.swift` | Subagent mini cards under each workstream row. |
 | `Sources/Views/ContextMeter.swift` | Context-window meter (bar + percentage) shared by the row and roster cards. |
@@ -139,16 +140,40 @@ Reads are throttled to one per 5 seconds per workstream — except at turn end
 (`Stop`), where the read is forced so the final totals always land. A failed
 read keeps the previously known value.
 
-Limits come from `ContextLimits`: 200k tokens by default, 1M when the model
-ID contains `[1m]` or `-1m` (case-insensitive, e.g.
-`claude-sonnet-4-5[1m]`).
+Limits come from `ContextLimits`: 200k tokens by default, 1M for an
+extended-context session. Deciding which takes **two** signals, because
+neither is enough on its own:
+
+- `message.model` in the transcript is the *resolved* model. Claude Code
+  writes `claude-opus-5` whether or not the 1M beta is on — the `[1m]` marker
+  appears in no transcript it has ever written — so this can confirm an
+  extended window (a harness that does spell it out) but never rule one out.
+- The `model` *selection*, which is where `[1m]` survives:
+  `ClaudeCodeSettings.configuredModel(cwd:)` reads it from
+  `<projectDir>/.claude/settings.local.json`, then
+  `<projectDir>/.claude/settings.json`, then `~/.claude/settings.json`. That
+  mirrors what Claude Code itself does — its window size is `/\[1m\]/i` tested
+  against the selected model string. `projectDir` is the hook's
+  `CLAUDE_PROJECT_DIR`, the same root Claude Code resolves project settings
+  from, not the transcript's `cwd`, which follows the session around.
+
+The selection is global, so it only widens the window when it names the same
+*family* as the model the transcript recorded — otherwise one Haiku workstream
+would inherit a 1M window from an Opus selection. Family rather than plain
+containment because `opusplan` is Opus in plan mode while being a substring of
+no resolved Opus ID; an unrecognised family falls back to containment either
+way. A `--model` flag or `ANTHROPIC_MODEL` in the session's own environment is
+invisible from outside the process; for those, usage past 200k is taken as
+proof the window is the larger one.
 
 The main session's meter shows on the workstream row itself (visible while
 the main agent is working or stalled), reading the transcript-derived figure
 (`Workstream.AgentStateTracker.mainContextUsage(for:)`). Subagent roster cards
 carry no meter — Claude Code hooks report no per-run token figures. The meter
-itself is a 40×3pt bar plus a percentage: green below 60%, orange below 85%,
-red at 85% or more (`ContextMeter`).
+itself is a bar plus a "133k · 13%" label: gray below 60% of the window,
+orange below 85%, red at 85% or more — and orange/red regardless of the
+window past 200k/300k absolute tokens, where response quality decays even
+on a roomy one (`ContextMeter`).
 
 ## Testing
 
