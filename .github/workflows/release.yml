@@ -43,11 +43,6 @@ jobs:
         with:
           submodules: true
 
-      - name: Log build environment
-        run: |
-          xcodebuild -version
-          swift --version
-
       - name: Install XcodeGen
         run: brew install xcodegen
 
@@ -80,6 +75,27 @@ jobs:
         run: |
           cd ghostty
           zig build -Demit-xcframework=true -Demit-macos-app=false -Dxcframework-target=universal -Doptimize=ReleaseFast
+
+      # Two toolchains, deliberately — the same split ci.yml makes, for the
+      # same reasons. zig 0.15.2 (required by ghostty v1.3.1) cannot link
+      # against the macOS 26 SDK — every libc symbol comes back undefined — so
+      # ghostty must build under the image's default Xcode 16.4 and its macOS
+      # 15 SDK. The app is the opposite: ChangesView.swift relies on Swift 6.2
+      # actor-isolation rules that 16.4 rejects. So switch only after the
+      # xcframework exists. Without this step the Release build fails with
+      # actor-isolation errors in AboutPanel, ChangesView, InlineTextField and
+      # PortsConfig, which is exactly what v0.2.1's first run did.
+      - name: Select newest Xcode for the Swift build
+        run: |
+          ls -d /Applications/Xcode_*.app
+          latest=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          echo "Selecting $latest"
+          sudo xcode-select -s "$latest"
+
+      - name: Log build environment
+        run: |
+          xcodebuild -version
+          swift --version
 
       - name: Build Monaco editor
         run: ./scripts/build-editor.sh
