@@ -106,16 +106,6 @@ final class WorkspaceModel: ObservableObject {
 
     // MARK: - Derived state
 
-    var hasBrowserTabs: Bool {
-        tabs.contains {
-            if case .browser = $0 {
-                true
-            } else {
-                false
-            }
-        }
-    }
-
     var hasEditorTabs: Bool {
         tabs.contains {
             if case .editor = $0 {

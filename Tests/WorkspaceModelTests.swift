@@ -145,7 +145,6 @@ final class WorkspaceModelTests: XCTestCase {
         model.removeTab(.browser(browser))
 
         XCTAssertNil(model.browserTitles[browser])
-        XCTAssertFalse(model.hasBrowserTabs)
     }
 
     func testCountersDoNotRewindAfterClose() {
