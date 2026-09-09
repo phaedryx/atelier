@@ -1083,6 +1083,127 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertNotEqual(fpEdited, fpUntracked, "branch-mode fingerprint must change when an untracked file is added")
     }
 
+    // The defect the tests below pin: `git diff --stat` reports insertion and deletion
+    // counts, so an edit that leaves the counts alone leaves the whole stat text alone.
+    // Rewriting a line, renaming an identifier, swapping two lines — the Changes tab
+    // kept rendering the pre-edit diff until the user pressed Refresh. Both modes, and
+    // untracked files too, because the diff listing unions those in.
+
+    func testDiffFingerprintChangesOnASameLineCountEdit() throws {
+        let repoDir = tempDir.appendingPathComponent("fp-same-line-count")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: repoDir)
+        try "let name = 1\n".write(to: repoDir.appendingPathComponent("a.swift"), atomically: true, encoding: .utf8)
+        git(["add", "."], in: repoDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "-m", "init"], in: repoDir)
+
+        try "let alpha = 1\n".write(to: repoDir.appendingPathComponent("a.swift"), atomically: true, encoding: .utf8)
+        let fpRenamed = Git.Operations.diffFingerprint(worktreePath: repoDir.path, projectPath: repoDir.path, mode: "uncommitted")
+
+        // Same one line changed, same 1 insertion / 1 deletion — identical `--stat` text.
+        try "let bravo = 1\n".write(to: repoDir.appendingPathComponent("a.swift"), atomically: true, encoding: .utf8)
+        let fpRenamedAgain = Git.Operations.diffFingerprint(worktreePath: repoDir.path, projectPath: repoDir.path, mode: "uncommitted")
+
+        XCTAssertNotEqual(
+            fpRenamed,
+            fpRenamedAgain,
+            "fingerprint must move for an edit that leaves the line counts unchanged"
+        )
+    }
+
+    func testDiffFingerprintChangesOnASameLineCountEditToAnUntrackedFile() throws {
+        let repoDir = tempDir.appendingPathComponent("fp-untracked-rewrite")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: repoDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "-m", "init", "--allow-empty"], in: repoDir)
+
+        // Untracked files reach the fingerprint through `ls-files --others`, which reports
+        // names and not contents — so an untracked file rewritten in place moved nothing.
+        try "one\n".write(to: repoDir.appendingPathComponent("scratch.txt"), atomically: true, encoding: .utf8)
+        let fpOne = Git.Operations.diffFingerprint(worktreePath: repoDir.path, projectPath: repoDir.path, mode: "uncommitted")
+
+        try "two\n".write(to: repoDir.appendingPathComponent("scratch.txt"), atomically: true, encoding: .utf8)
+        let fpTwo = Git.Operations.diffFingerprint(worktreePath: repoDir.path, projectPath: repoDir.path, mode: "uncommitted")
+
+        XCTAssertNotEqual(fpOne, fpTwo, "fingerprint must move when an untracked file's contents are rewritten")
+    }
+
+    func testDiffFingerprintBranchModeChangesOnASameLineCountEdit() throws {
+        let projectDir = tempDir.appendingPathComponent("fp-branch-rewrite-proj")
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: projectDir)
+        try "let name = 0\n".write(to: projectDir.appendingPathComponent("b.swift"), atomically: true, encoding: .utf8)
+        git(["add", "."], in: projectDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "-m", "base"], in: projectDir)
+
+        let wt = tempDir.appendingPathComponent("fp-branch-rewrite-wt")
+        git(["worktree", "add", "-b", "feature-fp-rewrite", wt.path], in: projectDir)
+
+        try "let alpha = 0\n".write(to: wt.appendingPathComponent("b.swift"), atomically: true, encoding: .utf8)
+        let fpRenamed = Git.Operations.diffFingerprint(worktreePath: wt.path, projectPath: projectDir.path, mode: "branch")
+
+        try "let bravo = 0\n".write(to: wt.appendingPathComponent("b.swift"), atomically: true, encoding: .utf8)
+        let fpRenamedAgain = Git.Operations.diffFingerprint(worktreePath: wt.path, projectPath: projectDir.path, mode: "branch")
+
+        XCTAssertNotEqual(
+            fpRenamed,
+            fpRenamedAgain,
+            "branch-mode fingerprint must move for an edit that leaves the line counts unchanged"
+        )
+    }
+
+    func testDiffFingerprintToleratesADeletedFileAndStillMoves() throws {
+        // `diff --name-only` lists a deleted path, and `hash-object` cannot open one. If a
+        // deletion took the whole batch down with it, every *other* dirty file in the
+        // worktree would stop being hashed — so the same-line-count blindness would come
+        // back the moment a user deleted a file.
+        let repoDir = tempDir.appendingPathComponent("fp-deleted")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: repoDir)
+        try "gone\n".write(to: repoDir.appendingPathComponent("gone.txt"), atomically: true, encoding: .utf8)
+        try "let name = 1\n".write(to: repoDir.appendingPathComponent("kept.swift"), atomically: true, encoding: .utf8)
+        git(["add", "."], in: repoDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "-m", "init"], in: repoDir)
+
+        try FileManager.default.removeItem(at: repoDir.appendingPathComponent("gone.txt"))
+        try "let alpha = 1\n".write(to: repoDir.appendingPathComponent("kept.swift"), atomically: true, encoding: .utf8)
+        let fpFirst = Git.Operations.diffFingerprint(worktreePath: repoDir.path, projectPath: repoDir.path, mode: "uncommitted")
+
+        try "let bravo = 1\n".write(to: repoDir.appendingPathComponent("kept.swift"), atomically: true, encoding: .utf8)
+        let fpSecond = Git.Operations.diffFingerprint(worktreePath: repoDir.path, projectPath: repoDir.path, mode: "uncommitted")
+
+        XCTAssertNotEqual(
+            fpFirst,
+            fpSecond,
+            "a deleted path must not stop the surviving dirty files from being hashed"
+        )
+    }
+
+    func testDiffFingerprintHandlesAPathWithASpaceInIt() throws {
+        // Without `-z` on the listings git quotes such a path, and a quoted path handed to
+        // `hash-object` names a file that does not exist — failing the batch and silently
+        // returning the fingerprint to being blind.
+        let repoDir = tempDir.appendingPathComponent("fp-odd-names")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: repoDir)
+        try "let name = 1\n".write(to: repoDir.appendingPathComponent("a file.swift"), atomically: true, encoding: .utf8)
+        git(["add", "."], in: repoDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "-m", "init"], in: repoDir)
+
+        try "let alpha = 1\n".write(to: repoDir.appendingPathComponent("a file.swift"), atomically: true, encoding: .utf8)
+        let fpFirst = Git.Operations.diffFingerprint(worktreePath: repoDir.path, projectPath: repoDir.path, mode: "uncommitted")
+
+        try "let bravo = 1\n".write(to: repoDir.appendingPathComponent("a file.swift"), atomically: true, encoding: .utf8)
+        let fpSecond = Git.Operations.diffFingerprint(worktreePath: repoDir.path, projectPath: repoDir.path, mode: "uncommitted")
+
+        XCTAssertNotEqual(fpFirst, fpSecond, "a path with a space in it must still be hashed")
+    }
+
     // MARK: - projectLocation
 
     func testProjectLocationOfAPlainRepoIsTheRepoItself() throws {
