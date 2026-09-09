@@ -48,6 +48,19 @@ point at the upstream repository.
   location alone, so a committed config at the root of such a repository is
   still treated as user-placed and its `bootstrap` and `dispose` still run
   without approval. That is untouched here and wants its own fix.
+* **process-compose:** Start reclaims this workstream's execute socket when a
+  server is still bound to it, instead of failing at the end of the run.
+  `process-compose up` refuses a socket another server holds — and in the chained
+  `prepare && execute` it refuses *after* prepare, so the whole phase (an
+  install, a package build, a bundle install) was paid for before the user was
+  told about a unix socket. `stopRun` kills the tmux session without calling
+  `down`, so a server can outlive the run Atelier believes it stopped; a crash
+  or a quit that races `stopAllServers` leaves one too. A leftover socket *file*
+  is deliberately untouched, since process-compose overwrites one.
+* **process-compose:** Rerun goes through Start rather than inlining its own
+  copy of it, so it reclaims the socket too. Rerun kills the tmux session and
+  runs `up` again on the same socket, which is the likeliest way to strand a
+  server and hit the failure above.
 * **archive:** the purge guard refuses the project's checkout as well as its
   directory. Neither is ever a workstream, and naming only one left the other
   destroyable depending on which the caller passed.

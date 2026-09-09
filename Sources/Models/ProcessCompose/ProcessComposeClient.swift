@@ -148,32 +148,36 @@ extension ProcessCompose {
 
         // MARK: - Transport
 
-        /// A single request over the unix socket.
+        /// Connects to a unix socket and returns a descriptor the **caller must
+        /// close**, with both directions bounded by `ioTimeout`.
         ///
-        /// URLSession has no unix-socket transport on macOS, and the payloads here
-        /// are small and infrequent, so this speaks the minimum HTTP/1.1 needed:
-        /// one request, `Connection: close`, read to EOF, split on the blank line.
-        private func request(method: String, path: String) throws -> Data {
+        /// Shared with `isServerListening`, which needs the connect and nothing
+        /// else — the two must agree about what "there is a server here" means,
+        /// and a second hand-rolled `sockaddr_un` would be a second answer.
+        private static func connectedDescriptor(to socketPath: String) throws -> Int32 {
             guard FileManager.default.fileExists(atPath: socketPath) else {
                 throw ClientError.notRunning
             }
 
             let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
             guard descriptor >= 0 else { throw ClientError.transport("socket() failed") }
-            defer { Darwin.close(descriptor) }
 
             // Checked, because a silent failure here removes the per-read bound
             // and leaves a blocking syscall with no timeout at all.
-            var timeout = Self.ioTimeout
+            var timeout = ioTimeout
             let size = socklen_t(MemoryLayout<timeval>.size)
             guard setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, size) == 0,
                   setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, &timeout, size) == 0
-            else { throw ClientError.transport("could not set socket timeouts") }
+            else {
+                Darwin.close(descriptor)
+                throw ClientError.transport("could not set socket timeouts")
+            }
 
             var address = sockaddr_un()
             address.sun_family = sa_family_t(AF_UNIX)
             let pathBytes = Array(socketPath.utf8)
             guard pathBytes.count < MemoryLayout.size(ofValue: address.sun_path) else {
+                Darwin.close(descriptor)
                 throw ClientError.transport("socket path too long")
             }
             withUnsafeMutableBytes(of: &address.sun_path) { raw in
@@ -185,7 +189,45 @@ extension ProcessCompose {
                     connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
                 }
             }
-            guard connected == 0 else { throw ClientError.notRunning }
+            guard connected == 0 else {
+                Darwin.close(descriptor)
+                throw ClientError.notRunning
+            }
+            return descriptor
+        }
+
+        /// Whether a control server is bound to this socket **right now**.
+        ///
+        /// A connect and an immediate close: the question is only whether
+        /// something is listening, and asking it over HTTP would turn a server
+        /// that accepts and never answers into a five-second stall on a path
+        /// that must stay cheap.
+        ///
+        /// `process-compose up` refuses to bind a socket another server holds —
+        /// `unix socket <path> is already in use`, exit 1, verified against
+        /// v1.122.0 — and in the chained `prepare && execute` it refuses at the
+        /// *end*, after the whole prepare phase has run. This is what lets Start
+        /// clear the socket first instead of discovering it there.
+        ///
+        /// **A leftover socket *file* is not this case.** process-compose
+        /// overwrites one without complaint (also verified against v1.122.0), so
+        /// a killed server that never unlinked its socket needs no handling at
+        /// all. Only a live listener does, which is why this connects rather than
+        /// calling `fileExists`.
+        static func isServerListening(atSocketPath path: String) -> Bool {
+            guard let descriptor = try? connectedDescriptor(to: path) else { return false }
+            Darwin.close(descriptor)
+            return true
+        }
+
+        /// A single request over the unix socket.
+        ///
+        /// URLSession has no unix-socket transport on macOS, and the payloads here
+        /// are small and infrequent, so this speaks the minimum HTTP/1.1 needed:
+        /// one request, `Connection: close`, read to EOF, split on the blank line.
+        private func request(method: String, path: String) throws -> Data {
+            let descriptor = try Self.connectedDescriptor(to: socketPath)
+            defer { Darwin.close(descriptor) }
 
             let request = """
             \(method) \(path) HTTP/1.1\r

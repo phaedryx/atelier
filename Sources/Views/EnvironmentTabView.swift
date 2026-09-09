@@ -91,6 +91,14 @@ struct EnvironmentTabView: View {
     /// resolved command — and an unresolvable process-compose binary rendered an
     /// enabled Start that did nothing and explained nothing.
     let canStart: Bool
+    /// Whether Start is currently shutting down a server that still holds this
+    /// workstream's execute socket, before it can run anything.
+    ///
+    /// Start is otherwise instant — the pane swaps to a terminal on the same
+    /// press — so an unchanged button that ignores a press is read as a broken
+    /// button rather than as work in progress. `TerminalContainerView.doStartRun`
+    /// already refuses the second press; this is what says why.
+    let isReclaimingSocket: Bool
     /// Every file process-compose will load for this workstream, or empty when
     /// the run is not a process-compose run. Shown instead of a command string:
     /// see `devCommandDisplay`.
@@ -210,9 +218,15 @@ struct EnvironmentTabView: View {
                 VStack(spacing: 12) {
                     Button(action: onStart) {
                         HStack(spacing: 6) {
-                            Image(systemName: "play.fill")
-                                .font(.system(size: 14))
-                            Text("Start")
+                            if isReclaimingSocket {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .tint(.white)
+                            } else {
+                                Image(systemName: "play.fill")
+                                    .font(.system(size: 14))
+                            }
+                            Text(isReclaimingSocket ? "Reclaiming…" : "Start")
                                 .font(.system(size: 13, weight: .medium))
                         }
                         .padding(.horizontal, 16)
@@ -220,8 +234,10 @@ struct EnvironmentTabView: View {
                         .background(Color.accentColor)
                         .foregroundStyle(.white)
                         .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .opacity(isReclaimingSocket ? 0.6 : 1)
                     }
                     .buttonStyle(.borderless)
+                    .disabled(isReclaimingSocket)
                     if let display = devCommandDisplay {
                         Text(display)
                             .font(.system(size: 12, design: .monospaced))
