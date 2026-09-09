@@ -17,6 +17,10 @@ point at the upstream repository.
   `down`, so a server can outlive the run Atelier believes it stopped; a crash
   or a quit that races `stopAllServers` leaves one too. A leftover socket *file*
   is deliberately untouched, since process-compose overwrites one.
+* **process-compose:** Rerun goes through Start rather than inlining its own
+  copy of it, so it reclaims the socket too. Rerun kills the tmux session and
+  runs `up` again on the same socket, which is the likeliest way to strand a
+  server and hit the failure above.
 
 ## [0.2.0](https://github.com/phaedryx/atelier/compare/731cc14...v0.2.0) (2026-08-31)
 

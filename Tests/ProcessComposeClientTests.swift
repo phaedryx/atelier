@@ -220,6 +220,8 @@ final class ProcessComposeClientTests: XCTestCase {
 
     /// A real listening unix socket, since the whole point of this probe is that
     /// it answers a question `fileExists` gets wrong.
+    ///
+    /// The caller owns the close — see `closeListeningSocket`.
     private func makeListeningSocket(at path: String) throws -> Int32 {
         Darwin.unlink(path)
         // `Darwin.`-qualified throughout: `bind`, `listen` and `close` all
@@ -229,10 +231,6 @@ final class ProcessComposeClientTests: XCTestCase {
         guard descriptor >= 0 else {
             XCTFail("socket() failed: \(errno)")
             throw ClientTestError.setupFailed
-        }
-        addTeardownBlock {
-            Darwin.close(descriptor)
-            Darwin.unlink(path)
         }
 
         var address = sockaddr_un()
@@ -246,14 +244,28 @@ final class ProcessComposeClientTests: XCTestCase {
             }
         }
         guard bound == 0 else {
+            closeListeningSocket(descriptor, at: path)
             XCTFail("bind() failed: \(errno)")
             throw ClientTestError.setupFailed
         }
         guard Darwin.listen(descriptor, 1) == 0 else {
+            closeListeningSocket(descriptor, at: path)
             XCTFail("listen() failed: \(errno)")
             throw ClientTestError.setupFailed
         }
         return descriptor
+    }
+
+    /// Closes a listener from `makeListeningSocket` and removes its file.
+    ///
+    /// Every caller closes exactly **once**, via `defer` rather than a teardown
+    /// block: the test that watches the answer flip has to close early, and a
+    /// teardown block would then close the descriptor a second time — by which
+    /// point the number can belong to an unrelated open file in the same test
+    /// process.
+    private func closeListeningSocket(_ descriptor: Int32, at path: String) {
+        Darwin.close(descriptor)
+        Darwin.unlink(path)
     }
 
     private enum ClientTestError: Error {
@@ -288,7 +300,8 @@ final class ProcessComposeClientTests: XCTestCase {
 
     func testIsServerListeningIsTrueWhileSomethingIsBound() throws {
         let path = socketPath()
-        _ = try makeListeningSocket(at: path)
+        let descriptor = try makeListeningSocket(at: path)
+        defer { closeListeningSocket(descriptor, at: path) }
 
         XCTAssertTrue(ProcessCompose.Client.isServerListening(atSocketPath: path))
     }
@@ -300,8 +313,7 @@ final class ProcessComposeClientTests: XCTestCase {
         let descriptor = try makeListeningSocket(at: path)
         XCTAssertTrue(ProcessCompose.Client.isServerListening(atSocketPath: path))
 
-        Darwin.close(descriptor)
-        Darwin.unlink(path)
+        closeListeningSocket(descriptor, at: path)
 
         XCTAssertFalse(ProcessCompose.Client.isServerListening(atSocketPath: path))
     }

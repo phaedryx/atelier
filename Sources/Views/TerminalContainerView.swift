@@ -331,6 +331,11 @@ struct TerminalContainerView: View {
     /// window for as long as `down` takes — and a second press would then run a
     /// second `down` and a second `beginRun`, the later one bumping
     /// `runGeneration` and replacing the surface the earlier one just built.
+    ///
+    /// Passed to `EnvironmentTabView` as well as guarding `doStartRun`, because
+    /// a button that silently swallows a press reads as broken. The guard still
+    /// has to be there: `.rerunScript` (⌘⇧⏎) reaches `startRunIfNeeded` without
+    /// going through the button at all.
     @State private var isReclaimingRunSocket = false
     /// The last thing background setup said about this workstream.
     ///
@@ -762,6 +767,7 @@ struct TerminalContainerView: View {
                     portsByName: portPlan.values,
                     declaredProcesses: declaredExecuteProcesses,
                     canStart: runPlan.canRun,
+                    isReclaimingSocket: isReclaimingRunSocket,
                     devCommandFiles: devCommandFiles,
                     startUnavailableReason: runUnavailableReason,
                     unapprovedConfigFiles: configApproved ? [] : repositoryConfigFiles,
@@ -1219,10 +1225,7 @@ struct TerminalContainerView: View {
         guard resolvedRunCommand != nil else { return }
         guard sessionMode != .waitingForTools, !appEnv.isDetecting else { return }
         guard portDetector.status == .none else { return }
-        if model.runStarted {
-            stopRun()
-        }
-        doStartRun()
+        restartRun()
     }
 
     /// Start, after reclaiming this workstream's execute socket if anything is
@@ -1250,6 +1253,10 @@ struct TerminalContainerView: View {
     ///
     /// A leftover socket *file* is deliberately not handled: process-compose
     /// overwrites one. See `ProcessCompose.Client.isServerListening`.
+    ///
+    /// Every way into a run comes through here — the Start button, Rerun via
+    /// `restartRun`, and the browser tab via `startRunIfNeeded` — so the probe
+    /// is paid once and cannot be routed around.
     @MainActor
     private func doStartRun() {
         guard let command = resolvedRunCommand else { return }
@@ -1376,18 +1383,34 @@ struct TerminalContainerView: View {
         }
     }
 
+    /// Rerun: stop what is running, then go through Start.
+    ///
+    /// This used to inline `beginRun`'s body — kill the tmux session, bump
+    /// `runGeneration`, set `runStarted` — and so skipped the socket reclaim
+    /// entirely. Rerun is the path *most* likely to need it: killing the tmux
+    /// session without calling `down` is exactly how a process-compose server
+    /// gets stranded, and Rerun does that immediately before running `up`
+    /// again on the same socket. It failed the way Start used to, at the end
+    /// of prepare.
+    ///
+    /// Routing through `stopRun` first, rather than teaching this path its own
+    /// reclaim, is what keeps Stop out of the reclaim window: `runStarted` is
+    /// false for the whole of it, and the Stop and Rerun controls are rendered
+    /// only when it is true. A Stop landing mid-reclaim would otherwise be
+    /// followed by the run it just cancelled.
+    ///
+    /// `stopRun` sets `runStoppedManually`, which suppresses the tmux restore —
+    /// but `beginRun` clears it again on the far side, so the pair lands where
+    /// the old inline body did.
     private func restartRun() {
+        // Kept ahead of `stopRun`: without it a Rerun with no runnable command
+        // would stop the run and then decline to start one, which is a Stop
+        // wearing Rerun's label.
         guard resolvedRunCommand != nil else { return }
-        killRunTmuxSession()
-        surfaceCache.removeSurface(for: runID)
-        model.runStoppedManually = false
-        markBrowserStartPending()
-        model.runGeneration += 1
-        if let command = resolvedRunCommand {
-            model.runCommandString = buildRunCommand(script: command)
+        if model.runStarted {
+            stopRun()
         }
-        model.runStarted = true
-        preloadRunSurface()
+        doStartRun()
     }
 
     /// Marks the start so browser tabs hold the waiting overlay until a port
