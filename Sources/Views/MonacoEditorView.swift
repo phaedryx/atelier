@@ -55,24 +55,28 @@ final class MonacoResourceSchemeHandler: NSObject, WKURLSchemeHandler {
     /// The bundle file a request names, or nil if it does not resolve to one
     /// *inside* the bundle.
     ///
-    /// Containment is checked on path *components*, not with `hasPrefix` on the
-    /// bare path: a prefix match is true for any sibling whose name merely starts
-    /// with the base's, so `.../MonacoEditor-evil/payload.js` passed a guard meant
-    /// to allow only `.../MonacoEditor/...`.
+    /// Containment goes through `isCanonicallyInside`, which resolves symlinks on
+    /// both sides and requires a separator: a bare `hasPrefix` on the raw path is
+    /// true for any sibling whose name merely *starts* with the base's, so
+    /// `.../MonacoEditor-evil/payload.js` passed a guard meant to allow only
+    /// `.../MonacoEditor/...`. "Inside" is also strict — the base directory
+    /// itself is not a file to serve.
+    ///
+    /// Resolving is the half a lexical `.standardized` cannot do. It collapses
+    /// `..` textually and never follows a link, so a symlink planted inside the
+    /// bundle kept every path component of the base — passing containment — while
+    /// pointing anywhere on disk.
+    ///
+    /// The canonical URL is what gets returned, so the file that was checked is
+    /// the file that gets read.
     ///
     /// Internal so the containment rule can be tested without a `WKURLSchemeTask`.
     static func resolve(requestPath: String, in baseURL: URL) -> URL? {
         // Strip leading slash to get the path relative to MonacoEditor/
         let relativePath = String(requestPath.dropFirst())
-        let fileURL = baseURL.appendingPathComponent(relativePath).standardized
-        let base = baseURL.standardized.pathComponents
-        let candidate = fileURL.pathComponents
-        // A served file lives *under* the base, so it has strictly more
-        // components — the base directory itself is not a file to serve.
-        guard candidate.count > base.count, Array(candidate.prefix(base.count)) == base else {
-            return nil
-        }
-        return fileURL
+        let canonical = baseURL.appendingPathComponent(relativePath).path.canonicalPath
+        guard canonical.isCanonicallyInside(baseURL.path) else { return nil }
+        return URL(fileURLWithPath: canonical)
     }
 
     /// Internal so the table can be checked against the rename that mangled it.
