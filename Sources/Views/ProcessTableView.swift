@@ -30,6 +30,18 @@ struct ProcessTableView: View {
                 }
             }
         }
+        // On the outer stack, not per-`Text`: selectability travels through the
+        // environment, so one modifier covers every label a row renders and any
+        // added later. The `Button`s are unaffected — they are controls, and a
+        // control's label is not selectable text.
+        //
+        // The terminal beside this table needs no equivalent. `execute` is the
+        // one phase that runs with process-compose's TUI (`PhaseRunner.command`
+        // appends `-t=false` only for the non-interactive ones), and a TUI that
+        // grabs the mouse is exactly what shift-drag exists to override — see
+        // ghostty's `mouse-shift-capture`, which Atelier leaves at its default.
+        // This modifier is for the rows the TUI does not draw.
+        .textSelection(.enabled)
     }
 
     private func row(for process: ProcessCompose.ProcessEntry) -> some View {
