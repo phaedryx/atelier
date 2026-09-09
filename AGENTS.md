@@ -344,7 +344,17 @@ Three facts about this are load-bearing and easy to lose:
 records `loadedFiles` (base plus the one override process-compose prefers) and
 `repositoryProvidedFiles` (the subset needing approval). The project directory is the better
 home in the bare-repo layout: it sits outside every worktree, so git cannot see it, no ignore
-rule is needed, and one file serves every worktree. A config in the worktree still wins,
+rule is needed, and one file serves every worktree.
+
+**Which directory that is, is load-bearing.** `Project.directory` means the repository's
+*home* — the `.bare` container, not the default checkout inside it — and every caller that
+locates a config or reads `ports.yml` passes exactly that. `Project.checkout` is the other
+half of the pair, and is for git work-tree reads only. They were one field until this was
+fixed: `projectLocation` resolved a container forward to its checkout, so the lookups ran
+against `<container>/main` and a config placed where the README says was never found. Passing
+`checkout` to `Config.locate` or `PortsConfig.load` reintroduces exactly that bug.
+
+A config in the worktree still wins,
 because a worktree carrying its own is saying something deliberate. Either way process-compose
 runs with the *worktree* as cwd and resolves a relative `working_dir` against its own cwd, so
 `working_dir: apps/api` lands inside the worktree from either home.

@@ -531,7 +531,7 @@ struct ProjectSidebar: View {
         let project = projects[index]
         logger.warning("[Atelier] addWorkstream: project=\(project.name, privacy: .public) dir=\(project.directory, privacy: .public)")
 
-        guard Git.Operations.isGitRepo(at: project.directory) else {
+        guard Git.Operations.isGitRepo(at: project.checkout) else {
             logger.warning("[Atelier] addWorkstream: not a git repo")
             showNotGitRepoError = true
             return
@@ -549,7 +549,7 @@ struct ProjectSidebar: View {
 
     private func addWorkstreamFromShortcut(for projectID: UUID) {
         guard let index = projects.firstIndex(where: { $0.id == projectID }) else { return }
-        guard Git.Operations.isGitRepo(at: projects[index].directory) else {
+        guard Git.Operations.isGitRepo(at: projects[index].checkout) else {
             showNotGitRepoError = true
             return
         }
@@ -709,7 +709,7 @@ struct ProjectSidebar: View {
         rebuildIndices()
         logger.warning("[Atelier] addWorkstream: posted notification (optimistic), starting background worktree creation")
 
-        let projectPath = project.directory
+        let projectPath = project.checkout
         let projectName = project.name
         let workstreamID = workstream.id
 
@@ -959,29 +959,31 @@ struct ProjectSidebar: View {
     }
 
     private func addProject(name: String, directory: String) {
-        // Resolve worktree branches to their main repository, and .bare
-        // containers forward to their default checkout.
+        // Resolve worktree branches to their main repository, and a .bare
+        // container to itself plus the checkout that represents it.
         let location = Git.Operations.projectLocation(for: directory)
         let resolvedDirectory = location.directory
         let resolvedName = location.name.isEmpty ? name : location.name
 
-        // Also match the container, so a project saved under an older
-        // resolution — before .bare containers resolved forward to their
-        // checkout — is recognised instead of being added a second time. Two
-        // rows for one repo would collide in ~/.atelier/worktrees, since
-        // worktree paths are built from the project name. Compared against the
-        // container we already resolved rather than by re-resolving every
-        // existing project, which would fan out to git subprocesses on the main
-        // thread for each one.
-        if let existing = projects.first(where: {
-            $0.directory == resolvedDirectory || $0.directory == location.containerDirectory
-        }) {
-            selection = .project(existing.id)
+        if let existing = Project.existingRegistration(for: location, in: projects) {
+            if let repaired = existing.repaired {
+                projects[existing.index] = repaired
+                // Saved by hand, because `Project` equates by id: the debounced
+                // save on `projectList.items` cannot see a change that leaves
+                // every id where it was. `.projectCreated` saves for the same
+                // reason.
+                ProjectStore.save(projects)
+            }
+            selection = .project(projects[existing.index].id)
             return
         }
 
         let projectName = resolvedName.isEmpty ? URL(fileURLWithPath: resolvedDirectory).lastPathComponent : resolvedName
-        let project = Project(name: projectName, directory: resolvedDirectory)
+        let project = Project(
+            name: projectName,
+            directory: resolvedDirectory,
+            checkoutDirectory: location.checkoutDirectory
+        )
         NotificationCenter.default.post(
             name: .projectCreated,
             object: nil,

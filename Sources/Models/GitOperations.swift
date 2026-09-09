@@ -76,24 +76,32 @@ extension Worktree {
     }
 }
 
-/// Where a project should be registered, and what to call it.
+/// Where a project should be registered, what to call it, and which checkout
+/// represents it.
 ///
-/// These differ in the `.bare` container layout, where the directory the user
-/// points at (`<container>`) is a bare repository with no work tree: the project
-/// lives in the default branch's checkout, but keeps the container's name.
+/// All three differ in the `.bare` container layout. `directory` is the
+/// repository's home — the container, which holds `.bare`, the default checkout
+/// and every workstream worktree as peers — and `checkoutDirectory` is the
+/// checkout that stands in for it wherever a work tree is required, because the
+/// container has none of its own.
 extension Project {
     struct Location: Equatable {
         let directory: String
         let name: String
-        /// The `.bare` container this checkout sits in, when the path resolved
-        /// forward out of one. Projects saved before that resolution existed point
-        /// at the container, so callers can match them without re-running git.
-        let containerDirectory: String?
+        /// The checkout that represents this repository, when `directory` is a
+        /// `.bare` container with no work tree of its own. Nil when `directory`
+        /// *is* a work tree, and nil for a container whose checkout is gone —
+        /// there is nothing better to offer than the container itself.
+        ///
+        /// Also what recognises a project saved under the *older* resolution,
+        /// which stored this checkout as the project's `directory`. See
+        /// `ProjectSidebar.addProject`.
+        let checkoutDirectory: String?
 
-        init(directory: String, name: String, containerDirectory: String? = nil) {
+        init(directory: String, name: String, checkoutDirectory: String? = nil) {
             self.directory = directory
             self.name = name
-            self.containerDirectory = containerDirectory
+            self.checkoutDirectory = checkoutDirectory
         }
     }
 }
@@ -1012,24 +1020,41 @@ extension Git {
         }
 
         /// Resolve any path the user points at — a repo, a worktree, or a `.bare`
-        /// container — to the directory the project should be registered under.
+        /// container — to the repository's home, and to the checkout that
+        /// represents it.
         ///
-        /// Worktrees resolve to their main repository, as before. A `.bare`
-        /// container has no work tree of its own (`git status` there fails outright
-        /// and HEAD reads as the parked `root` branch), so it resolves *forward* to
-        /// its default checkout instead, while keeping the container's name.
+        /// Worktrees resolve to their main repository. A `.bare` container
+        /// resolves to *itself*: it is the repository's home, the directory that
+        /// holds `.bare`, the default checkout and every workstream worktree as
+        /// peers, and the one place a `process-compose.yaml` or `ports.yml` can
+        /// sit and serve all of them while staying outside git.
+        ///
+        /// This used to resolve *forward*, registering the container's default
+        /// checkout as the project, because a bare container has no work tree of
+        /// its own — `git status` there fails outright and HEAD reads as the
+        /// parked `root` branch — and every git-backed surface read
+        /// `Project.directory` directly. That is still true of those surfaces,
+        /// and they still need a checkout; what changed is that they ask
+        /// `Project.checkout` for one. Resolving forward here meant
+        /// "project directory" named the container in the README and the
+        /// checkout in the code, and the process-compose lookups were written
+        /// against the first while being handed the second.
         static func projectLocation(for path: String) -> Project.Location {
             let container = mainRepositoryPath(for: path) ?? path
+            let name = URL(fileURLWithPath: container).lastPathComponent
 
             guard isBareRepository(at: container) else {
-                return Project.Location(directory: container, name: URL(fileURLWithPath: container).lastPathComponent)
-            }
-
-            let name = URL(fileURLWithPath: container).lastPathComponent
-            guard let checkout = defaultCheckoutPath(in: container) else {
                 return Project.Location(directory: container, name: name)
             }
-            return Project.Location(directory: checkout, name: name, containerDirectory: container)
+
+            // Nil for a container whose checkout is gone. `Project.checkout`
+            // then falls back to the container, which is wrong for a work tree
+            // and is still the only answer there is.
+            return Project.Location(
+                directory: container,
+                name: name,
+                checkoutDirectory: defaultCheckoutPath(in: container)
+            )
         }
 
         /// True when `path` resolves to a bare repository — the `.bare` container

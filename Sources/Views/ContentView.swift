@@ -182,7 +182,7 @@ struct ContentView: View {
                 )
                 TerminalContainerView(
                     workstreamID: workstreamID,
-                    workingDirectory: workstream.workingDirectory(projectDirectory: project.directory),
+                    workingDirectory: workstream.workingDirectory(checkout: project.checkout),
                     projectDirectory: project.directory,
                     projectName: project.name,
                     workstreamName: workstream.name,
@@ -659,9 +659,9 @@ struct ContentView: View {
 
     private func openExternalTerminal() {
         let dir: String? = if let ws = activeWorkstream, let project = activeProject {
-            ws.workingDirectory(projectDirectory: project.directory)
+            ws.workingDirectory(checkout: project.checkout)
         } else if let project = activeProject {
-            project.directory
+            project.checkout
         } else {
             nil
         }
