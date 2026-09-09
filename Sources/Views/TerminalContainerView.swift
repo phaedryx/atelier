@@ -1234,9 +1234,13 @@ struct TerminalContainerView: View {
         _ = model.addBrowser()
     }
 
-    /// Starts the dev server when the browser asks for it. The browser tab
-    /// owns the server's lifecycle: it stays up while a browser tab is open
-    /// and dies when the last one closes.
+    /// Starts the dev server when the browser asks for it — a browser tab with
+    /// nothing serving it is a page that cannot load.
+    ///
+    /// Opening starts the run; closing does not stop it. That asymmetry is the
+    /// point: a browser tab is one view onto a running server, and the last one
+    /// closing says nothing about whether the server is still wanted. Only the
+    /// Environment tab's close stops a run — see `closingTabStopsRun`.
     private func startRunIfNeeded() {
         guard resolvedRunCommand != nil else { return }
         guard sessionMode != .waitingForTools, !appEnv.isDetecting else { return }
@@ -1320,12 +1324,12 @@ struct TerminalContainerView: View {
     /// loaded.
     private func beginRun(command: String) {
         // A run always gets an Environment tab, because that tab is what can
-        // see and stop it. `addBrowser` starts the dev server through
-        // `startRunIfNeeded` and opens only a browser, so a run could exist
-        // with no Environment tab at all — and then the only way to stop it
-        // was closing the *last* browser tab, which nothing tells the user.
-        // Closing the Environment tab stops the run (see `forceCloseTab`), so
-        // guaranteeing the tab exists is what makes that reachable.
+        // see and stop it — and, since browser tabs stopped claiming the run,
+        // the only thing that can. `addBrowser` starts the dev server through
+        // `startRunIfNeeded` and opens only a browser, so without this a run
+        // could exist with no Environment tab at all and nothing left that
+        // stops it short of quitting. This line is what keeps
+        // `closingTabStopsRun`'s single owner present for every run.
         //
         // Ensure rather than activate: the browser tab the user just asked for
         // must keep focus.
@@ -1734,35 +1738,18 @@ struct TerminalContainerView: View {
             surfaceCache.removeSurface(for: id)
         case let .browser(id):
             surfaceCache.removeWebView(for: id)
-            // The browser tab owns the dev server: closing the last one stops it.
-            //
-            // `runStarted` guards it for the same reason the `.environment`
-            // case below is guarded: `stopRun` sets `runStoppedManually`,
-            // which suppresses the tmux restore. Without it, opening and
-            // closing a browser tab while nothing ran was enough to strand a
-            // live tmux run session for the rest of the session — the flag
-            // outlives the view on the model, and `restoreRunState` refuses to
-            // reattach once it is set.
-            if !model.hasBrowserTabs, model.runStarted {
-                stopRun()
-            }
         case let .editor(id):
             model.editorBridge?.closeModel(modelId: id.uuidString)
-        case .environment:
-            // The Environment tab owns the run the same way the browser tab
-            // owns it: closing it stops the processes rather than leaving them
-            // running with nothing on screen that can see or stop them. The
-            // tab is closable and reopenable, and reopening offers Start
-            // again.
-            //
-            // Guarded on `runStarted` because `stopRun` sets
-            // `runStoppedManually`, which suppresses the tmux restore on next
-            // launch. Closing a tab that was not running must not decide that.
-            if model.runStarted {
-                stopRun()
-            }
         default:
             break
+        }
+        // Which tab's close stops the run is one rule, tested without a view.
+        // It lives outside the switch because it is not per-tab teardown: the
+        // run is a workstream-wide thing that exactly one tab owns, and asking
+        // the question once here is what keeps a second tab from quietly
+        // claiming it again.
+        if closingTabStopsRun(tab, runStarted: model.runStarted) {
+            stopRun()
         }
         stopFileTreeWatcherIfUnneeded()
     }

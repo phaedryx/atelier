@@ -7,6 +7,33 @@ func shouldRestoreRunSession(useTmux: Bool, hasRunScript: Bool, hasExistingRunSe
     useTmux && hasRunScript && hasExistingRunSession && !wasStoppedManually
 }
 
+/// Whether closing `tab` stops this workstream's run.
+///
+/// The Environment tab is the run's sole owner. It is the pane that lists the
+/// processes and the pane Stop lives on, and `beginRun` opens one for every
+/// run, so no other tab has to stand in as the way out.
+///
+/// A browser tab used to claim the same ownership, guarded by a "no browser
+/// tabs left" check that matched only browser tabs and so could not see an open
+/// Environment tab. Closing the last browser therefore stopped a run that tab
+/// was still watching, and set `runStoppedManually` on the way out, so it did
+/// not come back on the next launch either.
+///
+/// `runStarted` is folded in here rather than left to the caller because
+/// forgetting it is the same defect in a second place: `stopRun` sets
+/// `runStoppedManually`, and closing a tab that was running nothing must not
+/// suppress the next launch's tmux restore.
+///
+/// A free function, like its neighbours, so which tab owns the run can be
+/// tested without standing up a view.
+func closingTabStopsRun(_ tab: WorkspaceTab, runStarted: Bool) -> Bool {
+    guard runStarted else { return false }
+    if case .environment = tab {
+        return true
+    }
+    return false
+}
+
 /// What the Environment pane shows for the effective dev command.
 ///
 /// An override is shown as the command it is — the user typed it, and it is what

@@ -62,6 +62,16 @@ point at the upstream repository.
 
 ### Bug Fixes
 
+* **workspace:** the Environment tab is the only tab whose close stops the run.
+  Closing a browser tab used to stop it too — the check that decided this asked
+  "are there any browser tabs left?", which could not see an open Environment
+  tab, so closing the last browser killed a run that tab was still listing, and
+  set `runStoppedManually` on the way out so the tmux session was not restored
+  on the next launch either. Terminal, browser and editor tabs now close without
+  touching the processes; only the Environment tab, the pane that lists them and
+  carries Stop, still stops them. Opening a browser tab still *starts* the dev
+  server: a browser with nothing serving it is a page that cannot load, and the
+  last browser closing says nothing about whether the server is still wanted.
 * **process-compose:** in the `.bare` container layout, a config in the project
   directory is marked as the user's own rather than the repository's, and that
   is now true of it: the container sits outside git, where before the project

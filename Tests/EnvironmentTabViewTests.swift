@@ -234,4 +234,24 @@ final class EnvironmentTabViewTests: XCTestCase {
     func testAnEmptyChecklistStillHasARowOfHeight() {
         XCTAssertEqual(processChecklistHeight(count: 0, rowHeight: 20, visibleRows: 8), 20)
     }
+
+    /// The Environment tab is the only owner of the run. Closing anything else
+    /// leaves the processes alone, however much of the run that tab was
+    /// showing: a browser tab pointed at the dev server used to stop it too,
+    /// so closing the last browser killed a run an open Environment tab was
+    /// still watching.
+    func testOnlyTheEnvironmentTabStopsTheRunWhenClosed() {
+        XCTAssertTrue(closingTabStopsRun(.environment, runStarted: true))
+        XCTAssertFalse(closingTabStopsRun(.browser(UUID()), runStarted: true))
+        XCTAssertFalse(closingTabStopsRun(.terminal(UUID()), runStarted: true))
+        XCTAssertFalse(closingTabStopsRun(.editor(UUID()), runStarted: true))
+        XCTAssertFalse(closingTabStopsRun(.changes, runStarted: true))
+    }
+
+    /// Guards the `runStarted` half. `stopRun` sets `runStoppedManually`, which
+    /// suppresses the tmux restore for the rest of the session — so closing an
+    /// Environment tab that was not running anything must not reach it.
+    func testClosingAnEnvironmentTabWithNoRunStopsNothing() {
+        XCTAssertFalse(closingTabStopsRun(.environment, runStarted: false))
+    }
 }
