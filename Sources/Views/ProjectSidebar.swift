@@ -100,6 +100,14 @@ struct ProjectSidebar: View {
     /// Held so Cancel can actually stop it. Without this the fetch completes after the
     /// sheet closes and creates a workstream the user thought they had cancelled.
     @State private var shortcutFetchTask: Task<Void, Never>?
+    @State private var showingGitHubBranch = false
+    @State private var gitHubBranchInput = ""
+    @State private var gitHubBranchError = ""
+    @State private var gitHubBranchChecking = false
+    /// Held so Cancel can stop the lookup, for the same reason as `shortcutFetchTask`:
+    /// a fetch that lands after the dialog closes would create a workstream nobody asked for.
+    @State private var gitHubBranchTask: Task<Void, Never>?
+
     /// Workstream whose row is showing the inline rename field; at most one
     /// at a time. Held here (not per-row) so periodic project mutations
     /// don't drop the edit state when rows rebuild.
@@ -199,6 +207,11 @@ struct ProjectSidebar: View {
                     hasToken: hasShortcutToken
                 ),
                 onAddFromShortcut: { addWorkstreamFromShortcut(for: project.id) },
+                // Both halves are already cached in AppEnvironment and refreshed on its own
+                // schedule — asking git or gh from a row body would spawn a subprocess per render.
+                showGitHubButton: appEnv.isGitRepo(project.directory)
+                    && appEnv.githubURL(for: project.directory) != nil,
+                onAddFromGitHub: { addWorkstreamFromGitHub(for: project.id) },
                 onDelete: { projectToDelete = project.id }
             )
             .tag(SidebarSelection.project(project.id))
@@ -453,6 +466,22 @@ struct ProjectSidebar: View {
                     }
                 )
             }
+            .sheet(isPresented: $showingGitHubBranch) {
+                GitHubBranchSheet(
+                    branchInput: $gitHubBranchInput,
+                    error: $gitHubBranchError,
+                    isChecking: gitHubBranchChecking,
+                    projectName: pendingWorkstreamProjectID.flatMap { id in projects.first(where: { $0.id == id })?.name } ?? "",
+                    onCreate: { createWorkstreamFromGitHubBranch() },
+                    onCancel: {
+                        gitHubBranchTask?.cancel()
+                        gitHubBranchTask = nil
+                        gitHubBranchChecking = false
+                        showingGitHubBranch = false
+                        pendingWorkstreamProjectID = nil
+                    }
+                )
+            }
             .onReceive(NotificationCenter.default.publisher(for: Shortcut.Settings.tokenChanged)) { _ in
                 hasShortcutToken = KeychainTokenStore().hasToken
             }
@@ -666,6 +695,110 @@ struct ProjectSidebar: View {
         }
     }
 
+    private func addWorkstreamFromGitHub(for projectID: UUID) {
+        guard let index = projects.firstIndex(where: { $0.id == projectID }) else { return }
+        guard Git.Operations.isGitRepo(at: projects[index].checkout) else {
+            showNotGitRepoError = true
+            return
+        }
+        gitHubBranchInput = ""
+        gitHubBranchError = ""
+        gitHubBranchChecking = false
+        pendingWorkstreamProjectID = projectID
+        showingGitHubBranch = true
+    }
+
+    /// What the pre-flight found, decided off the main actor.
+    ///
+    /// The whole point of asking before creating anything: git refuses to check one branch
+    /// out twice and reports a missing branch as an ordinary failure, and both of those
+    /// arrive too late to say anything useful — after the optimistic row is already drawn.
+    private enum GitHubBranchPreflight {
+        case ready
+        case missingOnOrigin
+        case checkedOutAt(String)
+    }
+
+    /// Confirms origin really has the branch, and that no worktree already holds it, before
+    /// a workstream exists. Nothing is created if either check fails.
+    private func createWorkstreamFromGitHubBranch() {
+        guard let projectID = pendingWorkstreamProjectID,
+              let index = projects.firstIndex(where: { $0.id == projectID })
+        else { return }
+
+        let branch: String
+        switch GitHub.BranchInput.branch(from: gitHubBranchInput) {
+        case let .success(name):
+            branch = name
+        case let .failure(rejection):
+            gitHubBranchError = rejection.message
+            return
+        }
+
+        let project = projects[index]
+        guard !project.workstreams.contains(where: { $0.name == branch }) else {
+            gitHubBranchError = NSLocalizedString(
+                "A workstream with this name already exists.",
+                comment: "Error when the workstream name collides with an existing workstream"
+            )
+            return
+        }
+
+        let bypass = defaultBypass
+        let projectPath = project.checkout
+        gitHubBranchError = ""
+        gitHubBranchChecking = true
+
+        gitHubBranchTask = Task {
+            // Detached because both checks are git subprocesses, and one of them fetches:
+            // run on the main actor they would freeze the dialog they are drawing a spinner in.
+            // The local lookup goes first so an already-checked-out branch never waits on a fetch.
+            let preflight = await Task.detached { () -> GitHubBranchPreflight in
+                if let holder = Git.Operations.worktreePath(forBranch: branch, at: projectPath) {
+                    return .checkedOutAt(holder)
+                }
+                guard Git.Operations.remoteBranchTip(at: projectPath, branch: branch) != nil else {
+                    return .missingOnOrigin
+                }
+                return .ready
+            }.value
+
+            // The dialog may have been cancelled while the fetch was in flight; on a slow
+            // link that window is seconds wide.
+            guard !Task.isCancelled, pendingWorkstreamProjectID == projectID else { return }
+            gitHubBranchChecking = false
+
+            switch preflight {
+            case .missingOnOrigin:
+                gitHubBranchError = String(
+                    format: NSLocalizedString(
+                        "origin has no branch named %@.",
+                        comment: "Error when the typed branch does not exist on the GitHub remote"
+                    ),
+                    branch
+                )
+            case let .checkedOutAt(path):
+                gitHubBranchError = String(
+                    format: NSLocalizedString(
+                        "That branch is already checked out at %@.",
+                        comment: "Error when another worktree already holds the requested branch"
+                    ),
+                    path.abbreviatedPath
+                )
+            case .ready:
+                showingGitHubBranch = false
+                pendingWorkstreamProjectID = nil
+                launchWorkstream(
+                    project: project,
+                    projectID: projectID,
+                    name: branch,
+                    bypass: bypass,
+                    existingBranch: branch
+                )
+            }
+        }
+    }
+
     private func createWorkstream() {
         guard let projectID = pendingWorkstreamProjectID else { return }
         guard let index = projects.firstIndex(where: { $0.id == projectID }) else {
@@ -705,14 +838,21 @@ struct ProjectSidebar: View {
 
     /// Posts the optimistic creation, then builds the worktree in the background.
     ///
-    /// Shared by the plain `+` flow and the Shortcut flow so both get identical
-    /// notification behaviour; only the name and the story id differ.
+    /// Shared by the plain `+` flow, the Shortcut flow and the GitHub flow so all three get
+    /// identical notification behaviour; only the name, the story id, and whether the branch
+    /// already exists differ.
+    ///
+    /// `existingBranch` decides *which* git operation runs, and it is not cosmetic:
+    /// `createWorktree` cuts a new branch from the base branch, so using it for a branch that
+    /// lives on origin succeeds and produces a worktree holding the base branch's code under
+    /// the name the user asked for.
     private func launchWorkstream(
         project: Project,
         projectID: UUID,
         name: String,
         bypass: Bool,
-        shortcutStoryID: Int? = nil
+        shortcutStoryID: Int? = nil,
+        existingBranch: String? = nil
     ) {
         let workstream = Workstream(
             name: name,
@@ -734,11 +874,19 @@ struct ProjectSidebar: View {
         let workstreamID = workstream.id
 
         DispatchQueue.global(qos: .userInitiated).async {
-            let worktreePath = Git.Operations.createWorktree(
-                projectPath: projectPath,
-                projectName: projectName,
-                workstreamName: name
-            )
+            let worktreePath = if let existingBranch {
+                Git.Operations.createWorktreeTrackingRemote(
+                    projectPath: projectPath,
+                    projectName: projectName,
+                    branch: existingBranch
+                )
+            } else {
+                Git.Operations.createWorktree(
+                    projectPath: projectPath,
+                    projectName: projectName,
+                    workstreamName: name
+                )
+            }
             DispatchQueue.main.async {
                 if let worktreePath {
                     logger.warning("[Atelier] addWorkstream: worktree created at \(worktreePath, privacy: .public)")
@@ -1065,6 +1213,8 @@ private struct ProjectHeaderRow: View {
     let onAddWithoutPermissions: () -> Void
     let showShortcutButton: Bool
     let onAddFromShortcut: () -> Void
+    let showGitHubButton: Bool
+    let onAddFromGitHub: () -> Void
     let onDelete: () -> Void
 
     @State private var isHovering = false
@@ -1117,12 +1267,20 @@ private struct ProjectHeaderRow: View {
 
             Spacer()
 
-            // 4pt, not 8, so both buttons fit without crowding the project name
+            // 4pt, not 8, so the buttons fit without crowding the project name
             // and path. Below 4 the buttons' hover backgrounds touch.
+            //
+            // Ordered least-permanent first, farthest from the edge: this row is
+            // right-anchored, so a Shortcut button that disappears when the token goes
+            // would otherwise shift the buttons beside it out from under the cursor.
             HStack(spacing: 4) {
                 if showShortcutButton {
                     SidebarIconButton(image: "shortcut", action: onAddFromShortcut)
                         .accessibilityLabel("New workstream from Shortcut story in \(project.name)")
+                }
+                if showGitHubButton {
+                    SidebarIconButton(image: "github", action: onAddFromGitHub)
+                        .accessibilityLabel("New workstream from GitHub branch in \(project.name)")
                 }
                 if isGitRepo {
                     SidebarIconButton(icon: "plus", action: onAdd)

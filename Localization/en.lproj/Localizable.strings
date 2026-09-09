@@ -204,6 +204,16 @@
 "Story" = "Story";
 "The branch and worktree are named using the Branch Name Pattern in Settings." = "The branch and worktree are named using the Branch Name Pattern in Settings.";
 
+/* GitHub - new workstream from a branch that already exists on origin */
+"New Workstream from GitHub" = "New Workstream from GitHub";
+"Branch" = "Branch";
+"The branch must already exist on origin. The workstream takes its name." = "The branch must already exist on origin. The workstream takes its name.";
+"Enter a branch name." = "Enter a branch name.";
+"That's a pull request. Enter the name of its branch instead." = "That's a pull request. Enter the name of its branch instead.";
+"That isn't a valid git branch name." = "That isn't a valid git branch name.";
+"origin has no branch named %@." = "origin has no branch named %@.";
+"That branch is already checked out at %@." = "That branch is already checked out at %@.";
+
 "Open Settings" = "Open Settings";
 
 /* Shortcut - info tab */

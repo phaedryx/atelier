@@ -699,6 +699,112 @@ extension Git {
             return worktreeDir.path
         }
 
+        /// Create a git worktree for a branch that already exists on origin, checking that
+        /// branch out rather than cutting a new one.
+        /// Returns the worktree path on success, nil on failure.
+        ///
+        /// Deliberately a sibling of `createWorktree` rather than a `startPoint:` parameter on
+        /// it. That function's whole job is branching off `BaseBranchSetting`, and its
+        /// `-b`-less fallback exists to reuse a local branch of the same name — handed a
+        /// branch that lives only on origin, the pair of them succeeds and produces a worktree
+        /// holding the base branch's code under exactly the name the user asked for.
+        static func createWorktreeTrackingRemote(
+            projectPath: String,
+            projectName: String,
+            branch: String
+        ) -> String? {
+            let worktreeDir = worktreeDestination(
+                projectPath: projectPath,
+                projectName: projectName,
+                workstreamName: branch
+            )
+
+            // Fetched here as well as in `remoteBranchTip`: this has to be correct when called
+            // on its own, and re-fetching one branch that is already current is a no-op.
+            fetchBranch(at: projectPath, branch: branch)
+
+            try? FileManager.default.createDirectory(
+                at: worktreeDir.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+
+            let tracked = runOnWholeTree(
+                args: ["worktree", "add", "--track", "-b", branch, worktreeDir.path, "origin/\(branch)"],
+                in: projectPath
+            )
+
+            if tracked == nil {
+                // A local branch of this name already exists, so `-b` refuses. Nothing exists
+                // to check out if this fails too.
+                guard runOnWholeTree(args: ["worktree", "add", worktreeDir.path, branch], in: projectPath) != nil
+                else { return nil }
+                adoptRemoteBranch(inWorktree: worktreeDir.path, branch: branch)
+            }
+
+            addExcludeEntry(at: projectPath, pattern: ".atelier-state/")
+
+            return worktreeDir.path
+        }
+
+        /// Point a local branch that already existed at its counterpart on origin.
+        ///
+        /// In the README's bare-repo layout this is the *ordinary* path, not the edge case:
+        /// `git clone --bare` writes every branch into `refs/heads`, and the refspec
+        /// `BareRepoClone` configures only ever updates `refs/remotes/origin/*` afterwards. So
+        /// for every branch the clone captured, `refs/heads/<branch>` exists, carries no
+        /// upstream, and is as old as the clone — and checking it out is how a worktree ends up
+        /// named for a branch while holding code from whenever the project was added.
+        ///
+        /// `--ff-only` is what makes advancing it safe: a branch that is merely behind moves to
+        /// origin's tip, and one carrying commits origin has never seen refuses to move and
+        /// keeps them. The upstream is set either way, so the Changes tab and the ahead count
+        /// have a remote to measure against.
+        private static func adoptRemoteBranch(inWorktree worktree: String, branch: String) {
+            _ = run(args: ["branch", "--set-upstream-to=origin/\(branch)", branch], in: worktree)
+            _ = runOnWholeTree(args: ["merge", "--ff-only", "origin/\(branch)"], in: worktree)
+        }
+
+        /// The commit `origin/<branch>` points at, after fetching it — or nil when origin has
+        /// no such branch.
+        ///
+        /// The pre-flight for `createWorktreeTrackingRemote`: a typo'd branch name is a message
+        /// in the dialog the user is still looking at, rather than an optimistic sidebar row
+        /// followed by a generic "could not create worktree" alert.
+        ///
+        /// Asks for the remote-tracking ref specifically. A local branch of the same name is
+        /// not evidence origin has one, and `--verify <branch>` would resolve it.
+        static func remoteBranchTip(at path: String, branch: String) -> String? {
+            fetchBranch(at: path, branch: branch)
+            guard let sha = run(
+                args: ["rev-parse", "--verify", "--quiet", "refs/remotes/origin/\(branch)"],
+                in: path
+            )?.trimmingCharacters(in: .whitespacesAndNewlines), !sha.isEmpty else { return nil }
+            return sha
+        }
+
+        /// The worktree that has `branch` checked out, or nil when none does.
+        ///
+        /// git refuses to check one branch out twice, and reports it as an ordinary failure —
+        /// which arrives too late to say anything useful, after the optimistic row is already
+        /// on screen. Like `worktreePaths` this is a single git command, so it is cheap enough
+        /// to ask before starting.
+        static func worktreePath(forBranch branch: String, at path: String) -> String? {
+            guard let output = run(args: ["worktree", "list", "--porcelain"], in: path) else { return nil }
+
+            var current: String?
+            for line in output.components(separatedBy: "\n") {
+                if line.hasPrefix("worktree ") {
+                    current = String(line.dropFirst("worktree ".count))
+                } else if line.hasPrefix("branch "), let holder = current {
+                    guard String(line.dropFirst("branch ".count)) == "refs/heads/\(branch)" else { continue }
+                    return holder
+                } else if line.isEmpty {
+                    current = nil
+                }
+            }
+            return nil
+        }
+
         /// Append a pattern to the repo's info/exclude if not already present.
         static func addExcludeEntry(at repoPath: String, pattern: String) {
             // Ask git where the file lives rather than assuming `.git` is a
@@ -1327,8 +1433,19 @@ extension Git {
                 "main"
             }
 
-            // Fetch with timeout — don't block worktree creation
-            runWithTimeout(args: ["fetch", "origin", branchToFetch, "--no-tags"], in: path, timeout: 5)
+            fetchBranch(at: path, branch: branchToFetch)
+        }
+
+        /// Fetch one named branch from origin. No-ops without a remote, and gives up rather
+        /// than blocking a worktree creation that can proceed on stale refs.
+        ///
+        /// The 5s bound is much tighter than `ProcessRunner.Timeout.network`, and stays that
+        /// way: every caller either has a stale ref to fall back on or a `rev-parse` that will
+        /// report the miss, so waiting two minutes on a wedged link buys nothing.
+        private static func fetchBranch(at path: String, branch: String) {
+            guard run(args: ["remote", "get-url", "origin"], in: path) != nil else { return }
+            let ref = branch.hasPrefix("origin/") ? String(branch.dropFirst("origin/".count)) : branch
+            runWithTimeout(args: ["fetch", "origin", ref, "--no-tags"], in: path, timeout: 5)
         }
 
         /// Runs git and returns stdout, or nil if git is missing, exited non-zero,
