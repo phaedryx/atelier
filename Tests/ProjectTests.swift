@@ -408,9 +408,10 @@ final class ProjectTests: XCTestCase {
         let container = root.appendingPathComponent(name)
         let checkoutURL = container.appendingPathComponent(checkout)
         let bare = container.appendingPathComponent(".bare")
-        // `worktrees/<checkout>` and not just `worktrees`: that is where the
-        // checkout's `gitdir:` points, git always creates it, and
-        // `resolvingSymlinksInPath()` is a no-op on a path that does not exist.
+        // `worktrees/<checkout>` and not just `worktrees`, because that is where
+        // the checkout's `gitdir:` points and git always creates it. The hoist no
+        // longer needs it to exist — see `testHoistsWhenTheWorktreeAdminDirIsPruned`
+        // — but a fixture that matches a real repository is worth keeping.
         try FileManager.default.createDirectory(
             at: bare.appendingPathComponent("worktrees/\(checkout)"),
             withIntermediateDirectories: true
@@ -517,6 +518,22 @@ final class ProjectTests: XCTestCase {
             checkout.standardizedFileURL.path,
             "the paths returned are the ones the user registered, not the resolved ones"
         )
+    }
+
+    /// `git worktree prune` deletes `.bare/worktrees/<name>` and leaves the
+    /// checkout's `.git` pointing at it. That spelling still names this
+    /// container, but `resolvingSymlinksInPath()` no-ops on a path that is gone,
+    /// so the comparison used to run on raw spellings and refuse to hoist.
+    func testHoistsWhenTheWorktreeAdminDirIsPruned() throws {
+        let (container, checkout) = try makeContainerLayout()
+        try FileManager.default.removeItem(
+            at: container.appendingPathComponent(".bare/worktrees/main")
+        )
+
+        let hoisted = Project.hoistedLocation(directory: checkout.path)
+
+        XCTAssertEqual(hoisted.directory, container.standardizedFileURL.path)
+        XCTAssertEqual(hoisted.checkoutDirectory, checkout.standardizedFileURL.path)
     }
 
     func testDoesNotHoistAWorktreeOwnedByADifferentContainer() throws {

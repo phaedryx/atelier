@@ -55,4 +55,68 @@ extension String {
         }
         return self
     }
+
+    /// This path with every symlink above it resolved, whether or not the path
+    /// itself is on disk.
+    ///
+    /// `URL.resolvingSymlinksInPath()` is a no-op on a path that does not exist
+    /// — verified on macOS 15 — so two spellings of one location canonicalize to
+    /// two different strings the moment the leaf is missing. With `link` a
+    /// symlink to `real/deep`:
+    ///
+    ///     <root>/link/nope       stays  <root>/link/nope
+    ///     <root>/real/deep/nope  stays  <root>/real/deep/nope
+    ///
+    /// A guard that compares those two is then correct only by accident of what
+    /// happens to be on disk. This resolves the deepest ancestor that *does*
+    /// exist and re-appends the rest, so the answer turns on how the path is
+    /// spelled rather than on whether its leaf is there.
+    ///
+    /// The input is deliberately not standardized first. Stripping `..`
+    /// lexically before the prefix is symlink-free is the one part Foundation
+    /// already gets right unaided — `link/..` resolves to the link's parent, not
+    /// the link's *lexical* parent — and doing it early would throw that away.
+    /// Standardization happens once at the end, by which point every symlink
+    /// above the missing tail is gone.
+    var canonicalPath: String {
+        let fileManager = FileManager.default
+        var components = URL(fileURLWithPath: self).pathComponents
+        var missing: [String] = []
+
+        // The walk drops one element of `components` per turn, so it always
+        // reaches `["/"]`. Walking with `deletingLastPathComponent()` instead
+        // does **not** terminate: on a path that does not exist and ends in
+        // `..` it is a fixed point — `/no/such/place/..` yields itself, with the
+        // same component count, forever. A `pathComponents.count > 1` floor does
+        // not save it, because the count never falls.
+        //
+        // `fileExists` follows symlinks, so a different spelling of a directory
+        // that is present stops the walk at once. Each turn costs one `stat`,
+        // and only for a component that is not there.
+        while components.count > 1,
+              !fileManager.fileExists(atPath: NSString.path(withComponents: components))
+        {
+            missing.append(components.removeLast())
+        }
+
+        var resolved = URL(fileURLWithPath: NSString.path(withComponents: components))
+            .resolvingSymlinksInPath()
+        for component in missing.reversed() {
+            resolved.appendPathComponent(component)
+        }
+        // Any `..` still in the tail is resolved lexically here, which is the
+        // only option left: nothing it refers to is on disk.
+        return resolved.standardizedFileURL.path
+    }
+
+    /// Whether this path sits strictly beneath `other` — compared canonically,
+    /// so a trailing slash, a `.` segment, or a symlinked ancestor cannot defeat
+    /// it. A path is **not** inside itself.
+    ///
+    /// Worth a name of its own because the separator is the whole of it: a bare
+    /// `hasPrefix(other)` makes `/repo-backup` a child of `/repo`, and that is
+    /// the shape a hand-rolled copy keeps arriving in.
+    func isCanonicallyInside(_ other: String) -> Bool {
+        canonicalPath.hasPrefix(other.canonicalPath + "/")
+    }
 }

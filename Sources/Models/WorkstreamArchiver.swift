@@ -105,12 +105,13 @@ extension Workstream {
                   !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else { return nil }
 
-            func canonical(_ path: String) -> String {
-                URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
-            }
-
-            let resolved = canonical(path)
-            let protected = Set([projectDirectory, checkoutDirectory].compactMap(\.self).map(canonical))
+            // `String.canonicalPath` rather than `resolvingSymlinksInPath()`,
+            // which is a no-op on a path that is not on disk and so answered
+            // this correctly only while every path involved happened to exist.
+            let resolved = path.canonicalPath
+            let protected = Set(
+                [projectDirectory, checkoutDirectory].compactMap(\.self).map(\.canonicalPath)
+            )
             return protected.contains(resolved) ? nil : path
         }
 
