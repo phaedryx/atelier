@@ -75,27 +75,43 @@ extension Workstream {
 
         /// The worktree `purge` is allowed to destroy, or nil when there is none.
         ///
-        /// Deliberately not `Workstream.workingDirectory(projectDirectory:)`. That
-        /// falls back to the project directory, which is the right answer for
-        /// opening a terminal and the wrong one for everything `purge` does: a
+        /// Deliberately not `Workstream.workingDirectory(checkout:)`. That falls
+        /// back to the project's checkout, which is the right answer for opening
+        /// a terminal and the wrong one for everything `purge` does: a
         /// workstream archived before `workstreamWorktreeReady` lands has no
         /// worktree path, and the fallback handed the user's main checkout to
         /// `Git.Operations.removeWorktree` (which deletes the path it is given),
         /// to `deleteLocalBranch` (with whatever branch that checkout was on), and
         /// to `dispose` (which runs project-authored processes).
         ///
-        /// A path that names the project directory under a different spelling is
-        /// refused for the same reason, so the check cannot be defeated by a
+        /// A path that names one of those directories under a different spelling
+        /// is refused for the same reason, so the check cannot be defeated by a
         /// trailing slash or a symlink the two paths disagree about.
-        static func destroyableWorktreePath(for workstream: Workstream, projectDirectory: String) -> String? {
+        ///
+        /// **Both directories, and both are load-bearing.** In the `.bare`
+        /// container layout `Project.directory` is the container and
+        /// `Project.checkout` is the default worktree inside it, and neither is
+        /// ever a workstream: the container holds every workstream as a peer,
+        /// and the checkout is the trunk. Naming only one would leave the other
+        /// destroyable — and which one that is depends on which the caller
+        /// happened to pass, which is exactly the ambiguity this change exists
+        /// to remove.
+        static func destroyableWorktreePath(
+            for workstream: Workstream,
+            projectDirectory: String,
+            checkoutDirectory: String? = nil
+        ) -> String? {
             guard let path = workstream.worktreePath,
                   !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else { return nil }
 
-            let resolved = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
-            let project = URL(fileURLWithPath: projectDirectory)
-                .standardizedFileURL.resolvingSymlinksInPath().path
-            return resolved == project ? nil : path
+            func canonical(_ path: String) -> String {
+                URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+            }
+
+            let resolved = canonical(path)
+            let protected = Set([projectDirectory, checkoutDirectory].compactMap(\.self).map(canonical))
+            return protected.contains(resolved) ? nil : path
         }
 
         /// Purges a workstream by running its `dispose` phase, removing the git worktree from disk,
@@ -116,7 +132,11 @@ extension Workstream {
                 // stand here reached `removeWorktree`, `deleteLocalBranch` and
                 // `dispose` — none of which had any business touching the user's main
                 // checkout.
-                let worktreePath = destroyableWorktreePath(for: ws, projectDirectory: projectDir)
+                let worktreePath = destroyableWorktreePath(
+                    for: ws,
+                    projectDirectory: projectDir,
+                    checkoutDirectory: project.checkoutDirectory
+                )
                 let standardizedPath = URL(fileURLWithPath: worktreePath ?? projectDir).standardizedFileURL.path
                 let wsName = ws.name
                 let projName = project.name

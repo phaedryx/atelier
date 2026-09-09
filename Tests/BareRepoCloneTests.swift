@@ -130,7 +130,13 @@ final class BareRepoCloneTests: XCTestCase {
         let location = Git.Operations.projectLocation(for: container.path)
         XCTAssertEqual(
             URL(fileURLWithPath: location.directory).standardizedFileURL.path,
-            container.appendingPathComponent("main").standardizedFileURL.path
+            container.standardizedFileURL.path,
+            "a freshly cloned container is the project's directory"
+        )
+        XCTAssertEqual(
+            URL(fileURLWithPath: location.checkoutDirectory ?? "").standardizedFileURL.path,
+            container.appendingPathComponent("main").standardizedFileURL.path,
+            "and its default checkout is what stands in for it"
         )
         XCTAssertEqual(location.name, "my-repo", "the project is named for the container, not the branch")
     }
