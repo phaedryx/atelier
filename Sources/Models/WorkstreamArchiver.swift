@@ -101,9 +101,17 @@ extension Workstream {
             projectDirectory: String,
             checkoutDirectory: String? = nil
         ) -> String? {
-            guard let path = workstream.worktreePath,
-                  !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            else { return nil }
+            // Absolute only. `URL(fileURLWithPath:)` resolves a relative string
+            // against the *process's* working directory, which has nothing to do
+            // with this project — so it never equals the protected set and sails
+            // through the guard below. The raw string is then what
+            // `removeWorktree` and `deleteLocalBranch` are handed, and they
+            // resolve it against a working directory of their own. `~` is not
+            // expanded for the same reason: only a path that already names one
+            // directory can be reasoned about here.
+            guard let stored = workstream.worktreePath else { return nil }
+            let path = stored.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard path.hasPrefix("/") else { return nil }
 
             // `String.canonicalPath` rather than `resolvingSymlinksInPath()`,
             // which is a no-op on a path that is not on disk and so answered

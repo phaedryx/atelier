@@ -30,6 +30,52 @@ final class MonacoResourceSchemeHandlerTests: XCTestCase {
         XCTAssertNil(MonacoResourceSchemeHandler.resolve(requestPath: "/", in: base))
     }
 
+    /// `.standardized` collapses `..` lexically; it does not follow symlinks.
+    /// A link planted inside the bundle therefore kept every path component of
+    /// the base — passing containment — while pointing anywhere on disk.
+    func testRejectsASymlinkOutOfTheBundle() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("monaco-symlink-\(UUID().uuidString)", isDirectory: true)
+        let bundle = root.appendingPathComponent("MonacoEditor", isDirectory: true)
+        let outside = root.appendingPathComponent("outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let secret = outside.appendingPathComponent("secret.js")
+        try "stolen".write(to: secret, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(
+            at: bundle.appendingPathComponent("escape.js"),
+            withDestinationURL: secret
+        )
+
+        XCTAssertNil(
+            MonacoResourceSchemeHandler.resolve(requestPath: "/escape.js", in: bundle),
+            "a symlink whose target leaves the bundle must not be servable"
+        )
+    }
+
+    /// The counterpart: resolving symlinks must not reject files that really do
+    /// live inside the bundle, including through a symlinked bundle root (the
+    /// temporary directory is itself behind `/var -> /private/var`).
+    func testStillResolvesARealFileWhenTheBaseIsBehindASymlink() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("monaco-real-\(UUID().uuidString)", isDirectory: true)
+        let bundle = root.appendingPathComponent("MonacoEditor", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: bundle.appendingPathComponent("vs"), withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "ok".write(
+            to: bundle.appendingPathComponent("vs/loader.js"), atomically: true, encoding: .utf8
+        )
+
+        XCTAssertNotNil(
+            MonacoResourceSchemeHandler.resolve(requestPath: "/vs/loader.js", in: bundle),
+            "a genuine bundle file must stay servable"
+        )
+    }
+
     // MARK: - MIME types
 
     /// `"woatelier"` — collateral from a project-wide rename of "ff" to "atelier"

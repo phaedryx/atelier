@@ -195,7 +195,16 @@ private final class PortScanner: @unchecked Sendable {
     }
 
     private func childPIDs(of pid: Int32) -> [Int32] {
-        // proc_listchildpids returns the number of PIDs (not bytes)
+        // The two sizes here are in *different units*, which is easy to read
+        // backwards: `buffersize` is a **byte** count, while the return value is
+        // a **PID** count. Verified against the real syscall — with three
+        // children, `proc_listchildpids(pid, buf, 4)` writes exactly one PID and
+        // leaves `buf[1]` untouched, and `(pid, buf, 12)` writes three and
+        // returns 3, not 12. So the `* stride` below is required, and the
+        // `prefix(filledCount)` at the end must not be scaled. Do not "fix"
+        // either one: dropping the `* stride` would tell the kernel the buffer
+        // is a quarter of its real size, and scaling the result would read past
+        // what was filled.
         let estimatedCount = proc_listchildpids(pid, nil, 0)
         guard estimatedCount > 0 else { return [] }
 

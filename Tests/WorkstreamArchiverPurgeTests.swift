@@ -67,6 +67,36 @@ final class WorkstreamArchiverPurgeTests: XCTestCase {
         )
     }
 
+    /// The comment above describes `""`, but only `"   "` was exercised. The
+    /// two take different branches: whitespace survives the trim as a path
+    /// component, an empty string does not.
+    func testATrulyEmptyWorktreePathIsNotDestroyable() {
+        XCTAssertNil(
+            Workstream.Archiver.destroyableWorktreePath(
+                for: workstream(worktreePath: ""),
+                projectDirectory: projectDirectory
+            )
+        )
+    }
+
+    /// A relative path is resolved against the *process's* working directory,
+    /// which has nothing to do with the project — so it never equals the
+    /// protected set and sails through the guard. The raw, unresolved string is
+    /// then what `removeWorktree` and `deleteLocalBranch` are handed, and they
+    /// resolve it against their own working directory. Only absolute paths can
+    /// be reasoned about here.
+    func testARelativeWorktreePathIsNotDestroyable() {
+        for relative in ["../sibling", "sibling", "./sibling", "~/sibling"] {
+            XCTAssertNil(
+                Workstream.Archiver.destroyableWorktreePath(
+                    for: workstream(worktreePath: relative),
+                    projectDirectory: projectDirectory
+                ),
+                "\(relative) is not an absolute path and must not be destroyable"
+            )
+        }
+    }
+
     /// In the `.bare` container layout the project's directory is the container
     /// and its checkout is the trunk worktree inside it. Neither is ever a
     /// workstream — the container holds them all as peers — so both have to be

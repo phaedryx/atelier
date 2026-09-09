@@ -24,6 +24,26 @@ func expandedProjectIDs(afterSelecting selection: SidebarSelection?, current: Se
     return expanded
 }
 
+/// The directory new projects and clones are created under, or nil if the
+/// setting cannot name one.
+///
+/// `URL(fileURLWithPath:)` resolves a relative string — and an empty one — against
+/// the *process's* working directory, which for a launched app is wherever it
+/// happened to start. The base directory is `@AppStorage` with a `?? ""`
+/// default, so "unset" is reachable without the user doing anything unusual, and
+/// the two callers go straight on to `createDirectory` and `git init`. Refusing
+/// here keeps that failure a visible error instead of a repository somewhere
+/// nobody chose.
+///
+/// Surrounding whitespace is trimmed rather than refused: the value is
+/// user-editable text and a trailing space is not a reason to reject an
+/// otherwise good path.
+func projectBaseDirectory(from setting: String) -> URL? {
+    let trimmed = setting.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmed.hasPrefix("/") else { return nil }
+    return URL(fileURLWithPath: trimmed)
+}
+
 extension Notification.Name {
     static let addProject = Notification.Name("atelier.addProject")
     static let addNew = Notification.Name("atelier.addNew")
@@ -858,6 +878,13 @@ struct ProjectSidebar: View {
 
     @AppStorage("atelier.baseDirectory") private var baseDirectory: String = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first ?? ""
 
+    /// Shown by both creation paths when the base directory names nowhere. The
+    /// picker and the settings row are left alone: an unusable value there is a
+    /// bad starting directory for a panel, not a directory anything writes to.
+    private static let missingBaseDirectoryMessage = NSLocalizedString(
+        "Choose a base directory in Settings first.", comment: ""
+    )
+
     private func openDirectoryPicker() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
@@ -876,7 +903,12 @@ struct ProjectSidebar: View {
         let name = newProjectName.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty else { return }
 
-        let dirURL = URL(fileURLWithPath: baseDirectory).appendingPathComponent(name)
+        guard let base = projectBaseDirectory(from: baseDirectory) else {
+            newProjectError = Self.missingBaseDirectoryMessage
+            return
+        }
+
+        let dirURL = base.appendingPathComponent(name)
         if FileManager.default.fileExists(atPath: dirURL.path) {
             newProjectError = NSLocalizedString("A file or directory with this name already exists.", comment: "")
             return
@@ -922,7 +954,12 @@ struct ProjectSidebar: View {
             return
         }
 
-        let container = URL(fileURLWithPath: baseDirectory).appendingPathComponent(directoryName)
+        guard let base = projectBaseDirectory(from: baseDirectory) else {
+            cloneError = Self.missingBaseDirectoryMessage
+            return
+        }
+
+        let container = base.appendingPathComponent(directoryName)
         let cancellation = BareRepoClone.Cancellation()
         cloneCancellation = cancellation
         cloneError = ""

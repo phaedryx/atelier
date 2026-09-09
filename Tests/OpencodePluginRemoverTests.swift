@@ -30,6 +30,24 @@ final class OpencodePluginRemoverTests: XCTestCase {
         XCTAssertFalse(OpencodePluginRemover.isAtelierPlugin(contents: "export const Plugin = {}"))
     }
 
+    /// The marker identifies the *installer's own first line*. Someone else's
+    /// plugin that merely mentions it — a comment explaining what it replaced,
+    /// say — is not ours to delete, and a whole-file `contains` would eat it.
+    func testAMarkerBelowTheFirstLineIsNotOurs() {
+        XCTAssertFalse(OpencodePluginRemover.isAtelierPlugin(
+            contents: "// my own plugin\n// replaces ATELIER_OPENCODE_PLUGIN\nexport const Plugin = {}"
+        ))
+    }
+
+    func testLeavesAPluginThatOnlyMentionsTheMarkerAlone() throws {
+        let path = try writePlugin("// mine\n// supersedes ATELIER_OPENCODE_PLUGIN version=9\n")
+        OpencodePluginRemover.uninstall(at: path)
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: path),
+            "a plugin that only references the marker must survive"
+        )
+    }
+
     func testRemovesAPluginAtelierWrote() throws {
         let path = try writePlugin("// ATELIER_OPENCODE_PLUGIN version=9\nexport const Plugin = {}")
         OpencodePluginRemover.uninstall(at: path)
