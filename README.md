@@ -340,6 +340,7 @@ from.
 | ⌘↩ | Focus Coding Agent |
 | ⌘1–9 | Switch to tab by position |
 | ⌘⇧[ / ⌘⇧] | Cycle tabs |
+| ⌘T | New terminal tab |
 | ⌘W | Close tab |
 | ⌘[ / ⌘] | Cycle workstreams |
 | ⌘↑ / ⌘↓ | Cycle projects |
