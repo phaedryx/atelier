@@ -50,7 +50,12 @@ them. This project has no Developer ID, so it is kept only for if that changes.
 
 ### Branching
 - Work on feature branches, not directly on `main`
-- Branch names: `feat/description`, `fix/description`, `refactor/description`
+- Branch names are hyphenated, not slashed: `feat-description`,
+  `fix-description`, `refactor-description`. A worktree is added as a peer of
+  `main` at a path spelled like its branch, so `feat/thing` puts the checkout a
+  directory deeper instead of beside `main` — and `worktree add <path>` on its
+  own infers the branch from the path's last component, `thing`
+  (`Sources/Models/BareRepoClone.swift`).
 - Open PRs against `main`
 
 ### Releasing
