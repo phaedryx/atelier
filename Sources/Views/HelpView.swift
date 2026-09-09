@@ -49,7 +49,7 @@ struct HelpView: View {
                 }
                 .font(.system(size: 11))
 
-                PoblenouSkylineView()
+                EaselRowView()
                     .padding(.horizontal, 40)
                     .padding(.vertical, -4)
 

@@ -1,3 +1,7 @@
+<!-- Source for dmg-background@2x.png. Regenerate with:
+       rsvg-convert -w 1320 -h 1000 Resources/dmg-background.svg -o Resources/dmg-background@2x.png
+     The PNG is deliberately taller than 2x this canvas and so renders stretched:
+     the extra height keeps the artwork clear of the Finder status bar (#424). -->
 <svg xmlns="http://www.w3.org/2000/svg" width="660" height="440" viewBox="0 0 660 440">
   <defs>
     <!-- Subtle wine glow between icon positions -->
@@ -23,16 +27,16 @@
   <!-- Drag label -->
   <text x="330" y="230" text-anchor="middle" font-family="ui-monospace, 'SF Mono', Menlo, monospace" font-size="11" fill="#928E8D">Drag to Applications</text>
 
-  <!-- Skyline (same as website hero, scaled to fit) -->
+  <!-- Easel row (same shape as EaselRow.swift, scaled to fit) -->
   <g transform="translate(-5.5, 280) scale(0.556, 0.5)" opacity="0.2">
     <defs>
-      <linearGradient id="skyGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <linearGradient id="easelGrad" x1="0%" y1="0%" x2="100%" y2="0%">
         <stop offset="0%" stop-color="transparent"/>
         <stop offset="10%" stop-color="#5B2333"/>
         <stop offset="90%" stop-color="#5B2333"/>
         <stop offset="100%" stop-color="transparent"/>
       </linearGradient>
     </defs>
-    <path d="M20,220 L80,220 L80,200 L120,200 L120,220 L170,220 L170,195 L220,195 L220,220 L240,220 L240,130 L256,130 L256,220 L280,220 L280,205 L320,205 L320,220 L340,220 L340,200 L360,190 L380,200 L400,190 L420,200 L440,190 L460,200 L480,200 L480,220 L520,220 L520,140 L538,140 L538,220 L560,220 L560,190 L630,190 L630,220 L660,220 L660,115 L676,115 L676,220 L700,220 L700,200 L735,200 L735,180 L770,180 L770,220 L800,220 L800,150 L816,150 L816,220 L882,220 Q882,100 915,100 Q948,100 948,220 L1040,220 L1040,205 L1080,205 L1080,220 L1120,220 L1120,190 L1160,190 L1160,220 L1180,220" fill="none" stroke="url(#skyGrad)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M20,220 L1180,220 M105,161 L105,121 L165,121 L165,161 M135,121 L135,112 M95,161 L175,161 M125,161 L110.22,220 M145,161 L159.78,220 M135,161 L185.15,220 M285,156 L285,104 L349,104 L349,156 M317,104 L317,94 M275,156 L359,156 M307,156 L290.12,220 M327,156 L343.88,220 M317,156 L371.4,220 M469,162 L469,132 L535,132 L535,162 M502,132 L502,124 M459,162 L545,162 M492,162 L477.64,220 M512,162 L526.36,220 M502,162 L551.3,220 M655,146 L655,98 L729,98 L729,146 M692,98 L692,88 M645,146 L739,146 M682,146 L660.92,220 M702,146 L723.08,220 M692,146 L754.9,220 M849,170 L849,136 L905,136 L905,170 M877,136 L877,128 M839,170 L915,170 M867,170 L856,220 M887,170 L898,220 M877,170 L919.5,220 M1025,158 L1025,114 L1093,114 L1093,158 M1059,114 L1059,105 M1015,158 L1103,158 M1049,158 L1032.96,220 M1069,158 L1085.04,220 M1059,158 L1111.7,220" fill="none" stroke="url(#easelGrad)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
   </g>
 </svg>
