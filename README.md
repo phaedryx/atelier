@@ -360,6 +360,15 @@ from.
 | ⌘⌥B | Open in external browser |
 | ⌘⌥T | Open in external terminal |
 | ⌘/ | Help |
+| ⇧drag | Select in a terminal, over a TUI that has grabbed the mouse |
+
+A full-screen TUI — process-compose's own, which Start runs for the `execute`
+phase — reports mouse events to itself, so an ordinary drag never reaches the
+terminal and selects nothing. Holding shift takes the mouse back for the
+duration of the drag; the selection is copied on release, so there is no ⌘C to
+follow it with. process-compose also has its own answer for the log pane alone,
+**Ctrl-S**, which turns the pane into an editable buffer you select in and press
+Enter to copy.
 
 ## License
 
