@@ -136,7 +136,7 @@ struct OnboardingView: View {
             }
         )
         .background(alignment: .bottom) {
-            PoblenouSkylineView()
+            EaselRowView()
                 .padding(.horizontal, 40)
                 .padding(.bottom, 10)
         }
