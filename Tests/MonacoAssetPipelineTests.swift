@@ -79,5 +79,54 @@ final class MonacoAssetPipelineTests: XCTestCase {
 
         let state = try await webView.evaluateJavaScript("document.readyState") as? String
         XCTAssertEqual(state, "complete")
+
+        // The Palenight theme is a vendored extension registered in
+        // shared-init.js, and it fails silently in a way the check above cannot
+        // see: `updateValue('workbench.colorTheme', ...)` with a label no
+        // contribution matches leaves the config set, raises nothing, and
+        // renders the built-in dark theme. Reading the color the theme service
+        // actually published is the only thing that separates "the bundle
+        // loaded" from "the theme applied". #292D3E is Palenight's
+        // `editor.background`; the built-in dark themes are #1F1F1F / #1E1E1E.
+        //
+        // The theme's variables are published on `.monaco-workbench`, which is
+        // `document.body` here — not on `:root`, where reading them yields "".
+        var background = ""
+        let themeDeadline = Date().addingTimeInterval(10)
+        while Date() < themeDeadline, background.isEmpty {
+            background = try await (webView.evaluateJavaScript(
+                "getComputedStyle(document.body)"
+                    + ".getPropertyValue('--vscode-editor-background').trim()"
+            ) as? String) ?? ""
+            if background.isEmpty {
+                try await Task.sleep(nanoseconds: 200_000_000)
+            }
+        }
+        XCTAssertEqual(
+            background.lowercased(),
+            "#292d3e",
+            "the diff view is not on Palenight — the theme label in shared-init.js matched no contribution"
+        )
+
+        // Palenight is dark-only, so light appearance stays on VS Code's own
+        // Light Modern (#FFFFFF). Asserting the switch as well as the initial
+        // theme is what keeps `setTheme` honest: both halves name a theme by
+        // label, and both fail the same silent way when a label stops matching.
+        _ = try await webView.evaluateJavaScript("window.diffAPI.setTheme(false); true")
+        let lightDeadline = Date().addingTimeInterval(10)
+        while Date() < lightDeadline, background.lowercased() != "#ffffff" {
+            background = try await (webView.evaluateJavaScript(
+                "getComputedStyle(document.body)"
+                    + ".getPropertyValue('--vscode-editor-background').trim()"
+            ) as? String) ?? ""
+            if background.lowercased() != "#ffffff" {
+                try await Task.sleep(nanoseconds: 200_000_000)
+            }
+        }
+        XCTAssertEqual(
+            background.lowercased(),
+            "#ffffff",
+            "setTheme(false) did not reach Light Modern"
+        )
     }
 }

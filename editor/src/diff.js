@@ -1,4 +1,4 @@
-import { monaco, configService, postToSwift } from './shared-init.js'
+import { monaco, configService, postToSwift, DARK_THEME, LIGHT_THEME } from './shared-init.js'
 
 // --- Diff API ---
 // Renders a vertical stack of inline diff editors, one per file. Each editor is
@@ -635,7 +635,7 @@ window.diffAPI = {
   },
 
   setTheme(isDark) {
-    configService.updateValue('workbench.colorTheme', isDark ? 'Dark Modern' : 'Light Modern')
+    configService.updateValue('workbench.colorTheme', isDark ? DARK_THEME : LIGHT_THEME)
     document.documentElement.style.colorScheme = isDark ? 'dark' : 'light'
   },
 
