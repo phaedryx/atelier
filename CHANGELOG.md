@@ -36,6 +36,30 @@ point at the upstream repository.
   instead the next time the repository is added, where both halves have already
   been resolved.
 
+### Features
+
+* **process-compose:** a worktree's `bootstrap` namespace can be run again, from
+  a Rerun button on the Info tab's Setup section or from the command palette's
+  **Rerun Bootstrap**. It ran exactly once, at worktree creation, and there was
+  no way to ask for it a second time — so a config edited afterwards, a
+  `process-compose` installed afterwards, the integration switched on
+  afterwards, or a `bootstrap` that failed halfway were all dead ends for the
+  life of the worktree. The Setup section now always renders and every setup
+  state says something, including the two that used to render nothing: a
+  successful bootstrap, and the `.idle` that every workstream reports after a
+  relaunch. Rerun is refused only while a bootstrap is already in flight;
+  every other reason it might do nothing is reported in the row above it
+  instead of swallowed.
+* **process-compose:** the "processes to start" checklist sits directly above
+  the Start button, as a plain vertical column with one process per line. It was
+  an adaptive grid in a full-width band at the top of the Environment pane,
+  where it read as more configuration beside "Dev command" and was a
+  pane-height away from the button it chooses for. The heading is gone — a
+  column of checkboxes above Start needs no label saying what it is — and so is
+  the **All** button, which was a shortcut for what checking every box already
+  does. Past eight processes the list scrolls instead of growing, so no config
+  can walk Start down the pane.
+
 ### Bug Fixes
 
 * **process-compose:** in the `.bare` container layout, a config in the project
