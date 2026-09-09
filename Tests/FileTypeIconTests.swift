@@ -31,12 +31,35 @@ final class FileTypeIconTests: XCTestCase {
         )
     }
 
+    /// vscicons keys framework conventions as compound extensions — "service.ts",
+    /// "spec.ts", "d.ts" — so `user.service.ts` is meant to read as a service
+    /// rather than as plain TypeScript. Walking dots left to right tries the
+    /// longest suffix first, which is what makes the specific key win.
     func testCompoundExtensionBeatsItsBareSuffix() {
-        // "component.ts" is its own key; it must win over plain "ts".
-        let compound = FileTypeIcon.icon(for: "button.component.ts").assetName
-        let bare = FileTypeIcon.icon(for: "button.ts").assetName
-        XCTAssertNotEqual(compound, bare)
-        XCTAssertEqual(bare, "typescript")
+        XCTAssertEqual(FileTypeIcon.icon(for: "user.service.ts").assetName, "angular-service")
+        XCTAssertEqual(FileTypeIcon.icon(for: "user.spec.ts").assetName, "testts")
+        XCTAssertEqual(FileTypeIcon.icon(for: "index.d.ts").assetName, "typescriptdef")
+        XCTAssertEqual(FileTypeIcon.icon(for: "user.ts").assetName, "typescript")
+    }
+
+    /// The other half of the rule: a dotted name whose inner segments match no
+    /// key must fall through to the bare extension rather than matching something
+    /// adjacent. A too-eager walk would reach for a neighbouring icon here.
+    func testDottedNameWithNoCompoundKeyFallsThroughToTheBareExtension() {
+        for fileName in ["user.model.ts", "order.mapper.ts", "cart.total.ts"] {
+            XCTAssertEqual(
+                FileTypeIcon.icon(for: fileName).assetName,
+                "typescript",
+                "Expected \(fileName) to fall through to the TypeScript icon"
+            )
+        }
+    }
+
+    /// Tool configs are keyed by their whole name, which must beat both the
+    /// compound-extension walk and the bare extension.
+    func testToolConfigNamesWinOverTheExtensionWalk() {
+        XCTAssertEqual(FileTypeIcon.icon(for: "vite.config.ts").assetName, "vite")
+        XCTAssertEqual(FileTypeIcon.icon(for: "next.config.ts").assetName, "next")
     }
 
     /// The dot-prefixed extension keys (".travis.yml") are only reachable if the

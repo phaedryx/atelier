@@ -34,12 +34,19 @@ def asset_name(definition_id):
     return Path(definition["iconPath"]).stem
 
 
+dropped = []
+
+
 def resolve(table):
     """Lowercase keys and resolve values, dropping entries with no definition."""
     resolved = {}
     for key, definition_id in sorted(table.items()):
         name = asset_name(definition_id)
         if name is None:
+            # A mapping entry pointing at a definition the theme no longer
+            # declares. Silently dropping it would make an icon disappear on a
+            # version bump with nothing to notice, so it is reported below.
+            dropped.append(f"{key} -> {definition_id}")
             continue
         # A handful of keys ship capitalised (CLAUDE.md, Cargo.toml, Rakefile).
         # Matching is case-insensitive, so fold them here and let the first
@@ -161,6 +168,11 @@ enum FileIconCatalog {{
 }}
 """
 )
+
+if dropped:
+    print(f"    warning: {len(dropped)} mapping entries name an undeclared definition")
+    for entry in dropped[:10]:
+        print(f"      {entry}")
 
 print(f"    {len(referenced)} imagesets ({recoloured} folder bodies recoloured)")
 print(
