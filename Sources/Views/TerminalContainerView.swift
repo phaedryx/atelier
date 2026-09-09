@@ -1572,6 +1572,15 @@ struct TerminalContainerView: View {
             hasExistingRunSession: hasExistingRunSession,
             wasStoppedManually: model.runStoppedManually
         ) {
+            // The same guarantee `beginRun` makes, on the other path that can
+            // set `runStarted`. Only the Environment tab's close stops a run
+            // (`closingTabStopsRun`), so a restored run without that tab is a
+            // run nothing can stop short of quitting — and the tab really can
+            // be absent here: `terminalTabExited` sets `runStarted = false`
+            // and deliberately leaves `runStoppedManually` alone, so the tab
+            // can be closed with no consequence while tmux still has a session
+            // for the next launch to find.
+            model.ensureSingleton(.environment)
             model.runStarted = true
         }
     }
