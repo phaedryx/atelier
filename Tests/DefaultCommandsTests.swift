@@ -53,6 +53,17 @@ final class DefaultCommandsTests: XCTestCase {
         wait(for: [posted], timeout: 1)
     }
 
+    /// The palette advertises the same key the Tabs menu binds. Only the label
+    /// is pinned here — `keyboardShortcut` lives in `AtelierApp`'s `commands`
+    /// block, which no test can reach — so this catches the two drifting apart,
+    /// not the binding going missing.
+    func testNewTerminalCommandAdvertisesCommandT() throws {
+        let commands = defaultPaletteCommands()
+        let terminal = try XCTUnwrap(commands.first { $0.id == "tab.newTerminal" })
+
+        XCTAssertEqual(terminal.shortcut, "⌘T")
+    }
+
     @MainActor
     func testSubmitReviewCommandIsWorkstreamGated() {
         let commands = defaultPaletteCommands()

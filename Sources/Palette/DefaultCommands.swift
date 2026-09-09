@@ -34,7 +34,7 @@ func defaultPaletteCommands() -> [PaletteCommand] {
         PaletteCommand(id: "tab.environment", title: NSLocalizedString("Show Environment", comment: ""), category: tabs,
                        isAvailable: workstream, action: post(.toggleEnvironment)),
         PaletteCommand(id: "tab.newTerminal", title: NSLocalizedString("New Terminal", comment: ""), category: tabs,
-                       isAvailable: workstream, action: post(.toggleTerminal)),
+                       shortcut: "⌘T", isAvailable: workstream, action: post(.toggleTerminal)),
         PaletteCommand(id: "tab.newBrowser", title: NSLocalizedString("New Browser", comment: ""), category: tabs,
                        isAvailable: workstream, action: post(.toggleBrowser)),
         PaletteCommand(id: "tab.newEditor", title: NSLocalizedString("New Editor", comment: ""), category: tabs,

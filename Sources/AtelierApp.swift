@@ -407,6 +407,11 @@ struct AtelierApp: App {
                 }
                 .keyboardShortcut(.return, modifiers: .command)
 
+                Button("New Terminal Tab") {
+                    NotificationCenter.default.post(name: .toggleTerminal, object: nil)
+                }
+                .keyboardShortcut("t", modifiers: .command)
+
                 if isEditorActive {
                     Button("Find File") {
                         NotificationCenter.default.post(name: .toggleFileFinder, object: nil)
