@@ -468,6 +468,7 @@
 "Cloned as a .bare repository with the default branch checked out beside it." = "Cloned as a .bare repository with the default branch checked out beside it.";
 "Enter a repository URL or an owner/repo name." = "Enter a repository URL or an owner/repo name.";
 "Enter a folder name." = "Enter a folder name.";
+"Choose a base directory in Settings first." = "Choose a base directory in Settings first.";
 "The folder name must be a single directory name." = "The folder name must be a single directory name.";
 "A file or directory named “%@” already exists." = "A file or directory named “%@” already exists.";
 "Could not determine the repository's default branch." = "Could not determine the repository's default branch.";
