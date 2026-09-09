@@ -25,8 +25,16 @@ enum OpencodePluginRemover {
     }
 
     /// Whether the file's contents identify it as a plugin Atelier installed.
+    ///
+    /// The marker is looked for on the *first line only*, which is where the
+    /// installer stamped it. A whole-file `contains` also matched someone
+    /// else's plugin that merely mentions the marker — a comment saying what it
+    /// replaced, say — and this decides what gets deleted.
+    ///
+    /// Not `hasPrefix`: the installer wrote the marker inside a comment
+    /// (`// ATELIER_OPENCODE_PLUGIN version=9`), so it never sat at column zero.
     static func isAtelierPlugin(contents: String) -> Bool {
-        contents.contains(marker)
+        contents.prefix(while: { !$0.isNewline }).contains(marker)
     }
 
     /// Deletes the installed plugin, if it is one Atelier wrote.
