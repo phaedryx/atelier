@@ -575,12 +575,69 @@ final class AppEnvironment: ObservableObject {
         guard ghAvailable, let ghPath = toolStatus.gh.path, !branches.isEmpty else { return }
         Task.detached {
             let prs = GitHub.Operations.recentPRs(ghPath: ghPath, at: directory, limit: 100)
-            let prsByBranch = GitHub.PR.byBranch(prs)
-            await MainActor.run {
-                self.commitChanges {
-                    for branch in branches {
-                        let key = "\(directory)|\(branch)"
-                        if let pr = prsByBranch[branch] {
+            await self.reconcileBranchPRs(
+                directory: directory,
+                branches: branches,
+                prsByBranch: GitHub.PR.byBranch(prs),
+                ghPath: ghPath
+            )
+        }
+    }
+
+    /// Fold one project's bulk `pr list` result into the branch PR cache.
+    ///
+    /// Shared by both refreshers because the interesting decision is the one they
+    /// disagreed about: what a branch's *absence* from the bulk result means. It means
+    /// almost nothing. `recentPRs` asks for the 100 most recent PRs in any state, so in a
+    /// busy repository a long-lived workstream's PR falls out of that window while still
+    /// being the live PR for its branch. Blanking on absence put a **Create PR** action
+    /// (`GitHubActionMenu.primaryAction`, which branches on `prState == nil`) on a branch
+    /// that already had one — and it was sticky, because the only thing that would have
+    /// restored the badge was a targeted lookup this refresher never made.
+    ///
+    /// So absence is a question, not an answer: a branch that has a badge gets asked about
+    /// directly with `prForBranch`, and only a lookup that comes back empty clears the
+    /// cache. A branch with no badge and no bulk hit needs no lookup at all — it is a
+    /// branch nobody has opened a PR for.
+    ///
+    /// `nonisolated` because the `gh` calls must not run on the main actor; every cache
+    /// touch is inside a `MainActor.run`.
+    private nonisolated func reconcileBranchPRs(
+        directory: String,
+        branches: Set<String>,
+        prsByBranch: [String: GitHub.PR],
+        ghPath: String
+    ) async {
+        // Which branches the bulk result did not cover *and* still show a badge. Read here
+        // rather than snapshotted before the network hop, so a PR that arrived from
+        // `refreshGitHubInfo` while the hop was in flight is defended too.
+        let unanswered: [(branch: String, key: String)] = await MainActor.run {
+            var unanswered: [(branch: String, key: String)] = []
+            self.commitChanges {
+                for branch in branches {
+                    let key = "\(directory)|\(branch)"
+                    if let pr = prsByBranch[branch] {
+                        self.githubBranchPRCache[key] = pr
+                    } else if self.githubBranchPRCache[key] != nil {
+                        unanswered.append((branch: branch, key: key))
+                    }
+                }
+            }
+            return unanswered
+        }
+
+        guard !unanswered.isEmpty else { return }
+
+        await withTaskGroup(of: (String, GitHub.PR?).self) { group in
+            for lookup in unanswered {
+                group.addTask {
+                    (lookup.key, GitHub.Operations.prForBranch(ghPath: ghPath, at: directory, branch: lookup.branch))
+                }
+            }
+            for await (key, pr) in group {
+                await MainActor.run {
+                    self.commitChanges {
+                        if let pr {
                             self.githubBranchPRCache[key] = pr
                         } else {
                             self.githubBranchPRCache.removeValue(forKey: key)
@@ -619,70 +676,23 @@ final class AppEnvironment: ObservableObject {
         // is every call made before tool detection finishes at launch.
         lastBranchPRRefresh = now
 
-        // Which branches already have a badge on screen. A branch missing from the bulk
-        // result only warrants a targeted lookup if it had one — otherwise it is simply a
-        // branch that has never been opened as a PR.
-        var cachedKeys: Set<String> = []
-        for (dir, branches) in projectBranches {
-            for branch in branches where githubBranchPRCache["\(dir)|\(branch)"] != nil {
-                cachedKeys.insert("\(dir)|\(branch)")
-            }
-        }
-
         Task.detached {
             // One gh call per project, now covering every PR state. That is what collapses
             // the open-then-merged two-phase lookup this used to need: a merged PR arrives
             // in the same response as an open one.
-            var allPRs: [(String, [GitHub.PR])] = []
-            await withTaskGroup(of: (String, [GitHub.PR]).self) { group in
-                for (dir, _) in projectBranches {
+            //
+            // Each project's result is reconciled as it lands, in its own child task, so one
+            // project's targeted follow-up lookups do not hold up another project's badges.
+            await withTaskGroup(of: Void.self) { group in
+                for (dir, branches) in projectBranches {
                     group.addTask {
-                        (dir, GitHub.Operations.recentPRs(ghPath: ghPath, at: dir, limit: 100))
-                    }
-                }
-                for await result in group {
-                    allPRs.append(result)
-                }
-            }
-
-            var missing: [(dir: String, branch: String, key: String)] = []
-            for (dir, prs) in allPRs {
-                let branches = projectBranches[dir] ?? []
-                let prsByBranch = GitHub.PR.byBranch(prs)
-
-                await MainActor.run {
-                    self.commitChanges {
-                        for branch in branches {
-                            let key = "\(dir)|\(branch)"
-                            if let pr = prsByBranch[branch] {
-                                self.githubBranchPRCache[key] = pr
-                            } else if cachedKeys.contains(key) {
-                                missing.append((dir: dir, branch: branch, key: key))
-                            }
-                        }
-                    }
-                }
-            }
-
-            // A branch with a badge that fell out of the bulk result is usually just older
-            // than the 100 most recent PRs, so ask about it directly rather than blanking a
-            // badge that is still correct. Only a lookup that finds nothing clears the cache.
-            guard !missing.isEmpty else { return }
-            await withTaskGroup(of: (String, GitHub.PR?).self) { group in
-                for lookup in missing {
-                    group.addTask {
-                        (lookup.key, GitHub.Operations.prForBranch(ghPath: ghPath, at: lookup.dir, branch: lookup.branch))
-                    }
-                }
-                for await (key, pr) in group {
-                    await MainActor.run {
-                        self.commitChanges {
-                            if let pr {
-                                self.githubBranchPRCache[key] = pr
-                            } else {
-                                self.githubBranchPRCache.removeValue(forKey: key)
-                            }
-                        }
+                        let prs = GitHub.Operations.recentPRs(ghPath: ghPath, at: dir, limit: 100)
+                        await self.reconcileBranchPRs(
+                            directory: dir,
+                            branches: branches,
+                            prsByBranch: GitHub.PR.byBranch(prs),
+                            ghPath: ghPath
+                        )
                     }
                 }
             }
