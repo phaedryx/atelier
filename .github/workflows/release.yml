@@ -61,6 +61,16 @@ jobs:
           key: spm-${{ hashFiles('project.yml') }}
           restore-keys: spm-
 
+      # Keyed on the submodule's checked-out commit, the way ci.yml does it.
+      # `hashFiles('ghostty/.git')` stood here and could not work: for a
+      # submodule that path is a pointer file whose contents never change when
+      # the pinned commit moves, so a stale libghostty would be restored
+      # forever. The arch is in the namespace too — an arm64 release must never
+      # restore the universal artifact this workflow used to build.
+      - name: Compute Ghostty cache key
+        id: ghostty-key
+        run: echo "key=ghostty-release-$(git -C ghostty rev-parse HEAD)-zig-0.15.2-arm64" >> "$GITHUB_OUTPUT"
+
       - name: Cache Ghostty xcframework
         id: ghostty-cache
         uses: actions/cache@v5
@@ -68,13 +78,16 @@ jobs:
           path: |
             ghostty/macos/GhosttyKit.xcframework
             ghostty/zig-out/share
-          key: ghostty-build-${{ hashFiles('ghostty/.git') }}
+          key: ${{ steps.ghostty-key.outputs.key }}
 
       - name: Build Ghostty xcframework
         if: steps.ghostty-cache.outputs.cache-hit != 'true'
         run: |
           cd ghostty
-          zig build -Demit-xcframework=true -Demit-macos-app=false -Dxcframework-target=universal -Doptimize=ReleaseFast
+          # `native`, not `universal`: the release ships arm64 only, and the
+          # macos-15 runner is Apple Silicon. Building both slices cost a cold
+          # zig build's worth of time for an x86_64 half nothing installs.
+          zig build -Demit-xcframework=true -Demit-macos-app=false -Dxcframework-target=native -Doptimize=ReleaseFast
 
       # Two toolchains, deliberately — the same split ci.yml makes, for the
       # same reasons. zig 0.15.2 (required by ghostty v1.3.1) cannot link
@@ -109,12 +122,15 @@ jobs:
       - name: Build release
         # Same flags as `./scripts/dev.sh release`: ad-hoc identity ("-"), the
         # local entitlements file, and no --timestamp (a secure timestamp needs
-        # a real certificate).
+        # a real certificate). Plus `ARCHS=arm64`: a Release build otherwise
+        # takes ARCHS_STANDARD, which is arm64 + x86_64, and the x86_64 half
+        # would fail to link against a `native` xcframework.
         run: |
           xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
             -destination 'generic/platform=macOS' \
             -derivedDataPath build/derived \
             -clonedSourcePackagesDirPath build/derived/SourcePackages \
+            ARCHS=arm64 \
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGN_STYLE=Manual \
             ENABLE_HARDENED_RUNTIME=YES \
@@ -203,6 +219,10 @@ jobs:
           # under it.
           BODY=$(gh release view "$TAG_NAME" --json body -q .body)
           NOTE=$(cat <<'MARKDOWN'
+          > **Apple Silicon only.** This DMG is an arm64 build. It will not run
+          > on an Intel Mac, even though the deployment target (macOS 14) is one
+          > an Intel Mac can reach.
+          >
           > **This build is not notarized.** It is ad-hoc signed, so macOS will
           > refuse to open it on the first try. Right-click the app in
           > `/Applications` and choose **Open**, then confirm — or run:
