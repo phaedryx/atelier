@@ -81,6 +81,24 @@ final class PathUtilitiesTests: XCTestCase {
         XCTAssertEqual("/no/such/place".canonicalPath, "/no/such/place")
     }
 
+    /// A non-existent path ending in `..` used to hang: walking up with
+    /// `deletingLastPathComponent()` returns that path unchanged, with the same
+    /// component count, so the loop never advanced and never hit its floor.
+    /// Reachable from `Project.hoistedLocation`, whose candidate is built from a
+    /// `gitdir:` string read off disk — on the launch path, inside a decoder.
+    func testADotDotSuffixOnAMissingPathTerminates() {
+        XCTAssertEqual("/no/such/place/..".canonicalPath, "/no/such")
+        XCTAssertEqual("/no/such/place/../..".canonicalPath, "/no")
+        XCTAssertEqual("/no/../..".canonicalPath, "/")
+    }
+
+    /// The same shape, spelled through a symlink, since that is how it would
+    /// actually arrive: a relative `gitdir:` resolved against a checkout.
+    func testADotDotSuffixResolvesAgainstTheRealAncestor() {
+        let viaLink = link.appendingPathComponent("gone/..").path
+        XCTAssertEqual(viaLink.canonicalPath, real.path.canonicalPath)
+    }
+
     func testRootCanonicalizesToItself() {
         XCTAssertEqual("/".canonicalPath, "/")
     }

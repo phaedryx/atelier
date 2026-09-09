@@ -80,22 +80,32 @@ extension String {
     /// above the missing tail is gone.
     var canonicalPath: String {
         let fileManager = FileManager.default
+        var components = URL(fileURLWithPath: self).pathComponents
         var missing: [String] = []
-        var url = URL(fileURLWithPath: self)
 
+        // The walk drops one element of `components` per turn, so it always
+        // reaches `["/"]`. Walking with `deletingLastPathComponent()` instead
+        // does **not** terminate: on a path that does not exist and ends in
+        // `..` it is a fixed point — `/no/such/place/..` yields itself, with the
+        // same component count, forever. A `pathComponents.count > 1` floor does
+        // not save it, because the count never falls.
+        //
         // `fileExists` follows symlinks, so a different spelling of a directory
-        // that is present stops the walk immediately. The floor is "/", which
-        // always exists, so this terminates; each turn costs one `stat`, and
-        // only for a component that is not there.
-        while !fileManager.fileExists(atPath: url.path), url.pathComponents.count > 1 {
-            missing.append(url.lastPathComponent)
-            url = url.deletingLastPathComponent()
+        // that is present stops the walk at once. Each turn costs one `stat`,
+        // and only for a component that is not there.
+        while components.count > 1,
+              !fileManager.fileExists(atPath: NSString.path(withComponents: components))
+        {
+            missing.append(components.removeLast())
         }
 
-        var resolved = url.resolvingSymlinksInPath()
+        var resolved = URL(fileURLWithPath: NSString.path(withComponents: components))
+            .resolvingSymlinksInPath()
         for component in missing.reversed() {
             resolved.appendPathComponent(component)
         }
+        // Any `..` still in the tail is resolved lexically here, which is the
+        // only option left: nothing it refers to is on disk.
         return resolved.standardizedFileURL.path
     }
 
