@@ -89,6 +89,38 @@ jobs:
           # zig build's worth of time for an x86_64 half nothing installs.
           zig build -Demit-xcframework=true -Demit-macos-app=false -Dxcframework-target=native -Doptimize=ReleaseFast
 
+      # `native` emits a single-slice xcframework, so the slice directory is
+      # `macos-arm64` — not the `macos-arm64_x86_64` that `project.yml`'s
+      # LIBRARY_SEARCH_PATHS names, which is the universal artifact's name and
+      # the one `.shared/` carries for local builds. Resolving the slice here
+      # and overriding the search path for this build only keeps project.yml
+      # correct for everyone else, and makes flipping the ghostty target a
+      # one-line change instead of a link failure.
+      #
+      # The glob is unambiguous: the iOS slices are `ios-arm64*`, so `macos-*`
+      # matches exactly one directory under either target.
+      - name: Resolve the Ghostty slice and resources
+        id: ghostty-slice
+        run: |
+          root=ghostty/macos/GhosttyKit.xcframework
+          slice=$(ls -d "$root"/macos-* 2>/dev/null | head -1)
+          if [ -z "$slice" ]; then
+            echo "::error::no macos-* slice in $root"
+            ls -la "$root" || true
+            exit 1
+          fi
+          # All three failures surface here, in a second, rather than at three
+          # different depths of a ten-minute build: a missing library fails at
+          # link, missing resources fail at Copy Bundle Resources.
+          fail=0
+          test -f "$slice/libghostty.a" || { echo "::error::$slice has no libghostty.a"; ls -la "$slice"; fail=1; }
+          test -d ghostty/zig-out/share/terminfo || { echo "::error::no ghostty/zig-out/share/terminfo"; fail=1; }
+          test -d ghostty/zig-out/share/ghostty || { echo "::error::no ghostty/zig-out/share/ghostty"; fail=1; }
+          [ "$fail" -eq 0 ] || exit 1
+          echo "Slice: $slice"
+          lipo -info "$slice/libghostty.a"
+          echo "path=$PWD/$slice" >> "$GITHUB_OUTPUT"
+
       # Two toolchains, deliberately — the same split ci.yml makes, for the
       # same reasons. zig 0.15.2 (required by ghostty v1.3.1) cannot link
       # against the macOS 26 SDK — every libc symbol comes back undefined — so
@@ -124,13 +156,15 @@ jobs:
         # local entitlements file, and no --timestamp (a secure timestamp needs
         # a real certificate). Plus `ARCHS=arm64`: a Release build otherwise
         # takes ARCHS_STANDARD, which is arm64 + x86_64, and the x86_64 half
-        # would fail to link against a `native` xcframework.
+        # would fail to link against a `native` xcframework. And the resolved
+        # slice path, because project.yml's is the universal one.
         run: |
           xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
             -destination 'generic/platform=macOS' \
             -derivedDataPath build/derived \
             -clonedSourcePackagesDirPath build/derived/SourcePackages \
             ARCHS=arm64 \
+            LIBRARY_SEARCH_PATHS="${{ steps.ghostty-slice.outputs.path }}" \
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGN_STYLE=Manual \
             ENABLE_HARDENED_RUNTIME=YES \
