@@ -323,6 +323,15 @@ struct TerminalContainerView: View {
     /// Why Start can do nothing, when it can do nothing and the pane's own copy
     /// does not already explain it. Set in the same refresh as `runPlan`.
     @State private var runUnavailableReason: String?
+    /// True while `doStartRun` is awaiting `down` on a socket it has to reclaim.
+    ///
+    /// Start is otherwise synchronous, and that is what kept it safe to press
+    /// twice: the second press found `runStarted` already true. The reclaim path
+    /// awaits a child process before flipping any state, which reopens that
+    /// window for as long as `down` takes — and a second press would then run a
+    /// second `down` and a second `beginRun`, the later one bumping
+    /// `runGeneration` and replacing the surface the earlier one just built.
+    @State private var isReclaimingRunSocket = false
     /// The last thing background setup said about this workstream.
     ///
     /// `AsyncSetupService` has posted `.asyncSetupStateChanged` since it
@@ -1216,6 +1225,69 @@ struct TerminalContainerView: View {
         doStartRun()
     }
 
+    /// Start, after reclaiming this workstream's execute socket if anything is
+    /// still holding it.
+    ///
+    /// `process-compose up` refuses to bind a socket another server holds:
+    /// `unix socket <path> is already in use`, exit 1. In the chained
+    /// `prepare && execute` that `ProcessCompose.PhaseRunner.startCommand`
+    /// builds, it refuses at the **end** — so the user waits out the entire
+    /// prepare phase, which for a real project is an install, a package build
+    /// and a bundle install, and is then told about a unix socket.
+    ///
+    /// Whatever holds it is this workstream's own orphaned run: the path is
+    /// named for the workstream id. It happens because `stopRun` kills the tmux
+    /// session and drops the surface without ever calling `down`, so a server
+    /// can outlive the run Atelier believes it stopped — and `runStarted` then
+    /// reads false while the socket is still bound, which is exactly the state
+    /// that makes Start look available and fail.
+    ///
+    /// Reclaiming belongs to Start rather than to Stop, or as well as to Stop:
+    /// Start already means "tear down and re-run" — it kills the tmux session
+    /// and bumps `runGeneration` — and a server stranded by a *crash*, or by a
+    /// quit that raced `stopAllServers`, was never going to be cleaned up by a
+    /// Stop that is not coming.
+    ///
+    /// A leftover socket *file* is deliberately not handled: process-compose
+    /// overwrites one. See `ProcessCompose.Client.isServerListening`.
+    @MainActor
+    private func doStartRun() {
+        guard let command = resolvedRunCommand else { return }
+
+        // A reclaim already in flight owns this press. See
+        // `isReclaimingRunSocket`.
+        guard !isReclaimingRunSocket else { return }
+
+        let socketPath = ProcessCompose.PhaseRunner.socketPath(for: workstreamID)
+        guard ProcessCompose.Client.isServerListening(atSocketPath: socketPath),
+              let binary = ProcessCompose.Settings.resolveBinary()
+        else {
+            beginRun(command: command)
+            return
+        }
+
+        logger.warning("[Atelier] doStartRun: reclaiming execute socket still in use")
+        let worktree = workingDirectory
+        isReclaimingRunSocket = true
+        Task {
+            // Cleared however this ends — a thrown or cancelled Task that left
+            // the flag set would make Start permanently inert for this
+            // workstream, which is worse than the double-press it prevents.
+            defer { isReclaimingRunSocket = false }
+            // `down` spawns a child and waits on it, so it stays off the main
+            // actor. The run begins once the socket is free, not before: that
+            // ordering is the whole point.
+            await Task.detached {
+                ProcessCompose.PhaseExecutor.shutDown(
+                    binary: binary,
+                    socketPath: socketPath,
+                    workingDirectory: worktree
+                )
+            }.value
+            beginRun(command: command)
+        }
+    }
+
     /// Starts the run session. The command is either the user's own override or
     /// the phase-scoped `prepare && execute` Atelier composes from the located
     /// config. Nothing here is gated behind approval, because this is attended:
@@ -1223,9 +1295,7 @@ struct TerminalContainerView: View {
     /// and Stop is to hand. The pane does *not* display this command — what it
     /// shows for a process-compose source is the list of files that will be
     /// loaded.
-    @MainActor
-    private func doStartRun() {
-        guard let command = resolvedRunCommand else { return }
+    private func beginRun(command: String) {
         // A run always gets an Environment tab, because that tab is what can
         // see and stop it. `addBrowser` starts the dev server through
         // `startRunIfNeeded` and opens only a browser, so a run could exist

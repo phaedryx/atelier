@@ -4,6 +4,20 @@ Atelier was forked from [Factory Floor](https://github.com/alltuner/factoryfloor
 at v0.1.79. Everything below that release is Factory Floor's history; those links
 point at the upstream repository.
 
+## Unreleased
+
+### Bug Fixes
+
+* **process-compose:** Start reclaims this workstream's execute socket when a
+  server is still bound to it, instead of failing at the end of the run.
+  `process-compose up` refuses a socket another server holds — and in the chained
+  `prepare && execute` it refuses *after* prepare, so the whole phase (an
+  install, a package build, a bundle install) was paid for before the user was
+  told about a unix socket. `stopRun` kills the tmux session without calling
+  `down`, so a server can outlive the run Atelier believes it stopped; a crash
+  or a quit that races `stopAllServers` leaves one too. A leftover socket *file*
+  is deliberately untouched, since process-compose overwrites one.
+
 ## [0.2.0](https://github.com/phaedryx/atelier/compare/731cc14...v0.2.0) (2026-08-31)
 
 The first Atelier release: everything since the hard fork. The theme is

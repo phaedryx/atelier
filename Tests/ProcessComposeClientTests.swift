@@ -215,4 +215,94 @@ final class ProcessComposeClientTests: XCTestCase {
         XCTAssertFalse(ProcessCompose.Client.isChunked("HTTP/1.1 200 OK\r\nContent-Length: 3"))
         XCTAssertTrue(ProcessCompose.Client.isChunked("HTTP/1.1 200 OK\r\ntransfer-encoding:  CHUNKED "))
     }
+
+    // MARK: - isServerListening
+
+    /// A real listening unix socket, since the whole point of this probe is that
+    /// it answers a question `fileExists` gets wrong.
+    private func makeListeningSocket(at path: String) throws -> Int32 {
+        Darwin.unlink(path)
+        // `Darwin.`-qualified throughout: `bind`, `listen` and `close` all
+        // resolve to XCTestCase members otherwise, and `bind` fails to compile
+        // rather than misbehaving quietly.
+        let descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        guard descriptor >= 0 else {
+            XCTFail("socket() failed: \(errno)")
+            throw ClientTestError.setupFailed
+        }
+        addTeardownBlock {
+            Darwin.close(descriptor)
+            Darwin.unlink(path)
+        }
+
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let bytes = Array(path.utf8)
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: bytes) }
+
+        let bound = withUnsafePointer(to: address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard bound == 0 else {
+            XCTFail("bind() failed: \(errno)")
+            throw ClientTestError.setupFailed
+        }
+        guard Darwin.listen(descriptor, 1) == 0 else {
+            XCTFail("listen() failed: \(errno)")
+            throw ClientTestError.setupFailed
+        }
+        return descriptor
+    }
+
+    private enum ClientTestError: Error {
+        case setupFailed
+    }
+
+    /// Short, because `sun_path` is 104 bytes and the temporary directory alone
+    /// can eat most of it.
+    private func socketPath() -> String {
+        "/tmp/atl-probe-\(UUID().uuidString.prefix(8)).sock"
+    }
+
+    func testIsServerListeningIsFalseWhenNothingIsThere() {
+        XCTAssertFalse(ProcessCompose.Client.isServerListening(atSocketPath: socketPath()))
+    }
+
+    /// The case that decides the design. A server killed without shutting down
+    /// leaves its socket file behind, and process-compose overwrites one without
+    /// complaint — so a `fileExists` probe would report "in use" and make Start
+    /// tear down a server that is not there.
+    func testIsServerListeningIsFalseForALeftoverSocketFile() {
+        let path = socketPath()
+        FileManager.default.createFile(atPath: path, contents: Data())
+        addTeardownBlock { Darwin.unlink(path) }
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: path), "the file is there")
+        XCTAssertFalse(
+            ProcessCompose.Client.isServerListening(atSocketPath: path),
+            "a file nobody is listening on is not a server"
+        )
+    }
+
+    func testIsServerListeningIsTrueWhileSomethingIsBound() throws {
+        let path = socketPath()
+        _ = try makeListeningSocket(at: path)
+
+        XCTAssertTrue(ProcessCompose.Client.isServerListening(atSocketPath: path))
+    }
+
+    /// Closing the listener has to flip the answer back, or Start would keep
+    /// paying for a `down` against a socket that is already free.
+    func testIsServerListeningIsFalseOnceTheListenerCloses() throws {
+        let path = socketPath()
+        let descriptor = try makeListeningSocket(at: path)
+        XCTAssertTrue(ProcessCompose.Client.isServerListening(atSocketPath: path))
+
+        Darwin.close(descriptor)
+        Darwin.unlink(path)
+
+        XCTAssertFalse(ProcessCompose.Client.isServerListening(atSocketPath: path))
+    }
 }
