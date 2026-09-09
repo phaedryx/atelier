@@ -13,6 +13,15 @@ import getTextmateServiceOverride from '@codingame/monaco-vscode-textmate-servic
 import getThemeServiceOverride from '@codingame/monaco-vscode-theme-service-override'
 import getLanguagesServiceOverride from '@codingame/monaco-vscode-languages-service-override'
 import { MenuRegistry, MenuId } from '@codingame/monaco-vscode-api/vscode/vs/platform/actions/common/actions'
+// `?url` (not a bare JSON import) so Vite emits the theme as an asset file the
+// extension can be pointed at, instead of inlining it as a module.
+import palenightThemeUrl from './themes/palenight.json?url'
+
+// The two themes the app switches between. Palenight is dark-only, so light
+// appearance keeps VS Code's own Light Modern. Both `main.js` and `diff.js`
+// import these — a literal in either would drift from the other.
+export const DARK_THEME = 'Palenight Theme'
+export const LIGHT_THEME = 'Light Modern'
 
 // --- Capture extension resource URL mappings ---
 // FileAccess.uriToBrowserUri() uses a ResourceMap internally, but the URI lookup
@@ -30,6 +39,37 @@ FileAccess.registerStaticBrowserUri = function (uri, browserUri) {
 // Static imports would evaluate before the module body.
 await import('@codingame/monaco-vscode-all-language-default-extensions')
 await import('@codingame/monaco-vscode-theme-defaults-default-extension')
+
+// --- Palenight color theme ---
+// Registered exactly the way the codingame default-extension packages register
+// theirs: a manifest contributing a theme, plus a browser URL for the theme
+// JSON. Vendored under src/themes/ from whizkydee/vscode-palenight-theme at
+// commit 6291efa (v2.0.4, MIT — see src/themes/palenight-LICENSE.md); the
+// marketplace extension is not published to npm.
+//
+// Must come after the registerStaticBrowserUri patch above so the theme's URL
+// lands in `extensionResourceUrls` — ExtensionResourceLoader below reads it
+// from there. `system: true` skips the extension-enablement machinery, which
+// has no store in standalone mode.
+const { registerExtension } = await import('@codingame/monaco-vscode-api/extensions')
+const palenightExtension = registerExtension({
+  name: 'palenight-theme',
+  publisher: 'whizkydee',
+  version: '2.0.4',
+  license: 'MIT',
+  engines: { vscode: '*' },
+  categories: ['Themes'],
+  contributes: {
+    themes: [{
+      // The theme has no `id` in its own manifest, so this label IS the
+      // identifier `workbench.colorTheme` is matched against.
+      label: DARK_THEME,
+      uiTheme: 'vs-dark',
+      path: './themes/palenight.json'
+    }]
+  }
+}, undefined, { system: true })
+palenightExtension.registerFileUrl('themes/palenight.json', palenightThemeUrl, 'application/json')
 
 // --- JS ↔ Swift bridge ---
 export function postToSwift(msg) {
@@ -141,7 +181,11 @@ await initialize({
 // configurationDefaults doesn't work in @codingame/monaco-vscode-api standalone mode
 // because DefaultConfiguration.getConfigurationDefaultOverrides() is never overridden.
 const configService = await getService(IConfigurationService)
-await configService.updateValue('workbench.colorTheme', 'Dark Modern')
+// The theme service matches by label, so the contribution has to be live before
+// the value is set — otherwise nothing matches and the theme silently stays put.
+// `whenReady()` waits on services, so it can only be awaited after initialize().
+await palenightExtension.whenReady()
+await configService.updateValue('workbench.colorTheme', DARK_THEME)
 
 // Import monaco AFTER initialize()
 const monaco = await import('monaco-editor')

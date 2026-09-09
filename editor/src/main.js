@@ -1,4 +1,4 @@
-import { monaco, configService, postToSwift } from './shared-init.js'
+import { monaco, configService, postToSwift, DARK_THEME, LIGHT_THEME } from './shared-init.js'
 
 // --- Create editor ---
 const editor = monaco.editor.create(document.getElementById('editor'), {
@@ -139,7 +139,7 @@ window.editorAPI = {
 
   // Switch between light and dark theme.
   setTheme(isDark) {
-    configService.updateValue('workbench.colorTheme', isDark ? 'Dark Modern' : 'Light Modern')
+    configService.updateValue('workbench.colorTheme', isDark ? DARK_THEME : LIGHT_THEME)
     document.documentElement.style.colorScheme = isDark ? 'dark' : 'light'
   }
 }
