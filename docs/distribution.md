@@ -21,13 +21,24 @@ an Intel user downloading the DMG, clearing quarantine as the release note
 instructs, and still getting a binary that cannot execute. The release body
 leads with the architecture for that reason.
 
-The release workflow builds libghostty with `-Dxcframework-target=native` on an
-Apple Silicon runner and pins the app to `ARCHS=arm64`. Both halves are
-required: a Release build otherwise takes `ARCHS_STANDARD` (arm64 + x86_64) and
-its x86_64 slice fails to link against a `native` xcframework. Building
-universal is a supported option — `-Dxcframework-target=universal` plus dropping
-the `ARCHS` override — and costs a second zig build for a slice that, for a
-personal project shipped to Apple Silicon machines, nothing installs.
+`ARCHS=arm64` on the app build is what makes the shipped binary arm64. The
+Release configuration otherwise takes `ARCHS_STANDARD`, which is arm64 + x86_64.
+
+libghostty is still built `-Dxcframework-target=universal`, which looks
+wasteful and is deliberate. `native` does not link. It routes through
+`GhosttyLib.initStatic`, which emits **`libghostty-fat.a`** — "fat" meaning all
+static dependencies combined into one archive, not multiple architectures —
+while the app links with `-lghostty` and so needs `libghostty.a`, the name only
+`initMacOSUniversal` produces. `native` also names its slice directory
+`macos-arm64` instead of `macos-arm64_x86_64`. Both couplings are invisible
+until the link fails, and both cost a release run to discover.
+
+So the universal xcframework is built and the linker takes its arm64 slice out
+of the fat static lib; the x86_64 slice goes unused. The waste is a cold zig
+build compiling slices nothing installs, once per submodule bump. Making
+`native` work would mean redirecting `-lghostty` at `libghostty-fat.a` as well
+as resolving the slice directory — more moving parts than the wasted
+compilation is worth.
 
 ## Builds are not notarized
 
