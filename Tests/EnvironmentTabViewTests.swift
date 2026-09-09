@@ -211,4 +211,27 @@ final class EnvironmentTabViewTests: XCTestCase {
     func testAnUntouchedSelectionStaysUntouched() {
         XCTAssertEqual(processSelectionOnLoad(stored: [], declared: ["api", "bff"]), [])
     }
+
+    // MARK: - Keeping Start reachable under the checklist
+
+    /// The vertical list is the layout that pushed Start off the pane once
+    /// already. Above the cap it stops growing and scrolls instead.
+    func testALongChecklistIsCappedSoStartKeepsItsPlace() {
+        XCTAssertEqual(processChecklistHeight(count: 20, rowHeight: 20, visibleRows: 8), 160)
+        XCTAssertEqual(processChecklistHeight(count: 9, rowHeight: 20, visibleRows: 8), 160)
+    }
+
+    /// And below the cap it is exactly as tall as its rows — one fixed height
+    /// for every list would give a small project rows of dead space above its
+    /// Start button, which is the same theft by another route.
+    func testAShortChecklistIsExactlyAsTallAsItsRows() {
+        XCTAssertEqual(processChecklistHeight(count: 3, rowHeight: 20, visibleRows: 8), 60)
+        XCTAssertEqual(processChecklistHeight(count: 8, rowHeight: 20, visibleRows: 8), 160)
+    }
+
+    /// `EnvironmentTabView` does not render the checklist for an empty config,
+    /// but a zero-height scroll view is a bad thing to depend on that for.
+    func testAnEmptyChecklistStillHasARowOfHeight() {
+        XCTAssertEqual(processChecklistHeight(count: 0, rowHeight: 20, visibleRows: 8), 20)
+    }
 }

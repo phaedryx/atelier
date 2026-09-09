@@ -148,62 +148,108 @@ func processSelectionOnLoad(stored: [String], declared: [String]) -> [String] {
     return surviving.isEmpty || surviving == Set(declared) ? [] : surviving.sorted()
 }
 
+/// The height of one checklist row.
+///
+/// Pinned rather than inferred. `processChecklistHeight` multiplies by it to
+/// decide the list's frame, so a row that renders at some other height would
+/// make that arithmetic a guess: a checkbox's intrinsic height comes from the
+/// control, not from the 11pt label, and undershooting it by two points would
+/// scroll a three-process list that was meant to fit exactly. The rows are
+/// given this height explicitly so the sum is right by construction.
+let processChecklistRowHeight: CGFloat = 20
+
+/// How tall the checklist is: one row each, up to `visibleRows`, and then it
+/// scrolls.
+///
+/// The choices used to wrap into an adaptive grid, because a vertical column of
+/// six processes pushed the Start button off the useful part of the pane. The
+/// list is vertical again by request, so that failure is prevented here instead
+/// of by the layout: past `visibleRows` entries the column stops growing, so no
+/// config can walk Start down the pane by declaring more processes.
+///
+/// Exactly as tall as its contents below the cap, which matters as much as the
+/// cap itself — a single fixed height would hand a three-process project five
+/// rows of dead space above its Start button, which is the same theft by
+/// another route.
+///
+/// A free function, like its neighbours, so both ends can be tested without a
+/// view.
+func processChecklistHeight(
+    count: Int,
+    rowHeight: CGFloat = processChecklistRowHeight,
+    visibleRows: Int = 8
+) -> CGFloat {
+    CGFloat(min(max(count, 1), visibleRows)) * rowHeight
+}
+
 /// Which of `execute`'s processes the Start button will launch.
 ///
-/// A view of its own, and rendered by `EnvironmentTabView` in **both** the
-/// started and not-started states, because the process table it used to live
-/// inside only renders once a run exists — so the control for choosing what to
-/// start was unreachable until after starting, which is the one moment it is
-/// no use.
+/// A view of its own rather than a section of the process table, which is where
+/// it used to live: the table only renders once a run exists, so the control
+/// for choosing what to start was unreachable until after starting — the one
+/// moment it is no use.
+///
+/// Rendered **before a run only**, which is `showsProcessSelection`'s call and
+/// documented there; a stale version of this comment claimed both states, and
+/// leaving it editable mid-run was the other half of the same defect.
 ///
 /// The choices come from the config rather than from the live API for the same
-/// reason: before Start there is nothing running to enumerate.
+/// reason it moved out of the table: before Start there is nothing running to
+/// enumerate.
 struct ProcessSelectionView: View {
     let workstreamID: UUID
     let declaredProcesses: [String]
 
     @State private var selection: Set<String> = []
 
+    /// A bare vertical checklist, with no heading and no "All" button.
+    ///
+    /// The heading named a pane that no longer exists: sitting directly above
+    /// Start, a column of checkboxes reads as the thing Start will run without
+    /// a label saying so. "All" went with it — checking every box canonicalises
+    /// back to the stored empty set on its own, so it was a shortcut for
+    /// something the checkboxes already do.
+    ///
+    /// Always a `ScrollView`, even for the two-process case that cannot
+    /// overflow. Branching on the count instead would give the two shapes
+    /// different view identities, so crossing the cap — a process added to the
+    /// YAML — would tear the subtree down and re-fire `onAppear`. One arm, one
+    /// identity; `processChecklistHeight` is what makes the short case look
+    /// like no scroll view at all.
+    ///
+    /// Sized to its rows in *both* directions, which is why there is no
+    /// `maxWidth: .infinity` and no horizontal padding here. `EnvironmentTabView`
+    /// renders this as the first child of the centred stack that holds Start,
+    /// so a checklist that spanned the pane would put its checkboxes against
+    /// the far left edge with the button centred a pane away — the list has to
+    /// hug its content for the two to read as one group. A `ScrollView` is
+    /// greedy across its scroll axis, hence `fixedSize(horizontal:)` to make it
+    /// take the widest row instead.
+    ///
+    /// `defaultScrollAnchor(.top)` because otherwise a list past the cap opens
+    /// scrolled to the *bottom* — a ten-process config rendered `proc-03` first
+    /// and hid the two above it with no sign they were there. A checklist whose
+    /// first rows are off-screen on arrival is worse than one that is too tall.
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack {
-                Text("Processes to start")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-                Spacer()
-                if !selection.isEmpty {
-                    // Stored as empty, the canonical "all" — see
-                    // `processSelectionAfterToggling`.
-                    Button("All") { store([]) }
-                        .buttonStyle(.borderless)
-                        .font(.system(size: 9))
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 4)
-
-            // Wraps across the pane's width rather than one per line. Six
-            // processes is an ordinary stack and a vertical list of them pushed
-            // the Start button off the useful part of the pane.
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 105), spacing: 4, alignment: .leading)],
-                alignment: .leading,
-                spacing: 1
-            ) {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
                 ForEach(sortedProcesses, id: \.self) { name in
                     Toggle(isOn: binding(for: name)) {
                         Text(name)
                             .font(.system(size: 11, design: .monospaced))
                     }
                     .toggleStyle(.checkbox)
+                    .frame(height: processChecklistRowHeight)
                     .disabled(isLastSelected(name))
                     .help(isLastSelected(name)
                         ? NSLocalizedString("At least one process has to start.", comment: "")
                         : "")
                 }
             }
-            .padding(.horizontal, 12)
         }
+        .defaultScrollAnchor(.top)
+        .frame(height: processChecklistHeight(count: sortedProcesses.count))
+        .fixedSize(horizontal: true, vertical: false)
         .onAppear {
             let cleaned = processSelectionOnLoad(
                 stored: ProcessCompose.TableModel.selected(for: workstreamID),
