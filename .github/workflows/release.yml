@@ -65,11 +65,12 @@ jobs:
       # `hashFiles('ghostty/.git')` stood here and could not work: for a
       # submodule that path is a pointer file whose contents never change when
       # the pinned commit moves, so a stale libghostty would be restored
-      # forever. The arch is in the namespace too — an arm64 release must never
-      # restore the universal artifact this workflow used to build.
+      # forever. The xcframework target is in the namespace because it decides
+      # both the slice directory's name and the library's, so an artifact built
+      # under one must never be restored for the other.
       - name: Compute Ghostty cache key
         id: ghostty-key
-        run: echo "key=ghostty-release-$(git -C ghostty rev-parse HEAD)-zig-0.15.2-arm64" >> "$GITHUB_OUTPUT"
+        run: echo "key=ghostty-release-$(git -C ghostty rev-parse HEAD)-zig-0.15.2-universal" >> "$GITHUB_OUTPUT"
 
       - name: Cache Ghostty xcframework
         id: ghostty-cache
@@ -84,18 +85,26 @@ jobs:
         if: steps.ghostty-cache.outputs.cache-hit != 'true'
         run: |
           cd ghostty
-          # `native`, not `universal`: the release ships arm64 only, and the
-          # macos-15 runner is Apple Silicon. Building both slices cost a cold
-          # zig build's worth of time for an x86_64 half nothing installs.
-          zig build -Demit-xcframework=true -Demit-macos-app=false -Dxcframework-target=native -Doptimize=ReleaseFast
+          # `universal`, even though the release ships arm64 only. `native`
+          # looks like the economical choice and does not link: it routes
+          # through GhosttyLib.initStatic, which emits `libghostty-fat.a`
+          # ("fat" as in all static deps combined, not multi-arch), while the
+          # app links with `-lghostty` and so needs `libghostty.a` — the name
+          # only initMacOSUniversal produces. It also names its slice directory
+          # `macos-arm64` rather than `macos-arm64_x86_64`. Two couplings, both
+          # invisible until the link fails.
+          #
+          # ARCHS=arm64 on the app build is what makes the shipped binary
+          # arm64: the linker takes that slice out of the fat static lib and
+          # the x86_64 one goes unused. The cost is a cold zig build compiling
+          # slices nothing installs, once per submodule bump.
+          zig build -Demit-xcframework=true -Demit-macos-app=false -Dxcframework-target=universal -Doptimize=ReleaseFast
 
-      # `native` emits a single-slice xcframework, so the slice directory is
-      # `macos-arm64` — not the `macos-arm64_x86_64` that `project.yml`'s
-      # LIBRARY_SEARCH_PATHS names, which is the universal artifact's name and
-      # the one `.shared/` carries for local builds. Resolving the slice here
-      # and overriding the search path for this build only keeps project.yml
-      # correct for everyone else, and makes flipping the ghostty target a
-      # one-line change instead of a link failure.
+      # The slice directory's name is decided by the xcframework target, so it
+      # is resolved rather than hardcoded a second time — `project.yml` already
+      # names `macos-arm64_x86_64` for local builds and `.shared/`, and the two
+      # agreeing by coincidence is what made the last failure look like a
+      # missing library rather than a renamed directory.
       #
       # The glob is unambiguous: the iOS slices are `ios-arm64*`, so `macos-*`
       # matches exactly one directory under either target.
@@ -156,8 +165,9 @@ jobs:
         # local entitlements file, and no --timestamp (a secure timestamp needs
         # a real certificate). Plus `ARCHS=arm64`: a Release build otherwise
         # takes ARCHS_STANDARD, which is arm64 + x86_64, and the x86_64 half
-        # would fail to link against a `native` xcframework. And the resolved
-        # slice path, because project.yml's is the universal one.
+        # would be linked and shipped for no one. And the resolved slice path,
+        # so the build does not depend on project.yml and the xcframework
+        # target happening to agree on a directory name.
         run: |
           xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
             -destination 'generic/platform=macOS' \
