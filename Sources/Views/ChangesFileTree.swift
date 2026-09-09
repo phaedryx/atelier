@@ -106,6 +106,11 @@ struct FileTreeNode: Identifiable, Equatable {
 /// GitHub-PR-style "Files changed" navigator for the Changes tab. Renders the
 /// tree built from `files` as a collapsible outline; selecting a leaf invokes
 /// `onSelect` with its relative path (the diff webview scrolls to that block).
+///
+/// Styled to match the editor's `FileTreeView`: the same vscicons file icons,
+/// the same 12pt rows, and a flat background rather than the sidebar material.
+/// `List` stays (rather than the editor's `ScrollView` of buttons) because its
+/// `selection` binding is what gives the tree keyboard navigation.
 struct ChangesFileTreeSidebar: View {
     let files: [Git.DiffFile]
     @Binding var selectedFilePath: String?
@@ -119,15 +124,17 @@ struct ChangesFileTreeSidebar: View {
 
     var body: some View {
         List(selection: $selectedFilePath) {
-            Section {
-                ForEach(rootChildren) { node in
-                    ChangesFileTreeRow(node: node)
-                }
-            } header: {
-                Text("Files changed")
+            ForEach(rootChildren) { node in
+                ChangesFileTreeRow(node: node, selectedFilePath: selectedFilePath)
             }
         }
-        .listStyle(.sidebar)
+        .listStyle(.plain)
+        // `.sidebar` painted the tree on vibrancy material — darker than the
+        // editor's tree and with its own light selection fill. `.plain` plus a
+        // hidden scroll background lets the window colour through, so both
+        // trees sit on one flat surface. The header row went with it: the
+        // toolbar above already reports the changed-file count.
+        .scrollContentBackground(.hidden)
         .accessibilityLabel(Text("Files changed"))
         .onAppear { rebuild() }
         .onChange(of: files) { rebuild() }
@@ -146,9 +153,10 @@ struct ChangesFileTreeSidebar: View {
 }
 
 /// One row in the file tree. Directories render a `DisclosureGroup` over their
-/// children; leaves render a selectable file row with a status badge and counts.
+/// children; leaves render a selectable file row with a file icon and counts.
 private struct ChangesFileTreeRow: View {
     let node: FileTreeNode
+    let selectedFilePath: String?
     /// Directories start expanded so the tree shows files all the way down on
     /// load (no clicking through each level). Users can still collapse manually.
     @State private var isExpanded = true
@@ -157,25 +165,36 @@ private struct ChangesFileTreeRow: View {
         if node.isDirectory {
             DisclosureGroup(isExpanded: $isExpanded) {
                 ForEach(node.children ?? []) { child in
-                    ChangesFileTreeRow(node: child)
+                    ChangesFileTreeRow(node: child, selectedFilePath: selectedFilePath)
                 }
             } label: {
-                Label {
-                    Text(node.name).lineLimit(1).truncationMode(.middle)
-                } icon: {
-                    Image(systemName: "folder")
-                        .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    FileIconImage(icon: FileTypeIcon.folderIcon(for: node.name, isExpanded: isExpanded))
+                    Text(node.name)
+                        .font(.system(size: 12, weight: .medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
             }
+            .listRowBackground(Color.clear)
         } else {
             ChangesFileLeafRow(node: node)
                 .tag(node.id)
+                // Overrides the row fill so `List` cannot paint its own
+                // selection colour — the tree uses the editor's tinted,
+                // rounded selection instead.
+                .listRowBackground(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(node.id == selectedFilePath ? Color.accentColor.opacity(0.15) : Color.clear)
+                )
         }
     }
 }
 
-/// A single changed-file leaf: name, status badge, and `+a −d` counts (or a
-/// "Bin" indicator for binary files).
+/// A single changed-file leaf: file icon, name, then a right-aligned trailing
+/// slot holding `+a −d` counts (or a "Bin" indicator for binary files) and the
+/// status letter last — `+1 −1 M`, `+2 A`, `−13 D`. The letter used to lead the
+/// row, which pushed every filename right by a column the eye had to skip.
 private struct ChangesFileLeafRow: View {
     let node: FileTreeNode
 
@@ -188,14 +207,16 @@ private struct ChangesFileLeafRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 6) {
-            statusBadge
+        HStack(spacing: 4) {
+            FileIconImage(icon: FileTypeIcon.icon(for: node.name))
             Text(node.name)
+                .font(.system(size: 12))
                 .lineLimit(1)
                 .truncationMode(.middle)
             copyButton
             Spacer(minLength: 4)
             counts
+            statusBadge
         }
         .onHover { hovering in
             isHovering = hovering
@@ -235,15 +256,21 @@ private struct ChangesFileLeafRow: View {
         .animation(.easeInOut(duration: 0.12), value: copied)
     }
 
+    /// The status letter, last in the row and in a fixed-width frame so the
+    /// letters line up down the tree however wide the counts beside them are.
+    /// No tooltip: the letter is the label, and a hover popup that only
+    /// spelled it out was noise on every row.
     @ViewBuilder
     private var statusBadge: some View {
         if let status = file?.status {
             Text(status.rawValue)
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(Self.badgeColor(for: status))
-                .frame(width: 14)
+                // Wide enough for a 10pt bold monospaced cap with its bearing;
+                // a tighter frame center-overflows rather than truncating, so it
+                // looks fine until a different system font size shifts it.
+                .frame(width: 12)
                 .accessibilityLabel(Text(Self.accessibilityLabel(for: status)))
-                .help(Text(Self.accessibilityLabel(for: status)))
         }
     }
 
@@ -270,7 +297,7 @@ private struct ChangesFileLeafRow: View {
         }
     }
 
-    /// Status badge color matching the diff webview conventions (GitHub palette).
+    /// Status letter color, matching the diff webview conventions (GitHub palette).
     static func badgeColor(for status: Git.DiffFile.Status) -> Color {
         switch status {
         case .added: Color(red: 0.25, green: 0.72, blue: 0.31)
@@ -280,7 +307,7 @@ private struct ChangesFileLeafRow: View {
         }
     }
 
-    /// Localized accessibility/tooltip label for a status (badge letters stay A/M/D/R).
+    /// Localized VoiceOver label for a status; the visible letters stay A/M/D/R.
     static func accessibilityLabel(for status: Git.DiffFile.Status) -> String {
         switch status {
         case .added: NSLocalizedString("Added", comment: "Changes sidebar: file status")
