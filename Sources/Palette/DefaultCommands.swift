@@ -59,6 +59,14 @@ func defaultPaletteCommands() -> [PaletteCommand] {
 
         PaletteCommand(id: "run.startRerun", title: NSLocalizedString("Start/Rerun", comment: ""), category: run,
                        shortcut: "⌘⇧↩", isAvailable: workstream, action: post(.rerunScript)),
+        // The other half of Run, and a different phase: `.rerunScript` is
+        // `execute`, this is `bootstrap`. No badge, because bootstrap is not a
+        // thing you reach for often enough to spend a chord on — the palette
+        // and the Info tab's own Rerun button are its surface. Workstream-gated
+        // only; whether a bootstrap can start *right now* is the receiver's
+        // question, the same split `tab.close` is commented for above.
+        PaletteCommand(id: "run.rerunBootstrap", title: NSLocalizedString("Rerun Bootstrap", comment: ""), category: run,
+                       isAvailable: workstream, action: post(.rerunBootstrap)),
 
         PaletteCommand(id: "changes.submitReview", title: NSLocalizedString("Submit Review Comments", comment: ""), category: changes,
                        isAvailable: workstream, action: post(.submitChangeReview)),

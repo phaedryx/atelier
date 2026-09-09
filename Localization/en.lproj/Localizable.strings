@@ -450,6 +450,7 @@
 "New Editor" = "New Editor";
 "Close Tab" = "Close Tab";
 "Start/Rerun" = "Start/Rerun";
+"Rerun Bootstrap" = "Rerun Bootstrap";
 "Open in External Browser" = "Open in External Browser";
 "Back to Project" = "Back to Project";
 "Archive Workstream" = "Archive Workstream";
@@ -520,6 +521,10 @@
 "This project declares no bootstrap processes, so nothing ran." = "This project declares no bootstrap processes, so nothing ran.";
 "Bootstrap" = "Bootstrap";
 "Bootstrap failed: %@" = "Bootstrap failed: %@";
+"Nothing reported this session." = "Nothing reported this session.";
+"Ran successfully." = "Ran successfully.";
+"Bootstrap is already running." = "Bootstrap is already running.";
+"Run this project's bootstrap namespace against this worktree again." = "Run this project's bootstrap namespace against this worktree again.";
 "No shell was available to run the phase." = "No shell was available to run the phase.";
 "The %@ phase did not finish in time." = "The %@ phase did not finish in time.";
 "%@ failed." = "%@ failed.";
@@ -550,8 +555,6 @@
 "starts with FF_, which Atelier mirrors from ATELIER_*; declare the ATELIER_ name instead" = "starts with FF_, which Atelier mirrors from ATELIER_*; declare the ATELIER_ name instead";
 
 /* Process selection */
-"All" = "All";
-"Processes to start" = "Processes to start";
 "At least one process has to start." = "At least one process has to start.";
 "is not a usable variable name; use letters, digits and _, not starting with a digit" = "is not a usable variable name; use letters, digits and _, not starting with a digit";
 "pins port %d, which %@ already pins" = "pins port %d, which %@ already pins";

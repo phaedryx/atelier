@@ -3,6 +3,64 @@
 
 import SwiftUI
 
+/// One row's worth of what background setup did.
+///
+/// Every state speaks, including the two that used to be silent. While this was
+/// only a report, `.idle` and `.completed` returned nothing and the row did not
+/// render — nothing had happened yet, or bootstrap did what the project asked
+/// and the worktree was the evidence.
+///
+/// The row carries Rerun now, so silence is no longer free. `.completed` is the
+/// state a manual re-run is most often wanted from — a clobbered
+/// `node_modules`, a schema that needs reseeding — and a control that hides
+/// there is no control at all. `.idle` is not an edge case either:
+/// `AsyncSetupService.states` lives in memory, so after a relaunch every
+/// existing workstream reports `.idle` and this is the default text on every
+/// Info tab.
+///
+/// `.idle`'s copy is deliberately about the report and not about the run.
+/// Nothing here knows whether a bootstrap ever happened for this worktree, only
+/// that this session has not seen one, and "bootstrap never ran" would be a
+/// claim the state cannot support.
+///
+/// A free function, so the copy for all five states can be pinned without a
+/// view.
+func bootstrapRow(for state: AsyncSetupState) -> (detail: String, icon: String, tint: Color) {
+    switch state {
+    case .idle:
+        (NSLocalizedString("Nothing reported this session.", comment: ""), "questionmark.circle", .secondary)
+    case let .inProgress(step, _):
+        (step, "clock", .secondary)
+    case .completed:
+        (NSLocalizedString("Ran successfully.", comment: ""), "checkmark.circle", .green)
+    case let .completedWithNote(note):
+        (note, "info.circle", .secondary)
+    case let .failed(detail):
+        (detail, "exclamationmark.triangle", .orange)
+    }
+}
+
+/// Whether Rerun may be pressed.
+///
+/// One state refuses, and it is the actor's own rule surfaced rather than a
+/// second opinion about it: `AsyncSetupService` already ignores a second
+/// bootstrap for a workstream that has one in flight, because both would share
+/// `<id>-bootstrap.sock` and the second would strand the first's control
+/// server. Disabling the button is how that refusal reads as unavailable
+/// instead of as a press that did nothing.
+///
+/// Nothing else is checked. A missing binary, a config that came with the
+/// repository and has not been approved, the integration switched off — those
+/// are `PhasePolicy.plan`'s to decide, and it reports each one as a
+/// `.completedWithNote` that lands in the row above. Refusing the press for
+/// them would trade an explanation for silence.
+func canRerunBootstrap(_ state: AsyncSetupState) -> Bool {
+    if case .inProgress = state {
+        return false
+    }
+    return true
+}
+
 struct WorkstreamInfoView: View {
     let workstreamID: UUID
     let workingDirectory: String
@@ -23,6 +81,11 @@ struct WorkstreamInfoView: View {
     /// the whole failure this gate exists to avoid.
     let onReviewConfig: () -> Void
     let onRevokeConfig: () -> Void
+    /// Runs the project's `bootstrap` namespace against this worktree again.
+    /// No default for the same reason as the two above, and one more: this row
+    /// always renders, so a call site that forgot it would ship a Rerun button
+    /// on every workstream that does nothing.
+    let onRerunBootstrap: () -> Void
 
     @EnvironmentObject var appEnv: AppEnvironment
     @AppStorage("atelier.defaultTerminal") private var defaultTerminal: String = ""
@@ -342,25 +405,29 @@ struct WorkstreamInfoView: View {
         self.docFiles = docFiles
     }
 
-    /// Files found on disk, plus the Shortcut story description when there is one.
+    /// What background setup did, and the button that runs it again.
     ///
-    /// The story is appended here rather than pushed into `docFiles` so it tracks the
-    /// `AppEnvironment` cache: the description arrives after the disk scan and can change
-    /// on a later refresh. Note this widens what a `DocFile` is — no longer strictly a
-    /// file on disk, but any Markdown panel the tab row can show.
-    /// What background setup did, when there is anything worth a row.
-    @ViewBuilder
+    /// Always rendered. It used to appear only when there was something worth
+    /// saying, which was right for a report and wrong for a control: the states
+    /// it stayed quiet for — `.completed`, and `.idle` after any relaunch — are
+    /// the ordinary ones, so the section would have been missing in exactly the
+    /// case someone came looking for Rerun.
     private var setupSection: some View {
-        if let setup = setupSummary {
-            Section("Setup") {
-                LabeledContent(setup.label) {
-                    HStack(spacing: 6) {
-                        Image(systemName: setup.icon)
-                            .foregroundStyle(setup.tint)
-                        Text(setup.detail)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.trailing)
-                    }
+        let row = bootstrapRow(for: setupState)
+        let canRerun = canRerunBootstrap(setupState)
+        return Section("Setup") {
+            LabeledContent("Bootstrap") {
+                HStack(spacing: 6) {
+                    Image(systemName: row.icon)
+                        .foregroundStyle(row.tint)
+                    Text(row.detail)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.trailing)
+                    Button("Rerun") { onRerunBootstrap() }
+                        .disabled(!canRerun)
+                        .help(canRerun
+                            ? NSLocalizedString("Run this project's bootstrap namespace against this worktree again.", comment: "")
+                            : NSLocalizedString("Bootstrap is already running.", comment: ""))
                 }
             }
         }
@@ -408,26 +475,12 @@ struct WorkstreamInfoView: View {
         }
     }
 
-    /// One row's worth of what background setup did, or nil when there is
-    /// nothing worth a row.
+    /// Files found on disk, plus the Shortcut story description when there is one.
     ///
-    /// `.idle` and `.completed` are both silent on purpose: nothing has happened
-    /// yet, or bootstrap did exactly what the project asked and the worktree is
-    /// the evidence. The two that must speak are `.completedWithNote`, whose
-    /// entire content is the reason nothing ran, and `.failed`.
-    private var setupSummary: (label: String, detail: String, icon: String, tint: Color)? {
-        switch setupState {
-        case .idle, .completed:
-            nil
-        case let .inProgress(step, _):
-            (NSLocalizedString("Bootstrap", comment: ""), step, "clock", .secondary)
-        case let .completedWithNote(note):
-            (NSLocalizedString("Bootstrap", comment: ""), note, "info.circle", .secondary)
-        case let .failed(detail):
-            (NSLocalizedString("Bootstrap", comment: ""), detail, "exclamationmark.triangle", .orange)
-        }
-    }
-
+    /// The story is appended here rather than pushed into `docFiles` so it tracks the
+    /// `AppEnvironment` cache: the description arrives after the disk scan and can change
+    /// on a later refresh. Note this widens what a `DocFile` is — no longer strictly a
+    /// file on disk, but any Markdown panel the tab row can show.
     private var displayedDocs: [DocFile] {
         guard let story = appEnv.shortcutStory(for: workingDirectory),
               let description = story.description,

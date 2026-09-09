@@ -33,7 +33,7 @@ func devCommandDisplayText(devCommand: DevCommand?, loadedFiles: [String]) -> St
     }
 }
 
-/// Whether the "Processes to start" list should render.
+/// Whether the process checklist above Start should render.
 ///
 /// Visible before a run and hidden during one, and both halves are defects
 /// that have already shipped, in opposite directions.
@@ -204,18 +204,37 @@ struct EnvironmentTabView: View {
                 )
                 .id(runID)
             } else if canStart {
-                if showsProcessSelection(
-                    runStarted: runStarted,
-                    showsProcessTable: showsProcessTable,
-                    declaredProcesses: declaredProcesses
-                ) {
-                    ProcessSelectionView(
-                        workstreamID: workstreamID,
-                        declaredProcesses: declaredProcesses
-                    )
-                    Divider()
-                }
+                // The checklist is *inside* this stack, not a band above it.
+                // Rendered as its own row at the top of the pane it read as
+                // more configuration next to "Dev command", and the thing it
+                // chooses for — Start — was a pane-height away. As the stack's
+                // first child it is what Start will run.
+                //
+                // This stack is the greedy view and centres its content, so a
+                // longer list is absorbed in both directions: each added row
+                // lifts the checklist half a row and lowers Start by the same
+                // half, instead of pushing the button a whole row down the pane
+                // the way a top-anchored list did. `processChecklistHeight`
+                // caps how far that can go whatever a config declares.
                 VStack(spacing: 12) {
+                    if showsProcessSelection(
+                        runStarted: runStarted,
+                        showsProcessTable: showsProcessTable,
+                        declaredProcesses: declaredProcesses
+                    ) {
+                        ProcessSelectionView(
+                            workstreamID: workstreamID,
+                            declaredProcesses: declaredProcesses
+                        )
+                        // On top of the stack's own 12, for 24 in total. The
+                        // stack's spacing is right for Start and the two lines
+                        // of caption under it, which are one block; the
+                        // checklist is a separate thing above the button and
+                        // reads as crowding it at the same gap. Padding here
+                        // rather than a wider `spacing` so the caption lines
+                        // keep their tighter set.
+                        .padding(.bottom, 12)
+                    }
                     Button(action: onStart) {
                         HStack(spacing: 6) {
                             if isReclaimingSocket {

@@ -64,6 +64,30 @@ final class DefaultCommandsTests: XCTestCase {
         XCTAssertEqual(terminal.shortcut, "⌘T")
     }
 
+    /// The palette is the only surface for this one outside the Info tab, so a
+    /// wrong notification name is invisible until someone presses it.
+    func testRerunBootstrapCommandPostsRerunBootstrap() throws {
+        let commands = defaultPaletteCommands()
+        let rerun = try XCTUnwrap(commands.first { $0.id == "run.rerunBootstrap" })
+        let posted = expectation(forNotification: .rerunBootstrap, object: nil)
+
+        rerun.action()
+
+        wait(for: [posted], timeout: 1)
+    }
+
+    /// Bootstrap is a phase, not the run — this must not be the same
+    /// notification Start/Rerun posts.
+    func testRerunBootstrapIsNotTheSameCommandAsStartRerun() throws {
+        let commands = defaultPaletteCommands()
+        let rerunBootstrap = try XCTUnwrap(commands.first { $0.id == "run.rerunBootstrap" })
+        let startRerun = try XCTUnwrap(commands.first { $0.id == "run.startRerun" })
+
+        XCTAssertNotEqual(rerunBootstrap.title, startRerun.title)
+        XCTAssertFalse(rerunBootstrap.isAvailable(PaletteContext(workstreamActive: false, editorActive: false)))
+        XCTAssertTrue(rerunBootstrap.isAvailable(PaletteContext(workstreamActive: true, editorActive: false)))
+    }
+
     @MainActor
     func testSubmitReviewCommandIsWorkstreamGated() {
         let commands = defaultPaletteCommands()
