@@ -329,9 +329,7 @@ struct EditorView: View {
         let icon = FileTypeIcon.icon(for: name)
 
         return HStack(spacing: 6) {
-            Image(systemName: icon.symbolName)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+            FileIconImage(icon: icon)
             Text(name)
                 .font(.system(size: 12, weight: isSelected ? .medium : .regular))
                 .lineLimit(1)

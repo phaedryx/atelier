@@ -128,9 +128,7 @@ private struct FileTreeNodeView: View {
                     .foregroundStyle(.tertiary)
                     .frame(width: 10)
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                Image(systemName: "folder.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                FileIconImage(icon: FileTypeIcon.folderIcon(for: node.name, isExpanded: isExpanded))
                 Text(node.name)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(gitTextColor(for: dirStatus))
@@ -158,9 +156,7 @@ private struct FileTreeNodeView: View {
             HStack(spacing: 4) {
                 Color.clear
                     .frame(width: 10, height: 1)
-                Image(systemName: icon.symbolName)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                FileIconImage(icon: icon)
                 Text(node.name)
                     .font(.system(size: 12))
                     .foregroundStyle(gitTextColor(for: fileStatus))
