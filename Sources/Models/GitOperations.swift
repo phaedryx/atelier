@@ -680,16 +680,16 @@ extension Git {
         /// deleted the user's checkout: git refuses to remove a main working tree,
         /// but the `removeItem` below never asked.
         ///
-        /// Symlinks are resolved before the two are compared, because the same
-        /// directory reaches here under different spellings — a stored worktree
-        /// path and a picked project directory need not agree on `/tmp` vs
-        /// `/private/tmp`, and `removeItem` follows a symlinked parent to the real
-        /// directory.
+        /// Compared as `canonicalPath`, because the same directory reaches here
+        /// under different spellings — a stored worktree path and a picked
+        /// project directory need not agree on `/tmp` vs `/private/tmp`, and
+        /// `removeItem` follows a symlinked parent to the real directory.
+        /// `resolvingSymlinksInPath()` alone would settle that only while both
+        /// paths were on disk.
         static func removeWorktree(projectPath: String, worktreePath: String) {
             let worktreeDir = URL(fileURLWithPath: worktreePath).standardizedFileURL
-            let resolvedWorktree = worktreeDir.resolvingSymlinksInPath().path
-            let resolvedProject = URL(fileURLWithPath: projectPath)
-                .standardizedFileURL.resolvingSymlinksInPath().path
+            let resolvedWorktree = worktreePath.canonicalPath
+            let resolvedProject = projectPath.canonicalPath
             guard resolvedWorktree != resolvedProject else {
                 logger.error(
                     "[Atelier] Refusing to remove \(resolvedProject, privacy: .public): that is the project directory, not a worktree of it"
@@ -708,7 +708,7 @@ extension Git {
                 guard let root = run(args: args, in: worktreePath)?
                     .trimmingCharacters(in: .whitespacesAndNewlines), !root.isEmpty
                 else { return false }
-                return URL(fileURLWithPath: root).standardizedFileURL.resolvingSymlinksInPath().path == resolvedWorktree
+                return root.canonicalPath == resolvedWorktree
             }
 
             // The last line of defence, below whichever caller got here: the trunk's

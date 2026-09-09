@@ -279,22 +279,23 @@ extension Project {
         let resolvedGitDir = gitDir.hasPrefix("/")
             ? URL(fileURLWithPath: gitDir)
             : checkoutURL.appendingPathComponent(gitDir)
-        // Symlinks resolved on both sides before comparing, the same way
+        // Compared canonically, the same way
         // `Workstream.Archiver.destroyableWorktreePath` compares paths. `git
         // worktree add` records the pointer through whatever spelling it was
         // given, so a container reached through a symlinked parent — `/tmp` for
         // `/private/tmp`, a home directory linked in from elsewhere — writes an
         // absolute gitdir that shares no textual prefix with `bareURL`.
         //
-        // `resolvingSymlinksInPath()` is a no-op on a path that does not exist,
-        // so this resolves only for a gitdir git actually created — which is the
-        // only kind worth hoisting. Anything else is compared by its literal
-        // spelling and, at worst, declines to hoist.
+        // `String.canonicalPath` and not `resolvingSymlinksInPath()`, which is a
+        // no-op on a path that is not on disk: `git worktree prune` leaves a
+        // checkout's pointer aimed at a `worktrees/<name>` that is gone, and
+        // that spelling still names this container. The gitdir is the *inside*
+        // of the pair, so this asks containment rather than a prefix, which is
+        // also what keeps a sibling `.bare-backup` out.
         //
         // The paths returned below are the unresolved ones, because those are
         // what the user registered and how every other stored path is spelled.
-        let bare = bareURL.resolvingSymlinksInPath().path
-        guard resolvedGitDir.resolvingSymlinksInPath().path.hasPrefix(bare + "/") else {
+        guard resolvedGitDir.path.isCanonicallyInside(bareURL.path) else {
             return unchanged
         }
 
