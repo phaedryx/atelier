@@ -4,12 +4,13 @@
 @testable import Atelier
 import XCTest
 
-/// `Workstream.workingDirectory(projectDirectory:)` falls back to the project
-/// directory when a workstream has no worktree, which is right for launching a
-/// terminal and catastrophic for archiving: `purge` fed that same fallback to
+/// `Workstream.workingDirectory(checkout:)` falls back to the project's checkout
+/// when a workstream has no worktree, which is right for launching a terminal and
+/// catastrophic for archiving: `purge` fed that same fallback to
 /// `Git.Operations.removeWorktree`, which deletes the path it is handed.
 final class WorkstreamArchiverPurgeTests: XCTestCase {
     private let projectDirectory = "/tmp/atelier-test/project"
+    private let checkoutDirectory = "/tmp/atelier-test/project/main"
 
     private func workstream(worktreePath: String?) -> Workstream {
         Workstream(name: "scan-deep-thr", worktreePath: worktreePath)
@@ -63,6 +64,41 @@ final class WorkstreamArchiverPurgeTests: XCTestCase {
                 for: workstream(worktreePath: "   "),
                 projectDirectory: projectDirectory
             )
+        )
+    }
+
+    /// In the `.bare` container layout the project's directory is the container
+    /// and its checkout is the trunk worktree inside it. Neither is ever a
+    /// workstream — the container holds them all as peers — so both have to be
+    /// refused, not whichever one the caller happened to pass.
+    func testTheProjectsCheckoutIsNotDestroyable() {
+        XCTAssertNil(
+            Workstream.Archiver.destroyableWorktreePath(
+                for: workstream(worktreePath: checkoutDirectory),
+                projectDirectory: projectDirectory,
+                checkoutDirectory: checkoutDirectory
+            )
+        )
+    }
+
+    func testTheProjectsCheckoutIsNotDestroyableUnderAnotherSpelling() {
+        XCTAssertNil(
+            Workstream.Archiver.destroyableWorktreePath(
+                for: workstream(worktreePath: checkoutDirectory + "/./"),
+                projectDirectory: projectDirectory,
+                checkoutDirectory: checkoutDirectory
+            )
+        )
+    }
+
+    func testAPeerWorkstreamBesideTheCheckoutStaysDestroyable() {
+        XCTAssertEqual(
+            Workstream.Archiver.destroyableWorktreePath(
+                for: workstream(worktreePath: "/tmp/atelier-test/project/tad@feature"),
+                projectDirectory: projectDirectory,
+                checkoutDirectory: checkoutDirectory
+            ),
+            "/tmp/atelier-test/project/tad@feature"
         )
     }
 

@@ -50,7 +50,7 @@ struct ProjectOverviewView: View {
             Form {
                 // MARK: - Repository
 
-                if let info = appEnv.repoInfo(for: project.directory) {
+                if let info = appEnv.repoInfo(for: project.checkout) {
                     Section("Repository") {
                         if info.isRepo {
                             LabeledContent("Branch") {
@@ -118,10 +118,10 @@ struct ProjectOverviewView: View {
                                         loadRepoDetail()
                                     }
                                     .popover(isPresented: $showRepoChanges) {
-                                        RepoChangesPopover(detail: repoDetail, directory: project.directory) {
+                                        RepoChangesPopover(detail: repoDetail, directory: project.checkout) {
                                             showRepoChanges = false
                                             repoDetail = nil
-                                            appEnv.refreshRepoInfo(for: project.directory)
+                                            appEnv.refreshRepoInfo(for: project.checkout)
                                         }
                                     }
                                 }
@@ -319,14 +319,14 @@ struct ProjectOverviewView: View {
         } // VStack
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
-            appEnv.refreshRepoInfo(for: project.directory)
+            appEnv.refreshRepoInfo(for: project.checkout)
             appEnv.refreshGitHubInfo(for: project.directory)
             purgingPaths = Workstream.Archiver.archivingPaths
             refreshWorktrees()
             loadDocFiles()
         }
         .onChange(of: project.id) { _, _ in
-            appEnv.refreshRepoInfo(for: project.directory)
+            appEnv.refreshRepoInfo(for: project.checkout)
             appEnv.refreshGitHubInfo(for: project.directory)
             worktrees = []
             docFiles = []
@@ -406,7 +406,7 @@ struct ProjectOverviewView: View {
     }
 
     private func loadRepoDetail() {
-        let dir = project.directory
+        let dir = project.checkout
         repoDetail = nil
         Task.detached {
             let result = Git.Operations.worktreeDetail(at: dir, mainRepoPath: dir)
@@ -415,7 +415,7 @@ struct ProjectOverviewView: View {
     }
 
     private func pullCurrentBranch() {
-        let dir = project.directory
+        let dir = project.checkout
         isPulling = true
         Task.detached {
             let result = Git.Operations.pullCurrentBranch(at: dir)
@@ -443,14 +443,20 @@ struct ProjectOverviewView: View {
     }
 
     private func refreshWorktrees() {
-        let dir = project.directory
+        // The checkout, because `listWorktreesWithInfo` decides `isMain` by
+        // comparing each row against the path it is given, and the container
+        // matches no row — which fails that flag open for the trunk, putting a
+        // Purge button on it and letting the bulk prune sweep reach it.
+        let dir = project.checkout
+        // The home, because that is the key every `github*` cache uses.
+        let prCacheKey = project.directory
         Task.detached {
             let wts = Git.Operations.listWorktreesWithInfo(at: dir)
             await updateWorktrees(wts)
             // Populate PR cache for worktree branches
             let branches = Set(wts.compactMap(\.branch))
             await MainActor.run {
-                appEnv.refreshBranchPRs(for: dir, branches: branches)
+                appEnv.refreshBranchPRs(for: prCacheKey, branches: branches)
             }
         }
     }
@@ -465,7 +471,7 @@ struct ProjectOverviewView: View {
     }
 
     private func loadDocFiles() {
-        let dir = project.directory
+        let dir = project.checkout
         Task.detached {
             let found = DocFile.loadFrom(directory: dir)
             await updateDocFiles(found)
@@ -486,7 +492,7 @@ struct ProjectOverviewView: View {
 
     private func pruneWorktrees() {
         isPruning = true
-        let dir = project.directory
+        let dir = project.checkout
         let pathsToPrune = prunablePaths
         Task.detached {
             let removed = Git.Operations.pruneCleanWorktrees(at: dir, onlyPaths: pathsToPrune)

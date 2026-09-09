@@ -91,7 +91,7 @@ final class AppEnvironment: ObservableObject {
     func fetchOrigin(projects: [Project]) {
         let now = Date()
         for project in projects {
-            let dir = project.directory
+            let dir = project.checkout
             if let lastFetch = lastOriginFetch[dir],
                now.timeIntervalSince(lastFetch) < Self.originFetchInterval
             {
@@ -137,14 +137,14 @@ final class AppEnvironment: ObservableObject {
             let age = now.timeIntervalSince(project.lastAccessedAt)
             let minInterval: TimeInterval = age < 300 ? 10 : 60 // 10s for recent, 60s for stale
 
-            if let lastRefresh = repoInfoTimestamps[project.directory],
+            if let lastRefresh = repoInfoTimestamps[project.checkout],
                now.timeIntervalSince(lastRefresh) < minInterval
             {
                 continue
             }
 
-            repoInfoTimestamps[project.directory] = now
-            let dir = project.directory
+            repoInfoTimestamps[project.checkout] = now
+            let dir = project.checkout
             Task.detached {
                 let info = Git.Operations.repoInfo(at: dir)
                 await MainActor.run {
@@ -391,13 +391,26 @@ final class AppEnvironment: ObservableObject {
             var validPaths: [String] = []
 
             for project in projects {
-                var isDir: ObjCBool = false
-                let exists = FileManager.default.fileExists(atPath: project.directory, isDirectory: &isDir) && isDir.boolValue
+                // Both, because they are different failures with the same
+                // symptom. The repository's home going missing takes everything
+                // with it; a `.bare` container losing the checkout that
+                // represents it leaves the container standing while every
+                // work-tree read against it fails. Before `directory` meant the
+                // container, this one check covered both by accident.
+                let exists = FileManager.default.isDirectory(at: URL(fileURLWithPath: project.directory))
+                    && FileManager.default.isDirectory(at: URL(fileURLWithPath: project.checkout))
                 if !exists {
-                    logger.warning("[Atelier] refreshPathValidity: project \(project.name, privacy: .public) directory MISSING: \(project.directory, privacy: .public)")
+                    logger.warning("[Atelier] refreshPathValidity: project \(project.name, privacy: .public) directory MISSING: \(project.directory, privacy: .public) checkout: \(project.checkout, privacy: .public)")
                     missing.insert(project.id)
                 }
 
+                // Keyed by the repository's home, not its checkout. Both probes
+                // need only a git directory — the container has a `.git` file
+                // and a remote — and `TerminalContainerView` reads these caches
+                // back with the project directory it was handed, having no
+                // checkout of its own to pass. Same for every `github*` cache
+                // below. `repoInfo` is the exception, and is keyed by the
+                // checkout, because `git status` in a container fails outright.
                 gitRepoResults[project.directory] = Git.Operations.isGitRepo(at: project.directory)
                 githubRemoteResults[project.directory] = GitHub.Operations.hasGitHubRemote(at: project.directory)
 
@@ -430,7 +443,7 @@ final class AppEnvironment: ObservableObject {
             for project in projects {
                 for ws in project.workstreams {
                     if let path = ws.worktreePath, validPaths.contains(path) {
-                        worktreeToProject[path] = project.directory
+                        worktreeToProject[path] = project.checkout
                     }
                 }
             }

@@ -285,6 +285,307 @@ final class ProjectTests: XCTestCase {
 
     // MARK: - Inline rename
 
+    // MARK: - checkout
+
+    func testCheckoutFallsBackToTheDirectoryWhenThereIsNoneStored() {
+        let project = Project(name: "plain", directory: "/repos/plain")
+        XCTAssertEqual(project.checkout, "/repos/plain")
+    }
+
+    func testCheckoutIsTheStoredCheckoutWhenThereIsOne() {
+        let project = Project(name: "app", directory: "/repos/app", checkoutDirectory: "/repos/app/main")
+        XCTAssertEqual(project.directory, "/repos/app", "the container stays the project's directory")
+        XCTAssertEqual(project.checkout, "/repos/app/main")
+    }
+
+    func testCheckoutSurvivesACodableRoundTrip() throws {
+        let project = Project(name: "app", directory: "/repos/app", checkoutDirectory: "/repos/app/main")
+        let decoded = try JSONDecoder().decode(Project.self, from: JSONEncoder().encode(project))
+        XCTAssertEqual(decoded.directory, "/repos/app")
+        XCTAssertEqual(decoded.checkoutDirectory, "/repos/app/main")
+    }
+
+    // MARK: - matching and repairing an already-registered project
+
+    private func location(
+        directory: String,
+        checkout: String? = nil,
+        name: String = "app"
+    ) -> Project.Location {
+        Project.Location(directory: directory, name: name, checkoutDirectory: checkout)
+    }
+
+    func testNothingIsRegisteredForAnUnknownLocation() {
+        let projects = [Project(name: "other", directory: "/repos/other")]
+        XCTAssertNil(
+            Project.existingRegistration(
+                for: location(directory: "/repos/app", checkout: "/repos/app/main"),
+                in: projects
+            )
+        )
+    }
+
+    func testAnAlreadyCorrectRegistrationNeedsNoRepair() throws {
+        let projects = [Project(name: "app", directory: "/repos/app", checkoutDirectory: "/repos/app/main")]
+        let found = try XCTUnwrap(
+            Project.existingRegistration(
+                for: location(directory: "/repos/app", checkout: "/repos/app/main"),
+                in: projects
+            )
+        )
+        XCTAssertEqual(found.index, 0)
+        XCTAssertNil(found.repaired, "the pair is already what it should be")
+    }
+
+    /// The pre-0.2.0 cohort: the container was stored, but no checkout was ever
+    /// recorded, so every work-tree read runs against a directory that has none.
+    func testAContainerWithNoCheckoutIsRepairedInPlace() throws {
+        let projects = [Project(name: "app", directory: "/repos/app")]
+        let found = try XCTUnwrap(
+            Project.existingRegistration(
+                for: location(directory: "/repos/app", checkout: "/repos/app/main"),
+                in: projects
+            )
+        )
+        let repaired = try XCTUnwrap(found.repaired)
+        XCTAssertEqual(repaired.directory, "/repos/app")
+        XCTAssertEqual(repaired.checkoutDirectory, "/repos/app/main")
+        XCTAssertEqual(repaired.id, projects[0].id, "the same row, not a second one")
+    }
+
+    /// The cohort the hoist could not prove: the checkout was stored as the
+    /// project's directory, and there was no `.bare` beside it to settle it.
+    func testACheckoutStoredAsTheDirectoryIsMatchedAndRepaired() throws {
+        let projects = [Project(name: "app", directory: "/repos/app/main")]
+        let found = try XCTUnwrap(
+            Project.existingRegistration(
+                for: location(directory: "/repos/app", checkout: "/repos/app/main"),
+                in: projects
+            )
+        )
+        let repaired = try XCTUnwrap(found.repaired)
+        XCTAssertEqual(repaired.directory, "/repos/app", "hoisted to the container")
+        XCTAssertEqual(repaired.checkoutDirectory, "/repos/app/main")
+        XCTAssertEqual(repaired.id, projects[0].id)
+    }
+
+    func testWorkstreamsSurviveTheRepair() throws {
+        var stored = Project(name: "app", directory: "/repos/app/main")
+        stored.workstreams = [Workstream(name: "feat", worktreePath: "/repos/app/tad@feat")]
+        let found = try XCTUnwrap(
+            Project.existingRegistration(
+                for: location(directory: "/repos/app", checkout: "/repos/app/main"),
+                in: [stored]
+            )
+        )
+        let repaired = try XCTUnwrap(found.repaired)
+        XCTAssertEqual(repaired.workstreams.map(\.id), stored.workstreams.map(\.id))
+    }
+
+    /// A plain clone, and a container whose checkout is gone, both resolve with
+    /// no checkout. Writing that over a recorded one would be a downgrade.
+    func testARecordedCheckoutIsNotOverwrittenWithNothing() throws {
+        let projects = [Project(name: "app", directory: "/repos/app", checkoutDirectory: "/repos/app/main")]
+        let found = try XCTUnwrap(
+            Project.existingRegistration(for: location(directory: "/repos/app"), in: projects)
+        )
+        XCTAssertEqual(found.index, 0)
+        XCTAssertNil(found.repaired)
+    }
+
+    // MARK: - hoisting a directory saved under the older meaning
+
+    /// Builds `<container>/{.bare, .git, <name>/.git}` on disk without git, since
+    /// the hoist is filesystem-only by design.
+    private func makeContainerLayout(
+        named name: String = "app",
+        checkout: String = "main",
+        containerGitIsDirectory: Bool = false,
+        gitdir: String? = nil
+    ) throws -> (container: URL, checkout: URL) {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("hoist-\(UUID().uuidString)")
+        let container = root.appendingPathComponent(name)
+        let checkoutURL = container.appendingPathComponent(checkout)
+        let bare = container.appendingPathComponent(".bare")
+        // `worktrees/<checkout>` and not just `worktrees`: that is where the
+        // checkout's `gitdir:` points, git always creates it, and
+        // `resolvingSymlinksInPath()` is a no-op on a path that does not exist.
+        try FileManager.default.createDirectory(
+            at: bare.appendingPathComponent("worktrees/\(checkout)"),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(at: checkoutURL, withIntermediateDirectories: true)
+
+        let containerGit = container.appendingPathComponent(".git")
+        if containerGitIsDirectory {
+            try FileManager.default.createDirectory(at: containerGit, withIntermediateDirectories: true)
+        } else {
+            try "gitdir: ./.bare\n".write(to: containerGit, atomically: true, encoding: .utf8)
+        }
+
+        let pointer = gitdir ?? bare.appendingPathComponent("worktrees/\(checkout)").path
+        try "gitdir: \(pointer)\n".write(
+            to: checkoutURL.appendingPathComponent(".git"),
+            atomically: true,
+            encoding: .utf8
+        )
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        return (container, checkoutURL)
+    }
+
+    func testHoistsACheckoutSavedAsTheProjectDirectory() throws {
+        let (container, checkout) = try makeContainerLayout()
+
+        let hoisted = Project.hoistedLocation(directory: checkout.path)
+
+        XCTAssertEqual(hoisted.directory, container.standardizedFileURL.path)
+        XCTAssertEqual(hoisted.checkoutDirectory, checkout.standardizedFileURL.path)
+    }
+
+    func testDecodingABlobWithNoCheckoutFieldHoistsIt() throws {
+        let (container, checkout) = try makeContainerLayout()
+        // A blob written while `projectLocation` resolved a container forward:
+        // the checkout stored as `directory`, and no `checkoutDirectory` at all.
+        let json = """
+        {"id":"\(UUID().uuidString)","name":"app","directory":"\(checkout.path)",
+         "workstreams":[],"lastAccessedAt":0}
+        """
+        let decoded = try JSONDecoder().decode(Project.self, from: Data(json.utf8))
+
+        XCTAssertEqual(decoded.directory, container.standardizedFileURL.path)
+        XCTAssertEqual(decoded.checkout, checkout.standardizedFileURL.path)
+    }
+
+    func testDoesNotHoistAContainerThatIsAlreadyTheDirectory() throws {
+        let (container, _) = try makeContainerLayout()
+
+        // Its `.git` is a file, but its *parent* holds no `.bare`, so there is
+        // nothing above it to hoist to. A project saved before the forward
+        // resolution existed is left exactly as it is.
+        let hoisted = Project.hoistedLocation(directory: container.path)
+
+        XCTAssertEqual(hoisted.directory, container.path)
+        XCTAssertNil(hoisted.checkoutDirectory)
+    }
+
+    func testDoesNotHoistAnOrdinaryClone() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("hoist-plain-\(UUID().uuidString)")
+        let repo = root.appendingPathComponent("plain")
+        try FileManager.default.createDirectory(at: repo.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+
+        let hoisted = Project.hoistedLocation(directory: repo.path)
+
+        XCTAssertEqual(hoisted.directory, repo.path, "`.git` is a directory here, so this is not a linked worktree")
+        XCTAssertNil(hoisted.checkoutDirectory)
+    }
+
+    func testDoesNotHoistWhenTheParentIsAnOrdinaryRepository() throws {
+        // The dangerous false positive: a worktree that happens to sit inside a
+        // repository which happens to have a `.bare` directory of its own. The
+        // parent's `.git` is a directory, not the `gitdir:` pointer file the
+        // layout is built from.
+        let (_, checkout) = try makeContainerLayout(containerGitIsDirectory: true)
+
+        let hoisted = Project.hoistedLocation(directory: checkout.path)
+
+        XCTAssertEqual(hoisted.directory, checkout.path)
+        XCTAssertNil(hoisted.checkoutDirectory)
+    }
+
+    /// `git worktree add` records the pointer through whatever spelling it was
+    /// given, so a container reached through a symlink writes an absolute gitdir
+    /// that shares no textual prefix with the container's own path. Comparing
+    /// the two unresolved refused a repair that should have happened.
+    func testHoistsThroughASymlinkedContainerPath() throws {
+        let (container, checkout) = try makeContainerLayout()
+        let link = container.deletingLastPathComponent().appendingPathComponent("link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: container)
+        try "gitdir: \(link.appendingPathComponent(".bare/worktrees/main").path)\n".write(
+            to: checkout.appendingPathComponent(".git"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let hoisted = Project.hoistedLocation(directory: checkout.path)
+
+        XCTAssertEqual(hoisted.directory, container.standardizedFileURL.path)
+        XCTAssertEqual(
+            hoisted.checkoutDirectory,
+            checkout.standardizedFileURL.path,
+            "the paths returned are the ones the user registered, not the resolved ones"
+        )
+    }
+
+    func testDoesNotHoistAWorktreeOwnedByADifferentContainer() throws {
+        // Everything looks like the layout, but this worktree's git directory
+        // lives somewhere else entirely — so the two files are not related, and
+        // hoisting would hand the project a container that is not its own.
+        let (_, checkout) = try makeContainerLayout(gitdir: "/somewhere/else/.bare/worktrees/main")
+
+        let hoisted = Project.hoistedLocation(directory: checkout.path)
+
+        XCTAssertEqual(hoisted.directory, checkout.path)
+        XCTAssertNil(hoisted.checkoutDirectory)
+    }
+
+    func testDoesNotHoistABlobThatAlreadyCarriesACheckout() throws {
+        let (container, checkout) = try makeContainerLayout()
+        // Written under the current meaning. Even though the paths are hoistable,
+        // the field being present means the answer is already recorded.
+        let json = """
+        {"id":"\(UUID().uuidString)","name":"app","directory":"\(checkout.path)",
+         "checkoutDirectory":"\(container.path)","workstreams":[],"lastAccessedAt":0}
+        """
+        let decoded = try JSONDecoder().decode(Project.self, from: Data(json.utf8))
+
+        XCTAssertEqual(decoded.directory, checkout.path, "no repair when the field is there")
+        XCTAssertEqual(decoded.checkoutDirectory, container.path)
+    }
+
+    /// The bug the whole change exists for. A `process-compose.yaml` placed where
+    /// the README says — beside `.bare` and the worktrees — was invisible,
+    /// because `ProcessCompose.Config.locate` was handed `<container>/main` as
+    /// the project directory and looked for it there.
+    func testAConfigInTheContainerIsFoundForAPeerWorktree() throws {
+        let (container, checkout) = try makeContainerLayout()
+        try "processes:\n  web:\n    command: echo hi\n".write(
+            to: container.appendingPathComponent("process-compose.yaml"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let peer = container.appendingPathComponent("tad@feature")
+        try FileManager.default.createDirectory(at: peer, withIntermediateDirectories: true)
+
+        // Stored under the older meaning, so this also proves the hoist and the
+        // lookup agree.
+        let json = """
+        {"id":"\(UUID().uuidString)","name":"app","directory":"\(checkout.path)",
+         "workstreams":[],"lastAccessedAt":0}
+        """
+        let project = try JSONDecoder().decode(Project.self, from: Data(json.utf8))
+
+        let config = try XCTUnwrap(ProcessCompose.Config.locate(
+            worktree: peer.path,
+            projectDirectory: project.directory
+        ))
+        XCTAssertEqual(
+            config.path,
+            container.standardizedFileURL.appendingPathComponent("process-compose.yaml").path
+        )
+        XCTAssertFalse(
+            config.isRepositoryProvided,
+            "a config in the container sits outside git, so it needs no approval"
+        )
+
+        XCTAssertNil(
+            ProcessCompose.Config.locate(worktree: peer.path, projectDirectory: project.checkout),
+            "and the binding this change replaced still finds nothing"
+        )
+    }
+
     func testApplyRenameSetsDisplayNameOverride() {
         var ws = Workstream(name: "feat-auth")
         ws.applyRename("Login rework")

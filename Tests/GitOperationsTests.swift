@@ -1118,36 +1118,47 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertEqual(location.name, "main-repo")
     }
 
-    func testProjectLocationOfABareContainerResolvesToItsDefaultWorktree() throws {
+    func testProjectLocationOfABareContainerIsTheContainerItself() throws {
         let container = try makeBareContainer(named: "bare-project")
 
         let location = Git.Operations.projectLocation(for: container.path)
         XCTAssertEqual(
             standardized(location.directory),
+            container.standardizedFileURL.path,
+            "the container is the repository's home — where a process-compose.yaml sits beside .bare"
+        )
+        XCTAssertEqual(
+            standardized(location.checkoutDirectory ?? ""),
             container.appendingPathComponent("main").standardizedFileURL.path,
-            "a bare container has no work tree; the project must be its default checkout"
+            "and the default checkout stands in for it wherever a work tree is needed"
         )
         XCTAssertEqual(location.name, "bare-project", "the project keeps the container's name, not the branch's")
     }
 
-    func testProjectLocationOfACheckoutInsideABareContainerStaysOnTheCheckout() throws {
+    func testProjectLocationOfACheckoutInsideABareContainerResolvesToTheContainer() throws {
         let container = try makeBareContainer(named: "bare-project")
         let checkout = container.appendingPathComponent("main")
 
         let location = Git.Operations.projectLocation(for: checkout.path)
-        XCTAssertEqual(standardized(location.directory), checkout.standardizedFileURL.path)
+        XCTAssertEqual(standardized(location.directory), container.standardizedFileURL.path)
+        XCTAssertEqual(
+            standardized(location.checkoutDirectory ?? ""),
+            checkout.standardizedFileURL.path
+        )
         XCTAssertEqual(location.name, "bare-project")
     }
 
-    func testProjectLocationOfAnOutsideWorktreeOfABareContainerResolvesToTheDefaultCheckout() throws {
+    func testProjectLocationOfAnOutsideWorktreeOfABareContainerResolvesToTheContainer() throws {
         let container = try makeBareContainer(named: "bare-project")
         let stray = tempDir.appendingPathComponent("stray-worktree")
         git(["worktree", "add", "-q", "-b", "stray", stray.path, "main"], in: container)
 
         let location = Git.Operations.projectLocation(for: stray.path)
+        XCTAssertEqual(standardized(location.directory), container.standardizedFileURL.path)
         XCTAssertEqual(
-            standardized(location.directory),
-            container.appendingPathComponent("main").standardizedFileURL.path
+            standardized(location.checkoutDirectory ?? ""),
+            container.appendingPathComponent("main").standardizedFileURL.path,
+            "the stray worktree is not what represents the project; the default checkout is"
         )
         XCTAssertEqual(location.name, "bare-project")
     }
@@ -1158,8 +1169,9 @@ final class GitOperationsTests: XCTestCase {
         git(["config", "--unset", "wt.default"], in: container)
 
         let location = Git.Operations.projectLocation(for: container.path)
+        XCTAssertEqual(standardized(location.directory), container.standardizedFileURL.path)
         XCTAssertEqual(
-            standardized(location.directory),
+            standardized(location.checkoutDirectory ?? ""),
             container.appendingPathComponent("main").standardizedFileURL.path
         )
     }
@@ -1167,7 +1179,7 @@ final class GitOperationsTests: XCTestCase {
     func testProjectLocationPrefersTheDefaultBranchCheckoutOverASiblingWorkstream() throws {
         // Workstream worktrees are created beside the repository, so a container
         // holds the default checkout *and* workstreams as peers. Picking the
-        // first one would register a workstream as the project.
+        // first one would make a workstream stand in for the project.
         let container = try makeBareContainer(named: "bare-project")
         git(["config", "--unset", "wt.default"], in: container)
         // Sorts ahead of "main", so this is the entry a naive scan would take.
@@ -1175,23 +1187,18 @@ final class GitOperationsTests: XCTestCase {
 
         let location = Git.Operations.projectLocation(for: container.path)
         XCTAssertEqual(
-            standardized(location.directory),
+            standardized(location.checkoutDirectory ?? ""),
             container.appendingPathComponent("main").standardizedFileURL.path,
-            "the project is the default branch's checkout, not whichever worktree git lists first"
+            "the checkout is the default branch's, not whichever worktree git lists first"
         )
     }
 
-    func testProjectLocationCarriesTheContainerSoStaleProjectsCanBeMatched() throws {
-        let container = try makeBareContainer(named: "bare-project")
-
-        let location = Git.Operations.projectLocation(for: container.path)
-        XCTAssertEqual(standardized(location.containerDirectory ?? ""), container.standardizedFileURL.path)
-
-        // A plain repo resolved to itself has no container to report.
+    func testProjectLocationReportsNoCheckoutForAPlainRepo() throws {
+        // A plain repo *is* a work tree, so there is nothing to stand in for it.
         let repoDir = tempDir.appendingPathComponent("plain-repo")
         try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
         git(["init", "-q", "-b", "main"], in: repoDir)
-        XCTAssertNil(Git.Operations.projectLocation(for: repoDir.path).containerDirectory)
+        XCTAssertNil(Git.Operations.projectLocation(for: repoDir.path).checkoutDirectory)
     }
 
     func testProjectLocationPrefersTheCheckedOutDefaultOverADevelopmentBranch() throws {
@@ -1206,7 +1213,7 @@ final class GitOperationsTests: XCTestCase {
 
         let location = Git.Operations.projectLocation(for: container.path)
         XCTAssertEqual(
-            standardized(location.directory),
+            standardized(location.checkoutDirectory ?? ""),
             container.appendingPathComponent("main").standardizedFileURL.path
         )
     }
@@ -1221,19 +1228,21 @@ final class GitOperationsTests: XCTestCase {
 
         let location = Git.Operations.projectLocation(for: container.path)
         XCTAssertEqual(
-            standardized(location.directory),
+            standardized(location.checkoutDirectory ?? ""),
             container.appendingPathComponent("main").standardizedFileURL.path
         )
     }
 
-    func testProjectLocationFallsBackToTheContainerWhenNoCheckoutExists() throws {
-        // A bare container whose default checkout was deleted has nothing better
-        // to offer than itself.
+    func testProjectLocationReportsNoCheckoutWhenTheContainerHasNone() throws {
+        // A bare container whose default checkout was deleted has nothing to
+        // stand in for it. `Project.checkout` then falls back to the container,
+        // which is wrong for a work tree and is still the only answer there is.
         let container = try makeBareContainer(named: "bare-project")
         git(["worktree", "remove", "--force", "main"], in: container)
 
         let location = Git.Operations.projectLocation(for: container.path)
         XCTAssertEqual(standardized(location.directory), container.standardizedFileURL.path)
+        XCTAssertNil(location.checkoutDirectory)
         XCTAssertEqual(location.name, "bare-project")
     }
 

@@ -4,6 +4,54 @@ Atelier was forked from [Factory Floor](https://github.com/alltuner/factoryfloor
 at v0.1.79. Everything below that release is Factory Floor's history; those links
 point at the upstream repository.
 
+## Unreleased
+
+### ⚠ BREAKING CHANGES
+
+* **`Project.directory` is the repository's home again, not its default
+  checkout.** In the `.bare` container layout it now names the container — the
+  directory holding `.bare`, the default checkout and every workstream worktree
+  as peers — and `Project.checkout` names the worktree that stands in for it
+  wherever git needs one. Registering a container resolved *forward* to
+  `<container>/<wt.default>` since 0.2.0, which meant "project directory" named
+  the container in the README and the checkout in the code. Three consequences:
+
+  - A `process-compose.yaml` or `ports.yml` placed where the README says —
+    beside `.bare` and the worktrees — is finally found. It was being looked for
+    in the default checkout, so the Environment tab reported "Nothing to start"
+    for a project that had one.
+  - `ScriptTrust` keys config approvals by the project directory, so existing
+    approvals no longer match and a repository-provided config asks once more.
+    `isApproved` fails closed, so nothing runs unapproved in the meantime.
+  - `ATELIER_PROJECT_DIR`, the project row's Reveal in Finder / Open in External
+    Terminal / Copy Path, and the remove dialog's path all name the container
+    now. `ATELIER_WORKTREE_DIR` is unchanged.
+
+  Stored projects are migrated on load: a `directory` that is a linked worktree
+  inside a `.bare` container it demonstrably belongs to is hoisted to the
+  container, with the old value kept as the checkout. The load path is
+  filesystem-only and never runs git, so the two cohorts it cannot settle — a
+  project registered *before* 0.2.0, which already stores the container but has
+  no checkout recorded, and one whose layout it cannot prove — are repaired
+  instead the next time the repository is added, where both halves have already
+  been resolved.
+
+### Bug Fixes
+
+* **process-compose:** in the `.bare` container layout, a config in the project
+  directory is marked as the user's own rather than the repository's, and that
+  is now true of it: the container sits outside git, where before the project
+  directory was the checkout's root and a committed config there was reported as
+  user-placed. **This does not extend to an ordinary clone**, whose project
+  directory still *is* the checkout's root while its workstream worktrees live
+  under `~/.atelier/worktrees` — `ProcessCompose.Config.locate` classifies by
+  location alone, so a committed config at the root of such a repository is
+  still treated as user-placed and its `bootstrap` and `dispose` still run
+  without approval. That is untouched here and wants its own fix.
+* **archive:** the purge guard refuses the project's checkout as well as its
+  directory. Neither is ever a workstream, and naming only one left the other
+  destroyable depending on which the caller passed.
+
 ## [0.2.0](https://github.com/phaedryx/atelier/compare/731cc14...v0.2.0) (2026-08-31)
 
 The first Atelier release: everything since the hard fork. The theme is

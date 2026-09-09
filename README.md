@@ -69,12 +69,17 @@ nothing below runs until it is on, including the Environment tab's Start button.
 | `process-compose.override.yml` | the worktree | per-worktree additions to a project-directory config |
 | `ports.yml` (or `ports.yaml`) | the project directory only | the port variables Atelier supplies |
 
+**"The project directory" is the repository's home — in the bare-repo layout the
+container that holds `.bare`, the default checkout and every worktree as peers,
+not the default checkout inside it.** That is the whole point: the file sits
+outside every worktree, so one copy serves all of them instead of each growing
+its own that drifts, and git cannot see it, so no ignore rule is needed. For an
+ordinary clone the repository's home *is* the checkout, and the file goes at its
+root like anything else.
+
 The first two are [process-compose](https://f1bonacc1.github.io/process-compose/)'s
-own format; `ports.yml` is Atelier's. Keeping them in the project directory —
-beside `.bare` and the worktrees — means one copy serves every worktree instead
-of each growing its own that drifts, and in the bare-repo layout git cannot see
-them, so no ignore rule is needed. A `process-compose.yaml` in the worktree wins
-when both exist, because a worktree carrying its own is saying something
+own format; `ports.yml` is Atelier's. A `process-compose.yaml` in the worktree
+wins when both exist, because a worktree carrying its own is saying something
 deliberate — and in that case the override is not consulted, since a worktree
 config already *is* the per-worktree file.
 Either way process-compose runs with the *worktree* as cwd, so a relative
