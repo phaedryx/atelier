@@ -164,13 +164,19 @@ let processChecklistRowHeight: CGFloat = 20
 /// The choices used to wrap into an adaptive grid, because a vertical column of
 /// six processes pushed the Start button off the useful part of the pane. The
 /// list is vertical again by request, so that failure is prevented here instead
-/// of by the layout: past `visibleRows` entries the column stops growing, so no
-/// config can walk Start down the pane by declaring more processes.
+/// of by the layout: past `visibleRows` entries the column stops growing.
+///
+/// The cap outlived the layout that needed it and is still the right rule. In
+/// `ExecutionTabView`'s control section the checklist sits between the dev
+/// command and the buttons, both anchored to the top left, so a long list can
+/// no longer push Start off the pane — but it can push it past the process
+/// table and the terminal the section sits above, turning a corner of controls
+/// into most of the tab.
 ///
 /// Exactly as tall as its contents below the cap, which matters as much as the
 /// cap itself — a single fixed height would hand a three-process project five
-/// rows of dead space above its Start button, which is the same theft by
-/// another route.
+/// rows of dead space between its checkboxes and its Start button, which is
+/// the same theft by another route.
 ///
 /// A free function, like its neighbours, so both ends can be tested without a
 /// view.
@@ -204,9 +210,9 @@ struct ProcessSelectionView: View {
 
     /// A bare vertical checklist, with no heading and no "All" button.
     ///
-    /// The heading named a pane that no longer exists: sitting directly above
-    /// Start, a column of checkboxes reads as the thing Start will run without
-    /// a label saying so. "All" went with it — checking every box canonicalises
+    /// The heading named a pane that no longer exists: sitting between the dev
+    /// command and Start, a column of checkboxes reads as the thing Start will
+    /// run without a label saying so. "All" went with it — checking every box canonicalises
     /// back to the stored empty set on its own, so it was a shortcut for
     /// something the checkboxes already do.
     ///
@@ -219,12 +225,12 @@ struct ProcessSelectionView: View {
     ///
     /// Sized to its rows in *both* directions, which is why there is no
     /// `maxWidth: .infinity` and no horizontal padding here. `ExecutionTabView`
-    /// renders this as the first child of the centred stack that holds Start,
-    /// so a checklist that spanned the pane would put its checkboxes against
-    /// the far left edge with the button centred a pane away — the list has to
-    /// hug its content for the two to read as one group. A `ScrollView` is
-    /// greedy across its scroll axis, hence `fixedSize(horizontal:)` to make it
-    /// take the widest row instead.
+    /// renders this in a leading-aligned column with the dev command above it
+    /// and the buttons below, and that column already owns the padding; a
+    /// `ScrollView` is greedy across its scroll axis, so without
+    /// `fixedSize(horizontal:)` this one would stretch to the pane's full width
+    /// and hang a scroll gutter off the far right of a group nothing else in it
+    /// reaches.
     ///
     /// `defaultScrollAnchor(.top)` because otherwise a list past the cap opens
     /// scrolled to the *bottom* — a ten-process config rendered `proc-03` first
