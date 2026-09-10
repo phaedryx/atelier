@@ -315,7 +315,7 @@ extension IPC {
             "The worktree has changed since this run started, so these results no longer describe the code on disk."
 
         private static func pointerLine(runID: String) -> String {
-            "check_verification(run_id: \"\(runID)\") has the full per-check output."
+            "check_verification(run_id: \"\(runID)\") has more of each check's captured output."
         }
 
         private static func overflowNote(count: Int, runID: String) -> String {

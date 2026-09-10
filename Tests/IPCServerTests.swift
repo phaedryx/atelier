@@ -613,6 +613,12 @@ final class IPCServerTests: XCTestCase {
         XCTAssertTrue(rendered.contains("    3 examples, 1 failure"), rendered)
         XCTAssertTrue(rendered.contains("    ./spec/models/contact_spec.rb:42"), rendered)
         XCTAssertTrue(rendered.contains("output trimmed"), "the runner already trimmed this tail: \(rendered)")
+        // The log server is gone by the time an agent reads this, so the copy
+        // must not send it looking for a fuller one.
+        XCTAssertFalse(
+            rendered.contains("Verification tab has all"),
+            "there is no fuller copy anywhere after a run: \(rendered)"
+        )
     }
 }
 

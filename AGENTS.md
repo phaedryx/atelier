@@ -884,6 +884,15 @@ only discriminator; and a helper whose old socket has not closed yet re-register
 a *new* peer id, so an id captured when the run started can be dead while its pane has
 an agent sitting in it.
 
+**The captured tail is the only copy of a check's output that survives its run.** The
+log lives in process-compose's control server, and the runner shuts that down once the
+run is sealed — so there is no fuller copy in the Verification tab, in
+`check_verification`, or on disk, and `outputTruncated` means "there was more at capture
+time" rather than "more can be fetched". Every string that flag drives has to say so:
+copy that reads as retrievable sends an agent looking for a log that is nowhere, and the
+honest pointer is re-running that one check. (The tab spec's original "on demand for a
+passed check" was impossible for the same reason and has been withdrawn.)
+
 **Two bounds that are not tuning.** `IPC.Store` refuses content over 64KB outright, so
 an oversized notice is not trimmed on delivery — it is lost, silently, exactly when the
 agent is waiting for it; `VerificationSummary` assembles against a 6KB budget, verdicts

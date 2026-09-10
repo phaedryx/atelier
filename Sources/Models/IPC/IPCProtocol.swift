@@ -303,10 +303,19 @@ extension IPC {
         /// process-compose, so an exit code alone cannot tell them apart.
         let exitCode: Int?
         let durationSeconds: Double?
-        /// The tail of this check's output, bounded before it is sent. Nil when
-        /// there is none to show — a passing check usually has none stored.
+        /// The tail of this check's output as captured while the run was live,
+        /// bounded again before it is sent. Nil when there is none to show — a
+        /// passing check usually has none stored.
         let outputTail: String?
-        /// Whether `outputTail` is a tail of something longer.
+        /// Whether there was more output than this **at capture time**.
+        ///
+        /// Not a promise that more can be fetched. The log lives in
+        /// process-compose's control server, which the runner shuts down once
+        /// the run is sealed, so the tail captured in that window is the only
+        /// copy that exists afterwards — in the Verification tab, here, or on
+        /// disk. An agent that reads "truncated" as "retrievable" goes looking
+        /// for a fuller log that is not anywhere, which is why every string this
+        /// flag drives says so.
         let outputTruncated: Bool
     }
 

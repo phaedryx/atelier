@@ -304,9 +304,15 @@ let toolDefinitions: [ToolDefinition] = [
         Read a verification run: its state, and each check's verdict, duration
         and the tail of its output. Works while the run is still going — checks
         report as running or waiting until they finish — so this is also how you
-        watch one without blocking. Output is trimmed to what is worth reading;
-        a check that says its output was truncated has more in the Verification
-        tab. Only runs in your own workstream are readable.
+        watch one without blocking. Only runs in your own workstream are
+        readable.
+
+        Output is the tail captured while the run was live, and that is ALL that
+        exists: the log lives in process-compose's control server, which goes
+        away when the run ends. A check reporting truncated output means there
+        was more at the time, not that a fuller copy can be fetched now — from
+        here, from the Verification tab, or from disk. If you need more of it,
+        re-run that one check.
         """,
         properties: [
             "run_id": ["type": "string", "description": "The run id start_verification returned."],
@@ -429,7 +435,7 @@ func renderText(_ payload: IPC.Payload?) -> String {
             if let output = check.outputTail, !output.isEmpty {
                 lines.append(output.split(separator: "\n", omittingEmptySubsequences: false).map { "    \($0)" }.joined(separator: "\n"))
                 if check.outputTruncated {
-                    lines.append("    … output trimmed; the Verification tab has all of it.")
+                    lines.append("    … output trimmed — the tail captured while the run was live; no fuller copy was kept.")
                 }
             }
         }
