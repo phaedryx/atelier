@@ -1385,8 +1385,9 @@ private struct WorkstreamRow: View {
     }
 
     /// The main session's context bar stays visible once usage is known so a
-    /// finished turn's consumption remains readable; it dims while the agent
-    /// isn't actively spending context.
+    /// finished turn's consumption remains readable; `ContextMeter` dims its
+    /// track — and only its track — while the agent isn't actively spending
+    /// context.
     private var showsMainContextMeter: Bool {
         mainContextUsage != nil && isPathValid && hasLiveSession
     }
@@ -1513,9 +1514,7 @@ private struct WorkstreamRow: View {
                 }
 
                 if showsMainContextMeter, let usage = mainContextUsage {
-                    ContextMeter(usage: usage)
-                        .opacity(isAgentActive ? 1 : 0.45)
-                        .animation(.easeInOut(duration: 0.2), value: isAgentActive)
+                    ContextMeter(usage: usage, isActive: isAgentActive)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
