@@ -42,6 +42,25 @@ func verificationCanRun(isLive: Bool) -> Bool {
     !isLive
 }
 
+/// Whether the process checklist should render.
+///
+/// Hidden while live, not merely disabled: `Verification.Runner.start` reads
+/// the stored selection once, when Run is pressed, so a checkbox toggled
+/// mid-run silently affects nothing until the next Run — the same reasoning
+/// `showsProcessSelection` gives for hiding Execution's checklist
+/// (`ExecutionTabView.swift:83`). This tab used to keep the list visible and
+/// merely `.disabled(isLive)` it; that let a user click a box that could not
+/// take effect, which is the confusing state Tad flagged after seeing the tab
+/// run.
+///
+/// The empty-list guard is not cosmetic: an empty list would make
+/// `ProcessSelectionView`'s own `.onAppear` read the stored selection as
+/// "nothing survived" and overwrite it with the canonical "all" — see
+/// `processSelectionOnLoad`.
+func verificationShowsChecklist(isLive: Bool, declaredProcesses: [String]) -> Bool {
+    !isLive && !declaredProcesses.isEmpty
+}
+
 /// Whether `run`'s result no longer reflects the worktree's current content.
 ///
 /// Compares `run.stamp` — `Git.Operations.diffFingerprint` at the moment the
@@ -350,26 +369,24 @@ struct VerificationTabView: View {
         // decode, and three reads of an unchanging value in one render pass
         // buys nothing.
         let run = currentRun
-        return VStack(spacing: 12) {
+        return VStack(alignment: .leading, spacing: 12) {
             if let detail = run?.failureDetail {
                 failureDetailBanner(detail)
             }
 
-            // Guarded on a non-empty list as a second line of defense, even
-            // though the caller is not supposed to hand this view a
-            // momentarily-empty list while `unavailableReason` is nil: an
-            // empty list here would make `ProcessSelectionView`'s own
-            // `.onAppear` read the stored selection as "nothing survived" and
-            // overwrite it with the canonical "all" — see
-            // `processSelectionOnLoad`.
-            if !declaredProcesses.isEmpty {
+            // Hidden, not merely disabled, while a run is live —
+            // `verificationShowsChecklist`'s own doc. The gate folds in the
+            // empty-list guard too: a momentarily-empty list would make
+            // `ProcessSelectionView`'s own `.onAppear` read the stored
+            // selection as "nothing survived" and overwrite it with the
+            // canonical "all" — see `processSelectionOnLoad`.
+            if verificationShowsChecklist(isLive: isLive, declaredProcesses: declaredProcesses) {
                 ProcessSelectionView(
                     workstreamID: workstreamID,
                     declaredProcesses: declaredProcesses,
                     store: .verify,
                     lastSelectedHelp: NSLocalizedString("At least one check has to run.", comment: "")
                 )
-                .disabled(isLive)
             }
 
             actionRow(run: run)

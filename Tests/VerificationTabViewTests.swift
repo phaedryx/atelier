@@ -19,6 +19,27 @@ final class VerificationTabViewTests: XCTestCase {
         XCTAssertTrue(verificationCanRun(isLive: false))
     }
 
+    // MARK: - Checklist visibility
+
+    // Hidden while live, not merely disabled: clicking a box that cannot take
+    // effect is the confusing state, and Execution already resolves it this way
+    // (ExecutionTabView.swift:83 gates its own checklist on `!runStarted`).
+    func test_showsChecklist_hiddenWhileARunIsLive() {
+        XCTAssertFalse(verificationShowsChecklist(isLive: true, declaredProcesses: ["rspec"]))
+    }
+
+    func test_showsChecklist_visibleWhenIdleWithChecks() {
+        XCTAssertTrue(verificationShowsChecklist(isLive: false, declaredProcesses: ["rspec"]))
+    }
+
+    /// The empty-list guard stays. It is not cosmetic: an empty list would make
+    /// ProcessSelectionView's own .onAppear read the stored selection as "nothing
+    /// survived" and overwrite it with the canonical "all" — see
+    /// processSelectionOnLoad.
+    func test_showsChecklist_hiddenWhenNothingIsDeclared() {
+        XCTAssertFalse(verificationShowsChecklist(isLive: false, declaredProcesses: []))
+    }
+
     // MARK: - Staleness
 
     func test_isStale_comparesTheStamp() {
