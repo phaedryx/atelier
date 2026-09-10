@@ -87,7 +87,11 @@ func showsProcessSelection(
 /// the user's own terminal would. Used when the `atelier-run` launcher is
 /// unavailable and the command has to be run bare.
 func scriptCommand(script: String, shell: String = CommandBuilder.userShell) -> String {
-    "\(shell) -lic \(CommandBuilder.shellQuote(script, forShell: shell))"
+    // POSIX quoting for the same reason `RunLauncher.runScriptCommand` uses it:
+    // the outer shell that strips this layer is ghostty's `/bin/bash -c`, not
+    // the login shell named here, and double quotes would leave backticks in
+    // the script live for bash to substitute.
+    "\(shell) -lic \(CommandBuilder.shellQuote(script))"
 }
 
 struct ExecutionTabView: View {

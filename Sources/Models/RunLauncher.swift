@@ -28,7 +28,12 @@ enum RunLauncher {
 func runScriptCommand(script: String, workstreamID: UUID, launcherPath: String, shell: String = CommandBuilder.userShell) -> String {
     let workstream = workstreamID.uuidString.lowercased()
     let quotedLauncher = CommandBuilder.shellQuote(launcherPath)
-    let quotedScript = CommandBuilder.shellQuote(script, forShell: shell)
+    // POSIX, not `forShell:`. This token has one quoting layer and it is not
+    // the login shell that strips it: the assembled string is read by ghostty's
+    // `/bin/bash -c` wrapper (or by `sh -c` when tmux wraps it), which hands
+    // the unquoted script to fish as its `-c` argument. Double quotes here
+    // would leave backticks and `$(…)` for that outer shell to substitute.
+    let quotedScript = CommandBuilder.shellQuote(script)
     // `shell` defaults to $SHELL, so it is as much user data as the other two.
     let quotedShell = CommandBuilder.shellQuote(shell)
     return "\(quotedLauncher) --workstream-id \(workstream) -- \(quotedShell) -lic \(quotedScript)"

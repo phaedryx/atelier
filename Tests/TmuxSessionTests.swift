@@ -89,7 +89,15 @@ final class TmuxSessionTests: XCTestCase {
         )
     }
 
-    func testWrapCommandFishUsesDoubleQuotes() {
+    /// Fish quoting belongs on the `sh -c` argument and nowhere else.
+    ///
+    /// Both halves of this used to be asserted the other way round — the outer
+    /// argument had to *start* with a double quote and had to *not* contain
+    /// `'\''`. That is a claim about quote style rather than about what the
+    /// child receives, and it held while bash — which is what actually parses
+    /// this token, via ghostty's `/bin/bash --noprofile --norc -c "exec -l …"`
+    /// — performed command substitution on every backtick in the payload.
+    func testWrapCommandFishQuotesOnlyTheArgumentFishParses() {
         let command = TmuxSession.wrapCommand(
             tmuxPath: "/opt/homebrew/bin/tmux",
             sessionName: "proj/ws/agent",
@@ -97,30 +105,61 @@ final class TmuxSessionTests: XCTestCase {
             respawnOnExit: true,
             shell: "/opt/homebrew/bin/fish"
         )
-        XCTAssertTrue(command.hasPrefix("/opt/homebrew/bin/fish -lic \""), "Fish should use double-quote wrapping")
-        XCTAssertTrue(command.contains("exec sh -c"), "Should still use sh for POSIX syntax")
+        XCTAssertTrue(
+            command.hasPrefix("/opt/homebrew/bin/fish -lic '"),
+            "The outermost argument is parsed by bash, so it must be POSIX-quoted: \(command)"
+        )
+        XCTAssertTrue(command.contains("exec sh -c \""), "The argument fish parses stays fish-quoted: \(command)")
         XCTAssertTrue(command.contains("new-session -A -s"))
         XCTAssertTrue(command.contains("claude"))
     }
 
-    func testWrapCommandFishDoesNotContainPosixQuoteEscape() {
+    /// The end-to-end version: a payload full of characters a shell might act
+    /// on, driven through bash -> the login shell -> `sh -c` -> tmux's argv, with
+    /// a stub standing in for tmux so nothing starts a server.
+    private func assertTmuxPayloadSurvives(shell: String, file: StaticString = #filePath, line: UInt = #line) throws {
+        let stub = try makeArgvEchoStub()
         let command = TmuxSession.wrapCommand(
-            tmuxPath: "/opt/homebrew/bin/tmux",
-            sessionName: "proj/ws/agent",
-            command: "claude",
-            shell: "/opt/homebrew/bin/fish"
+            tmuxPath: stub,
+            sessionName: "atelier/proj/ws/agent",
+            command: ShellWrapper.printfCommand(),
+            environmentVars: ["ATELIER_PROJECT": "My Project"],
+            shell: shell
         )
-        // The outermost layer should NOT contain '\'' which Fish can't parse
-        let outerQuoteEnd = command.index(command.startIndex, offsetBy: "/opt/homebrew/bin/fish -lic ".count)
-        let outerArg = String(command[outerQuoteEnd...])
-        XCTAssertTrue(outerArg.hasPrefix("\""), "Outer argument should start with double quote")
-        // Inner POSIX quoting (parsed by sh, not Fish) may still use '\'' and that's fine
+        // The stub prints tmux's argv, so the payload arrives as the text of the
+        // command tmux was told to run rather than as printf's output.
+        try ShellWrapper.assertPayloadSurvives(command, payload: ShellWrapper.hostilePayload, file: file, line: line)
+    }
+
+    func testTmuxPayloadSurvivesUnderFish() throws {
+        try assertTmuxPayloadSurvives(shell: ShellWrapper.requireFish())
+    }
+
+    func testTmuxPayloadSurvivesUnderZsh() throws {
+        try assertTmuxPayloadSurvives(shell: "/bin/zsh")
+    }
+
+    /// Stands in for the tmux binary: prints its arguments and exits, so
+    /// `start-server`, `source-file` and `new-session` all no-op.
+    private func makeArgvEchoStub() throws -> String {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("atelier-tmux-stub-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        let stub = dir.appendingPathComponent("tmux")
+        try "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done\n"
+            .write(to: stub, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stub.path)
+        return stub.path
     }
 
     // MARK: - Shell syntax validation (integration tests)
 
-    // Invoke real shell binaries to verify generated tmux commands parse correctly.
-    // Ghostty passes commands to /bin/sh -c, so that's what we simulate.
+    // Invoke real shell binaries to verify generated tmux commands parse
+    // correctly. Syntax only, and `/bin/sh` is a stand-in for the outer parser
+    // rather than a claim about it — ghostty's real macOS wrapper is
+    // `/bin/bash --noprofile --norc -c "exec -l …"` (see `ShellWrapper`). A
+    // command can parse cleanly here and still deliver a mangled payload.
 
     private func assertShellCanParse(_ command: String, file: StaticString = #filePath, line: UInt = #line) throws {
         let syntaxCheck = command.replacingOccurrences(of: " -lic ", with: " -nc ")
