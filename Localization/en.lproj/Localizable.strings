@@ -572,6 +572,11 @@
 "This project's process-compose files came with the repository and have not been approved, so no %@ ran." = "This project's process-compose files came with the repository and have not been approved, so no %@ ran.";
 "Approval covers this repository until any of these files changes. Start is never gated by it." = "Approval covers this repository until any of these files changes. Start is never gated by it.";
 
+/* Verification runner */
+"Verification run %@ is already running in this workstream." = "Verification run %@ is already running in this workstream.";
+"This project declares no verify processes." = "This project declares no verify processes.";
+"No such check: %@. This project declares: %@." = "No such check: %@. This project declares: %@.";
+
 /* ports.yaml validation */
 "fixed: %d is not a port between 1 and 65535" = "fixed: %d is not a port between 1 and 65535";
 "is a name Atelier sets; choose another" = "is a name Atelier sets; choose another";
