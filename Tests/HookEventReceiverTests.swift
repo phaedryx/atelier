@@ -13,6 +13,7 @@ final class HookEventReceiverTests: XCTestCase {
     override func tearDown() {
         receiver.onEvent = nil
         receiver.onPermissionRequest = nil
+        receiver.onPing = nil
         super.tearDown()
     }
 
@@ -426,5 +427,106 @@ final class HookEventReceiverTests: XCTestCase {
             usleep(50_000)
         }
         XCTAssertEqual(receiver.connectionCount, 0, "the stalled connection was never reaped")
+    }
+
+    // MARK: - Tool brackets pair
+
+    /// An MCP call is a tool call like any other, and often a slow one. Dropping
+    /// its `PreToolUse` left it with no open bracket, so the stall sweep saw
+    /// pure silence and had nothing to exempt — the reason a slow MCP tool read
+    /// as a wedged agent.
+    func test_mcpToolCall_opensABracket() throws {
+        let events = try post([
+            "event_input": [
+                "hook_event_name": "PreToolUse",
+                "tool_name": "mcp__scenius__read",
+                "agent_id": "main",
+            ],
+            "project_dir": "/tmp/atelier-hook-test",
+            "surface_id": "",
+        ])
+
+        XCTAssertEqual(events.map(\.type), [.agentToolStart])
+        XCTAssertEqual(events.first?.activity, "scenius/read")
+    }
+
+    /// The meta tools stay filtered — but on *both* sides. A `PostToolUse` the
+    /// mapper let through for a `PreToolUse` it dropped closed a bracket that
+    /// was never opened.
+    func test_metaTool_isFilteredOnBothSidesOfTheBracket() throws {
+        try postExpectingNothing([
+            "event_input": ["hook_event_name": "PreToolUse", "tool_name": "Skill", "agent_id": "main"],
+            "project_dir": "/tmp/atelier-hook-test",
+            "surface_id": "",
+        ])
+        try postExpectingNothing([
+            "event_input": ["hook_event_name": "PostToolUse", "tool_name": "Skill", "agent_id": "main"],
+            "project_dir": "/tmp/atelier-hook-test",
+            "surface_id": "",
+        ])
+    }
+
+    /// An ordinary tool still closes its bracket.
+    func test_ordinaryTool_closesItsBracket() throws {
+        let events = try post([
+            "event_input": ["hook_event_name": "PostToolUse", "tool_name": "Bash", "agent_id": "main"],
+            "project_dir": "/tmp/atelier-hook-test",
+            "surface_id": "",
+        ])
+
+        XCTAssertEqual(events.map(\.type), [.agentToolDone])
+    }
+
+    // MARK: - Channel liveness ping
+
+    /// `HookChannelProbe` posts this envelope through the real `atelier-hook`
+    /// script and concludes the channel is up when its nonce comes back out
+    /// here. Nothing else in the app can tell it the delivery path works.
+    func test_ping_reportsItsNonce() throws {
+        let nonce = UUID().uuidString
+        var seen: String?
+        let arrived = expectation(description: "ping nonce reported")
+        receiver.onPing = { received in
+            seen = received
+            arrived.fulfill()
+        }
+
+        let fd = try sendEnvelope([
+            "event_input": ["hook_event_name": "AtelierPing", "nonce": nonce],
+            "project_dir": "",
+            "surface_id": "",
+        ], timeout: 10)
+        defer { close(fd) }
+        wait(for: [arrived], timeout: 10)
+
+        XCTAssertEqual(seen, nonce)
+    }
+
+    /// The ping must not look like agent activity: an envelope that reset a
+    /// workstream's stall clock would make the probe's own traffic the reason
+    /// the channel looked healthy.
+    func test_ping_producesNoAgentEvents() throws {
+        receiver.onPing = { _ in }
+        try postExpectingNothing([
+            "event_input": ["hook_event_name": "AtelierPing", "nonce": UUID().uuidString],
+            "project_dir": "/tmp/atelier-hook-test",
+            "surface_id": "",
+        ])
+    }
+
+    /// A ping with no nonce is not a ping. Reporting one would let a malformed
+    /// envelope satisfy a probe that is waiting for a specific nonce.
+    func test_ping_withoutANonceIsNotReported() throws {
+        let quiet = expectation(description: "no nonce reported")
+        quiet.isInverted = true
+        receiver.onPing = { _ in quiet.fulfill() }
+
+        let fd = try sendEnvelope([
+            "event_input": ["hook_event_name": "AtelierPing"],
+            "project_dir": "",
+            "surface_id": "",
+        ], timeout: 10)
+        defer { close(fd) }
+        wait(for: [quiet], timeout: 1)
     }
 }

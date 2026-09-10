@@ -11,6 +11,9 @@ import SwiftUI
 /// them the moment an agent finishes.
 struct WorkstreamAgentRosterView: View {
     let runs: [Workstream.AgentStateTracker.AgentRun]
+    /// Whether hook events are reaching the app at all. A card cannot report
+    /// its run as working on evidence that stopped arriving.
+    let channelDown: Bool
     /// Called when a roster line is clicked: selects the workstream and
     /// focuses its Coding Agent tab.
     let onSelect: () -> Void
@@ -28,7 +31,7 @@ struct WorkstreamAgentRosterView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             ForEach(visibleRuns) { run in
-                RosterCard(run: run)
+                RosterCard(run: run, channelDown: channelDown)
                     .contentShape(Rectangle())
                     .onTapGesture(perform: onSelect)
             }
@@ -57,19 +60,12 @@ struct WorkstreamAgentRosterView: View {
 
 private struct RosterCard: View {
     let run: Workstream.AgentStateTracker.AgentRun
+    let channelDown: Bool
 
-    private var statusColor: Color {
-        switch run.state {
-        case .working: .blue
-        case .stalled: .yellow
-        }
-    }
-
-    private var statusWord: LocalizedStringKey {
-        switch run.state {
-        case .working: "Working"
-        case .stalled: "Stalled"
-        }
+    /// Same decision as the workstream row's, from the same place — these two
+    /// had already drifted once, the row growing states the cards never learned.
+    private var status: AgentStatusLabel {
+        AgentStatusLabel.resolve(runState: run.state, channelDown: channelDown)
     }
 
     var body: some View {
@@ -96,12 +92,12 @@ private struct RosterCard: View {
     private var statusMeta: some View {
         HStack(spacing: 0) {
             Circle()
-                .fill(statusColor)
+                .fill(status.color)
                 .frame(width: 5, height: 5)
                 .padding(.trailing, 4)
 
-            Text(statusWord)
-                .foregroundStyle(statusColor)
+            Text(status.text)
+                .foregroundStyle(status.color)
 
             if let activity = run.activity {
                 metaSeparator

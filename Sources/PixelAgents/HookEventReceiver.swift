@@ -24,6 +24,10 @@ final class HookEventReceiver: @unchecked Sendable {
     /// life of the app. Settable so a test can shorten it.
     nonisolated(unsafe) static var connectionTimeout: TimeInterval = 15
 
+    /// `hook_event_name` of the liveness ping. Deliberately not a Claude Code
+    /// event name, so a real session can never produce one.
+    static let pingEventName = "AtelierPing"
+
     /// Called on the main queue with (projectDir, event).
     ///
     /// Behind a lock: it is read on the receiver's own queue and assigned from
@@ -53,6 +57,20 @@ final class HookEventReceiver: @unchecked Sendable {
     }
 
     private var storedOnPermissionRequest: ((String, PendingPermission, @escaping @Sendable (PendingPermission.Decision?) -> Void) -> Void)?
+
+    /// Called on the main queue with the nonce of an `AtelierPing` envelope.
+    ///
+    /// `HookChannelProbe` sends one through the real `atelier-hook` script and
+    /// waits here for its nonce. That round trip is the only evidence the app
+    /// has that the delivery path — port file, curl, this listener, the parser —
+    /// is working; every other signal it has is an *absence* of hook events,
+    /// which a broken channel and a busy agent produce identically.
+    var onPing: ((String) -> Void)? {
+        get { onEventLock.withLock { storedOnPing } }
+        set { onEventLock.withLock { storedOnPing = newValue } }
+    }
+
+    private var storedOnPing: ((String) -> Void)?
 
     /// How many connections are open right now. Test-facing.
     var connectionCount: Int {
@@ -272,6 +290,24 @@ final class HookEventReceiver: @unchecked Sendable {
         let surfaceID = (json["surface_id"] as? String).flatMap { $0.isEmpty ? nil : $0 }
 
         let hookEventName = eventInput["hook_event_name"] as? String ?? ""
+
+        // Atelier's own liveness ping, not a Claude Code event. Answered here
+        // rather than through `mapHookEvent` so it produces no `AgentEvent` at
+        // all: an envelope that touched a workstream's roster would reset the
+        // very stall clock the probe was sent to explain, making the probe's own
+        // traffic the reason the channel looked healthy.
+        if hookEventName == Self.pingEventName {
+            if let nonce = eventInput["nonce"] as? String, !nonce.isEmpty {
+                logger.info("Hook channel ping returned")
+                DispatchQueue.main.async { [weak self] in
+                    self?.onPing?(nonce)
+                }
+            }
+            sendResponse(on: connection, status: "200 OK", body: "{\"ok\":true}")
+            done()
+            return
+        }
+
         logger.info("Hook event received: \(hookEventName, privacy: .public) for project: \(projectDir, privacy: .public) surface: \(surfaceID ?? "none", privacy: .public)")
         var events = mapHookEvent(hookEventName: hookEventName, eventInput: eventInput, projectDir: projectDir)
         if let surfaceID {
@@ -408,9 +444,31 @@ final class HookEventReceiver: @unchecked Sendable {
         !agentId.isEmpty && agentId != "main"
     }
 
+    /// Whether a tool is Atelier's business to report at all.
+    ///
+    /// Consulted by **both** `PreToolUse` and `PostToolUse`, which is the point:
+    /// the two hooks bracket a running tool, and a bracket that opens without
+    /// closing — or closes without opening — is worse than no bracket at all.
+    /// `mcp__*` used to be filtered here on one side only, so an MCP call
+    /// reported nothing on the way in and a stray `toolDone` on the way out; the
+    /// stall sweep therefore saw a silent agent with no tool in flight and had
+    /// nothing to exempt. MCP calls are ordinary tool calls, frequently the
+    /// slowest ones, and belong inside a bracket.
+    static func isMetaTool(_ toolName: String) -> Bool {
+        toolName == "Skill" || toolName == "ToolSearch"
+    }
+
     /// Maps a tool name (and, when available, its input) to a short human-readable
     /// activity description for the sidebar roster, e.g. "Editing Foo.swift".
     static func activityDescription(toolName: String, toolInput: [String: Any]?) -> String? {
+        // `mcp__scenius__read` -> "scenius/read". The raw name is what the
+        // harness reports, and it does not fit the status line's one truncating
+        // slot; server and tool are the two parts that identify the call.
+        if toolName.hasPrefix("mcp__") {
+            let parts = toolName.dropFirst("mcp__".count).components(separatedBy: "__")
+            let named = parts.filter { !$0.isEmpty }
+            return named.isEmpty ? nil : named.joined(separator: "/")
+        }
         let filePath = (toolInput?["file_path"] as? String) ?? (toolInput?["notebook_path"] as? String)
         let baseName = filePath.map { URL(fileURLWithPath: $0).lastPathComponent }
 
@@ -463,18 +521,17 @@ final class HookEventReceiver: @unchecked Sendable {
         switch hookEventName {
         case "PreToolUse":
             let toolName = eventInput["tool_name"] as? String ?? "unknown"
-            // Skip internal/meta tools
-            guard !toolName.hasPrefix("mcp__"), toolName != "Skill", toolName != "ToolSearch" else {
-                return []
-            }
+            guard !Self.isMetaTool(toolName) else { return [] }
             let aid = agentId(from: eventInput)
             let activity = Self.activityDescription(toolName: toolName, toolInput: eventInput["tool_input"] as? [String: Any])
             logger.info("Hook PreToolUse: \(toolName, privacy: .public) agent=\(aid, privacy: .public)")
             return [AgentEvent.toolStart(agentId: aid, tool: toolName, activity: activity)]
 
         case "PostToolUse":
+            let toolName = eventInput["tool_name"] as? String ?? "unknown"
+            guard !Self.isMetaTool(toolName) else { return [] }
             let aid = agentId(from: eventInput)
-            logger.info("Hook PostToolUse: agent=\(aid, privacy: .public)")
+            logger.info("Hook PostToolUse: \(toolName, privacy: .public) agent=\(aid, privacy: .public)")
             return [AgentEvent.toolDone(agentId: aid)]
 
         case "Stop":

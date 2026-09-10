@@ -411,6 +411,7 @@
 "Stalled" = "Stalled";
 "Working" = "Working";
 "Waiting for approval" = "Waiting for approval";
+"No Signal" = "No Signal";
 
 /* Permission approval */
 "Claude wants to run %@" = "Claude wants to run %@";

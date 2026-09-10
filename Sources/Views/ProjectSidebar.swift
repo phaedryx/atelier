@@ -238,6 +238,7 @@ struct ProjectSidebar: View {
                                 isPathValid: appEnv.isPathValid(workstream.worktreePath),
                                 agentState: agentStateTracker.state(for: workstream.id),
                                 hasLiveSession: agentStateTracker.hasLiveSession(for: workstream.id),
+                                channelDown: channelProbe.state.isDown,
                                 mainActivity: mainRun?.activity,
                                 // Passed regardless of whether the main run
                                 // is still rostered: the tracker keeps the
@@ -260,7 +261,7 @@ struct ProjectSidebar: View {
                             )
 
                             if !subRuns.isEmpty {
-                                WorkstreamAgentRosterView(runs: subRuns) {
+                                WorkstreamAgentRosterView(runs: subRuns, channelDown: channelProbe.state.isDown) {
                                     selectAndFocusAgent(workstreamID: workstream.id)
                                 }
                                 .padding(.leading, 6)
@@ -911,6 +912,7 @@ struct ProjectSidebar: View {
     @EnvironmentObject private var surfaceCache: TerminalSurfaceCache
     @EnvironmentObject private var appEnv: AppEnvironment
     @EnvironmentObject private var agentStateTracker: Workstream.AgentStateTracker
+    @EnvironmentObject private var channelProbe: HookChannelProbe
 
     private func confirmPurge(_ workstream: Workstream) {
         purgeWarningMessage = Workstream.Archiver.purgeWarning(for: workstream)
@@ -1340,6 +1342,10 @@ private struct WorkstreamRow: View {
     let isPathValid: Bool
     var agentState: Workstream.AgentStateTracker.AgentRunState = .idle
     var hasLiveSession: Bool = false
+    /// Whether the hook channel has stopped delivering events. App-wide rather
+    /// than per-row, but it lands here because it decides what this row is
+    /// entitled to claim about its agent.
+    var channelDown: Bool = false
     var mainActivity: String?
     var mainContextUsage: Workstream.AgentStateTracker.ContextUsage?
     /// When this workstream's main run was first seen this launch; drives
@@ -1400,29 +1406,15 @@ private struct WorkstreamRow: View {
         }
     }
 
-    /// Dot/word color for the status meta line: blue = working, yellow =
-    /// stalled, orange = awaiting permission, green = finished, secondary =
-    /// idle with a live session. Nil when dormant, which hides the line.
-    private var statusColor: Color? {
-        switch agentState {
-        case .working: .blue
-        case .stalled: .yellow
-        case .needsAttention(.permission): .orange
-        case .needsAttention(.justFinished): .green
-        case .idle where hasLiveSession: .secondary
-        case .idle: nil
-        }
-    }
-
-    private var statusText: LocalizedStringKey? {
-        switch agentState {
-        case .working: "Working"
-        case .stalled: "Stalled"
-        case .needsAttention(.permission): "Waiting for approval"
-        case .needsAttention(.justFinished): "Done"
-        case .idle where hasLiveSession: "Idle"
-        case .idle: nil
-        }
+    /// Word and colour for the status meta line, or nil when dormant, which
+    /// hides the line. `AgentStatusLabel` owns the mapping — including whether
+    /// a hook channel that has stopped delivering overrides it.
+    private var statusLabel: AgentStatusLabel? {
+        AgentStatusLabel.resolve(
+            agentState: agentState,
+            hasLiveSession: hasLiveSession,
+            channelDown: channelDown
+        )
     }
 
     /// "● Working · Editing AuthView.swift · 4m" — colored dot + localized
@@ -1509,8 +1501,8 @@ private struct WorkstreamRow: View {
                     .foregroundStyle(prState == "MERGED" ? AnyShapeStyle(.purple) : AnyShapeStyle(.tertiary))
                 }
 
-                if let statusText, let statusColor {
-                    statusMeta(word: statusText, color: statusColor)
+                if let statusLabel {
+                    statusMeta(word: statusLabel.text, color: statusLabel.color)
                 }
 
                 if showsMainContextMeter, let usage = mainContextUsage {

@@ -102,6 +102,7 @@ struct ContentView: View {
     @StateObject private var appEnvironment = AppEnvironment()
     @StateObject private var usageStore = Usage.Store()
     @ObservedObject private var agentStateTracker = Workstream.AgentStateTracker.shared
+    @ObservedObject private var channelProbe = HookChannelProbe.shared
     @State private var saveWork: DispatchWorkItem?
     @State private var workstreamToRemove: UUID?
     @State private var workstreamToPurge: UUID?
@@ -454,6 +455,7 @@ struct ContentView: View {
         .environmentObject(appEnvironment)
         .environmentObject(usageStore)
         .environmentObject(agentStateTracker)
+        .environmentObject(channelProbe)
         .onAppear {
             // The nudge and prompt injector need the live surfaces this cache
             // owns; it is a @StateObject here rather than a singleton.

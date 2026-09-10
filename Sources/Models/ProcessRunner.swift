@@ -73,6 +73,7 @@ enum ProcessRunner {
         arguments: [String],
         environment: [String: String]? = nil,
         currentDirectory: URL? = nil,
+        standardInput: Data? = nil,
         timeout: TimeInterval
     ) -> Output? {
         let process = Process()
@@ -89,6 +90,10 @@ enum ProcessRunner {
         let errPipe = Pipe()
         process.standardOutput = outPipe
         process.standardError = errPipe
+        let inPipe = standardInput.map { _ in Pipe() }
+        if let inPipe {
+            process.standardInput = inPipe
+        }
 
         // Set before `run()`: this is the only way to wait on exit with a
         // deadline, since `waitUntilExit()` takes none.
@@ -110,6 +115,24 @@ enum ProcessRunner {
         // branch to *stderr*, hundreds of KB against a 16-64 KB pipe buffer.
         // Draining on separate threads is also what makes the deadline below
         // enforceable: the read is what blocks, not the wait.
+        // Written on its own thread for the same reason the two output streams
+        // are drained on theirs: a payload past the pipe buffer blocks the
+        // writer until the child reads it, so writing here — on the thread that
+        // goes on to wait for exit — deadlocks against a child that has not
+        // started reading yet. Closing the handle is what gives the child EOF;
+        // without it a child like `cat` never exits and only the deadline ends
+        // the call. Abandoned rather than waited on, like the drain threads.
+        if let inPipe, let standardInput {
+            DispatchQueue.global(qos: .utility).async {
+                let handle = inPipe.fileHandleForWriting
+                // A child that exits without reading its input leaves this
+                // write with nowhere to go; EPIPE arrives as an ObjC exception
+                // through `write(contentsOf:)`, which would tear down the app.
+                try? handle.write(contentsOf: standardInput)
+                try? handle.close()
+            }
+        }
+
         let outBox = DataBox()
         let errBox = DataBox()
         let outDrained = DispatchSemaphore(value: 0)
@@ -153,6 +176,7 @@ enum ProcessRunner {
         arguments: [String],
         environment: [String: String]? = nil,
         currentDirectory: URL? = nil,
+        standardInput: Data? = nil,
         timeout: TimeInterval
     ) -> Data? {
         guard let output = capture(
@@ -160,6 +184,7 @@ enum ProcessRunner {
             arguments: arguments,
             environment: environment,
             currentDirectory: currentDirectory,
+            standardInput: standardInput,
             timeout: timeout
         ), output.isSuccess else { return nil }
         return output.stdout
@@ -172,6 +197,7 @@ enum ProcessRunner {
         arguments: [String],
         environment: [String: String]? = nil,
         currentDirectory: URL? = nil,
+        standardInput: Data? = nil,
         timeout: TimeInterval
     ) -> Bool {
         capture(
@@ -179,6 +205,7 @@ enum ProcessRunner {
             arguments: arguments,
             environment: environment,
             currentDirectory: currentDirectory,
+            standardInput: standardInput,
             timeout: timeout
         )?.isSuccess ?? false
     }

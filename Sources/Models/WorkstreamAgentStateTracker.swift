@@ -85,6 +85,16 @@ extension Workstream {
             /// silent operation — no tool events for as long as it runs — so the
             /// stall sweep has to be told the difference between that and a wedge.
             var isCompacting: Bool = false
+            /// Set between `PreToolUse` and `PostToolUse`: a tool is running
+            /// right now.
+            ///
+            /// Tracked separately from `activity` even though the two move
+            /// together, because `activity` is display text and may be nil for a
+            /// tool the mapper had no phrase for. The sweep needs the *fact*,
+            /// and a run whose tool is in flight is working however long it has
+            /// been quiet — that silence is the tool's, and it is the single
+            /// biggest source of stalls reported against healthy agents.
+            var isRunningTool: Bool = false
         }
 
         /// Context-window consumption of a workstream's main session.
@@ -96,12 +106,36 @@ extension Workstream {
             }
         }
 
-        static let stallThreshold: TimeInterval = 45
-        /// How long a run may sit compacting before the stall sweep treats it as
-        /// wedged anyway. Generous, because compacting a full context window is
-        /// slow; bounded, because a `PostCompact` that never arrives — the agent
-        /// was killed mid-compaction — must not suppress the sweep forever.
-        static let compactStallGrace: TimeInterval = 300
+        /// Silence that is worth *investigating* — not worth reporting.
+        ///
+        /// Crossing this asks `HookChannelProbe` whether hook events are still
+        /// arriving at all, and changes nothing on screen. It used to set the
+        /// yellow "Stalled" dot directly, which was wrong far more often than
+        /// right: a build, a long model response and a slow MCP call all pass 45
+        /// seconds of silence routinely, and none of them is a wedge. The
+        /// question 45 seconds of silence actually raises is whether the app is
+        /// still listening, and only the probe can answer that.
+        static let silenceThreshold: TimeInterval = 45
+
+        /// Silence long enough to report as a wedge.
+        ///
+        /// By this point a tool in flight has been exempted, compaction has been
+        /// exempted, a permission prompt has been exempted, and the channel has
+        /// been verified at the silence threshold — so what is left really is an
+        /// agent that stopped without ending its turn.
+        static let wedgeThreshold: TimeInterval = 300
+
+        /// Upper bound on every "this run is doing known long work" exemption:
+        /// compaction between `PreCompact` and `PostCompact`, and a tool between
+        /// `PreToolUse` and `PostToolUse`.
+        ///
+        /// Both exemptions exist because the work is genuinely silent, and both
+        /// are bounded for the same reason: the event that would lift the
+        /// exemption may never arrive — the agent was killed mid-tool, or the
+        /// POST carrying it was one of the ones `curl --max-time 1` dropped — and
+        /// a missing end-event must not suppress the sweep for the rest of the
+        /// session. Larger than `wedgeThreshold`, or it would never bind.
+        static let longWorkGrace: TimeInterval = 1800
         private static let sweepInterval: TimeInterval = 15
         private static let contextReadInterval: TimeInterval = 5
 
@@ -131,6 +165,14 @@ extension Workstream {
         /// Currently selected workstream — `Stop` while selected goes straight to
         /// `.idle` because the user is already looking at it.
         var currentSelection: UUID?
+
+        /// Called once per sweep in which some run has been quiet past
+        /// `silenceThreshold`. `AtelierApp` points it at `HookChannelProbe`.
+        ///
+        /// A closure rather than a direct call to the probe's singleton so the
+        /// sweep's own logic stays testable without a process spawn, and so the
+        /// tracker keeps knowing nothing about how the channel gets checked.
+        var onProlongedSilence: (() -> Void)?
 
         private var sweepTimer: Timer?
 
@@ -252,6 +294,7 @@ extension Workstream {
             surfaceWorkstream.removeAll()
             workstreamLookup = nil
             currentSelection = nil
+            onProlongedSilence = nil
         }
 
         /// Backdates a run's last-event timestamp. Used by stall sweep unit tests.
@@ -362,6 +405,7 @@ extension Workstream {
             case .agentToolStart:
                 upsert(event.agentId, name: event.name) { run in
                     run.activity = event.activity ?? run.activity
+                    run.isRunningTool = true
                     if run.state == .stalled {
                         run.state = .working
                     }
@@ -373,6 +417,7 @@ extension Workstream {
             case .agentToolDone:
                 if let idx = list.firstIndex(where: { $0.id == event.agentId }) {
                     list[idx].activity = nil
+                    list[idx].isRunningTool = false
                     list[idx].lastEventAt = now
                 }
 
@@ -588,27 +633,58 @@ extension Workstream {
             sweepTimer = timer
         }
 
-        /// Marks runs stalled when they haven't emitted an event since `now - stallThreshold`.
+        /// Reports runs that have gone quiet, in the two stages that silence
+        /// actually means something.
+        ///
+        /// At `silenceThreshold` nothing is reported and the hook channel is
+        /// asked whether it is still delivering — because "the agent is quiet"
+        /// and "the app has stopped hearing" produce identical evidence here,
+        /// and no amount of further silence distinguishes them.
+        ///
+        /// At `wedgeThreshold` a run that is still quiet, is not mid-tool, is
+        /// not compacting and is not holding a permission prompt is marked
+        /// `.stalled`.
+        ///
         /// Internal (not private) so tests can sweep with backdated timestamps.
         func sweepForStalls(now: Date = Date()) {
-            let cutoff = now.addingTimeInterval(-Self.stallThreshold)
+            let silenceCutoff = now.addingTimeInterval(-Self.silenceThreshold)
+            let wedgeCutoff = now.addingTimeInterval(-Self.wedgeThreshold)
+            var sawProlongedSilence = false
+
             for (wsID, list) in rosters {
                 var updated = list
                 var changed = false
                 let rowState = states[wsID] ?? .idle
                 for idx in updated.indices {
-                    guard updated[idx].state == .working, updated[idx].lastEventAt < cutoff else { continue }
+                    guard updated[idx].state == .working, updated[idx].lastEventAt < silenceCutoff else { continue }
+
+                    // Worth asking about the channel even when something below
+                    // explains the silence: a tool in flight is explained by a
+                    // `PreToolUse` that arrived, but the `PostToolUse` that
+                    // should have followed is exactly the kind of event a
+                    // broken channel loses.
+                    sawProlongedSilence = true
+
+                    guard updated[idx].lastEventAt < wedgeCutoff else { continue }
+
                     // Waiting on the user isn't stalling.
                     if case .needsAttention(.permission) = rowState {
                         continue
                     }
-                    // Neither is compacting: it emits nothing between PreCompact
-                    // and PostCompact, and a full context window takes longer than
-                    // `stallThreshold` to compact often enough that the yellow dot
-                    // would be routine and wrong. Bounded by `compactStallGrace`
-                    // so a compaction that never reports finishing still stalls.
+                    // Neither is a tool that is still running. `PreToolUse`
+                    // fires when the agent starts a command and nothing else
+                    // arrives until it returns, so this exemption is what stops
+                    // a long build — the original complaint — reporting a
+                    // wedged agent.
+                    if updated[idx].isRunningTool,
+                       now.timeIntervalSince(updated[idx].lastEventAt) < Self.longWorkGrace
+                    {
+                        continue
+                    }
+                    // Nor is compacting: it emits nothing between PreCompact
+                    // and PostCompact.
                     if updated[idx].isCompacting,
-                       now.timeIntervalSince(updated[idx].lastEventAt) < Self.compactStallGrace
+                       now.timeIntervalSince(updated[idx].lastEventAt) < Self.longWorkGrace
                     {
                         continue
                     }
@@ -622,7 +698,7 @@ extension Workstream {
                 // (a live subagent) means the workstream is still actively
                 // working through it — keep the row Working.
                 let hasFreshActivity = updated.contains { run in
-                    run.state == .working && run.lastEventAt >= cutoff
+                    run.state == .working && run.lastEventAt >= silenceCutoff
                 }
                 if updated.contains(where: { $0.isMain && $0.state == .stalled }),
                    !hasFreshActivity,
@@ -630,6 +706,12 @@ extension Workstream {
                 {
                     states[wsID] = .stalled
                 }
+            }
+
+            // Once per sweep, not once per quiet run: ten workstreams falling
+            // silent together is one question about the channel.
+            if sawProlongedSilence {
+                onProlongedSilence?()
             }
         }
     }
