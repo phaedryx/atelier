@@ -11,7 +11,9 @@ import Foundation
 ///
 /// Only Info and Agent are permanent. Changes and Execution are singletons —
 /// there is exactly one of each — but they close and reopen like any terminal
-/// or browser, and they sit in the same draggable strip.
+/// or browser, and they sit in the same draggable strip. The tab bar's
+/// quick-add buttons take that split as data in `SingletonQuickAdd.all`, so a
+/// new singleton kind needs an entry there too.
 struct WorkspaceTabKind: Equatable, Hashable {
     /// Stable identifier; doubles as the drag identifier for the singleton
     /// kinds, which have no instance UUID to drag by.
