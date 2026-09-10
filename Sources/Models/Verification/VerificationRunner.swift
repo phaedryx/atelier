@@ -198,6 +198,21 @@ extension Verification {
             runs.values.first { $0.id == id }
         }
 
+        /// Whether this workstream has a run that has not been sealed.
+        ///
+        /// **The only correct answer to "is a run live here", and the reason it
+        /// is exported.** `Run.isFinished` is not that answer: the run loop
+        /// publishes each check's state as the poll sees it, so a run's rows are
+        /// all terminal for the last stretch of its life — a Run button keyed on
+        /// `isFinished` would re-enable mid-suite and let a second `up` rebind
+        /// `<id>-verify.sock` under the first. Everything that gates on liveness
+        /// — this type's own refusals, the tab's Run button, the IPC handler —
+        /// reads this.
+        func isLive(_ workstreamID: UUID) -> Bool {
+            guard let run = runs[workstreamID] else { return false }
+            return !sealedRunIDs.contains(run.id)
+        }
+
         /// Test seam: the in-flight refusal is otherwise only reachable by
         /// spawning a real process-compose.
         func seedInFlightForTesting(workstreamID: UUID, runID: String) {
@@ -233,7 +248,7 @@ extension Verification {
         /// rows still `Running`, seals them as `.stopped`, and *then* tears the
         /// server down, which is what ends the processes.
         func stop(workstreamID: UUID) {
-            guard let live = runs[workstreamID], !sealedRunIDs.contains(live.id) else { return }
+            guard isLive(workstreamID) else { return }
             stopRequested.insert(workstreamID)
         }
 
@@ -274,12 +289,20 @@ extension Verification {
                     // failure: nothing failed.
                     sealed.state = .notRun
                 }
-                if stopped {
-                    switch sealed.state {
-                    case .running: sealed.state = .stopped
-                    case .pending: sealed.state = .notRun
-                    default: break
-                    }
+                // A sealed run is over — the teardown that ends its processes
+                // is the next thing the run loop does — so a row still
+                // reporting live work is relabelled whatever ended the run, not
+                // only a Stop. **The other way here is the executor's own
+                // deadline**: `PhaseExecutor.run` returns `.failed` with the
+                // checks still executing, so persisting `.running` would claim a
+                // check is running that was killed a line later, and would
+                // leave a run whose rows never reach a terminal state at all.
+                // `wasStopped` is what still tells a user Stop from a timeout,
+                // at the level where that distinction is true — the run.
+                switch sealed.state {
+                case .running: sealed.state = .stopped
+                case .pending: sealed.state = .notRun
+                default: break
                 }
                 return sealed
             }
@@ -314,11 +337,11 @@ extension Verification {
             projectDirectory: String,
             checks: [String]
         ) throws -> (runID: String, started: [String]) {
-            // Liveness is `sealedRunIDs`, not `Run.isFinished`: live rows make a
-            // run's checks terminal before the run is over, and a start admitted
-            // in that window would rebind `<id>-verify.sock` under the running
-            // one — `PhaseExecutor.run` shuts the socket down at the top.
-            if let live = runs[workstreamID], !sealedRunIDs.contains(live.id) {
+            // `isLive`, not `Run.isFinished`: live rows make a run's checks
+            // terminal before the run is over, and a start admitted in that
+            // window would rebind `<id>-verify.sock` under the running one —
+            // `PhaseExecutor.run` shuts the socket down at the top.
+            if let live = runs[workstreamID], isLive(workstreamID) {
                 throw Failure.alreadyRunning(live.id)
             }
 

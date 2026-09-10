@@ -153,6 +153,49 @@ final class VerificationRunnerTests: XCTestCase {
         XCTAssertEqual(sealed?.wasStopped, true)
     }
 
+    /// The executor's own deadline reaches this function with `stopped: false`
+    /// and the checks still executing — `PhaseExecutor.run` returns `.failed`
+    /// while its processes run on, and the run loop's teardown, one line after
+    /// this, is what kills them. So the relabel is unconditional: a persisted
+    /// `.running` would claim a check is running that was killed a moment
+    /// later, and would leave a run whose rows never reach a terminal state.
+    func test_seal_relabelsLiveChecksEvenWhenTheRunWasNotStopped() {
+        let runner = Verification.Runner()
+        let id = UUID()
+        addTeardownBlock { Verification.Store.clear(for: id) }
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec", "vitest"])
+        let sealed = runner.seal(
+            runID: "abcd1234",
+            from: [
+                entry("rspec", status: "Running", isRunning: true, exitCode: 0),
+                entry("vitest", status: "Pending", isRunning: false, exitCode: 0),
+            ],
+            stopped: false
+        )
+        XCTAssertEqual(sealed?.checks.first { $0.name == "rspec" }?.state, .stopped)
+        XCTAssertEqual(sealed?.checks.first { $0.name == "vitest" }?.state, .notRun)
+        // The run-level flag is still what tells a Stop from a timeout.
+        XCTAssertEqual(sealed?.wasStopped, false)
+        XCTAssertEqual(sealed?.isFinished, true, "a sealed run must not still look in flight")
+    }
+
+    /// `isLive` is the exported answer to "is a run live here", because
+    /// `Run.isFinished` is true for the last stretch of a run's life.
+    func test_isLive_staysTrueUntilTheRunIsSealed() {
+        let runner = Verification.Runner()
+        let id = UUID()
+        addTeardownBlock { Verification.Store.clear(for: id) }
+        XCTAssertFalse(runner.isLive(id))
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rubocop"])
+        XCTAssertTrue(runner.isLive(id))
+        _ = runner.seal(
+            runID: "abcd1234",
+            from: [entry("rubocop", status: "Completed", isRunning: false, exitCode: 0)],
+            stopped: false
+        )
+        XCTAssertFalse(runner.isLive(id))
+    }
+
     func test_seal_persistsTheRun() {
         let runner = Verification.Runner()
         let id = UUID()
@@ -298,26 +341,44 @@ final class VerificationRunnerTests: XCTestCase {
         XCTAssertEqual(requested, ["rspec"])
     }
 
-    /// Live rows are published while the suite runs, not only at the end. The
-    /// duration is the proof that survives to the sealed result: it can only be
-    /// set by a poll that saw the check running and a later one that saw it end.
+    /// Live rows are published while the suite runs, not only at the end: the
+    /// tab reads `runs` at 1Hz and a result that only appeared at the end would
+    /// leave it blank for the length of a suite.
+    ///
+    /// Asserted twice over — a `.running` row observed while the loop is still
+    /// polling, and the duration that survives into the sealed result, which
+    /// can only be set by a poll that saw the check running and a later one
+    /// that saw it end.
     func test_execute_publishesLiveRowsWhileTheSuiteRuns() async {
         let id = UUID()
         addTeardownBlock { Verification.Store.clear(for: id) }
+        let running = StubComposeClient.Reply.list([
+            entry("rspec", status: "Running", isRunning: true, exitCode: 0),
+        ])
         let client = StubComposeClient(
             socketPath: "/nonexistent",
             replies: [
-                .list([entry("rspec", status: "Running", isRunning: true, exitCode: 0)]),
+                running, running, running,
                 .list([entry("rspec", status: "Completed", isRunning: false, exitCode: 0)]),
             ],
             latency: .zero
         )
-        let spawner = StubSpawner(client: client, finishAfter: .milliseconds(60))
+        let spawner = StubSpawner(client: client, finishAfter: .milliseconds(80))
         let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
         runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
+        let sawRunning = Flag()
 
-        await drive(runner, request(workstreamID: id, checks: ["rspec"]), runID: "abcd1234")
+        await drive(runner, request(workstreamID: id, checks: ["rspec"]), runID: "abcd1234") {
+            let deadline = Date().addingTimeInterval(2)
+            while !sawRunning.value, Date() < deadline {
+                if runner.run(id: "abcd1234")?.checks.first?.state == .running {
+                    sawRunning.value = true
+                }
+                try? await Task.sleep(for: .milliseconds(1))
+            }
+        }
 
+        XCTAssertTrue(sawRunning.value, "a running check must be visible in `runs` mid-suite")
         let check = runner.run(id: "abcd1234")?.checks.first
         XCTAssertEqual(check?.state, .passed)
         XCTAssertNotNil(check?.duration, "a check seen running and then finished must be timed")
