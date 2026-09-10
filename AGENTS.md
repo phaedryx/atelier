@@ -535,7 +535,7 @@ checks rather than a comment:
 |---|---|---|
 | Messaging | `register_peer`, `list_peers`, `send_message`, `receive_messages`, `broadcast`, `get_peer_status` | none needed — text between agents, nothing a user can see |
 | Workspace reads | `list_tabs`, `read_review_comments` | none needed — answers about the caller's own workstream |
-| Workspace actions | `open_agent_tab`, `open_editor`, `request_attention` | see below |
+| Workspace actions | `open_agent_tab`, `open_editor`, `request_attention`, `create_workstream` | see below |
 
 The messaging six were once the whole enum. Calix's IPC core is the same six, and everything it
 grew on top — pane/tab control, LSP, shell integration — arrived as separate tool surfaces with
@@ -568,6 +568,33 @@ consequences worth keeping:
 - **Surfaces are created eagerly, outside any render pass** (the same construction
   `TerminalSurfaceCache.retrySurface` already does), so a tab can be spawned into a workstream
   the user is not looking at. What is view-bound is *rendering*, not surface creation.
+
+**`create_workstream` inherits `bootstrap`'s approval gate by not touching it.** Creating a
+workstream runs the project's `bootstrap` namespace, which is repository-provided
+process-compose commands — the thing `ProcessCompose.PhasePolicy.plan` exists to gate. The
+handler never calls `AsyncSetupService.setupExistingWorktree`. It posts `.workstreamCreated`,
+does the git work off the main thread, and posts `.workstreamWorktreeReady`; `ContentView`'s
+handler for that notification is what calls `AsyncSetupService`, and therefore what runs
+`PhasePolicy`. Those three notifications are the seam — `ProjectSidebar.launchWorkstream` and
+`ProjectOverviewView` are the other two producers — and going through them is also what gets
+path persistence, the HeadWatcher, the agent-state lookup and the Shortcut story id, none of
+which a second creation path would remember. Adding a `PhasePolicy` check here, or calling
+`setupExistingWorktree` directly, is the inlined second copy that section forbids.
+
+Two further things about it that are not guesses:
+
+- **It does not take the selection.** `.workstreamCreated` carries an optional `select` key,
+  defaulting to true so every UI producer is unchanged; the launcher passes false. An agent
+  spinning up a workstream must not pull the user out of the pane they are working in, and the
+  sidebar row appears optimistically either way.
+- **Its agent goes in a terminal tab, never the Coding Agent tab.** The Coding Agent's surface
+  id *is* the workstream id, and `TerminalContainerView.preloadSurfaces` calls `ensureSurface`
+  for it with whatever `buildClaudeCommand` builds — which takes no initial prompt.
+  `ensureSurface` destroys and respawns a surface whose stored command differs, so seeding the
+  Coding Agent with a prompt would kill that agent mid-turn the first time the user opened the
+  workstream. A tab's surface id is fresh and nothing reconciles it against a rebuilt command.
+  Changing this needs `buildClaudeCommand` extracted the rest of the way out of the view, not a
+  second command builder.
 
 Two agents in one worktree is a supported shape, not a mistake — `/ping-pong`-style pairing
 wants it. They are distinguishable because every Atelier-launched terminal exports its own

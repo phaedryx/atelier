@@ -57,22 +57,8 @@ extension IPC {
             case .requestAttention:
                 return await requestAttention(for: request)
             case .createWorkstream:
-                return notImplemented(request)
+                return await createWorkstream(for: request)
             }
-        }
-
-        /// The answer for a `Tool` case that exists but has no handler yet.
-        ///
-        /// The workspace-action cases land in `IPC.Tool` ahead of their handlers
-        /// so that this switch — which must be exhaustive — is written once
-        /// rather than fought over by two branches implementing one tool each.
-        /// Until a handler arrives, the honest answer is a failure: these tools
-        /// create things, and an agent told "ok" by a no-op would report work it
-        /// never did. Nothing advertises them over MCP in the meantime — see
-        /// `toolDefinitions` in `Sources/MCPHelper/main.swift` — so reaching this
-        /// means a caller named the tool directly.
-        private func notImplemented(_ request: Request) -> Response {
-            .failure(id: request.id, "\(request.tool.rawValue) is not implemented yet.")
         }
 
         // MARK: - Tools
@@ -525,6 +511,106 @@ extension IPC {
                 mcpConfigPath: mcpConfigPath,
                 initialPrompt: prompt
             )
+        }
+
+        /// Creates a new workstream — worktree, branch, `bootstrap` — in the
+        /// caller's project, and optionally starts an agent in it.
+        ///
+        /// **Bootstrap's approval gate is inherited, not reimplemented.** The
+        /// work happens by posting `.workstreamWorktreeReady`, which
+        /// `ContentView` answers by calling
+        /// `AsyncSetupService.setupExistingWorktree` — and that is what runs
+        /// `bootstrap` through `ProcessCompose.PhasePolicy.plan`. `PhasePolicy`
+        /// is deliberately the only copy of those preconditions, so this handler
+        /// must never call `setupExistingWorktree` itself.
+        ///
+        /// **The agent goes in a terminal tab, not the Coding Agent tab, and
+        /// that is not a shortcut.** The Coding Agent's surface id *is* the
+        /// workstream id, and `TerminalContainerView.preloadSurfaces` calls
+        /// `ensureSurface` for it with the command
+        /// `TerminalContainerView.buildClaudeCommand` builds — which takes no
+        /// initial prompt. `ensureSurface` destroys and respawns a surface whose
+        /// stored command differs, so seeding the Coding Agent with a prompt
+        /// would have the agent killed mid-turn the first time the user opened
+        /// the workstream. A tab's surface id is fresh and nothing reconciles it
+        /// against a rebuilt command.
+        private func createWorkstream(for request: Request) async -> Response {
+            let name = request.arguments["name"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let prompt = request.arguments["prompt"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let callerWorkstreamID = callerWorkstreamID(request)
+
+            let bypass: Bool
+            switch Workstream.Launcher.parseBool(request.arguments["bypass_permissions"], name: "bypass_permissions") {
+            case let .success(value): bypass = value
+            case let .failure(failure): return .failure(id: request.id, failure.localizedDescription)
+            }
+
+            do {
+                let target = try await MainActor.run {
+                    try Workstream.Launcher.shared.target(
+                        callerWorkstreamID: callerWorkstreamID,
+                        projectDirectory: request.client.projectDirectory
+                    )
+                }
+
+                // Checked before anything is created. The worktree is a
+                // directory on disk and a branch in the repository; refusing
+                // after it exists would leave the caller a workstream it was
+                // told it did not get.
+                let claudePath = await MainActor.run { WorkspaceActions.shared.appEnvironment?.toolStatus.claude.path }
+                if prompt?.isEmpty == false, claudePath == nil {
+                    return .failure(
+                        id: request.id,
+                        "Cannot start an agent: Atelier could not find the `claude` binary. Omit `prompt` to create the workstream without one."
+                    )
+                }
+
+                let launched = try await Workstream.Launcher.shared.launch(
+                    in: target,
+                    requestedName: name,
+                    bypassPermissions: bypass
+                )
+
+                guard let prompt, !prompt.isEmpty else {
+                    return .success(id: request.id, .text(
+                        "Created workstream \(launched.name) at \(launched.worktreePath). "
+                            + "Its `bootstrap` is running in the background. No agent was started — pass `prompt` to start one."
+                    ))
+                }
+
+                // Built here rather than via `WorkspaceActions.agentTabPlan`,
+                // which reads the workstream back out of `ProjectList`. The
+                // append happens on `.workstreamCreated`, but this workstream is
+                // seconds old and its `worktreePath` is set by a *second*
+                // notification; the launcher already holds both facts, so taking
+                // them from it avoids depending on that ordering.
+                let plan = WorkspaceActions.AgentTabPlan(
+                    workstreamID: launched.workstreamID,
+                    workstreamName: launched.name,
+                    projectName: target.projectName,
+                    projectDirectory: target.directory,
+                    workingDirectory: launched.worktreePath,
+                    bypassPermissions: bypass,
+                    claudePath: claudePath
+                )
+                let surfaceID = try await MainActor.run {
+                    try WorkspaceActions.shared.spawnTerminalTab(
+                        workstreamID: launched.workstreamID,
+                        title: nil,
+                        command: { surfaceID in agentCommand(plan: plan, prompt: prompt, surfaceID: surfaceID) },
+                        environment: { surfaceID in WorkspaceActions.environment(for: plan, surfaceID: surfaceID) }
+                    )
+                }
+
+                return .success(id: request.id, .text(
+                    "Created workstream \(launched.name) at \(launched.worktreePath) and started an agent in it, "
+                        + "surface \(surfaceID.uuidString). Its `bootstrap` may still be running, so the worktree's "
+                        + "dependencies may not be installed yet. The agent is not addressable until it registers: "
+                        + "poll list_peers until a peer reports that surface id, then send_message to it."
+                ))
+            } catch {
+                return .failure(id: request.id, error.localizedDescription)
+            }
         }
 
         private func requestAttention(for request: Request) async -> Response {
