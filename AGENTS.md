@@ -270,9 +270,11 @@ three to move. Either delete `unmergedCommits` or move all three; do not quietly
 the count.
 
 `defaultBranch(at:)` is also read to export `ATELIER_DEFAULT_BRANCH` (`TerminalContainerView`,
-and `ProcessCompose.PhaseEnvironment`'s two callers). Those are *not* part of that follow-up: the variable
-means "what git thinks this repository's default branch is", and all three deliberately agree
-with each other rather than with the setting.
+and `ProcessCompose.PhaseEnvironment`'s four callers — `AsyncSetupService` for `bootstrap`,
+`WorkstreamArchiver` for `dispose`, `WorkspaceActions` for `open_agent_tab`'s spawned terminal, and
+`Verification.Runner` for `verify`). Those are *not* part of that follow-up: the variable means
+"what git thinks this repository's default branch is", and all five deliberately agree with each
+other rather than with the setting.
 
 ### The process-compose integration
 Everything a project asks Atelier to run lives in one **`process-compose.yaml`**, read by
@@ -443,7 +445,7 @@ reader would plausibly "simplify" away without knowing why:
 4. **Liveness is `Verification.Runner.isLive(_:)`, never `Run.isFinished`.** The run loop publishes
    each check's state as the poll sees it, so a run's rows can all read terminal while the spawn is
    still winding down and nothing has been sealed or persisted — `isFinished` goes true at that
-   moment; `isLive` does not (`VerificationRunner.swift:205-214`). `verificationCanRun`
+   moment; `isLive` does not (`VerificationRunner.swift:201-214`). `verificationCanRun`
    (`VerificationTabView.swift:32-43`) gates the Run button on `isLive` for the same reason.
    `Run.isFinished` is a row-state property, not a liveness signal: using it here would let a second
    `start` rebind `<id>-verify.sock` while the first run's spawn is still winding down and its
@@ -505,14 +507,14 @@ terminal tab. Declarations merge *over* Atelier's own variables, so a project th
 `ATELIER_PORT` to mean something specific may say so, and the legacy `FF_*` mirror is built
 last so it never lags behind.
 
-**And every declared name reaches all four namespaces.** `prepare` and `execute` run in a
-Ghostty surface, which is handed those variables when it is created; `bootstrap` and `dispose`
-spawn through `ProcessCompose.PhaseExecutor`, and until `ProcessCompose.PhaseEnvironment` existed their children inherited
+**And every declared name reaches all five namespaces.** `prepare` and `execute` run in a
+Ghostty surface, which is handed those variables when it is created; `bootstrap`, `dispose` and
+`verify` spawn through `ProcessCompose.PhaseExecutor`, and until `ProcessCompose.PhaseEnvironment` existed their children inherited
 only the app's own environment. One `process-compose.yaml` therefore ran under two different
 environments depending on which namespace was asked for: the documented replacement for the
 seeding this integration removed, `rsync -rlpt --copy-links "$$ATELIER_PROJECT_DIR/seed-files/" .`,
 rsynced from `/seed-files/`. `ProcessCompose.PhaseEnvironment.variables` assembles the same set for the
-unattended phases, resolving `ports.yaml` itself because neither call site has a plan to hand
+unattended phases, resolving `ports.yaml` itself because no call site has a plan to hand
 over. `ProcessCompose.PhaseExecutor.run` takes it as a **required** parameter, and layers it over the inherited
 environment with the login `PATH` applied last, so a declaration cannot displace `PATH`.
 Allocation is deterministic per worktree and per name, so a plan resolved at worktree creation

@@ -157,7 +157,7 @@ processes:
       # without Atelier. Under Atelier the names ports.yml declares are always
       # set, so a fallback that fires means ports.yml misspelled or forgot one —
       # which would otherwise be invisible, and would land every worktree on the
-      # same repo default. ATELIER_WORKTREE_DIR is set in all four namespaces
+      # same repo default. ATELIER_WORKTREE_DIR is set in all five namespaces
       # under Atelier and in no plain shell, so it is what tells the two apart.
       # Add a line here for each port ports.yml gains, or the new one is exactly
       # the case this guard was written to catch.
@@ -259,7 +259,7 @@ What it cannot do is tell "no Atelier" from "declared it wrong". A name
 repo default, in every worktree at once: exactly the collision the mechanism
 exists to prevent, arrived at silently. So `preflight` asserts the fallbacks go
 *unused* whenever Atelier is running the stack, branching on
-`ATELIER_WORKTREE_DIR` because it is set in all four namespaces under Atelier and
+`ATELIER_WORKTREE_DIR` because it is set in all five namespaces under Atelier and
 in no plain shell. Keep the defaults; make them prove they were unnecessary.
 
 An `assigned` port gets its own number per worktree; a `fixed: 4000` one is that
@@ -267,10 +267,10 @@ number everywhere, for values registered off the machine such as an OAuth
 redirect URI. At most one port may set `browser: true` — that is the one the
 embedded browser opens, and here it is the bff, because the bff is what serves
 the app. Pointing it at Vite gets you the dev server without the API. Every
-declared name is exported to every terminal surface and to all four namespaces,
+declared name is exported to every terminal surface and to all five namespaces,
 alongside `ATELIER_PROJECT_DIR`, `ATELIER_WORKTREE_DIR` and the rest of the
-`ATELIER_*` set, so `bootstrap` and `dispose` see the same environment `prepare`
-and `execute` do.
+`ATELIER_*` set, so `bootstrap`, `dispose` and `verify` see the same environment
+`prepare` and `execute` do.
 
 ### Three things that will bite you
 

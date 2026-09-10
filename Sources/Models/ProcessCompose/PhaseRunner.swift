@@ -1,5 +1,5 @@
 // ABOUTME: Builds the process-compose command for each lifecycle phase.
-// ABOUTME: One config, four namespaces, one predictable control socket.
+// ABOUTME: One config, five namespaces, one predictable control socket.
 
 import Foundation
 
@@ -9,7 +9,7 @@ extension ProcessCompose {
         case prepare
         case execute
         case dispose
-        /// On demand, repeatedly, from the Verification tab or an agent. Unlike the
+        /// On demand, repeatedly, from the Verification tab. Unlike the
         /// other four this is not a point in a workstream's life, which is why it is
         /// the one headless phase that is ever asked to run a subset.
         case verify
