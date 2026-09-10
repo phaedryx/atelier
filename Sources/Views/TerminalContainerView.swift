@@ -628,6 +628,18 @@ struct TerminalContainerView: View {
         model.tabs.filter(\.isCloseable)
     }
 
+    /// The singleton tabs whose quick-add button is currently showing, in the
+    /// order the buttons appear.
+    ///
+    /// One list, read by both the buttons and the divider that separates them
+    /// from the add-another-one buttons, so the two cannot disagree about
+    /// whether the group is empty — and it usually is:
+    /// `startupWorkspaceTabState` opens both singletons, so a fresh workstream
+    /// renders no button here at all and must render no divider either.
+    private var closedSingletons: [SingletonQuickAdd] {
+        SingletonQuickAdd.all.filter { !model.tabs.contains($0.tab) }
+    }
+
     private var tabBar: some View {
         HStack(spacing: 0) {
             // Permanent tabs (Info, Agent)
@@ -652,15 +664,21 @@ struct TerminalContainerView: View {
                 // Shown only while the tab is closed. ⌘1-9 is positional over
                 // the tabs that are open, so no number reaches a closed one;
                 // this and the command palette are the way back.
-                if !model.tabs.contains(.changes) {
-                    TabBarActionButton(icon: WorkspaceTabKind.changes.icon, tooltip: "Show Changes") {
-                        model.activateSingleton(.changes)
+                ForEach(closedSingletons, id: \.tab) { singleton in
+                    TabBarActionButton(icon: singleton.tab.kind.icon, tooltip: singleton.tooltip) {
+                        model.activateSingleton(singleton.tab)
                     }
                 }
-                if !model.tabs.contains(.execution) {
-                    TabBarActionButton(icon: WorkspaceTabKind.execution.icon, tooltip: "Show Execution") {
-                        model.activateSingleton(.execution)
-                    }
+                // Marks the boundary the two halves of this group mean
+                // different things across: reopen the one there is only ever
+                // one of, versus add another of something there can be many
+                // of. Drawn only when the left half is non-empty.
+                if !closedSingletons.isEmpty {
+                    Rectangle()
+                        .fill(.separator)
+                        .frame(width: 1, height: 14)
+                        .padding(.horizontal, 4)
+                        .accessibilityHidden(true)
                 }
                 TabBarActionButton(icon: "terminal", tooltip: "New Terminal", action: addTerminal)
                 TabBarActionButton(icon: "globe", tooltip: "New Browser", action: addBrowser)
@@ -2004,6 +2022,26 @@ private struct WorkspaceTabButton: View {
         .onTapGesture(perform: onSelect)
         .onHover { isHovering = $0 }
     }
+}
+
+/// One singleton tab's quick-add button, as data.
+///
+/// The tab bar's trailing group holds two kinds of button and the divider
+/// between them says so: everything in `all` reopens a tab there is exactly
+/// one of, everything after the divider adds another of a kind there can be
+/// many of. A new singleton kind is one entry here and nothing else — the
+/// buttons and the divider both read the list, so neither can be added
+/// without the other.
+private struct SingletonQuickAdd {
+    let tab: WorkspaceTab
+    /// Spelled out rather than derived from the kind's label: a key built by
+    /// interpolation is a key `genstrings` cannot see.
+    let tooltip: String
+
+    static let all: [SingletonQuickAdd] = [
+        SingletonQuickAdd(tab: .changes, tooltip: NSLocalizedString("Show Changes", comment: "Tab bar button tooltip")),
+        SingletonQuickAdd(tab: .execution, tooltip: NSLocalizedString("Show Execution", comment: "Tab bar button tooltip")),
+    ]
 }
 
 private struct TabBarActionButton: View {
