@@ -172,53 +172,24 @@ struct ExecutionTabView: View {
         runPane()
     }
 
-    @ViewBuilder
+    /// One control section in the upper left, and the run itself below it.
+    ///
+    /// The dev command, the checklist of what Start will run, and the buttons
+    /// that run it are three parts of one decision, so they are one stack in
+    /// one corner. They used to be three places: a full-width bar carrying the
+    /// section title, Stop and Rerun; a "Dev command" band under it; and — a
+    /// pane-height away — a centred stack holding the checklist and Start. Which
+    /// of those were on screen changed with the run state, so pressing Start
+    /// moved the controls from the middle of the pane to a bar at the top.
+    ///
+    /// Everything below the divider belongs to the run: the process table and
+    /// the terminal while one is up, the "nothing to start" copy when there is
+    /// nothing to run. Before a run that area is deliberately empty — the
+    /// controls are all in the corner, and a second Start in the middle of the
+    /// pane is the duplication this replaced.
     private func runPane() -> some View {
-        let title = NSLocalizedString("Run", comment: "")
-        let shortcut = "⌘⇧⏎"
         VStack(spacing: 0) {
-            // Only once something is running. Before that this bar carried a
-            // play button, a Start button and the section title, above a pane
-            // whose body is already one big Start button — three ways to do
-            // the same thing, stacked. Stop and Rerun mean nothing until there
-            // is a run, so the bar now arrives with them.
-            if runStarted {
-                HStack {
-                    Text(title)
-                        .font(.system(size: 12, weight: .semibold))
-
-                    // Travels with the bar: it warns that the browser will not
-                    // retarget on a detected port, which only matters once a
-                    // server is actually up.
-                    if canStart, RunLauncher.executableURL() == nil {
-                        Text("No port detection")
-                            .font(.system(size: 9))
-                            .foregroundStyle(.orange)
-                            .help("atelier-run helper not found. Run scripts will work but port detection is unavailable.")
-                    }
-
-                    Spacer()
-
-                    // Stop's precondition is that something is running, which
-                    // this whole bar already establishes. It used to be gated
-                    // on `canStart` alongside Rerun, so toggling the
-                    // integration off — or breaking the binary path — mid-run
-                    // took the Stop button away from a live stack, leaving
-                    // Ctrl+C in the surface as the only way out. Only Rerun
-                    // needs to know a run can be started.
-                    EnvActionButton(label: NSLocalizedString("Stop", comment: ""), icon: "stop.fill", shortcut: "", action: onStop)
-                    if runControlsEnabled {
-                        EnvActionButton(label: NSLocalizedString("Rerun", comment: ""), icon: "arrow.counterclockwise", shortcut: shortcut, action: onRestart)
-                    }
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(.bar)
-
-                Divider()
-            }
-
-            devCommandSection
+            controlSection
             Divider()
 
             if runStarted, let runCommand {
@@ -235,71 +206,99 @@ struct ExecutionTabView: View {
                 )
                 .id(runID)
             } else if canStart {
-                // The checklist is *inside* this stack, not a band above it.
-                // Rendered as its own row at the top of the pane it read as
-                // more configuration next to "Dev command", and the thing it
-                // chooses for — Start — was a pane-height away. As the stack's
-                // first child it is what Start will run.
-                //
-                // This stack is the greedy view and centres its content, so a
-                // longer list is absorbed in both directions: each added row
-                // lifts the checklist half a row and lowers Start by the same
-                // half, instead of pushing the button a whole row down the pane
-                // the way a top-anchored list did. `processChecklistHeight`
-                // caps how far that can go whatever a config declares.
-                VStack(spacing: 12) {
-                    if showsProcessSelection(
-                        runStarted: runStarted,
-                        showsProcessTable: showsProcessTable,
-                        declaredProcesses: declaredProcesses
-                    ) {
-                        ProcessSelectionView(
-                            workstreamID: workstreamID,
-                            declaredProcesses: declaredProcesses
-                        )
-                        // On top of the stack's own 12, for 24 in total. The
-                        // stack's spacing is right for Start and the two lines
-                        // of caption under it, which are one block; the
-                        // checklist is a separate thing above the button and
-                        // reads as crowding it at the same gap. Padding here
-                        // rather than a wider `spacing` so the caption lines
-                        // keep their tighter set.
-                        .padding(.bottom, 12)
-                    }
-                    Button(action: onStart) {
-                        HStack(spacing: 6) {
-                            if isReclaimingSocket {
-                                ProgressView()
-                                    .controlSize(.small)
-                                    .tint(.white)
-                            } else {
-                                Image(systemName: "play.fill")
-                                    .font(.system(size: 14))
-                            }
-                            Text(isReclaimingSocket ? "Reclaiming…" : "Start")
-                                .font(.system(size: 13, weight: .medium))
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(Color.accentColor)
-                        .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                        .opacity(isReclaimingSocket ? 0.6 : 1)
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(isReclaimingSocket)
-                    if let display = devCommandDisplay {
-                        Text(display)
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(.tertiary)
-                    }
-                    Text(shortcut)
-                        .font(.system(size: 13, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Nothing to draw before a run: Start is in the section above,
+                // and this is the space the run will fill.
+                Spacer()
             } else {
                 scriptInstructions(reason: startUnavailableReason)
+            }
+        }
+    }
+
+    /// The upper-left group: what will run, which parts of it, and the buttons
+    /// that start and stop it, in that order and always in that place.
+    private var controlSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            devCommandSection
+
+            if showsProcessSelection(
+                runStarted: runStarted,
+                showsProcessTable: showsProcessTable,
+                declaredProcesses: declaredProcesses
+            ) {
+                ProcessSelectionView(
+                    workstreamID: workstreamID,
+                    declaredProcesses: declaredProcesses
+                )
+            }
+
+            runControls
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    /// Start before a run, Stop and Rerun during one — in the same corner
+    /// either way, so starting something does not move the buttons.
+    ///
+    /// Neither arm renders when Start can do nothing and no run is up:
+    /// `scriptInstructions` below the divider is the surface that explains
+    /// that, and a disabled button beside its explanation says nothing extra.
+    @ViewBuilder
+    private var runControls: some View {
+        let shortcut = "⌘⇧⏎"
+        if runStarted {
+            HStack(spacing: 8) {
+                // Stop's precondition is that something is running, and that is
+                // all. It used to be gated on `canStart` alongside Rerun, so
+                // toggling the integration off — or breaking the binary path —
+                // mid-run took the Stop button away from a live stack, leaving
+                // Ctrl+C in the surface as the only way out. Only Rerun needs to
+                // know a run can be started.
+                EnvActionButton(label: NSLocalizedString("Stop", comment: ""), icon: "stop.fill", shortcut: "", action: onStop)
+                if runControlsEnabled {
+                    EnvActionButton(label: NSLocalizedString("Rerun", comment: ""), icon: "arrow.counterclockwise", shortcut: shortcut, action: onRestart)
+                }
+
+                // Only while something is running: it warns that the browser
+                // will not retarget on a detected port, which means nothing
+                // until a server is actually up.
+                if canStart, RunLauncher.executableURL() == nil {
+                    Text("No port detection")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.orange)
+                        .help("atelier-run helper not found. Run scripts will work but port detection is unavailable.")
+                }
+            }
+        } else if canStart {
+            HStack(spacing: 8) {
+                Button(action: onStart) {
+                    HStack(spacing: 6) {
+                        if isReclaimingSocket {
+                            ProgressView()
+                                .controlSize(.small)
+                                .tint(.white)
+                        } else {
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 12))
+                        }
+                        Text(isReclaimingSocket ? "Reclaiming…" : "Start")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
+                    .background(Color.accentColor)
+                    .foregroundStyle(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .opacity(isReclaimingSocket ? 0.6 : 1)
+                }
+                .buttonStyle(.borderless)
+                .disabled(isReclaimingSocket)
+
+                Text(shortcut)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -369,8 +368,6 @@ struct ExecutionTabView: View {
                     .foregroundStyle(.tertiary)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
     }
 
     private func sourceTag(for source: DevCommand.Source) -> some View {
