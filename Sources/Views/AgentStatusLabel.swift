@@ -20,6 +20,32 @@ struct AgentStatusLabel: Equatable {
     }
 }
 
+/// The app-wide notice that hook events have stopped arriving.
+///
+/// Separate from the rows' "No Signal" word rather than redundant with it. A row
+/// only carries a status line once it has seen a live session, so a channel that
+/// was already broken when the app launched — a stale port file, hook entries
+/// another Atelier install rewrote — produces no rows to speak through. This is
+/// what covers that, and it is the case the probe was built for.
+struct HookChannelBanner: View {
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "antenna.radiowaves.left.and.right.slash")
+            Text("Not receiving agent events")
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .font(.system(size: 9))
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 3)
+        .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
+        .help(Text("Claude Code hook events are not reaching Atelier, so agent status cannot be reported. Check that Atelier's hooks are still installed in ~/.claude/settings.json."))
+        .accessibilityLabel("Not receiving agent events")
+    }
+}
+
 extension AgentStatusLabel {
     /// The label for one workstream row, or nil when the row should draw no
     /// status line at all.
@@ -45,10 +71,7 @@ extension AgentStatusLabel {
                 // Grey deliberately. The fault is Atelier's own plumbing and
                 // nothing is asked of the user, so it must not compete on the
                 // colour scale with the states that do want them.
-                return AgentStatusLabel(
-                    key: NSLocalizedString("No Signal", comment: "Hook events are not reaching the app"),
-                    color: .secondary
-                )
+                return AgentStatusLabel(key: "No Signal", color: .secondary)
             case .idle, .needsAttention:
                 break
             }

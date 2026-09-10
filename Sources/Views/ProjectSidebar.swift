@@ -277,6 +277,16 @@ struct ProjectSidebar: View {
 
     private var bottomBar: some View {
         VStack(spacing: 4) {
+            // Gated on the probe's verdict and *nothing else*, which is the
+            // whole reason it exists rather than leaving the row words to carry
+            // this. A channel broken before any event ever arrived leaves every
+            // workstream with `hasLiveSession == false`, so no row draws a
+            // status line at all — the one case the feature is for would
+            // otherwise be exactly as invisible as before it existed.
+            if channelProbe.state.isDown {
+                HookChannelBanner()
+            }
+
             UsageMeterView()
 
             HStack {

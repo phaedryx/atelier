@@ -578,6 +578,16 @@ Facts worth keeping:
   singleton, so the sweep stays testable and the tracker keeps knowing nothing about how the
   channel gets checked.
 
+**Two surfaces, not one, and the second is not redundant.** `HookChannelBanner` sits in the
+sidebar's bottom bar, gated on the probe's verdict and *nothing else*. A row only draws a status
+line once `hasLiveSession` is true, and `liveSessionIDs` is only populated from `handle` — so a
+channel that was already broken when the app launched leaves every row silent and would have had
+nothing to speak through. `ensureSweepTimer` is called from `handle` too, so in that same case
+the sweep never runs and `onProlongedSilence` never fires either: the forced launch check is the
+only one that happens, and the banner is the only thing that can show it. Dropping the banner as
+"redundant with the row word" is the mistake to avoid — it removes the surface for exactly the
+case the probe exists to catch.
+
 **`AgentStatusLabel` decides what a row may claim, and `channelDown` masks `.working` and
 `.stalled` — nothing else.** Those two are held up by the *continued arrival* of events: "still
 working" means no `Stop` has come in, and `.stalled` is inferred from absence outright. Neither
