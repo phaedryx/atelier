@@ -1204,6 +1204,27 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertNotEqual(fpFirst, fpSecond, "a path with a space in it must still be hashed")
     }
 
+    func test_diffFingerprint_digestIsAStableHexHash() throws {
+        let repoDir = tempDir.appendingPathComponent("fp-digest")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: repoDir)
+        try "let a = 1\n".write(to: repoDir.appendingPathComponent("a.swift"), atomically: true, encoding: .utf8)
+        git(["add", "."], in: repoDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "-m", "init"], in: repoDir)
+
+        let fp = Git.Operations.diffFingerprint(
+            worktreePath: repoDir.path, projectPath: repoDir.path, mode: "uncommitted"
+        )
+        let digest = fp.split(separator: "|").last.map(String.init) ?? ""
+        // Swift's String.hashValue is seeded per process, so a hashValue-derived
+        // fingerprint compares unequal after every relaunch. The Verification tab
+        // persists a run's stamp and compares it across launches, so the digest has
+        // to be content-derived: 64 lowercase hex characters of SHA-256.
+        XCTAssertEqual(digest.count, 64, digest)
+        XCTAssertTrue(digest.allSatisfy { $0.isHexDigit && !$0.isUppercase }, digest)
+    }
+
     // MARK: - projectLocation
 
     func testProjectLocationOfAPlainRepoIsTheRepoItself() throws {
