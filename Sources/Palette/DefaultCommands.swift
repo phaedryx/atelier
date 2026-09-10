@@ -43,8 +43,8 @@ func defaultPaletteCommands() -> [PaletteCommand] {
         // all. The palette and the tab bar's reopen buttons are their surface.
         PaletteCommand(id: "tab.changes", title: NSLocalizedString("Show Changes", comment: ""), category: tabs,
                        isAvailable: workstream, action: post(.toggleChanges)),
-        PaletteCommand(id: "tab.environment", title: NSLocalizedString("Show Environment", comment: ""), category: tabs,
-                       isAvailable: workstream, action: post(.toggleEnvironment)),
+        PaletteCommand(id: "tab.execution", title: NSLocalizedString("Show Execution", comment: ""), category: tabs,
+                       isAvailable: workstream, action: post(.toggleExecution)),
         PaletteCommand(id: "tab.newTerminal", title: NSLocalizedString("New Terminal", comment: ""), category: tabs,
                        shortcut: "⌘T", isAvailable: workstream, action: post(.toggleTerminal)),
         PaletteCommand(id: "tab.newBrowser", title: NSLocalizedString("New Browser", comment: ""), category: tabs,

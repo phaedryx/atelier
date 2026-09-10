@@ -1,5 +1,5 @@
 // ABOUTME: Resolves the bundled atelier-run helper and builds wrapped run-script commands.
-// ABOUTME: Keeps Environment tab command assembly small and consistent across tmux modes.
+// ABOUTME: Keeps Execution tab command assembly small and consistent across tmux modes.
 
 import Foundation
 import os

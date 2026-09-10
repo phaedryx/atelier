@@ -169,7 +169,7 @@ final class WorkspaceActionsTabTests: XCTestCase {
     /// spawned agent could ever arrive at. Reporting the workstream id for them
     /// would be worse than nil: it would point at the Coding Agent.
     func testTabsWithoutAShellReportNoSurface() {
-        for tab in [WorkspaceTab.info, .changes, .environment, .browser(UUID()), .editor(UUID())] {
+        for tab in [WorkspaceTab.info, .changes, .execution, .browser(UUID()), .editor(UUID())] {
             XCTAssertNil(
                 WorkspaceActions.surfaceID(of: tab, workstreamID: UUID()),
                 "\(tab) should report no surface"

@@ -20,7 +20,7 @@ extension Notification.Name {
     static let toggleEditor = Notification.Name("atelier.toggleEditor")
     static let toggleChanges = Notification.Name("atelier.toggleChanges")
     static let submitChangeReview = Notification.Name("atelier.submitChangeReview")
-    static let toggleEnvironment = Notification.Name("atelier.toggleEnvironment")
+    static let toggleExecution = Notification.Name("atelier.toggleExecution")
     /// Runs the active workstream's `bootstrap` namespace again. Declared here
     /// rather than beside `.asyncSetupStateChanged`, which `AsyncSetupService`
     /// posts: like `.rerunScript`, this one is posted by the palette and named
@@ -36,7 +36,7 @@ extension Notification.Name {
 enum RestorableWorkspaceTab: String, Codable {
     case info
     case agent
-    case environment
+    case execution
     case changes
 
     init(activeTab: WorkspaceTab) {
@@ -45,8 +45,8 @@ enum RestorableWorkspaceTab: String, Codable {
             self = .agent
         case .changes:
             self = .changes
-        case .environment:
-            self = .environment
+        case .execution:
+            self = .execution
         case .info, .terminal, .browser, .editor:
             self = .info
         }
@@ -60,8 +60,8 @@ enum RestorableWorkspaceTab: String, Codable {
             .agent
         case .changes:
             .changes
-        case .environment:
-            .environment
+        case .execution:
+            .execution
         }
     }
 }
@@ -110,13 +110,13 @@ func reorderedCustomTabs(_ tabs: [WorkspaceTab], dragging draggedTab: WorkspaceT
 }
 
 /// A tab in the workspace. Info and Agent are permanent; everything else — the
-/// Changes and Environment singletons included — closes, reopens, and reorders
+/// Changes and Execution singletons included — closes, reopens, and reorders
 /// by drag.
 enum WorkspaceTab: Hashable {
     case info
     case agent
     case changes
-    case environment
+    case execution
     case terminal(UUID)
     case browser(UUID)
     case editor(UUID)
@@ -132,7 +132,7 @@ extension WorkspaceTab {
         case .info: .info
         case .agent: .agent
         case .changes: .changes
-        case .environment: .environment
+        case .execution: .execution
         case .terminal: .terminal
         case .browser: .browser
         case .editor: .editor
@@ -174,12 +174,12 @@ struct WorkspaceTabSnapshot {
 /// four tabs; only the last-active tab *kind* is restored.
 ///
 /// That unconditional seed is what makes restoring a saved `.changes` or
-/// `.environment` safe — the tab it names is always there. Closing either is a
+/// `.execution` safe — the tab it names is always there. Closing either is a
 /// within-session state; if that ever becomes persistent, `activeTab` below has
 /// to be reconciled against `tabs` rather than trusted.
 func startupWorkspaceTabState(savedTab: RestorableWorkspaceTab?) -> WorkspaceTabSnapshot {
     WorkspaceTabSnapshot(
-        tabs: [.info, .agent, .changes, .environment],
+        tabs: [.info, .agent, .changes, .execution],
         terminalCount: 0,
         browserCount: 0,
         editorCount: 0,
@@ -305,7 +305,7 @@ struct TerminalContainerView: View {
     /// What Start may run, decided once per change in `refreshDevCommand`.
     ///
     /// Stored rather than recomputed because *agreement* is the invariant here,
-    /// not freshness. The Environment pane's Start button is enabled on this
+    /// not freshness. The Execution pane's Start button is enabled on this
     /// value and `doStartRun` refuses on this value, so the two cannot describe
     /// different worlds; a plan that is a moment stale but consistent is
     /// harmless, while a fresh plan disagreeing with the button is exactly the
@@ -337,7 +337,7 @@ struct TerminalContainerView: View {
     /// second `down` and a second `beginRun`, the later one bumping
     /// `runGeneration` and replacing the surface the earlier one just built.
     ///
-    /// Passed to `EnvironmentTabView` as well as guarding `doStartRun`, because
+    /// Passed to `ExecutionTabView` as well as guarding `doStartRun`, because
     /// a button that silently swallows a press reads as broken. The guard still
     /// has to be there: `.rerunScript` (⌘⇧⏎) reaches `startRunIfNeeded` without
     /// going through the button at all.
@@ -399,7 +399,7 @@ struct TerminalContainerView: View {
         case .agent:
             [claudeID]
         case let .terminal(id): [id]
-        case .info, .changes, .environment, .browser, .editor: []
+        case .info, .changes, .execution, .browser, .editor: []
         }
     }
 
@@ -630,7 +630,7 @@ struct TerminalContainerView: View {
                 tabButton(for: tab)
             }
 
-            // Scrollable closeable tabs (Changes, Environment, terminals, browsers, editors)
+            // Scrollable closeable tabs (Changes, Execution, terminals, browsers, editors)
             if !closeableTabs.isEmpty {
                 ScrollableTabStrip(
                     tabs: closeableTabs,
@@ -652,9 +652,9 @@ struct TerminalContainerView: View {
                         model.activateSingleton(.changes)
                     }
                 }
-                if !model.tabs.contains(.environment) {
-                    TabBarActionButton(icon: WorkspaceTabKind.environment.icon, tooltip: "Show Environment") {
-                        model.activateSingleton(.environment)
+                if !model.tabs.contains(.execution) {
+                    TabBarActionButton(icon: WorkspaceTabKind.execution.icon, tooltip: "Show Execution") {
+                        model.activateSingleton(.execution)
                     }
                 }
                 TabBarActionButton(icon: "terminal", tooltip: "New Terminal", action: addTerminal)
@@ -750,11 +750,11 @@ struct TerminalContainerView: View {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        case .environment:
+        case .execution:
             if sessionMode == .waitingForTools {
                 terminalLoadingView(message: "Checking terminal tools...")
             } else {
-                EnvironmentTabView(
+                ExecutionTabView(
                     workstreamID: workstreamID,
                     workingDirectory: workingDirectory,
                     useTmux: useTmux,
@@ -870,7 +870,7 @@ struct TerminalContainerView: View {
                     preloadSurfaces()
                 }
                 // Tmux mode isn't resolvable until detection finishes; restore
-                // the run session then, not just on the Environment tab's own
+                // the run session then, not just on the Execution tab's own
                 // appearance, so a live session is picked up even if that tab
                 // is never opened.
                 restoreRunState()
@@ -899,7 +899,7 @@ struct TerminalContainerView: View {
                 } else {
                     startRunIfNeeded()
                 }
-                model.activateSingleton(.environment)
+                model.activateSingleton(.execution)
             }
             .onReceive(NotificationCenter.default.publisher(for: .toggleTerminal)) { _ in
                 guard isActive else { return }
@@ -923,9 +923,9 @@ struct TerminalContainerView: View {
                 guard isActive else { return }
                 addChanges()
             }
-            .onReceive(NotificationCenter.default.publisher(for: .toggleEnvironment)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .toggleExecution)) { _ in
                 guard isActive else { return }
-                model.activateSingleton(.environment)
+                model.activateSingleton(.execution)
             }
             // On `mainContent`, which is mounted whatever the active tab is, so
             // the palette reaches this from the Agent tab and not only from
@@ -1030,7 +1030,7 @@ struct TerminalContainerView: View {
     var body: some View {
         mainContent
             // On the container rather than on either tab, because both the
-            // Environment banner and the Info row open it and Environment is a
+            // Execution banner and the Info row open it and Execution is a
             // closeable tab.
             .sheet(isPresented: $isReviewingConfig) {
                 if !repositoryConfigFiles.isEmpty {
@@ -1180,7 +1180,7 @@ struct TerminalContainerView: View {
     private static let compactTabThreshold = 3
 
     /// Counts the tabs whose title is per-tab, which is what this used to mean
-    /// when only those kinds were closeable. Changes and Environment are
+    /// when only those kinds were closeable. Changes and Execution are
     /// closeable now but carry fixed labels, so counting them would trip
     /// compact mode two tabs early and hide browser titles that still fit.
     /// (Only `tabLabel`'s browser branch consults this; editor tabs keep their
@@ -1237,7 +1237,7 @@ struct TerminalContainerView: View {
     /// Opening starts the run; closing does not stop it. That asymmetry is the
     /// point: a browser tab is one view onto a running server, and the last one
     /// closing says nothing about whether the server is still wanted. Only the
-    /// Environment tab's close stops a run — see `closingTabStopsRun`.
+    /// Execution tab's close stops a run — see `closingTabStopsRun`.
     private func startRunIfNeeded() {
         guard resolvedRunCommand != nil else { return }
         guard sessionMode != .waitingForTools, !appEnv.isDetecting else { return }
@@ -1320,17 +1320,17 @@ struct TerminalContainerView: View {
     /// shows for a process-compose source is the list of files that will be
     /// loaded.
     private func beginRun(command: String) {
-        // A run always gets an Environment tab, because that tab is what can
+        // A run always gets an Execution tab, because that tab is what can
         // see and stop it — and, since browser tabs stopped claiming the run,
         // the only thing that can. `addBrowser` starts the dev server through
         // `startRunIfNeeded` and opens only a browser, so without this a run
-        // could exist with no Environment tab at all and nothing left that
+        // could exist with no Execution tab at all and nothing left that
         // stops it short of quitting. This line is what keeps
         // `closingTabStopsRun`'s single owner present for every run.
         //
         // Ensure rather than activate: the browser tab the user just asked for
         // must keep focus.
-        model.ensureSingleton(.environment)
+        model.ensureSingleton(.execution)
         killRunTmuxSession()
         surfaceCache.removeSurface(for: runID)
         model.runStoppedManually = false
@@ -1354,7 +1354,7 @@ struct TerminalContainerView: View {
     /// Whether this workstream's run is a process-compose run, and so has a
     /// control socket worth polling. Read off the already-resolved dev command
     /// rather than re-locating the config, because this is read per render (via
-    /// `tabContent`'s `.environment` case) and locating stats the filesystem.
+    /// `tabContent`'s `.execution` case) and locating stats the filesystem.
     ///
     /// `resolvedRunCommand`'s process-compose branch requires this to be true
     /// first, so the two cannot disagree about whether process-compose is in
@@ -1529,7 +1529,7 @@ struct TerminalContainerView: View {
     }
 
     /// Re-reads ports.yaml and resolves it for this worktree. A malformed file
-    /// leaves the plan empty and logs — the Environment tab surfaces the error
+    /// leaves the plan empty and logs — the Execution tab surfaces the error
     /// in Task 8; nothing here should throw into a view update.
     private func refreshPortPlan() {
         do {
@@ -1552,7 +1552,7 @@ struct TerminalContainerView: View {
 
     /// Restores `runStarted` from a run session already alive in tmux —
     /// survives relaunch, or a session started before this container existed.
-    /// Lives here rather than on the Environment tab because it must run
+    /// Lives here rather than on the Execution tab because it must run
     /// before the user ever opens that tab: on launch (once tool detection
     /// has resolved whether tmux is usable) and whenever detection state
     /// changes. The guards make re-invocation harmless.
@@ -1570,14 +1570,14 @@ struct TerminalContainerView: View {
             wasStoppedManually: model.runStoppedManually
         ) {
             // The same guarantee `beginRun` makes, on the other path that can
-            // set `runStarted`. Only the Environment tab's close stops a run
+            // set `runStarted`. Only the Execution tab's close stops a run
             // (`closingTabStopsRun`), so a restored run without that tab is a
             // run nothing can stop short of quitting — and the tab really can
             // be absent here: `terminalTabExited` sets `runStarted = false`
             // and deliberately leaves `runStoppedManually` alone, so the tab
             // can be closed with no consequence while tmux still has a session
             // for the next launch to find.
-            model.ensureSingleton(.environment)
+            model.ensureSingleton(.execution)
             model.runStarted = true
         }
     }

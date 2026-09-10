@@ -67,7 +67,7 @@ struct WorkstreamInfoView: View {
     let projectDirectory: String
     /// Every repository-provided process-compose file this worktree would load.
     /// Info is the permanent tab, so this is the approval route that survives the
-    /// user closing Environment.
+    /// user closing Execution.
     var repositoryConfigFiles: [String] = []
     var configApproved: Bool = false
     /// What background setup last reported for this workstream. Info is where

@@ -1,10 +1,10 @@
-// ABOUTME: Tests for environment tab session restoration decisions.
+// ABOUTME: Tests for execution tab session restoration decisions.
 // ABOUTME: Verifies run panes reappear when tmux already has a persisted run session.
 
 @testable import Atelier
 import XCTest
 
-final class EnvironmentTabViewTests: XCTestCase {
+final class ExecutionTabViewTests: XCTestCase {
     func testRunSessionRestoresOnlyWhenTmuxSessionExists() {
         XCTAssertTrue(shouldRestoreRunSession(useTmux: true, hasRunScript: true, hasExistingRunSession: true, wasStoppedManually: false))
         XCTAssertFalse(shouldRestoreRunSession(useTmux: false, hasRunScript: true, hasExistingRunSession: true, wasStoppedManually: false))
@@ -229,19 +229,19 @@ final class EnvironmentTabViewTests: XCTestCase {
         XCTAssertEqual(processChecklistHeight(count: 8, rowHeight: 20, visibleRows: 8), 160)
     }
 
-    /// `EnvironmentTabView` does not render the checklist for an empty config,
+    /// `ExecutionTabView` does not render the checklist for an empty config,
     /// but a zero-height scroll view is a bad thing to depend on that for.
     func testAnEmptyChecklistStillHasARowOfHeight() {
         XCTAssertEqual(processChecklistHeight(count: 0, rowHeight: 20, visibleRows: 8), 20)
     }
 
-    /// The Environment tab is the only owner of the run. Closing anything else
+    /// The Execution tab is the only owner of the run. Closing anything else
     /// leaves the processes alone, however much of the run that tab was
     /// showing: a browser tab pointed at the dev server used to stop it too,
-    /// so closing the last browser killed a run an open Environment tab was
+    /// so closing the last browser killed a run an open Execution tab was
     /// still watching.
-    func testOnlyTheEnvironmentTabStopsTheRunWhenClosed() {
-        XCTAssertTrue(closingTabStopsRun(.environment, runStarted: true))
+    func testOnlyTheExecutionTabStopsTheRunWhenClosed() {
+        XCTAssertTrue(closingTabStopsRun(.execution, runStarted: true))
         XCTAssertFalse(closingTabStopsRun(.browser(UUID()), runStarted: true))
         XCTAssertFalse(closingTabStopsRun(.terminal(UUID()), runStarted: true))
         XCTAssertFalse(closingTabStopsRun(.editor(UUID()), runStarted: true))
@@ -250,8 +250,8 @@ final class EnvironmentTabViewTests: XCTestCase {
 
     /// Guards the `runStarted` half. `stopRun` sets `runStoppedManually`, which
     /// suppresses the tmux restore for the rest of the session — so closing an
-    /// Environment tab that was not running anything must not reach it.
-    func testClosingAnEnvironmentTabWithNoRunStopsNothing() {
-        XCTAssertFalse(closingTabStopsRun(.environment, runStarted: false))
+    /// Execution tab that was not running anything must not reach it.
+    func testClosingAnExecutionTabWithNoRunStopsNothing() {
+        XCTAssertFalse(closingTabStopsRun(.execution, runStarted: false))
     }
 }

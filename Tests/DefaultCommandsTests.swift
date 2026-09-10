@@ -33,12 +33,12 @@ final class DefaultCommandsTests: XCTestCase {
         XCTAssertTrue(findFile.isAvailable(editorToo))
     }
 
-    func testEnvironmentCommandPostsToggleEnvironment() throws {
+    func testExecutionCommandPostsToggleExecution() throws {
         let commands = defaultPaletteCommands()
-        let environment = try XCTUnwrap(commands.first { $0.id == "tab.environment" })
-        let posted = expectation(forNotification: .toggleEnvironment, object: nil)
+        let execution = try XCTUnwrap(commands.first { $0.id == "tab.execution" })
+        let posted = expectation(forNotification: .toggleExecution, object: nil)
 
-        environment.action()
+        execution.action()
 
         wait(for: [posted], timeout: 1)
     }

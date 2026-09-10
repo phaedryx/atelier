@@ -1,4 +1,4 @@
-// ABOUTME: View for the run script / dev server in the Environment tab.
+// ABOUTME: View for the run script / dev server in the Execution tab.
 // ABOUTME: Shows a terminal for the running server, or start instructions when not configured.
 
 import SwiftUI
@@ -9,13 +9,13 @@ func shouldRestoreRunSession(useTmux: Bool, hasRunScript: Bool, hasExistingRunSe
 
 /// Whether closing `tab` stops this workstream's run.
 ///
-/// The Environment tab is the run's sole owner. It is the pane that lists the
+/// The Execution tab is the run's sole owner. It is the pane that lists the
 /// processes and the pane Stop lives on, and `beginRun` opens one for every
 /// run, so no other tab has to stand in as the way out.
 ///
 /// A browser tab used to claim the same ownership, guarded by a "no browser
 /// tabs left" check that matched only browser tabs and so could not see an open
-/// Environment tab. Closing the last browser therefore stopped a run that tab
+/// Execution tab. Closing the last browser therefore stopped a run that tab
 /// was still watching, and set `runStoppedManually` on the way out, so it did
 /// not come back on the next launch either.
 ///
@@ -28,13 +28,13 @@ func shouldRestoreRunSession(useTmux: Bool, hasRunScript: Bool, hasExistingRunSe
 /// tested without standing up a view.
 func closingTabStopsRun(_ tab: WorkspaceTab, runStarted: Bool) -> Bool {
     guard runStarted else { return false }
-    if case .environment = tab {
+    if case .execution = tab {
         return true
     }
     return false
 }
 
-/// What the Environment pane shows for the effective dev command.
+/// What the Execution pane shows for the effective dev command.
 ///
 /// An override is shown as the command it is — the user typed it, and it is what
 /// Start runs. A process-compose config is shown as the **files** that will be
@@ -90,7 +90,7 @@ func scriptCommand(script: String, shell: String = CommandBuilder.userShell) -> 
     "\(shell) -lic \(CommandBuilder.shellQuote(script, forShell: shell))"
 }
 
-struct EnvironmentTabView: View {
+struct ExecutionTabView: View {
     let workstreamID: UUID
     let workingDirectory: String
     let useTmux: Bool
@@ -160,11 +160,11 @@ struct EnvironmentTabView: View {
                 configApprovalBanner(paths: unapprovedConfigFiles)
                 Divider()
             }
-            environmentContent
+            executionContent
         }
     }
 
-    private var environmentContent: some View {
+    private var executionContent: some View {
         runPane()
     }
 

@@ -10,11 +10,11 @@ final class WorkspaceTabKindTests: XCTestCase {
             XCTAssertFalse(kind.isCloseable, "\(kind.id) must be permanent")
         }
         // Singletons: one of each, fixed label, but they close like any tab.
-        for kind in [WorkspaceTabKind.changes, .environment] {
+        for kind in [WorkspaceTabKind.changes, .execution] {
             XCTAssertTrue(kind.isCloseable, "\(kind.id) must be closeable")
             XCTAssertNil(kind.shortcutBadge, "\(kind.id) badges are positional")
         }
-        for kind in [WorkspaceTabKind.info, .agent, .changes, .environment] {
+        for kind in [WorkspaceTabKind.info, .agent, .changes, .execution] {
             XCTAssertNotNil(kind.staticLabel, "\(kind.id) has a fixed label")
         }
     }
@@ -46,13 +46,13 @@ final class WorkspaceTabKindTests: XCTestCase {
         // ⌘I is the dedicated binding; ⌘1 still works positionally.
         XCTAssertEqual(WorkspaceTabKind.info.shortcutBadge, "I")
         XCTAssertEqual(WorkspaceTabKind.agent.shortcutBadge, "\u{21A9}")
-        // No static badge: Changes and Environment move and close, so the tab
+        // No static badge: Changes and Execution move and close, so the tab
         // bar derives their ⌘N from the live tab order instead.
         XCTAssertNil(WorkspaceTabKind.changes.shortcutBadge)
 
-        XCTAssertEqual(WorkspaceTab.environment.kind, .environment)
-        XCTAssertEqual(WorkspaceTabKind.environment.icon, "play.circle")
-        XCTAssertNil(WorkspaceTabKind.environment.shortcutBadge)
+        XCTAssertEqual(WorkspaceTab.execution.kind, .execution)
+        XCTAssertEqual(WorkspaceTabKind.execution.icon, "play.circle")
+        XCTAssertNil(WorkspaceTabKind.execution.shortcutBadge)
     }
 
     func testDragIdentifierIsUUIDForInstancedAndKindIDForSingletons() {
@@ -63,7 +63,7 @@ final class WorkspaceTabKindTests: XCTestCase {
         XCTAssertEqual(WorkspaceTab.info.dragIdentifier, "info")
         XCTAssertEqual(WorkspaceTab.agent.dragIdentifier, "agent")
         XCTAssertEqual(WorkspaceTab.changes.dragIdentifier, "changes")
-        XCTAssertEqual(WorkspaceTab.environment.dragIdentifier, "environment")
+        XCTAssertEqual(WorkspaceTab.execution.dragIdentifier, "execution")
     }
 
     func testIsCloseableDelegatesToKind() {

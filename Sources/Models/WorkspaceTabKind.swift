@@ -9,7 +9,7 @@ import Foundation
 /// `tabContent`; the remaining per-kind switches (restore mapping, occlusion,
 /// seeding, removal) are exhaustive, so the compiler walks you to each one.
 ///
-/// Only Info and Agent are permanent. Changes and Environment are singletons —
+/// Only Info and Agent are permanent. Changes and Execution are singletons —
 /// there is exactly one of each — but they close and reopen like any terminal
 /// or browser, and they sit in the same draggable strip.
 struct WorkspaceTabKind: Equatable, Hashable {
@@ -46,9 +46,9 @@ struct WorkspaceTabKind: Equatable, Hashable {
         id: "changes", isCloseable: true, icon: "arrow.triangle.branch",
         staticLabel: NSLocalizedString("Changes", comment: ""), shortcutBadge: nil
     )
-    static let environment = WorkspaceTabKind(
-        id: "environment", isCloseable: true, icon: "play.circle",
-        staticLabel: NSLocalizedString("Environment", comment: ""), shortcutBadge: nil
+    static let execution = WorkspaceTabKind(
+        id: "execution", isCloseable: true, icon: "play.circle",
+        staticLabel: NSLocalizedString("Execution", comment: ""), shortcutBadge: nil
     )
     static let terminal = WorkspaceTabKind(
         id: "terminal", isCloseable: true, icon: "terminal",
