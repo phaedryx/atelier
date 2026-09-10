@@ -9,6 +9,10 @@ extension ProcessCompose {
         case prepare
         case execute
         case dispose
+        /// On demand, repeatedly, from the Verification tab or an agent. Unlike the
+        /// other four this is not a point in a workstream's life, which is why it is
+        /// the one headless phase that is ever asked to run a subset.
+        case verify
 
         var namespace: String {
             rawValue
@@ -111,7 +115,7 @@ extension ProcessCompose {
 
             parts += ["-n", phase.namespace]
 
-            if phase == .execute, !selectedProcesses.isEmpty {
+            if phase == .execute || phase == .verify, !selectedProcesses.isEmpty {
                 // Shell-quoting protects the shell; it does not protect
                 // process-compose's own flag parser, which reads these as trailing
                 // arguments. A repository YAML may name a process whatever it

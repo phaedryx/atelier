@@ -414,4 +414,44 @@ final class PhaseRunnerTests: XCTestCase {
         XCTAssertEqual(command.components(separatedBy: "-n ").count - 1, 1, "exactly one -n: \(command)")
         XCTAssertFalse(command.contains("--keep-project"), command)
     }
+
+    func test_verifyPhase_isHeadlessAndNamespaceScoped() {
+        XCTAssertEqual(ProcessCompose.Phase.verify.namespace, "verify")
+        XCTAssertFalse(ProcessCompose.Phase.verify.isInteractive)
+    }
+
+    func test_socketPath_verifyIsSuffixed() {
+        let path = ProcessCompose.PhaseRunner.socketPath(for: UUID(), phase: .verify)
+        XCTAssertTrue(path.hasSuffix("-verify.sock"), path)
+    }
+
+    func test_command_verifyPassesSelectedProcessesAsTrailingArguments() {
+        let config = ProcessCompose.Config(
+            path: "/tmp/process-compose.yaml", isRepositoryProvided: false, overridePath: nil
+        )
+        let command = ProcessCompose.PhaseRunner.command(
+            phase: .verify, config: config, binary: "/usr/bin/process-compose",
+            workstreamID: UUID(), selectedProcesses: ["rspec", "rubocop"], keepProject: true
+        )
+        XCTAssertTrue(command.contains("-n verify"), command)
+        XCTAssertTrue(command.contains("-t=false"), command)
+        XCTAssertTrue(command.contains("--keep-project"), command)
+        XCTAssertTrue(command.hasSuffix("rspec rubocop"), command)
+    }
+
+    func test_command_verifyDropsNamesThatWouldParseAsFlags() {
+        let config = ProcessCompose.Config(
+            path: "/tmp/process-compose.yaml", isRepositoryProvided: false, overridePath: nil
+        )
+        let command = ProcessCompose.PhaseRunner.command(
+            phase: .verify, config: config, binary: "/usr/bin/process-compose",
+            workstreamID: UUID(), selectedProcesses: ["-n", "rspec"], keepProject: false
+        )
+        XCTAssertFalse(command.contains(" -n dispose"), command)
+        XCTAssertTrue(command.hasSuffix("rspec"), command)
+    }
+
+    func test_timeout_suiteIsLongerThanUserCommand() {
+        XCTAssertGreaterThan(ProcessRunner.Timeout.suite, ProcessRunner.Timeout.userCommand)
+    }
 }
