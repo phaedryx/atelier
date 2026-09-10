@@ -83,7 +83,17 @@ extension ProcessCompose {
             workstreamID: UUID,
             workingDirectory: String,
             environment: [String: String],
-            timeout: TimeInterval
+            timeout: TimeInterval,
+            selectedProcesses: [String] = [],
+            // `verify` passes false to hold the control server open after the
+            // namespace finishes, so the runner can read final states and per-check
+            // logs before the server goes away. It then tears down itself, and is the
+            // only caller that does — see the spec's "one owner for teardown".
+            //
+            // Not a leak risk if that teardown is missed: `run` calls `shutDown` at
+            // the *top*, before spawning, precisely to clear a server a killed run
+            // left behind.
+            shutDownWhenDone: Bool = true
         ) -> Outcome {
             let presence = config.namespacePresence(phase.namespace)
             // Nothing declared: return without spawning anything. This is the
@@ -114,7 +124,7 @@ extension ProcessCompose {
 
             let command = ProcessCompose.PhaseRunner.command(
                 phase: phase, config: config, binary: binary,
-                workstreamID: workstreamID, selectedProcesses: [], keepProject: true
+                workstreamID: workstreamID, selectedProcesses: selectedProcesses, keepProject: true
             )
             // zsh or bash with `-c`, not `$SHELL -lic`: `ProcessCompose.PhaseRunner.command` quotes
             // with POSIX rules, which fish cannot parse, and an interactive shell
@@ -152,11 +162,13 @@ extension ProcessCompose {
                 upFinished: finished
             )
 
-            shutDown(binary: binary, socketPath: socketPath, workingDirectory: workingDirectory)
-            // Best effort. If the child ignores `down`, `capture`'s own deadline
-            // kills it; the window is bounded by `budget`, not open-ended.
-            if finished.wait(timeout: .now() + shutdownGrace) == .timedOut {
-                logger.warning("\(phase.namespace, privacy: .public) did not exit after down; it will be killed at its deadline")
+            if shutDownWhenDone {
+                shutDown(binary: binary, socketPath: socketPath, workingDirectory: workingDirectory)
+                // Best effort. If the child ignores `down`, `capture`'s own deadline
+                // kills it; the window is bounded by `budget`, not open-ended.
+                if finished.wait(timeout: .now() + shutdownGrace) == .timedOut {
+                    logger.warning("\(phase.namespace, privacy: .public) did not exit after down; it will be killed at its deadline")
+                }
             }
 
             return outcome(for: phase, poll: poll, output: captured.read())

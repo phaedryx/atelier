@@ -264,6 +264,35 @@ final class PhaseExecutorTests: XCTestCase {
         XCTAssertEqual(runBootstrap(config), .skipped)
         XCTAssertLessThan(Date().timeIntervalSince(started), 30, "must not wait out the deadline")
     }
+
+    /// Regression guard: `run`'s two-caller shape (bootstrap and dispose) must
+    /// stay callable without the new `selectedProcesses`/`shutDownWhenDone`
+    /// arguments. Reaches `.skipped` honestly, via a real config with no
+    /// processes in the `bootstrap` namespace — a nonexistent config path
+    /// would instead yield `.unknown` presence, which spawns on a shortened
+    /// budget rather than returning early, asserting the right outcome for
+    /// the wrong reason.
+    func test_run_defaultsKeepBootstrapAndDisposeCallableUnchanged() throws {
+        let config = try writeConfig("""
+        version: "0.5"
+        processes:
+          web:
+            namespace: execute
+            command: sh -c 'exit 0'
+        """)
+
+        let outcome = ProcessCompose.PhaseExecutor.run(
+            phase: .bootstrap,
+            config: config,
+            binary: binary,
+            workstreamID: workstreamID,
+            workingDirectory: dir.path,
+            environment: [:],
+            timeout: 60
+        )
+
+        XCTAssertEqual(outcome, .skipped)
+    }
 }
 
 /// How a finished phase is turned into a report. No binary needed, so these run
