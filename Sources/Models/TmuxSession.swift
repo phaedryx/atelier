@@ -92,15 +92,19 @@ enum TmuxSession {
         }
 
         // Use login shell for proper PATH, with inner sh for POSIX syntax.
-        // Both the sh -c argument and the outer login shell argument use
-        // Fish-aware quoting when Fish is the shell.
+        // Fish-aware quoting applies to the `sh -c` argument — the one the
+        // login shell itself parses — and to that alone. The outer argument is
+        // read by ghostty's `/bin/bash -c` wrapper before the login shell is
+        // ever execed, so it is POSIX-quoted; double quotes there let bash
+        // substitute every backtick in the payload. See
+        // `CommandBuilder.shellQuote(_:forShell:)`.
         let setup = serverSetupCommand(tmuxPath: tmuxPath, configPath: configPath)
         let innerCmd = "\(setup); exec \(tmuxCmd)"
         let shArgQuote = CommandBuilder.isFish(shell)
             ? CommandBuilder.shellQuote(innerCmd, forShell: shell)
             : shellEscape(innerCmd)
         let shCmd = "exec sh -c \(shArgQuote)"
-        return "\(shell) -lic \(CommandBuilder.shellQuote(shCmd, forShell: shell))"
+        return "\(shell) -lic \(CommandBuilder.shellQuote(shCmd))"
     }
 
     /// Kill a tmux session by name.

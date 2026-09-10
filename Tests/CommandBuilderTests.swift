@@ -179,15 +179,96 @@ final class CommandBuilderTests: XCTestCase {
 
     func testWithFallbackFish() {
         let result = CommandBuilder.withFallback("cmd1", "cmd2", shell: "/opt/homebrew/bin/fish")
-        XCTAssertTrue(result.hasPrefix("/opt/homebrew/bin/fish -lic \""), "Fish withFallback should use double quotes")
         XCTAssertTrue(result.contains("exec sh -c"), "Should still use sh for POSIX syntax")
         XCTAssertTrue(result.contains("cmd1 || cmd2"))
     }
 
+    /// Fish quoting stops at the argument fish parses, and the outermost token
+    /// is POSIX-quoted for every shell — because that one is read by ghostty's
+    /// `/bin/bash -c` wrapper, not by the login shell it names.
+    ///
+    /// This replaces a test that asserted the opposite (`hasPrefix("fish -lic
+    /// \"")`). Double quotes there left backticks live for bash to substitute,
+    /// which is how the IPC system prompt reached the agent with every tool
+    /// name deleted from it and `bash: register_peer: command not found` on
+    /// screen. The round-trip tests below are the real guard; this one names
+    /// the mechanism so the two cannot be "simplified" back together.
+    func testWithFallbackPosixQuotesTheOutermostArgumentEvenForFish() {
+        let result = CommandBuilder.withFallback("cmd1", "cmd2", shell: "/opt/homebrew/bin/fish")
+        XCTAssertTrue(
+            result.hasPrefix("/opt/homebrew/bin/fish -lic '"),
+            "The outermost argument is parsed by bash, so it must be POSIX-quoted: \(result)"
+        )
+        XCTAssertTrue(result.contains("exec sh -c \""), "The argument fish parses stays fish-quoted: \(result)")
+    }
+
+    // MARK: - Payload round trips (integration tests)
+
+    // These invoke real shell binaries through `ShellWrapper`, which reproduces
+    // ghostty's own macOS wrapper — `/bin/bash --noprofile --norc -c "exec -l
+    // …"`, not the `/bin/sh -c` this comment used to claim. They assert what the
+    // child process receives, which is the only thing that ever mattered.
+
+    private func assertPayloadSurvivesFallback(shell: String, file: StaticString = #filePath, line: UInt = #line) throws {
+        let command = CommandBuilder.withFallback(
+            ShellWrapper.printfCommand(), "/usr/bin/false",
+            shell: shell
+        )
+        try ShellWrapper.assertPayloadSurvives(command, file: file, line: line)
+    }
+
+    func testFallbackPayloadSurvivesUnderFish() throws {
+        try assertPayloadSurvivesFallback(shell: ShellWrapper.requireFish())
+    }
+
+    func testFallbackPayloadSurvivesUnderZsh() throws {
+        try assertPayloadSurvivesFallback(shell: "/bin/zsh")
+    }
+
+    func testFallbackPayloadSurvivesUnderBash() throws {
+        try assertPayloadSurvivesFallback(shell: "/bin/bash")
+    }
+
+    /// The failing case as the user met it: a `--append-system-prompt` whose
+    /// value is the IPC prompt, backticked tool names and all.
+    func testAgentSystemPromptSurvivesUnderFish() throws {
+        let prompt = SystemPrompts.agentIPCPrompt(workstreamName: "start-messages")
+        var resume = CommandBuilder("/usr/bin/printf")
+        resume.option("%s", prompt)
+        let command = try CommandBuilder.withFallback(
+            resume.command, "/usr/bin/false",
+            message: "Starting new session...",
+            shell: ShellWrapper.requireFish()
+        )
+        try ShellWrapper.assertPayloadSurvives(command, payload: prompt)
+    }
+
+    /// The same path with the auto-rename prompt, and the destructive half of
+    /// this bug rather than the lossy one.
+    ///
+    /// `agentIPCPrompt`'s backticks hold tool names, so substituting them
+    /// deleted words. This prompt's hold `git branch -m <new-name>` and an
+    /// `mkdir`/`echo` pair that writes `.atelier-state/description` — commands
+    /// bash would have *run*, on every agent launch, before claude ever saw the
+    /// prompt. Nothing about the fix is specific to which prompt is active, and
+    /// this test is here so nobody concludes otherwise.
+    func testAutoRenamePromptSurvivesUnderFish() throws {
+        let prompt = SystemPrompts.autoRenameBranchPrompt
+        var fresh = CommandBuilder("/usr/bin/printf")
+        fresh.option("%s", prompt)
+        let command = try CommandBuilder.withFallback(
+            fresh.command, "/usr/bin/false",
+            shell: ShellWrapper.requireFish()
+        )
+        try ShellWrapper.assertPayloadSurvives(command, payload: prompt)
+    }
+
     // MARK: - Shell syntax validation (integration tests)
 
-    // These tests invoke real shell binaries to verify generated commands parse correctly.
-    // Ghostty passes commands to /bin/sh -c, so that's what we simulate here.
+    // These tests invoke real shell binaries to verify generated commands parse
+    // correctly. Syntax only — a command can parse cleanly in the outer shell
+    // and still deliver a mangled payload, which is what the round trips above
+    // are for.
 
     private func assertShellCanParse(_ command: String, file: StaticString = #filePath, line: UInt = #line) throws {
         // Replace -lic with -nc: keeps -c (command string) but adds -n (no-execute/syntax-only)

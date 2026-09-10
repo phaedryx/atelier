@@ -30,6 +30,28 @@ final class ExecutionTabViewTests: XCTestCase {
         XCTAssertFalse(command.contains("/bin/sh"))
     }
 
+    /// Both wrappers hand the script to the login shell as its `-c` argument,
+    /// and that argument sits inside a string ghostty's own `/bin/bash -c`
+    /// reads first. So it is POSIX-quoted — fish-quoting it, as both sites used
+    /// to, left every backtick in the script for bash to substitute.
+    func testScriptWrappersPosixQuoteTheScriptEvenForFish() {
+        let fish = "/opt/homebrew/bin/fish"
+        let script = "just local `whoami`"
+
+        XCTAssertTrue(
+            scriptCommand(script: script, shell: fish).hasSuffix("-lic 'just local `whoami`'"),
+            scriptCommand(script: script, shell: fish)
+        )
+        XCTAssertTrue(
+            runScriptCommand(
+                script: script,
+                workstreamID: UUID(),
+                launcherPath: "/path/to/atelier-run",
+                shell: fish
+            ).hasSuffix("-lic 'just local `whoami`'")
+        )
+    }
+
     // MARK: - What the pane displays
 
     private let displayCommand = "process-compose up -U -f /repo/ws/process-compose.yaml"
