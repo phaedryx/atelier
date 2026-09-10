@@ -16,10 +16,37 @@ extension IPC {
 
     struct Message: Codable {
         let id: UUID
-        let from: UUID
+        let from: Sender
         let to: UUID
         let content: String
         var timestamp: Date
+    }
+
+    /// Who a message came from.
+    ///
+    /// Two cases rather than one `UUID`, because an app-originated notice — a
+    /// verification run finishing, so far the only one — has **no peer behind
+    /// it**, and the alternatives were both worse. A reserved peer registered in
+    /// the store would have to be filtered out of `listPeers`, out of a
+    /// `broadcast` audience and out of `peersBySurface`, each one a place to
+    /// forget; a sentinel UUID would let an agent try to `send_message` back to
+    /// something that cannot read, and would put a lie where the type used to be
+    /// honest. This way the compiler walks every site that assumed a sender peer
+    /// existed — the liveness scan, the `lastSeen` bump on read — and the label
+    /// an agent sees (`atelier/verification`) is not a peer id it can address.
+    enum Sender: Codable, Equatable {
+        case peer(UUID)
+        /// A reserved sender inside Atelier itself, named for what sent it.
+        case system(String)
+
+        /// The peer that sent this, when one did. Nil for `.system`, which is
+        /// exactly the distinction every caller here needs.
+        var peerID: UUID? {
+            switch self {
+            case let .peer(id): id
+            case .system: nil
+            }
+        }
     }
 
     // MARK: - Errors
@@ -75,7 +102,7 @@ extension IPC {
                 return true
             }
             for (_, msgs) in inbox {
-                if msgs.contains(where: { $0.from == peer.id || $0.to == peer.id }) {
+                if msgs.contains(where: { $0.from.peerID == peer.id || $0.to == peer.id }) {
                     return true
                 }
             }
@@ -178,7 +205,7 @@ extension IPC {
             guard aliveOrPurge(recipientID) != nil else { throw Error.peerNotFound(recipientID) }
 
             let now = Date()
-            let message = Message(id: UUID(), from: senderID, to: recipientID, content: content, timestamp: now)
+            let message = Message(id: UUID(), from: .peer(senderID), to: recipientID, content: content, timestamp: now)
             appendCapped(message, to: recipientID)
 
             peers[senderID]?.lastSeen = now
@@ -203,7 +230,7 @@ extension IPC {
             for recipientID in audience where recipientID != senderID {
                 guard aliveOrPurge(recipientID) != nil else { continue }
 
-                let message = Message(id: UUID(), from: senderID, to: recipientID, content: content, timestamp: now)
+                let message = Message(id: UUID(), from: .peer(senderID), to: recipientID, content: content, timestamp: now)
                 appendCapped(message, to: recipientID)
                 peers[recipientID]?.lastSeen = now
                 messages.append(message)
@@ -211,6 +238,30 @@ extension IPC {
 
             peers[senderID]?.lastSeen = now
             return messages
+        }
+
+        /// Delivers a message that came from Atelier itself rather than from a
+        /// peer — a verification run finishing, so far the only one.
+        ///
+        /// **This is new machinery, not a variation on `sendMessage`.** Every
+        /// other message in this store has a peer on both ends, and the two
+        /// guarantees that hang off that do not apply: there is no sender to
+        /// prove alive, and no sender `lastSeen` to bump. What *does* still
+        /// apply is the content cap, deliberately — a caller assembling a
+        /// summary has to keep it small enough to deliver, and silently sending
+        /// half of one would be worse than telling it so.
+        ///
+        /// Returns nil when the recipient is gone. That is an ordinary outcome
+        /// rather than an error: the agent that asked for the run may have
+        /// finished its session while the suite ran, and the results stay
+        /// readable through `check_verification` either way.
+        func deliverSystemMessage(from label: String, to recipientID: UUID, content: String) throws -> Message? {
+            guard content.utf8.count <= maxContentSize else { throw Error.contentTooLarge }
+            guard aliveOrPurge(recipientID) != nil else { return nil }
+
+            let message = Message(id: UUID(), from: .system(label), to: recipientID, content: content, timestamp: Date())
+            appendCapped(message, to: recipientID)
+            return message
         }
 
         /// Drains the peer's inbox: delete-on-read, at-most-once. A message this
@@ -230,8 +281,8 @@ extension IPC {
             peers[peerID]?.lastSeen = now
 
             var seenSenders: Set<UUID> = []
-            for msg in messages where seenSenders.insert(msg.from).inserted {
-                peers[msg.from]?.lastSeen = now
+            for senderID in messages.compactMap(\.from.peerID) where seenSenders.insert(senderID).inserted {
+                peers[senderID]?.lastSeen = now
             }
 
             return messages

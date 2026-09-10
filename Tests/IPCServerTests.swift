@@ -517,7 +517,7 @@ final class IPCServerTests: XCTestCase {
             [
                 "register_peer", "list_peers", "send_message", "receive_messages", "broadcast", "get_peer_status",
                 "list_tabs", "read_review_comments", "open_editor", "open_agent_tab", "request_attention",
-                "create_workstream",
+                "create_workstream", "start_verification", "check_verification",
             ]
         )
         // Every advertised name must be a real `IPC.Tool`. `toolDefinitions` and
