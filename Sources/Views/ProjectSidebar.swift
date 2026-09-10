@@ -236,6 +236,7 @@ struct ProjectSidebar: View {
                                 branchName: branch,
                                 worktreePath: workstream.worktreePath,
                                 isPathValid: appEnv.isPathValid(workstream.worktreePath),
+                                isSelected: selection == .workstream(workstream.id),
                                 agentState: agentStateTracker.state(for: workstream.id),
                                 hasLiveSession: agentStateTracker.hasLiveSession(for: workstream.id),
                                 channelDown: channelProbe.state.isDown,
@@ -1350,6 +1351,9 @@ private struct WorkstreamRow: View {
     var branchName: String?
     var worktreePath: String?
     let isPathValid: Bool
+    /// Whether this row is the sidebar's current selection. Gates the
+    /// double-click-to-rename gesture — see `body`.
+    var isSelected: Bool = false
     var agentState: Workstream.AgentStateTracker.AgentRunState = .idle
     var hasLiveSession: Bool = false
     /// Whether the hook channel has stopped delivering events. App-wide rather
@@ -1494,7 +1498,19 @@ private struct WorkstreamRow: View {
                         .strikethrough(!isPathValid)
                         .foregroundStyle(isPathValid ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                         .lineLimit(2)
-                        .gesture(TapGesture(count: 2).onEnded { isRenaming = true })
+                        // Rename is armed only on the selected row, and even then
+                        // recognizes simultaneously rather than exclusively. Both
+                        // halves are about the *first* click: a gesture attached here
+                        // swallows mouse-down inside the label's own bounds, so the
+                        // enclosing List never sees it and the row will not select
+                        // when clicked on its name — the one part of the row users
+                        // aim at. `.none` leaves no recognizer to swallow anything,
+                        // so an unselected row selects on a plain click; once it is
+                        // selected there is no selection left to lose.
+                        .simultaneousGesture(
+                            TapGesture(count: 2).onEnded { isRenaming = true },
+                            including: isSelected ? .gesture : .none
+                        )
                 }
 
                 if let subtitle {
