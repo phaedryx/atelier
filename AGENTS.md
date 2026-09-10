@@ -177,7 +177,7 @@ carries the `-dev` marker.
 
 ### Workstream lifecycle
 1. Creating a workstream: generates name, runs `git worktree add`; `AsyncSetupService` then runs the project's `bootstrap` namespace in the background
-2. Workspace view: only Info (Cmd+I) and Agent (Cmd+Return) are permanent; Changes and Execution open by default but close, reopen, and reorder like terminals/browsers, which are added on demand
+2. Workspace view: a workstream opens with only Info (Cmd+I) and Agent (Cmd+Return), which are also the only permanent tabs. Changes and Execution are singletons — at most one of each — opened on demand from the tab bar's quick-add buttons, the command palette, or their toggles, and they close and reorder like terminals/browsers once open. `startupWorkspaceTabState` seeds the two permanent tabs and clamps the restored `activeTab` into that list; the seed and the clamp move together, because a saved `.changes` restored onto a strip with no Changes tab renders the pane with nothing selected
 3. Tmux mode: wraps Coding Agent only in `tmux new-session -A` on socket `-L atelier`
 4. Terminal tabs: close on shell exit (Ctrl+D). Agent respawns.
 5. Ending a workstream: two operations, not one — see below.
@@ -751,9 +751,10 @@ When adding, removing, or changing keyboard shortcuts:
 
 Current shortcuts:
 - **Cmd+I**: Info
-- **Cmd+1-9**: Switch tab (all tabs in display order). Changes and Execution
-  start at ⌘3/⌘4 but they close and reorder like any other tab, so nothing is
-  bound to them by name — reopen from the tab bar or the command palette.
+- **Cmd+1-9**: Switch tab (all tabs in display order). Positional, so no
+  number reaches a closed tab — and Changes and Execution start closed. Open
+  them from the tab bar's quick-add buttons or the command palette; nothing is
+  bound to them by name.
 - **Cmd+Shift+[/]**: Cycle tabs
 - **Cmd+Return**: Focus Coding Agent
 - **Cmd+P**: Find File (Editor)

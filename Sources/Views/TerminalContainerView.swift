@@ -169,21 +169,30 @@ struct WorkspaceTabSnapshot {
     var runStoppedManually: Bool
 }
 
-/// The state a workstream's model starts life with. Tab lists are never
-/// persisted across launches, so a fresh workstream always opens with the same
-/// four tabs; only the last-active tab *kind* is restored.
+/// The state a workstream's model starts life with: the two permanent tabs and
+/// nothing else. Tab lists are never persisted across launches, so every
+/// workstream opens the same way and Changes and Execution are opened when they
+/// are wanted — from the tab bar's quick-add buttons, the command palette, or
+/// ⌘-shortcuts.
 ///
-/// That unconditional seed is what makes restoring a saved `.changes` or
-/// `.execution` safe — the tab it names is always there. Closing either is a
-/// within-session state; if that ever becomes persistent, `activeTab` below has
-/// to be reconciled against `tabs` rather than trusted.
+/// `activeTab` is therefore clamped rather than trusted. `savedTab` restores the
+/// last-active tab *kind*, and two of the four kinds it can name are no longer
+/// seeded; a `.changes` restored onto a strip with no Changes tab would render
+/// that pane with nothing selected in the strip, and with the quick-add button
+/// still offering to open what is already on screen. The saved kind survives
+/// where it still can — Info versus Agent — and falls back to Info where it
+/// cannot. Any future seed change has to keep the `tabs.contains` clamp: it is
+/// what holds `activeTab` inside `tabs`.
 func startupWorkspaceTabState(savedTab: RestorableWorkspaceTab?) -> WorkspaceTabSnapshot {
-    WorkspaceTabSnapshot(
-        tabs: [.info, .agent, .changes, .execution],
+    let tabs: [WorkspaceTab] = [.info, .agent]
+    let restored = (savedTab ?? .info).workspaceTab()
+
+    return WorkspaceTabSnapshot(
+        tabs: tabs,
         terminalCount: 0,
         browserCount: 0,
         editorCount: 0,
-        activeTab: (savedTab ?? .info).workspaceTab(),
+        activeTab: tabs.contains(restored) ? restored : .info,
         browserTitles: [:],
         terminalTitles: [:],
         editorFilePaths: [:],
@@ -633,9 +642,10 @@ struct TerminalContainerView: View {
     ///
     /// One list, read by both the buttons and the divider that separates them
     /// from the add-another-one buttons, so the two cannot disagree about
-    /// whether the group is empty — and it usually is:
-    /// `startupWorkspaceTabState` opens both singletons, so a fresh workstream
-    /// renders no button here at all and must render no divider either.
+    /// whether the group is empty. Since `startupWorkspaceTabState` seeds
+    /// neither singleton, the usual state is both buttons showing; the empty
+    /// case is a workstream with both tabs open, and the divider has to
+    /// disappear with them rather than dangle at the head of the group.
     private var closedSingletons: [SingletonQuickAdd] {
         SingletonQuickAdd.all.filter { !model.tabs.contains($0.tab) }
     }
