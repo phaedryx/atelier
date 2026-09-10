@@ -690,9 +690,12 @@ struct TerminalContainerView: View {
                         .padding(.horizontal, 4)
                         .accessibilityHidden(true)
                 }
-                TabBarActionButton(icon: "terminal", tooltip: "New Terminal", action: addTerminal)
-                TabBarActionButton(icon: "globe", tooltip: "New Browser", action: addBrowser)
-                TabBarActionButton(icon: "doc.text", tooltip: "New Editor", action: openEditor)
+                // Icons come from the kind rather than a literal, the same way
+                // the singleton buttons above take theirs: a quick-add button
+                // and the tab it opens must not be able to drift apart.
+                TabBarActionButton(icon: WorkspaceTabKind.terminal.icon, tooltip: "New Terminal", action: addTerminal)
+                TabBarActionButton(icon: WorkspaceTabKind.browser.icon, tooltip: "New Browser", action: addBrowser)
+                TabBarActionButton(icon: WorkspaceTabKind.editor.icon, tooltip: "New Editor", action: openEditor)
             }
             .fixedSize()
 
