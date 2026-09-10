@@ -59,11 +59,17 @@ func verificationIsStale(run: Verification.Run, currentStamp: String?) -> Bool {
 ///
 /// Reads the same four preconditions `PhasePolicy.plan` evaluates — the
 /// unattended-phase gate `Verification.Runner.start` calls before spawning
-/// anything — in the same order, so the *decision* here is one copy with that
-/// gate; only the *rendering* is separate. `PhasePolicy`'s own strings are
+/// anything — in the same order, so the *decision* stays `PhasePolicy.plan`'s
+/// alone; only the *rendering* is separate. `PhasePolicy`'s own strings are
 /// past tense ("so no `verify` ran"), because they report on bootstrap and
 /// dispose after the fact; this tab has not run anything yet, so none of
 /// these may read as a report on a run that already happened.
+///
+/// Called by whichever caller resolved the four facts — `TerminalContainerView`,
+/// for the same reason `refreshDevCommand` resolves `ExecutionTabView`'s
+/// equivalent state and hands it in rather than letting the view re-derive
+/// it: see `VerificationTabView.unavailableReason`'s own doc. This function
+/// itself does no I/O; it only turns already-resolved facts into copy.
 ///
 /// - Parameter declared: the checks the located config declares in the
 ///   `verify` namespace, or `nil` when the config exists but could not be
@@ -125,22 +131,41 @@ func verificationUnavailableReason(
 /// The Verification tab. Runs a project's declared `verify` checks and shows
 /// each one's result.
 ///
-/// Self-sufficient by design, unlike `ExecutionTabView`: that view is fed its
-/// availability by `TerminalContainerView` because it shares state with the
-/// live process table and the run terminal. Verification has neither — a run
-/// here is headless and one-shot — so this view resolves its own config,
-/// binary and approval state from `worktreePath` and `projectDirectory`
-/// rather than taking them as parameters.
+/// Availability is **passed in, never re-derived here** — the same ruling
+/// `ExecutionTabView.canStart`'s own doc states for its equivalent state:
+/// "They used to be two [...] and an unresolvable process-compose binary
+/// rendered an enabled Start that did nothing and explained nothing." A first
+/// implementation of this view resolved `declaredProcesses` and
+/// `unavailableReason` itself, on every `.onAppear`, by calling
+/// `ProcessCompose.Config.locate`, `ProcessCompose.Settings.resolveBinary()`
+/// and `ScriptTrust.isApproved` directly — a config lookup, a file stat and a
+/// SHA-256 over the approval-relevant files, all on the main actor, and stale
+/// the moment any of Settings' process-compose switch, its binary path, or
+/// the config's approval state changed without the tab happening to
+/// re-appear. `TerminalContainerView` already holds all four facts as
+/// trigger-refreshed state for `ExecutionTabView`'s sake
+/// (`refreshDevCommand`); Task 10 is expected to resolve this tab's
+/// `declaredProcesses`/`unavailableReason` the same way, from the same
+/// triggers, and hand them in.
 struct VerificationTabView: View {
     let workstreamID: UUID
     let worktreePath: String
     let projectDirectory: String
     let projectName: String
     let workstreamName: String
+    /// The checks the located config declares in the `verify` namespace, or
+    /// empty when there is nothing to run (including when `unavailableReason`
+    /// is non-nil — the caller is not required to have anything meaningful
+    /// here in that case).
+    let declaredProcesses: [String]
+    /// Present-tense wording for why nothing can run yet, or nil when it can.
+    /// Produced by the caller from `verificationUnavailableReason`, fed the
+    /// same four facts `PhasePolicy.plan` — the gate `Verification.Runner.start`
+    /// itself calls — evaluates, so this tab's idea of "nothing to run" can
+    /// never disagree with what `start` will actually refuse.
+    let unavailableReason: String?
     @ObservedObject var runner: Verification.Runner
 
-    @State private var declaredProcesses: [String]
-    @State private var unavailableReason: String?
     /// `Git.Operations.diffFingerprint` computed just now, or nil before the
     /// first computation lands. Compared against a run's own `stamp` by
     /// `verificationIsStale`.
@@ -150,38 +175,15 @@ struct VerificationTabView: View {
     /// matches belongs to a refresh this view has already superseded — the
     /// same guard `ChangesView.fullLoad` uses against its own git hop.
     @State private var stalenessGeneration = 0
-
-    /// Resolves availability *before* the first render, not only in
-    /// `.onAppear`.
-    ///
-    /// `onAppear` fires after SwiftUI has already built the view tree for
-    /// that first pass, so writing `declaredProcesses` there only takes
-    /// effect on the *next* render. In between, the first `ProcessSelectionView`
-    /// this view constructs would see an empty `declaredProcesses` — no
-    /// preconditions failed, the real list just has not been read yet — and
-    /// its own `.onAppear` reconciles the stored selection against that empty
-    /// list: `processSelectionOnLoad(stored: [...], declared: [])` finds no
-    /// survivors and writes the canonical "all" back over whatever the user
-    /// had unchecked. Computing here means the list `ProcessSelectionView`
-    /// first sees is already the real one.
-    init(
-        workstreamID: UUID,
-        worktreePath: String,
-        projectDirectory: String,
-        projectName: String,
-        workstreamName: String,
-        runner: Verification.Runner
-    ) {
-        self.workstreamID = workstreamID
-        self.worktreePath = worktreePath
-        self.projectDirectory = projectDirectory
-        self.projectName = projectName
-        self.workstreamName = workstreamName
-        self.runner = runner
-        let resolved = Self.resolveAvailability(worktreePath: worktreePath, projectDirectory: projectDirectory)
-        _declaredProcesses = State(initialValue: resolved.declared)
-        _unavailableReason = State(initialValue: resolved.reason)
-    }
+    /// Set for the lifetime of one `diffFingerprint` hop. `HeadWatcher`
+    /// debounces at only 200ms and its own doc warns the watched directory is
+    /// noisy — ordinary agent activity rewrites `index` with HEAD unchanged —
+    /// so a burst of git-activity notifications must not queue up a matching
+    /// burst of `git diff --stat` / `hash-object` spawns. A newly-arrived
+    /// request while one is already in flight is redundant: the in-flight one
+    /// will read whatever the tree looks like when it actually runs `git`,
+    /// which is at least as current as a request queued behind it.
+    @State private var isRefreshingStaleness = false
 
     var body: some View {
         Group {
@@ -192,7 +194,6 @@ struct VerificationTabView: View {
             }
         }
         .onAppear {
-            refreshAvailability()
             refreshStaleness()
         }
         .onReceive(NotificationCenter.default.publisher(for: .worktreeGitActivity)) { notification in
@@ -224,14 +225,13 @@ struct VerificationTabView: View {
                 failureDetailBanner(detail)
             }
 
-            // Guarded on a non-empty list, not just on availability: the
-            // first render after this view is constructed has already run
-            // `resolveAvailability` (see `init`), but a defensive guard here
-            // means a future caller of `refreshAvailability()` mid-lifetime
-            // can never hand `ProcessSelectionView` a momentarily-empty list
-            // either — which is what would make its own `.onAppear` read the
-            // stored selection as "nothing survived" and overwrite it with
-            // the canonical "all".
+            // Guarded on a non-empty list as a second line of defense, even
+            // though the caller is not supposed to hand this view a
+            // momentarily-empty list while `unavailableReason` is nil: an
+            // empty list here would make `ProcessSelectionView`'s own
+            // `.onAppear` read the stored selection as "nothing survived" and
+            // overwrite it with the canonical "all" — see
+            // `processSelectionOnLoad`.
             if !declaredProcesses.isEmpty {
                 ProcessSelectionView(
                     workstreamID: workstreamID,
@@ -309,6 +309,13 @@ struct VerificationTabView: View {
                 Image(systemName: verificationRowGlyph(check.state))
                     .foregroundStyle(color(for: check.state))
                     .frame(width: 16)
+                    // The glyph alone is a thin signal: `.notRun`
+                    // (`circle.dashed`) and `.running` (`circle.dotted`)
+                    // differ by a few pixels at this size, with color as the
+                    // practical differentiator, and nowhere else in the row
+                    // does the state appear as text. VoiceOver gets the word
+                    // a sighted user reads from a glance at shape and hue.
+                    .accessibilityLabel(stateWord(check.state))
                 Text(check.name)
                     .font(.system(size: 11, design: .monospaced))
                 Spacer()
@@ -353,10 +360,21 @@ struct VerificationTabView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("The run itself failed to start its checks")
                     .font(.system(size: 12, weight: .semibold))
-                Text(detail)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
+                // Bounded, not left to grow with `detail`: `PhaseExecutor`
+                // keeps up to 2000 characters of process output for exactly
+                // this message (`PhaseExecutor.detailLimit`), and an
+                // unbounded block here would steal the pane from the results
+                // below it and walk the action row down — the same failure
+                // the per-check output `ScrollView` below is already bounded
+                // against.
+                ScrollView {
+                    Text(detail)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .frame(maxHeight: 120)
             }
             Spacer()
         }
@@ -396,6 +414,27 @@ struct VerificationTabView: View {
         }
     }
 
+    /// The word VoiceOver reads for a check's glyph — see `resultRow`'s
+    /// accessibility label for why the glyph cannot carry this alone.
+    private func stateWord(_ state: Verification.CheckResult.State) -> String {
+        switch state {
+        case .notRun:
+            NSLocalizedString("Not run", comment: "Verification tab: check state, accessibility label")
+        case .pending:
+            NSLocalizedString("Pending", comment: "Verification tab: check state, accessibility label")
+        case .running:
+            NSLocalizedString("Running", comment: "Verification tab: check state, accessibility label")
+        case .passed:
+            NSLocalizedString("Passed", comment: "Verification tab: check state, accessibility label")
+        case .failed:
+            NSLocalizedString("Failed", comment: "Verification tab: check state, accessibility label")
+        case .skipped:
+            NSLocalizedString("Skipped", comment: "Verification tab: check state, accessibility label")
+        case .stopped:
+            NSLocalizedString("Stopped", comment: "Verification tab: check state, accessibility label")
+        }
+    }
+
     private func formattedDuration(_ duration: TimeInterval) -> String {
         String(format: "%.1fs", duration)
     }
@@ -432,53 +471,24 @@ struct VerificationTabView: View {
 
     // MARK: - Refresh
 
-    /// Resolves the same four preconditions `PhasePolicy.plan` evaluates, so
-    /// the tab's own empty state agrees with what `runner.start` will
-    /// actually refuse. Cheap enough to run on the main actor — a config
-    /// lookup and a file stat, the same calls
-    /// `TerminalContainerView.refreshDevCommand` already makes synchronously
-    /// for the Execution tab's equivalent state.
-    ///
-    /// A `static` function, not an instance method: `init` needs the same
-    /// resolution before `self` exists (see `declaredProcesses`'s doc for
-    /// why), so this takes its inputs as parameters instead of reading
-    /// `worktreePath`/`projectDirectory` off `self`.
-    private static func resolveAvailability(
-        worktreePath: String, projectDirectory: String
-    ) -> (declared: [String], reason: String?) {
-        let isEnabled = ProcessCompose.Settings.isEnabled
-        let config = ProcessCompose.Config.locate(worktree: worktreePath, projectDirectory: projectDirectory)
-        let binary = ProcessCompose.Settings.resolveBinary()
-        let isApproved = config.map {
-            !$0.requiresApproval || ScriptTrust.isApproved(
-                configFiles: $0.repositoryProvidedFiles, for: projectDirectory
-            )
-        } ?? true
-        let declared = config?.declaredProcesses(in: ProcessCompose.Phase.verify.namespace)
-
-        let reason = verificationUnavailableReason(
-            isEnabled: isEnabled,
-            hasConfig: config != nil,
-            hasBinary: binary != nil,
-            isApproved: isApproved,
-            declared: declared
-        )
-        return (declared ?? [], reason)
-    }
-
-    private func refreshAvailability() {
-        let resolved = Self.resolveAvailability(worktreePath: worktreePath, projectDirectory: projectDirectory)
-        declaredProcesses = resolved.declared
-        unavailableReason = resolved.reason
-    }
-
     /// Recomputes `currentStamp` off the main actor, the same way
     /// `ChangesView.fullLoad` computes its own fingerprint: `diffFingerprint`
     /// spawns `git hash-object` in batches over the dirty tree, and this is
     /// called from `.onAppear` and from a notification that fires on every
     /// git-activity event in the worktree — running that on the main actor
     /// would stall the tab's own redraw on every keystroke-adjacent save.
+    ///
+    /// Two guards keep that notification cheap rather than merely
+    /// off-actor: nothing here is rendered without a run to compare against
+    /// (`currentStamp` is only read by `resultRows`, which only exists when
+    /// `currentRun` does), and `HeadWatcher` can fire at up to ~5Hz during
+    /// ordinary agent activity — its own doc says the watched directory is
+    /// noisy — so a computation already in flight absorbs a burst instead of
+    /// queuing a matching burst of `git` spawns behind it.
     private func refreshStaleness() {
+        guard currentRun != nil else { return }
+        guard !isRefreshingStaleness else { return }
+        isRefreshingStaleness = true
         stalenessGeneration += 1
         let token = stalenessGeneration
         let path = worktreePath
@@ -488,6 +498,7 @@ struct VerificationTabView: View {
                 worktreePath: path, projectPath: projectPath, mode: "uncommitted"
             )
             DispatchQueue.main.async {
+                isRefreshingStaleness = false
                 // A later refresh (another activity event, or the view
                 // reappearing) may have started and finished while this git
                 // hop was in flight; an older completion must not overwrite

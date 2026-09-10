@@ -464,11 +464,21 @@ extension Verification {
             await captureFailedOutput(from: entries, runID: runID, client: client)
             // Set on the stored run *before* `seal`, so `seal`'s own copy —
             // `var run = runs[workstreamID]` — carries it into both the
-            // published run and `Verification.Store.save`. A spawn that never
-            // bound a socket leaves `entries` empty, so every check seals
-            // `.notRun` with nothing in its own `output`; this is the only
-            // place that reason is recorded anywhere.
-            if let outcome = state.outcome, let detail = Self.failureDetail(for: outcome) {
+            // published run and `Verification.Store.save`. Only when
+            // `entries` is empty: a non-empty read means process-compose
+            // reported *something* about our checks — passed, failed,
+            // skipped — and that per-check state already explains itself.
+            // This matters beyond the obvious "a check genuinely failed"
+            // case: process-compose reports a `Skipped` check (one whose
+            // `depends_on` failed) with `exit_code: 1`, which alone is enough
+            // to make `PhaseExecutor` call the whole namespace `.failed` —
+            // and that must not read as the run breaking when the row itself
+            // already says `.skipped`, not `.failed`. Only a poll that came
+            // back with nothing at all — the spawn never bound a socket, or
+            // process-compose refused the config outright — leaves nothing
+            // else to explain a non-succeeded outcome, and that is exactly
+            // when every check seals `.notRun`.
+            if entries.isEmpty, let outcome = state.outcome, let detail = Self.failureDetail(for: outcome) {
                 runs[workstreamID]?.failureDetail = detail
             }
             seal(runID: runID, from: entries, stopped: stopped)

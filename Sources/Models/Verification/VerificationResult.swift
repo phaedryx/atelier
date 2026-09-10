@@ -83,11 +83,19 @@ extension Verification {
         let stamp: String
         var checks: [CheckResult]
         var wasStopped: Bool
-        /// Why the spawn itself failed, when it did — distinct from any one
-        /// check's own output. Set only on `PhaseExecutor.Outcome.failed` or
-        /// `.skipped`, the cases that leave every check `.notRun` with nothing
-        /// in its own `output` to explain that. Optional, and defaulted, so a
-        /// run persisted before this field existed still decodes.
+        /// Why the *run itself* failed to produce a per-check answer, when
+        /// that is what happened — distinct from any one check's own output,
+        /// and set only when no check has one of its own to show. A spawn that
+        /// never got far enough to report on anything leaves every check
+        /// `.notRun`, and this is the only place that reason is recorded
+        /// anywhere; process-compose refusing the config outright is the same
+        /// shape. It is deliberately **not** set merely because
+        /// `PhaseExecutor.Outcome` was non-`.succeeded` — a suite where one
+        /// check legitimately failed is already explained by that check's own
+        /// `.failed` state and `output`, and duplicating the same fact up here
+        /// would misdescribe an ordinary test failure as the run breaking.
+        /// Optional, and defaulted, so a run persisted before this field
+        /// existed still decodes.
         var failureDetail: String? = nil
 
         var isFinished: Bool {

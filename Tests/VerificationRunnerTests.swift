@@ -540,6 +540,66 @@ final class VerificationRunnerTests: XCTestCase {
         XCTAssertEqual(Verification.Store.latest(for: id)?.failureDetail, "binary exited 127", "must reach the persisted run, not only the in-memory one")
     }
 
+    /// The bug this test pins: `PhaseExecutor` reports a `.failed` outcome
+    /// whenever *any* process in the namespace exits non-zero, which is
+    /// exactly what happens when one check genuinely fails. That check's own
+    /// row already explains itself — `.failed(1)` plus its captured
+    /// `output` — so the run-level banner must not also fire and duplicate
+    /// (and outrank) the same fact with a different, less specific message.
+    func test_execute_doesNotRecordFailureDetailWhenACheckExplainsItself() async {
+        let id = UUID()
+        addTeardownBlock { Verification.Store.clear(for: id) }
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: [.list([
+                entry("rspec", status: "Completed", isRunning: false, exitCode: 1),
+                entry("rubocop", status: "Completed", isRunning: false, exitCode: 0),
+            ])],
+            latency: .zero
+        )
+        let spawner = StubSpawner(
+            client: client, finishAfter: .milliseconds(10),
+            outcome: .failed("rspec exited with code 1.")
+        )
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec", "rubocop"])
+
+        await drive(runner, request(workstreamID: id, checks: ["rspec", "rubocop"]), runID: "abcd1234")
+
+        let sealed = runner.run(id: "abcd1234")
+        XCTAssertEqual(sealed?.checks.map(\.state), [.failed(1), .passed])
+        XCTAssertNil(sealed?.failureDetail, "the failed row already explains itself")
+    }
+
+    /// process-compose reports a dependency-`Skipped` check with
+    /// `exit_code: 1` — a failure it never had — which is enough on its own
+    /// to make `PhaseExecutor` call the outcome `.failed`, even though every
+    /// row here is `.passed` or `.skipped` and nothing actually broke.
+    func test_execute_doesNotRecordFailureDetailForASkippedDependency() async {
+        let id = UUID()
+        addTeardownBlock { Verification.Store.clear(for: id) }
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: [.list([
+                entry("rspec", status: "Completed", isRunning: false, exitCode: 0),
+                entry("vitest", status: "Skipped", isRunning: false, exitCode: 1),
+            ])],
+            latency: .zero
+        )
+        let spawner = StubSpawner(
+            client: client, finishAfter: .milliseconds(10),
+            outcome: .failed("vitest exited with code 1.")
+        )
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec", "vitest"])
+
+        await drive(runner, request(workstreamID: id, checks: ["rspec", "vitest"]), runID: "abcd1234")
+
+        let sealed = runner.run(id: "abcd1234")
+        XCTAssertEqual(sealed?.checks.map(\.state), [.passed, .skipped])
+        XCTAssertNil(sealed?.failureDetail, "a skipped dependency is not the run breaking")
+    }
+
     /// A run that actually completes must not carry a stale `failureDetail`
     /// from some earlier attempt — there is nothing to explain.
     func test_execute_leavesFailureDetailNilOnSuccess() async {

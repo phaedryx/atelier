@@ -215,9 +215,17 @@ func processChecklistHeight(
 /// for choosing what to start was unreachable until after starting — the one
 /// moment it is no use.
 ///
-/// Rendered **before a run only**, which is `showsProcessSelection`'s call and
-/// documented there; a stale version of this comment claimed both states, and
-/// leaving it editable mid-run was the other half of the same defect.
+/// Rendered **before a run only** for Execution — `showsProcessSelection`'s
+/// call, documented there; a stale version of this comment claimed both
+/// states, and leaving it editable mid-run was the other half of the same
+/// defect. `VerificationTabView` is the second caller of this same view and
+/// does not follow that rule: a verify run is headless and one-shot rather
+/// than a live process table this checklist would otherwise collide with, so
+/// it stays on screen during a run too, wrapped in `.disabled(isLive)` —
+/// visible so the next selection is not lost from view, inert because
+/// editing it before the current run ends would silently affect nothing
+/// until the next Run press, the same reasoning `showsProcessSelection`
+/// gives for hiding Execution's checklist mid-run instead.
 ///
 /// The choices come from the config rather than from the live API for the same
 /// reason it moved out of the table: before Start there is nothing running to
