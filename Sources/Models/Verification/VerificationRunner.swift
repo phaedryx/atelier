@@ -462,6 +462,15 @@ extension Verification {
             let entries = await verifyProcesses(client: client) ?? []
             apply(entries, runID: runID, state: state)
             await captureFailedOutput(from: entries, runID: runID, client: client)
+            // Set on the stored run *before* `seal`, so `seal`'s own copy —
+            // `var run = runs[workstreamID]` — carries it into both the
+            // published run and `Verification.Store.save`. A spawn that never
+            // bound a socket leaves `entries` empty, so every check seals
+            // `.notRun` with nothing in its own `output`; this is the only
+            // place that reason is recorded anywhere.
+            if let outcome = state.outcome, let detail = Self.failureDetail(for: outcome) {
+                runs[workstreamID]?.failureDetail = detail
+            }
             seal(runID: runID, from: entries, stopped: stopped)
             // Cleared here, next to where it is read, rather than inside `seal`:
             // a `seal` that returns nil would otherwise leave the flag set and
@@ -476,6 +485,22 @@ extension Verification {
             await spawned.value
             if let outcome = state.outcome, outcome != .succeeded {
                 logger.info("verify run \(runID, privacy: .public): \(String(describing: outcome), privacy: .public)")
+            }
+        }
+
+        /// What `Run.failureDetail` should say for a non-`.succeeded` outcome,
+        /// or nil for `.succeeded`. `.failed` already carries the output that
+        /// explains itself; `.skipped` — the namespace turned out to declare no
+        /// processes after all — gets a sentence of its own, since there is no
+        /// output to quote.
+        private static func failureDetail(for outcome: ProcessCompose.PhaseExecutor.Outcome) -> String? {
+            switch outcome {
+            case .succeeded:
+                nil
+            case let .failed(detail):
+                detail
+            case .skipped:
+                NSLocalizedString("This project's verify namespace declared no processes to run.", comment: "")
             }
         }
 

@@ -83,6 +83,12 @@ extension Verification {
         let stamp: String
         var checks: [CheckResult]
         var wasStopped: Bool
+        /// Why the spawn itself failed, when it did — distinct from any one
+        /// check's own output. Set only on `PhaseExecutor.Outcome.failed` or
+        /// `.skipped`, the cases that leave every check `.notRun` with nothing
+        /// in its own `output` to explain that. Optional, and defaulted, so a
+        /// run persisted before this field existed still decodes.
+        var failureDetail: String? = nil
 
         var isFinished: Bool {
             !checks.contains { $0.state == .running || $0.state == .pending }

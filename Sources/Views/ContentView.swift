@@ -25,6 +25,15 @@ extension Notification.Name {
     /// `.switchToProject`, which carries no payload and can only mean "the
     /// project the selected workstream belongs to".
     static let focusProject = Notification.Name("atelier.focusProject")
+    /// object: the worktree path (`String`), from `Worktree.HeadWatcher`'s own
+    /// callback in `startHeadWatcher`. A hint, not a diff, exactly as the
+    /// watcher's own doc says: any git activity in that worktree, not only a
+    /// branch change. `VerificationTabView` is the first consumer — it uses
+    /// this to know when a worktree's uncommitted content may have moved, so
+    /// it can recompute staleness without polling `git hash-object` on a
+    /// timer. The subscription lives only as long as the view does, which is
+    /// what confines it to "while the tab is visible" with no extra state.
+    static let worktreeGitActivity = Notification.Name("atelier.worktreeGitActivity")
 }
 
 final class ProjectList: ObservableObject {
@@ -743,6 +752,12 @@ struct ContentView: View {
                 // sidebar name would then stay stale until the next tick. This
                 // is an in-memory walk that saves only on a real change.
                 syncWorkstreamNamesFromBranches()
+                // Broadcast last, and unconditionally — a listener does not
+                // know or care whether the branch name moved, only that git
+                // activity happened in this worktree. See the notification's
+                // own doc for why `VerificationTabView` is the reason this
+                // exists.
+                NotificationCenter.default.post(name: .worktreeGitActivity, object: worktreePath)
             }
         }
         headWatcher = watcher

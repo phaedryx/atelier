@@ -519,6 +519,46 @@ final class VerificationRunnerTests: XCTestCase {
         XCTAssertEqual(shutDowns, 1, "Stop must not add a second teardown of its own")
     }
 
+    /// A spawn that never binds a socket (bad binary path, config the daemon
+    /// itself refuses) leaves every check `.notRun` — nothing in any one
+    /// check's `output` explains that. `failureDetail` is the only place the
+    /// reason is recorded, and it has to reach the *persisted* run, not just
+    /// the in-memory one, since `seal` is what calls `Verification.Store.save`.
+    func test_execute_recordsFailureDetailWhenTheSpawnFails() async {
+        let id = UUID()
+        addTeardownBlock { Verification.Store.clear(for: id) }
+        let client = StubComposeClient(socketPath: "/nonexistent", replies: [], latency: .zero)
+        let spawner = StubSpawner(client: client, finishAfter: .milliseconds(10), outcome: .failed("binary exited 127"))
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
+
+        await drive(runner, request(workstreamID: id, checks: ["rspec"]), runID: "abcd1234")
+
+        let sealed = runner.run(id: "abcd1234")
+        XCTAssertEqual(sealed?.failureDetail, "binary exited 127")
+        XCTAssertEqual(sealed?.checks.map(\.state), [.notRun], "no entries ever arrived to report anything else")
+        XCTAssertEqual(Verification.Store.latest(for: id)?.failureDetail, "binary exited 127", "must reach the persisted run, not only the in-memory one")
+    }
+
+    /// A run that actually completes must not carry a stale `failureDetail`
+    /// from some earlier attempt — there is nothing to explain.
+    func test_execute_leavesFailureDetailNilOnSuccess() async {
+        let id = UUID()
+        addTeardownBlock { Verification.Store.clear(for: id) }
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: [.list([entry("rspec", status: "Completed", isRunning: false, exitCode: 0)])],
+            latency: .zero
+        )
+        let spawner = StubSpawner(client: client, finishAfter: .milliseconds(10))
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
+
+        await drive(runner, request(workstreamID: id, checks: ["rspec"]), runID: "abcd1234")
+
+        XCTAssertNil(runner.run(id: "abcd1234")?.failureDetail)
+    }
+
     /// Liveness is the runner's own bookkeeping, not `Run.isFinished`.
     ///
     /// Every row here reports a terminal state on the first poll, so the run
@@ -586,16 +626,21 @@ private actor StubSpawner: Verification.Runner.Spawning {
     /// when the loop seals, and the teardown is what ends it.
     private let finishAfter: Duration?
     private let atShutDown: (@MainActor @Sendable () -> Void)?
+    /// What `run` reports once it finishes. Defaults to `.succeeded`;
+    /// `.failed` is what a real spawn failure looks like to the run loop.
+    private let outcome: ProcessCompose.PhaseExecutor.Outcome
     private(set) var shutDowns = 0
     private var parked: CheckedContinuation<Void, Never>?
 
     init(
         client: StubComposeClient,
         finishAfter: Duration?,
+        outcome: ProcessCompose.PhaseExecutor.Outcome = .succeeded,
         atShutDown: (@MainActor @Sendable () -> Void)? = nil
     ) {
         self.client = client
         self.finishAfter = finishAfter
+        self.outcome = outcome
         self.atShutDown = atShutDown
     }
 
@@ -605,7 +650,7 @@ private actor StubSpawner: Verification.Runner.Spawning {
         } else {
             await withCheckedContinuation { parked = $0 }
         }
-        return .succeeded
+        return outcome
     }
 
     nonisolated func controlClient(for _: Verification.Runner.SpawnRequest) -> ProcessCompose.Controlling {
