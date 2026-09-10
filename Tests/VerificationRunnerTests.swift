@@ -48,6 +48,7 @@ final class VerificationRunnerTests: XCTestCase {
         let runner = Verification.Runner()
         let id = UUID()
         runner.seedInFlightForTesting(workstreamID: id, runID: "abcd1234")
+        let before = runner.runs
         XCTAssertThrowsError(
             try runner.start(
                 workstreamID: id, worktreePath: "/tmp", projectDirectory: "/tmp", checks: []
@@ -55,6 +56,23 @@ final class VerificationRunnerTests: XCTestCase {
         ) { error in
             XCTAssertEqual(error as? Verification.Runner.Failure, .alreadyRunning("abcd1234"))
         }
+        // A refusal must not mutate state — no id issued, no run touched.
+        // Task 8 adds mutations later in the same function, so this is what
+        // keeps a refusal from leaking partial state ahead of them.
+        XCTAssertEqual(runner.runs, before)
+    }
+
+    /// Reachable without a binary or config: the process-compose integration
+    /// defaults off, so a plain start reaches `PhasePolicy.plan`'s
+    /// `.nothingToDo` and must throw before touching `runs`.
+    func test_start_leavesRunsUntouchedWhenNothingCanRun() {
+        let runner = Verification.Runner()
+        XCTAssertThrowsError(
+            try runner.start(
+                workstreamID: UUID(), worktreePath: "/tmp", projectDirectory: "/tmp", checks: []
+            )
+        )
+        XCTAssertTrue(runner.runs.isEmpty)
     }
 
     func test_runID_isEightLowercaseHexCharacters() {

@@ -576,6 +576,7 @@
 "Verification run %@ is already running in this workstream." = "Verification run %@ is already running in this workstream.";
 "This project declares no verify processes." = "This project declares no verify processes.";
 "No such check: %@. This project declares: %@." = "No such check: %@. This project declares: %@.";
+"This project's process-compose files could not be parsed, so its verify checks are unknown." = "This project's process-compose files could not be parsed, so its verify checks are unknown.";
 
 /* ports.yaml validation */
 "fixed: %d is not a port between 1 and 65535" = "fixed: %d is not a port between 1 and 65535";

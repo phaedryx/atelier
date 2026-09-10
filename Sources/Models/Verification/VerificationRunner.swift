@@ -56,8 +56,9 @@ extension Verification {
         ///
         /// Length is about collisions and mistaken ids, not secrecy — every
         /// process here runs as the user, and even the IPC token is documented
-        /// as not being a boundary against the agent. Reads are scoped to the
-        /// caller's own workstream; that is the actual control.
+        /// as not being a boundary against the agent. `run(id:)` below scans
+        /// every workstream's runs unscoped; it is the IPC handler that is
+        /// meant to confine a caller to its own workstream, not this type.
         func makeRunID() -> String {
             while true {
                 let candidate = String(
@@ -141,9 +142,19 @@ extension Verification {
                 throw Failure.unavailable(reason)
             }
 
-            let declared = config.declaredProcesses(
+            // `declaredProcesses` returns nil when a file could not be parsed —
+            // never fold that into an empty list. Doing so would report a
+            // malformed process-compose.yaml as "this project declares no verify
+            // processes", the same message a project with genuinely no verify
+            // checks gets, which is false and the only diagnostic this path gives.
+            guard let declared = config.declaredProcesses(
                 in: ProcessCompose.Phase.verify.namespace
-            ) ?? []
+            ) else {
+                throw Failure.unavailable(NSLocalizedString(
+                    "This project's process-compose files could not be parsed, so its verify checks are unknown.",
+                    comment: ""
+                ))
+            }
             let resolved = try Self.resolveChecks(requested: checks, declared: declared).get()
 
             let runID = makeRunID()
