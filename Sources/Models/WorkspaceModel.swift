@@ -20,6 +20,9 @@ final class WorkspaceModel: ObservableObject {
     @Published var terminalTitles: [UUID: String]
     @Published var editorFilePaths: [UUID: String]
     @Published var editorDirtyState: [UUID: Bool] = [:]
+    /// Requested scroll position per editor tab, pending its first load. See
+    /// `addEditor(filePath:line:)`.
+    private var editorInitialLines: [UUID: Int] = [:]
 
     /// Whether this workstream's workspace has been on screen yet. A fresh
     /// model means a workstream nobody has visited this session, which is what
@@ -153,14 +156,32 @@ final class WorkspaceModel: ObservableObject {
         return id
     }
 
-    func addEditor(filePath: String?) -> UUID {
+    /// Opens an editor tab, optionally scrolled to `line` on first load.
+    ///
+    /// `line` is consumed once, by the first load of that tab — see
+    /// `takeInitialLine`. A line that persisted would re-scroll the user back
+    /// every time the file reloaded, which is the opposite of helpful once they
+    /// have started reading somewhere else.
+    func addEditor(filePath: String?, line: Int? = nil) -> UUID {
         editorCount += 1
         let id = derivedUUID(from: workstreamID, salt: "editor-\(editorCount)")
         if let filePath {
             editorFilePaths[id] = filePath
         }
+        if let line {
+            editorInitialLines[id] = line
+        }
         appendAndActivate(.editor(id))
         return id
+    }
+
+    /// The line an editor tab was asked to open at, removed as it is read.
+    ///
+    /// Deliberately not `@Published`: it is consumed inside a load that the view
+    /// is already performing, and publishing it would invalidate the view in the
+    /// middle of that load for a value nothing renders.
+    func takeInitialLine(for id: UUID) -> Int? {
+        editorInitialLines.removeValue(forKey: id)
     }
 
     /// Shows one of the singleton tabs (Changes, Environment), reopening it at

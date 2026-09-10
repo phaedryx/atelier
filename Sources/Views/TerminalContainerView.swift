@@ -519,24 +519,20 @@ struct TerminalContainerView: View {
         guard let basePath = appEnv.toolStatus.claude.path else { return nil }
         let sessionID = workstreamID.uuidString.lowercased()
 
-        var systemPromptParts: [String] = []
-        if !allowOutsideWorktree {
-            systemPromptParts.append(SystemPrompts.restrictToWorktreePrompt(worktreePath: workingDirectory))
-        }
-        if autoRenameBranch {
-            systemPromptParts.append(SystemPrompts.autoRenameBranchPrompt)
-        }
         // A file path rather than inline JSON, even though --mcp-config accepts
         // both: LaunchLogger records finalCommand verbatim. --strict-mcp-config
         // stays off, since turning it on would silently drop the user's own
         // global MCP servers.
         let mcpConfigPath = agentIPC ? IPC.Config.write(for: workstreamID) : nil
-        if mcpConfigPath != nil {
-            // Tied to the config actually being written: an agent told it has
-            // peers but given no server would call tools that do not exist.
-            systemPromptParts.append(SystemPrompts.agentIPCPrompt(workstreamName: workstreamName))
-        }
-        let combinedSystemPrompt = systemPromptParts.isEmpty ? nil : systemPromptParts.joined(separator: "\n\n")
+        // Shared with `open_agent_tab`, which spawns a second agent into this
+        // same worktree and must not assemble its own, differently-gated copy.
+        let combinedSystemPrompt = Workstream.AgentCommand.systemPrompt(
+            allowOutsideWorktree: allowOutsideWorktree,
+            autoRenameBranch: autoRenameBranch,
+            worktreePath: workingDirectory,
+            workstreamName: workstreamName,
+            mcpConfigWritten: mcpConfigPath != nil
+        )
 
         var resume = CommandBuilder(basePath)
         resume.option("--resume", sessionID)
@@ -836,6 +832,7 @@ struct TerminalContainerView: View {
                     initialFilePath: model.editorFilePaths[id],
                     bridge: bridge,
                     modelId: id.uuidString,
+                    initialLine: { model.takeInitialLine(for: id) },
                     isDirtyState: Binding(
                         get: { model.editorDirtyState[id] ?? false },
                         set: { model.editorDirtyState[id] = $0 }

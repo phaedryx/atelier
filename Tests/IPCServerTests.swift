@@ -165,7 +165,7 @@ final class IPCServerTests: XCTestCase {
         let observer = try connect(to: endpoint)
         defer { close(observer) }
         let deadline = Date().addingTimeInterval(5)
-        var listed: [IPC.PeerInfo] = [IPC.PeerInfo(id: peer.id, name: peer.name, role: "", workstream: nil, lastSeenSecondsAgo: 0, pendingMessages: 0)]
+        var listed: [IPC.PeerInfo] = [IPC.PeerInfo(id: peer.id, name: peer.name, role: "", workstream: nil, surfaceID: nil, lastSeenSecondsAgo: 0, pendingMessages: 0)]
         while Date() < deadline, !listed.isEmpty {
             let response = try roundTrip(
                 IPC.Request(token: endpoint.token, tool: .listPeers, client: identity(project: "/repos/atelier")),
@@ -511,9 +511,29 @@ final class IPCServerTests: XCTestCase {
         XCTAssertEqual(initialize["protocolVersion"] as? String, "2025-06-18")
 
         let tools = try XCTUnwrap((replies[1]["result"] as? [String: Any])?["tools"] as? [[String: Any]])
+        let advertised = tools.compactMap { $0["name"] as? String }
         XCTAssertEqual(
-            tools.map { $0["name"] as? String },
-            ["register_peer", "list_peers", "send_message", "receive_messages", "broadcast", "get_peer_status"]
+            advertised,
+            [
+                "register_peer", "list_peers", "send_message", "receive_messages", "broadcast", "get_peer_status",
+                "list_tabs", "read_review_comments", "open_editor", "open_agent_tab", "request_attention",
+            ]
+        )
+        // Every advertised name must be a real `IPC.Tool`. `toolDefinitions` and
+        // the enum are two lists that have to agree, and a typo in a raw value
+        // would otherwise surface as a tool the app rejects at dispatch time
+        // rather than as a failure here.
+        for name in advertised {
+            XCTAssertNotNil(IPC.Tool(rawValue: name), "advertised tool \(name) is not an IPC.Tool")
+        }
+        // A `Tool` case with no definition is deliberate — it is how a case
+        // lands ahead of its handler — but it must be *deliberate*, so pin the
+        // ones currently unadvertised rather than letting the set drift.
+        let undefined = IPC.Tool.allCases.map(\.rawValue).filter { !advertised.contains($0) }
+        XCTAssertEqual(
+            undefined.sorted(),
+            ["create_workstream"],
+            "a tool was added to IPC.Tool without a definition, or advertised before its handler landed"
         )
 
         let call = try XCTUnwrap(replies[2]["result"] as? [String: Any])
@@ -522,6 +542,13 @@ final class IPCServerTests: XCTestCase {
         let text = try XCTUnwrap(content.first?["text"] as? String)
         XCTAssertTrue(text.contains("planner"), "expected the registered peer in: \(text)")
         XCTAssertTrue(text.contains("wry-amber-lexer"), "expected the peer's workstream in: \(text)")
+        // Two agents in one workstream report the same workstream name, so the
+        // surface id is the only thing that tells them apart — and the only way
+        // a caller turns a tab it just created into a peer it can address.
+        XCTAssertTrue(
+            text.contains("surface=\(context.surfaceID?.uuidString ?? "")"),
+            "expected the peer's surface id in: \(text)"
+        )
     }
 }
 

@@ -46,7 +46,33 @@ extension IPC {
                 return await broadcast(for: request)
             case .getPeerStatus:
                 return await getPeerStatus(for: request)
+            case .listTabs:
+                return await listTabs(for: request)
+            case .readReviewComments:
+                return await readReviewComments(for: request)
+            case .openAgentTab:
+                return await openAgentTab(for: request)
+            case .openEditor:
+                return await openEditor(for: request)
+            case .requestAttention:
+                return await requestAttention(for: request)
+            case .createWorkstream:
+                return notImplemented(request)
             }
+        }
+
+        /// The answer for a `Tool` case that exists but has no handler yet.
+        ///
+        /// The workspace-action cases land in `IPC.Tool` ahead of their handlers
+        /// so that this switch — which must be exhaustive — is written once
+        /// rather than fought over by two branches implementing one tool each.
+        /// Until a handler arrives, the honest answer is a failure: these tools
+        /// create things, and an agent told "ok" by a no-op would report work it
+        /// never did. Nothing advertises them over MCP in the meantime — see
+        /// `toolDefinitions` in `Sources/MCPHelper/main.swift` — so reaching this
+        /// means a caller named the tool directly.
+        private func notImplemented(_ request: Request) -> Response {
+            .failure(id: request.id, "\(request.tool.rawValue) is not implemented yet.")
         }
 
         // MARK: - Tools
@@ -307,9 +333,222 @@ extension IPC {
                 name: peer.name,
                 role: peer.role,
                 workstream: contexts[peer.id]?.workstreamName,
+                surfaceID: contexts[peer.id]?.surfaceID?.uuidString,
                 lastSeenSecondsAgo: Int(now.timeIntervalSince(peer.lastSeen)),
                 pendingMessages: pending
             )
+        }
+
+        // MARK: - Workspace tools
+
+        /// The workstream the caller is running in, or the failure to report.
+        ///
+        /// Every workspace tool starts here. An agent Atelier did not launch has
+        /// no `ATELIER_WORKSTREAM_ID`, and there is no sensible default — acting
+        /// on "some workstream" would be worse than refusing.
+        private func callerWorkstreamID(_ request: Request) -> UUID? {
+            request.client.workstreamID.flatMap(UUID.init(uuidString:))
+        }
+
+        /// Surface id → the peer registered from it.
+        ///
+        /// Built from `contexts`, which is the only place the binding lives. This
+        /// is what lets `list_tabs` answer "which agent is in that tab" — and so
+        /// what lets a caller turn a tab it just created into a `send_message`
+        /// address once the agent there has connected.
+        private func peersBySurface() async -> [UUID: (id: String, name: String)] {
+            var result: [UUID: (id: String, name: String)] = [:]
+            for peer in await store.listPeers() {
+                guard let surfaceID = contexts[peer.id]?.surfaceID else { continue }
+                result[surfaceID] = (id: peer.id.uuidString, name: peer.name)
+            }
+            return result
+        }
+
+        private func listTabs(for request: Request) async -> Response {
+            guard let workstreamID = callerWorkstreamID(request) else {
+                return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
+            }
+            let callerSurfaceID = request.client.surfaceID.flatMap(UUID.init(uuidString:))
+            let peers = await peersBySurface()
+            do {
+                let tabs = try await MainActor.run {
+                    try WorkspaceActions.shared.tabs(
+                        workstreamID: workstreamID,
+                        callerSurfaceID: callerSurfaceID,
+                        peers: peers
+                    )
+                }
+                return .success(id: request.id, .tabs(tabs))
+            } catch {
+                return .failure(id: request.id, error.localizedDescription)
+            }
+        }
+
+        private func readReviewComments(for request: Request) async -> Response {
+            guard let workstreamID = callerWorkstreamID(request) else {
+                return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
+            }
+            do {
+                let comments = try await MainActor.run {
+                    try WorkspaceActions.shared.reviewComments(workstreamID: workstreamID)
+                }
+                return .success(id: request.id, .reviewComments(comments))
+            } catch {
+                return .failure(id: request.id, error.localizedDescription)
+            }
+        }
+
+        private func openEditor(for request: Request) async -> Response {
+            guard let workstreamID = callerWorkstreamID(request) else {
+                return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
+            }
+            guard let path = request.arguments["path"], !path.isEmpty else {
+                return .failure(id: request.id, WorkspaceActions.Failure.missingArgument("path").localizedDescription)
+            }
+            // `line` is optional, but a value that is present and unparseable is
+            // a mistake worth reporting rather than silently ignoring.
+            var line: Int?
+            if let raw = request.arguments["line"], !raw.isEmpty {
+                guard let parsed = Int(raw) else {
+                    return .failure(
+                        id: request.id,
+                        WorkspaceActions.Failure.invalidArgument(
+                            name: "line", reason: "expected a whole number, got \(raw)."
+                        ).localizedDescription
+                    )
+                }
+                line = parsed
+            }
+            do {
+                let opened = try await MainActor.run {
+                    try WorkspaceActions.shared.openEditor(workstreamID: workstreamID, path: path, line: line)
+                }
+                return .success(id: request.id, .text("Opened \(opened) in the editor."))
+            } catch {
+                return .failure(id: request.id, error.localizedDescription)
+            }
+        }
+
+        /// Opens a terminal tab in the caller's own workstream, optionally
+        /// starting an agent in it.
+        ///
+        /// Three steps in two isolation domains, and the middle one is why this
+        /// is not a single `MainActor.run`: building the environment asks git for
+        /// the default branch and reads `ports.yaml`, and the main actor has no
+        /// business waiting on either.
+        ///
+        /// The agent is started by *creating the surface already running it*,
+        /// never by typing into a shell. There is no paste, no synthetic Return,
+        /// and no question of whether the pane was interruptible — the tab does
+        /// not exist until it exists running the right thing.
+        private func openAgentTab(for request: Request) async -> Response {
+            guard let workstreamID = callerWorkstreamID(request) else {
+                return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
+            }
+            let title = Names.sanitized(request.arguments["title"] ?? "", limit: 40, fallback: "")
+            let prompt = request.arguments["prompt"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            do {
+                let plan = try await MainActor.run {
+                    try WorkspaceActions.shared.agentTabPlan(workstreamID: workstreamID)
+                }
+
+                // An agent was asked for but there is no `claude` to start. Refuse
+                // rather than opening a bare shell the caller would believe was an
+                // agent — a tab that silently is not what was asked for is worse
+                // than no tab.
+                if prompt != nil, plan.claudePath == nil {
+                    return .failure(
+                        id: request.id,
+                        "Cannot start an agent: Atelier could not find the `claude` binary. Omit `prompt` to open a plain terminal tab instead."
+                    )
+                }
+
+                let startsAgent = prompt?.isEmpty == false
+                let surfaceID = try await MainActor.run {
+                    try WorkspaceActions.shared.spawnTerminalTab(
+                        workstreamID: workstreamID,
+                        title: title.isEmpty ? nil : title,
+                        command: { surfaceID in
+                            agentCommand(plan: plan, prompt: prompt, surfaceID: surfaceID)
+                        },
+                        environment: { surfaceID in
+                            WorkspaceActions.environment(for: plan, surfaceID: surfaceID)
+                        }
+                    )
+                }
+
+                let answer = startsAgent
+                    ? "Started an agent in a new tab, surface \(surfaceID.uuidString). "
+                    + "It is not addressable yet: poll list_tabs until that surface reports a peer id, then send_message to it."
+                    : "Opened a terminal tab, surface \(surfaceID.uuidString)."
+                return .success(id: request.id, .text(answer))
+            } catch {
+                return .failure(id: request.id, error.localizedDescription)
+            }
+        }
+
+        /// The command a spawned tab runs, or nil for a plain shell.
+        ///
+        /// **The session id is the surface's, never the workstream's.** The
+        /// workstream id is the Coding Agent tab's own Claude session; a second
+        /// agent handed it would fight that tab over one transcript. The surface
+        /// id is unique per tab by construction, so it is the right session
+        /// identity — which is also why this is built per surface rather than once.
+        ///
+        /// The MCP config is the workstream's, shared deliberately: it names the
+        /// helper binary and carries no identity, and the agent's identity comes
+        /// from `ATELIER_SURFACE_ID` in its environment.
+        private nonisolated func agentCommand(
+            plan: WorkspaceActions.AgentTabPlan,
+            prompt: String?,
+            surfaceID: UUID
+        ) -> String? {
+            guard let prompt, !prompt.isEmpty, let claudePath = plan.claudePath else { return nil }
+            let mcpConfigPath = IPC.AgentSettings.isEnabled ? IPC.Config.write(for: plan.workstreamID) : nil
+            let systemPrompt = Workstream.AgentCommand.systemPrompt(
+                allowOutsideWorktree: UserDefaults.standard.bool(forKey: "atelier.allowOutsideWorktree"),
+                autoRenameBranch: UserDefaults.standard.bool(forKey: "atelier.autoRenameBranch"),
+                worktreePath: plan.workingDirectory,
+                workstreamName: plan.workstreamName,
+                mcpConfigWritten: mcpConfigPath != nil
+            )
+            return Workstream.AgentCommand.fresh(
+                claudePath: claudePath,
+                // The surface's id, never the workstream's: see this method's
+                // doc comment.
+                sessionID: surfaceID.uuidString.lowercased(),
+                sessionName: nil,
+                bypassPermissions: plan.bypassPermissions,
+                systemPrompt: systemPrompt,
+                mcpConfigPath: mcpConfigPath,
+                initialPrompt: prompt
+            )
+        }
+
+        private func requestAttention(for request: Request) async -> Response {
+            guard let workstreamID = callerWorkstreamID(request) else {
+                return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
+            }
+            let reason = Names.sanitized(request.arguments["reason"] ?? "", limit: 400, fallback: "")
+            guard !reason.isEmpty else {
+                return .failure(id: request.id, WorkspaceActions.Failure.missingArgument("reason").localizedDescription)
+            }
+            let name = request.client.workstreamName ?? "Atelier"
+            let outcome = await MainActor.run {
+                Workstream.AttentionNotifier.shared.notify(
+                    workstreamID: workstreamID,
+                    workstreamName: name,
+                    reason: reason
+                )
+            }
+            switch outcome {
+            case .success:
+                return .success(id: request.id, .text("Notified the user. They may not respond immediately — carry on with anything you can do without them."))
+            case let .failure(refusal):
+                return .failure(id: request.id, refusal.localizedDescription)
+            }
         }
 
         // MARK: - Test Support

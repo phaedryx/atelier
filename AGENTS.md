@@ -502,7 +502,11 @@ properties and the same comment.
 
 The Coding Agent receives additional system prompts via `--append-system-prompt` based on
 user settings. Prompts are defined in `Sources/Models/SystemPrompts.swift` and assembled in
-`TerminalContainerView.buildClaudeCommand()`.
+`Workstream.AgentCommand.systemPrompt` (`Sources/Models/AgentCommand.swift`), which
+`TerminalContainerView.buildClaudeCommand()` calls for the Coding Agent tab and the
+`open_agent_tab` tool calls for a tab it is about to spawn. It lives there rather than in the
+view because there are now two callers and the *gating* is what they must agree on — a second
+copy would drift on exactly the condition below.
 
 **Important**: Claude Code only accepts a single `--append-system-prompt` flag per invocation.
 Multiple flags do not stack; the last one wins. When multiple prompts are active, they must be
@@ -521,6 +525,57 @@ Active prompts (combined when multiple are enabled):
 
 There are three, and the list above is the whole of it. Two of them were once the
 whole of it, which is why `SystemPrompts.swift` is worth reading before assuming.
+
+### Agent workspace tools (IPC)
+
+`IPC.Tool` is three groups, not one, and `Tool.surface` makes the grouping a value the compiler
+checks rather than a comment:
+
+| Group | Tools | Trust story |
+|---|---|---|
+| Messaging | `register_peer`, `list_peers`, `send_message`, `receive_messages`, `broadcast`, `get_peer_status` | none needed — text between agents, nothing a user can see |
+| Workspace reads | `list_tabs`, `read_review_comments` | none needed — answers about the caller's own workstream |
+| Workspace actions | `open_agent_tab`, `open_editor`, `request_attention` | see below |
+
+The messaging six were once the whole enum. Calix's IPC core is the same six, and everything it
+grew on top — pane/tab control, LSP, shell integration — arrived as separate tool surfaces with
+separate gates. This is where Atelier takes that step.
+
+**No approval gate, and that is a decision rather than an omission.** Calix gates its
+`pane_run` because it can target any pane in any window, including one the caller does not own.
+Every tool here acts on the caller's *own* workstream and no other, which is the same
+attended-ness argument that leaves `execute` ungated. `atelier.agentIPC` already defaults off
+and already gates whether an agent knows these tools exist. Do not add an approval inbox here
+without a reason that survives that comparison; `PermissionApprovalStore` in particular is the
+wrong type to reuse — its expiry resolves to "no decision, let Claude Code ask in the terminal",
+a fallback an MCP tool call does not have.
+
+**A `Tool` case is not a tool an agent can see.** `toolDefinitions` in
+`Sources/MCPHelper/main.swift` is what is advertised; a case with no entry there is dispatchable
+but undiscoverable, and `IPC.Service.notImplemented` fails loudly for it. That is what lets the
+shared enum and the exhaustive dispatch switch land ahead of the handlers.
+`IPCServerTests.test_helperBinary_answersToolsCallOverStdio` pins both directions — every
+advertised name is a real `Tool`, and the unadvertised set is exactly the expected one — so a
+tool cannot be advertised before its handler exists or stay hidden after.
+
+**`open_agent_tab` spawns the surface already running the agent** —
+`TerminalSurfaceCache.surface(for:…command:)`, not a paste into a shell. There is no synthetic
+Return, no timing heuristic, and no question of whether the pane was interruptible. Two
+consequences worth keeping:
+
+- **The session id is the *surface's*, never the workstream's.** The workstream id is the Coding
+  Agent tab's own Claude session; a second agent handed it fights that tab over one transcript.
+- **Surfaces are created eagerly, outside any render pass** (the same construction
+  `TerminalSurfaceCache.retrySurface` already does), so a tab can be spawned into a workstream
+  the user is not looking at. What is view-bound is *rendering*, not surface creation.
+
+Two agents in one worktree is a supported shape, not a mistake — `/ping-pong`-style pairing
+wants it. They are distinguishable because every Atelier-launched terminal exports its own
+`ATELIER_SURFACE_ID`, which `IPC.Service.PeerContext` carries and `PeerInfo.surfaceID` reports.
+That field is load-bearing: two agents in one workstream report the same workstream name, so it
+is the only way a caller turns a tab it just created into a peer it can address. What one
+worktree cannot hold is two *branches*, which is why work needing its own branch needs its own
+workstream.
 
 ## Localization
 

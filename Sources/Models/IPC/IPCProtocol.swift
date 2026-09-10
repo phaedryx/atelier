@@ -38,18 +38,80 @@ extension IPC {
         }
     }
 
-    /// The tools the helper exposes over MCP and forwards to the app.
+    /// The tools the helper can forward to the app.
     ///
-    /// Six, deliberately. Calix's IPC core is the same six; everything else it
-    /// grew — pane/tab control, LSP, shell integration — is a different feature
-    /// with a different trust story.
+    /// **Three surfaces, and the split is the point** — see `Tool.surface`.
+    /// *Messaging* moves text between agents and changes nothing a user can see.
+    /// *Workspace reads* answer questions about the workstream the caller is
+    /// already in. *Workspace actions* create or change something in front of
+    /// the user. Sort a new case into the right group, and give a workspace
+    /// action its own trust story rather than inheriting messaging's, which is
+    /// "none needed".
+    ///
+    /// The messaging six were once the whole enum, with a comment saying so:
+    /// Calix's IPC core is the same six, and everything it grew on top —
+    /// pane/tab control, LSP, shell integration — arrived as separate tool
+    /// surfaces with separate gates (`MCPCockpitBridge`, `MCPLSPBridge`,
+    /// `MCPCommandLogBridge`). That prediction held; this enum is where Atelier
+    /// takes the same step, so the groups are named rather than merged.
+    ///
+    /// **A case here is not a tool an agent can see.** What is advertised over
+    /// MCP is `toolDefinitions` in `Sources/MCPHelper/main.swift`; a case with no
+    /// entry there is dispatchable but undiscoverable. That is deliberate — it
+    /// lets the shared enum and the exhaustive `IPC.Service.handle` switch land
+    /// ahead of the handlers, so agents implementing a tool each do not collide
+    /// on this file. An unimplemented case must fail loudly (see
+    /// `Service.notImplemented`), never succeed silently.
     enum Tool: String, Codable, CaseIterable {
+        // Messaging.
         case registerPeer = "register_peer"
         case listPeers = "list_peers"
         case sendMessage = "send_message"
         case receiveMessages = "receive_messages"
         case broadcast
         case getPeerStatus = "get_peer_status"
+
+        /// Workspace reads.
+        /// The tabs of the caller's own workstream, and which agent sits in each.
+        case listTabs = "list_tabs"
+        /// The review comments the user has left on the Changes diff.
+        case readReviewComments = "read_review_comments"
+
+        /// Workspace actions.
+        /// Opens a terminal tab in the caller's own workstream, optionally
+        /// starting an agent in it.
+        case openAgentTab = "open_agent_tab"
+        /// Opens a file in the workstream's editor, optionally at a line.
+        case openEditor = "open_editor"
+        /// Raises a notification asking the user to come and look.
+        case requestAttention = "request_attention"
+        /// Creates a new workstream — worktree, branch, `bootstrap` — and
+        /// optionally starts an agent there.
+        case createWorkstream = "create_workstream"
+
+        /// Which of the three surfaces above this tool belongs to.
+        ///
+        /// Nothing branches on it yet. It exists so the grouping is a value the
+        /// compiler checks rather than a comment that rots, and so that if a
+        /// gate is ever added it has one obvious place to ask "does this need
+        /// one?" — reads never do, and messaging never has.
+        var surface: Surface {
+            switch self {
+            case .registerPeer, .listPeers, .sendMessage, .receiveMessages, .broadcast, .getPeerStatus:
+                .messaging
+            case .listTabs, .readReviewComments:
+                .workspaceRead
+            case .openAgentTab, .openEditor, .requestAttention, .createWorkstream:
+                .workspaceAction
+            }
+        }
+    }
+
+    /// The three groups of `Tool` — see that type's doc comment.
+    enum Surface: String, Codable, CaseIterable {
+        case messaging
+        case workspaceRead
+        case workspaceAction
     }
 
     /// One request from a helper to the app.
@@ -117,6 +179,16 @@ extension IPC {
         let name: String
         let role: String
         let workstream: String?
+        /// The terminal surface this peer's agent is running in, when Atelier
+        /// launched it.
+        ///
+        /// Load-bearing, and the reason it is here: two agents in one workstream
+        /// report the same `workstream`, so nothing else distinguishes them. A
+        /// caller that has just created a tab holds its surface id and needs to
+        /// turn that into an addressable peer; without this field it can only
+        /// guess from names it does not choose. Nil for anything Atelier did not
+        /// launch.
+        let surfaceID: String?
         /// Seconds since this peer was last heard from.
         let lastSeenSecondsAgo: Int
         let pendingMessages: Int
@@ -132,11 +204,58 @@ extension IPC {
         let sentSecondsAgo: Int
     }
 
+    /// One tab of a workstream's workspace, as reported to an agent.
+    ///
+    /// `surfaceID` is the address the rest of this surface speaks in: it is what
+    /// `open_agent_tab` returns, what `ATELIER_SURFACE_ID` carries into a
+    /// terminal, and what `PeerInfo.surfaceID` reports back — so a caller that
+    /// spawns an agent can find the peer that appears in the tab it made. Only
+    /// terminal tabs have one; a browser or editor tab has no shell and no
+    /// agent, and reports nil rather than an id that addresses nothing.
+    struct TabInfo: Codable {
+        /// "agent", "terminal", "browser", "editor", "changes", "environment", "info".
+        let kind: String
+        let surfaceID: String?
+        /// The tab's label, when it has one distinct from its kind.
+        let title: String?
+        /// Whether this is the workspace's active tab.
+        let isActive: Bool
+        /// Whether this is the tab the caller itself is running in.
+        let isCaller: Bool
+        /// The peer registered in this tab, when an agent has connected from it.
+        /// Nil until one has — a tab whose agent is still starting reports the
+        /// tab but no peer, which is the state a spawner polls through.
+        let peerID: String?
+        let peerName: String?
+    }
+
+    /// One of the user's review comments on the Changes diff.
+    struct ReviewCommentInfo: Codable {
+        /// Repo-relative, as `Git.DiffFile.relativePath` spells it.
+        let filePath: String
+        /// The diff scope it was written in: "branch" or "uncommitted".
+        let mode: String
+        /// Which side of the diff it anchors to: "old" or "new".
+        let side: String
+        let line: Int
+        let endLine: Int?
+        /// The anchor line's own text, so a comment can be located even if the
+        /// line has since moved.
+        let lineText: String
+        let text: String
+        /// Whether the line it was anchored to has since disappeared. An
+        /// orphaned comment still says something; it just no longer says it
+        /// about a line that exists.
+        let isOrphaned: Bool
+    }
+
     /// The result of a successful call.
     enum Payload: Codable {
         case peers([PeerInfo])
         case peer(PeerInfo)
         case messages([MessageInfo])
+        case tabs([TabInfo])
+        case reviewComments([ReviewCommentInfo])
         case text(String)
     }
 

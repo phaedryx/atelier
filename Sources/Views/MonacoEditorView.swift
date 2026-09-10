@@ -196,7 +196,14 @@ final class MonacoEditorBridge {
 
     // MARK: - Model API
 
-    func openFile(modelId: String, text: String, languageId: String, filePath: String? = nil) {
+    /// Opens a file, optionally scrolled to `line`.
+    ///
+    /// `line` is passed into `openFile` rather than sent as a follow-up call:
+    /// the reveal has to happen against the model this call installs, and a
+    /// separate `revealLine` would race the swap and scroll whatever was open
+    /// before. Out-of-range values are clamped on the JavaScript side, where the
+    /// line count is known.
+    func openFile(modelId: String, text: String, languageId: String, filePath: String? = nil, line: Int? = nil) {
         enqueue {
             guard let webView = self.webView else { return }
             nonisolated(unsafe) let wv = webView
@@ -209,8 +216,13 @@ final class MonacoEditorBridge {
                 if let filePath {
                     args["filePath"] = filePath
                 }
+                // Always present, as NSNull when absent: `callAsyncJavaScript`
+                // declares one parameter per key, so a key omitted here is an
+                // undeclared identifier in the body and throws. JavaScript reads
+                // null as falsy, which is exactly "no line requested".
+                args["line"] = line ?? NSNull()
                 try? await wv.callAsyncJavaScript(
-                    "window.editorAPI.openFile(modelId, text, languageId, filePath)",
+                    "window.editorAPI.openFile(modelId, text, languageId, filePath, line)",
                     arguments: args,
                     contentWorld: .page
                 )

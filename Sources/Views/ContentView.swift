@@ -459,6 +459,11 @@ struct ContentView: View {
             // owns; it is a @StateObject here rather than a singleton.
             AgentNudge.shared.surfaceCache = surfaceCache
             PromptInjector.shared.surfaceCache = surfaceCache
+            // The IPC workspace tools reach the live app through the same weak
+            // references; `IPC.Service` is an actor with no view hierarchy.
+            WorkspaceActions.shared.surfaceCache = surfaceCache
+            WorkspaceActions.shared.projectList = projectList
+            WorkspaceActions.shared.appEnvironment = appEnvironment
             appEnvironment.refresh()
             appEnvironment.refreshAllRepoInfo(projects: projects)
             appEnvironment.refreshPathValidity(projects: projects)
