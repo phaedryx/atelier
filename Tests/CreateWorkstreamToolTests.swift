@@ -1,5 +1,5 @@
 // ABOUTME: Tests the create_workstream handler's refusals and the ordering that keeps them honest.
-// ABOUTME: Also pins that a tab spawned into a never-rendered workstream survives that workstream being opened.
+// ABOUTME: Also pins the tmux wrapping the seeded Coding Agent shares with the Coding Agent tab.
 
 @testable import Atelier
 import XCTest
@@ -211,55 +211,86 @@ final class CreateWorkstreamToolTests: XCTestCase {
             "the worktree must not exist when the caller is told the agent could not start"
         )
     }
+
+    /// `claude` is installed and there is still nowhere to run it: the agent now
+    /// goes on a terminal surface this handler creates itself, so the surface
+    /// handle is a precondition exactly like the binary is.
+    ///
+    /// `TerminalApp.shared.app` is nil under XCTest, which is what makes this
+    /// reachable — the real case is an agent calling the tool before
+    /// `ContentView` has run its `.onAppear`. Ordering matters as much as the
+    /// refusal: reporting "an agent started" with no surface running it would be
+    /// a lie the caller then waits on.
+    func test_aPromptWithNoTerminal_isRefusedBeforeAnythingIsCreated() async {
+        install([Project(name: "app", directory: "/repos/app")])
+        let environment = AppEnvironment()
+        environment.toolStatus.claude = .found("/usr/local/bin/claude")
+        WorkspaceActions.shared.appEnvironment = environment
+        defer { WorkspaceActions.shared.appEnvironment = nil }
+        let silence = SilenceCheck()
+
+        let response = await create(["prompt": "write the tests"], as: client(project: "/repos/app"))
+
+        XCTAssertNil(response.payload)
+        XCTAssertTrue(
+            response.error?.contains("terminal is not ready") ?? false,
+            "expected the no-surface refusal, got: \(response.error ?? "nil")"
+        )
+        XCTAssertTrue(
+            silence.posted.isEmpty,
+            "the worktree must not exist when the caller is told the agent could not start"
+        )
+    }
 }
 
-/// The ordering `open_agent_tab` never sees: a tab spawned into a workstream
-/// that has not been rendered yet, and then that workstream being opened.
+/// The tmux wrapping both agent-start paths share.
 ///
-/// `create_workstream` is the only caller that does this. The tab lives in a
-/// `WorkspaceModel` the *tool* created, and the view's first render asks for a
-/// model of its own — if that render reseeded or reconciled the model away, the
-/// agent would be running with no tab pointing at it.
-@MainActor
-final class SpawnedTabSurvivesFirstRenderTests: XCTestCase {
-    func test_aTabAddedBeforeTheFirstRender_survivesTheWorkstreamBeingOpened() {
-        let cache = TerminalSurfaceCache()
-        let workstreamID = UUID()
+/// `create_workstream` seeds the Coding Agent's surface itself, so it wraps its
+/// own command rather than waiting for `TerminalContainerView` to do it. Both go
+/// through `AgentCommand.tmuxWrapped` for one reason: the session name. A second
+/// copy deriving it differently would put the seeded agent in a session
+/// `Workstream.Archiver` does not kill, and leave a live tmux server behind
+/// every workstream an agent created.
+final class AgentCommandTmuxWrappingTests: XCTestCase {
+    private let command = "/bin/zsh -lic 'exec sh -c claude'"
 
-        // What the tool does: build the model and add the tab, with the
-        // workstream never having been on screen.
-        let toolModel = cache.workspaceModel(for: workstreamID, seed: startupWorkspaceTabState(savedTab: nil))
-        let surfaceID = toolModel.addTerminal()
-        XCTAssertTrue(toolModel.tabs.contains(.terminal(surfaceID)))
-
-        // What the view does on its first render of this workstream
-        // (`ContentView.detailView`): ask the cache for a model, seeded from
-        // saved state. The cache must hand back the one that already exists.
-        let viewModel = cache.workspaceModel(
-            for: workstreamID,
-            seed: startupWorkspaceTabState(savedTab: WorkspaceStateStore.load(for: workstreamID))
+    /// Nil covers both "tmux mode is off" and "tmux is not installed", and the
+    /// answer to each is the same — run the command as built.
+    func test_withoutTmux_theCommandIsUnchanged() {
+        XCTAssertEqual(
+            Workstream.AgentCommand.tmuxWrapped(
+                command,
+                tmuxPath: nil,
+                projectName: "app",
+                workstreamName: "bold-crimson-parser",
+                environmentVars: [:]
+            ),
+            command
         )
-        XCTAssertTrue(viewModel === toolModel, "the view must not reseed a model the tool already built")
-        XCTAssertTrue(viewModel.tabs.contains(.terminal(surfaceID)), "the spawned tab must survive the first render")
     }
 
-    /// The other half: `reconcile` drops terminal tabs whose surface is gone.
-    /// A tab whose surface the tool created eagerly is not gone, so it stays —
-    /// but a tab recorded without one would be swept, which is why the tool
-    /// creates the surface rather than only the tab.
-    func test_reconcileKeepsATabWhoseSurfaceWasCreatedEagerly() {
-        let cache = TerminalSurfaceCache()
-        let workstreamID = UUID()
-        let model = cache.workspaceModel(for: workstreamID, seed: startupWorkspaceTabState(savedTab: nil))
-        let withSurface = model.addTerminal()
-        let withoutSurface = model.addTerminal()
+    /// The name is the assertion. The wrapping's shape is `TmuxSession`'s
+    /// business; what this pins is that an agent seeded into a new workstream
+    /// lands in the session `TmuxSession.sessionName(role: "agent")` names — the
+    /// one the Coding Agent tab would have used and the one archiving kills.
+    func test_withTmux_theSessionIsTheWorkstreamsAgentSession() {
+        let wrapped = Workstream.AgentCommand.tmuxWrapped(
+            command,
+            tmuxPath: "/opt/homebrew/bin/tmux",
+            projectName: "app",
+            workstreamName: "bold-crimson-parser",
+            environmentVars: [:]
+        )
+        let expected = TmuxSession.sessionName(
+            project: "app",
+            workstream: "bold-crimson-parser",
+            role: "agent"
+        )
 
-        model.reconcile(liveSurfaceIDs: [withSurface])
-
-        XCTAssertTrue(model.tabs.contains(.terminal(withSurface)))
-        XCTAssertFalse(
-            model.tabs.contains(.terminal(withoutSurface)),
-            "a tab with no live surface is exactly what reconcile exists to drop"
+        XCTAssertNotEqual(wrapped, command, "tmux mode on must wrap the command")
+        XCTAssertTrue(
+            wrapped.contains(expected),
+            "expected the workstream's agent session \(expected) in: \(wrapped)"
         )
     }
 }

@@ -245,6 +245,68 @@ final class WorkstreamLauncherTests: XCTestCase {
         XCTAssertEqual(recorder.events[1].userInfo["workstreamID"] as? UUID, launched.workstreamID)
     }
 
+    /// The ordering `create_workstream` depends on, and the reason `beforeReady`
+    /// exists at all.
+    ///
+    /// `.workstreamWorktreeReady` is what makes a workstream renderable, and the
+    /// first render creates the Coding Agent's surface with the command the view
+    /// builds. An agent seeded into that surface has to be there first, or a user
+    /// clicking the sidebar row — which has been sitting there since
+    /// `.workstreamCreated`, seconds earlier — takes the surface and the prompt
+    /// is lost in silence. Recording the notifications the hook has seen *at the
+    /// moment it runs* is what pins the order; asserting afterwards would pass
+    /// either way.
+    @MainActor
+    func testBeforeReadyRunsWhileTheWorkstreamIsStillUnrenderable() async throws {
+        let launcher = makeLauncher([project(directory: "/repos/app")])
+        let recorder = Recorder()
+        let seen = Box<[Notification.Name]?>(nil)
+        let launchedAtHook = Box<Workstream.Launcher.Launched?>(nil)
+
+        let launched = try await launcher.launch(
+            in: target(launcher, projectDirectory: "/repos/app"),
+            requestedName: "feat-ipc",
+            createWorktree: { _, _, name in "/repos/app/\(name)" },
+            beforeReady: { launched in
+                seen.value = recorder.events.map(\.name)
+                launchedAtHook.value = launched
+            }
+        )
+
+        XCTAssertEqual(
+            seen.value,
+            [.workstreamCreated],
+            "beforeReady must run before .workstreamWorktreeReady, or the agent races the first render"
+        )
+        XCTAssertEqual(recorder.events.map(\.name), [.workstreamCreated, .workstreamWorktreeReady])
+        XCTAssertEqual(
+            launchedAtHook.value,
+            launched,
+            "the hook must be handed the same workstream the caller gets back"
+        )
+    }
+
+    /// A worktree that could not be created has nothing to seed an agent into,
+    /// and the caller is about to be thrown at — running the hook would give it a
+    /// path that does not exist.
+    @MainActor
+    func testBeforeReadyDoesNotRunWhenTheWorktreeFails() async {
+        let launcher = makeLauncher([project(directory: "/repos/app")])
+        let ran = Box(false)
+
+        do {
+            _ = try await launcher.launch(
+                in: target(launcher, projectDirectory: "/repos/app"),
+                requestedName: "feat-ipc",
+                createWorktree: { _, _, _ in nil },
+                beforeReady: { _ in ran.value = true }
+            )
+            XCTFail("expected the launch to throw")
+        } catch {
+            XCTAssertFalse(ran.value, "there is no worktree to start an agent in")
+        }
+    }
+
     /// `createWorktree` takes the work tree, not the repository's home. In the
     /// container layout those differ, and handing it `directory` would run
     /// `git worktree add` in a directory with no work tree.

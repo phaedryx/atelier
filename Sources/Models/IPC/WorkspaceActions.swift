@@ -54,6 +54,7 @@ final class WorkspaceActions {
         case notInAWorkstream
         case unknownWorkstream
         case appNotReady
+        case surfaceAlreadyRunning
         case missingArgument(String)
         case invalidArgument(name: String, reason: String)
 
@@ -65,6 +66,9 @@ final class WorkspaceActions {
                 "This workstream is no longer open in Atelier."
             case .appNotReady:
                 "Atelier's workspace is not ready yet. Try again in a moment."
+            case .surfaceAlreadyRunning:
+                "The workstream was created, but its Coding Agent had already been started by the user opening it, "
+                    + "so the prompt was not delivered. Send it to that agent instead, or use open_agent_tab."
             case let .missingArgument(name):
                 "Missing required argument `\(name)`."
             case let .invalidArgument(name, reason):
@@ -301,6 +305,49 @@ final class WorkspaceActions {
         )
         logger.detailed("open_agent_tab: spawned surface \(surfaceID) agent=\(resolved != nil)")
         return surfaceID
+    }
+
+    /// Starts the workstream's **Coding Agent** on a surface the view has not
+    /// created yet, running `command`.
+    ///
+    /// The counterpart to `spawnTerminalTab`, and deliberately much smaller:
+    /// there is no tab to add, because the Coding Agent's tab is permanent and
+    /// its surface id *is* the workstream id. All that is missing for a
+    /// workstream nobody has opened is the surface, and `seedSurface` is what
+    /// keeps the view from reconciling it away on the first render.
+    ///
+    /// Takes the workstream's identity and paths as values rather than resolving
+    /// them through `context(workstreamID:)`. That lookup reads the workstream
+    /// back out of `ProjectList`, and the caller here is holding a workstream
+    /// seconds old whose `worktreePath` is set by a *second* notification — the
+    /// same reason `create_workstream` builds its plan from what the launcher
+    /// returned.
+    func seedCodingAgent(
+        workstreamID: UUID,
+        workingDirectory: String,
+        command: String,
+        environment: [String: String]
+    ) throws {
+        guard let surfaceCache, let app = TerminalApp.shared.app else { throw Failure.appNotReady }
+        let seeded = surfaceCache.seedSurface(
+            for: workstreamID,
+            app: app,
+            workingDirectory: workingDirectory,
+            command: command,
+            environmentVars: environment
+        )
+        guard seeded else { throw Failure.surfaceAlreadyRunning }
+        logger.detailed("create_workstream: seeded the Coding Agent surface for \(workstreamID)")
+    }
+
+    /// Whether a surface can be created at all right now.
+    ///
+    /// Checked before anything is created, alongside the `claude` binary, so a
+    /// workstream is never reported as having an agent that no surface is
+    /// running. `seedCodingAgent` guards the same two references; this is the
+    /// pre-flight, not a substitute for it.
+    var canCreateSurfaces: Bool {
+        surfaceCache != nil && TerminalApp.shared.app != nil
     }
 
     /// Resolves a tool-supplied path against the worktree.

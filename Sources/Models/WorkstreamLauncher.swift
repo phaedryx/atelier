@@ -257,6 +257,25 @@ extension Workstream {
         ///
         /// `createWorktree` is injected so the notification sequence can be
         /// tested without a git repository. Production callers use the default.
+        ///
+        /// `beforeReady` runs once the worktree exists and **before**
+        /// `.workstreamWorktreeReady` is posted. That ordering is the whole
+        /// point of the hook: that notification is what makes the workstream
+        /// renderable, and the first render creates the Coding Agent's surface
+        /// with the command the *view* builds. Anything that needs to own that
+        /// surface — `create_workstream` seeding an agent into it — has to be in
+        /// place first, or it loses a race to a user clicking the sidebar row
+        /// that has been sitting there since `.workstreamCreated`. Errors are
+        /// deliberately not propagated: the worktree exists either way and still
+        /// needs its `bootstrap`, so the notification posts regardless and the
+        /// caller reports the failure itself.
+        ///
+        /// It is `@Sendable`, so it runs **off** the main actor and the hitch of
+        /// whatever it does — resolving a default branch, probing ports — is not
+        /// paid on screen. What closes the window is not holding the actor but
+        /// the notification itself: `.workstreamCreated` appends the workstream
+        /// with a nil `worktreePath`, and `workstreamHasUsablePath` refuses that,
+        /// so nothing can render this workstream however long the hook takes.
         func launch(
             in target: Target,
             requestedName: String?,
@@ -264,7 +283,8 @@ extension Workstream {
             select: Bool = false,
             createWorktree: @escaping @Sendable (_ checkout: String, _ projectName: String, _ workstreamName: String) -> String? = {
                 Git.Operations.createWorktree(projectPath: $0, projectName: $1, workstreamName: $2)
-            }
+            },
+            beforeReady: (@Sendable (Launched) async -> Void)? = nil
         ) async throws -> Launched {
             let name = try Self.resolveName(
                 requested: requestedName,
@@ -309,9 +329,13 @@ extension Workstream {
                 throw Failure.worktreeCreationFailed(name)
             }
 
+            let launched = Launched(workstreamID: workstream.id, name: name, worktreePath: worktreePath)
+            await beforeReady?(launched)
+
             // This is what runs `bootstrap`, via ContentView's handler and
             // `AsyncSetupService`. It is also what makes the workstream
-            // renderable, since `renderableWorkstreamID` requires a usable path.
+            // renderable, since `renderableWorkstreamID` requires a usable path
+            // — which is why `beforeReady` runs above it and not below.
             NotificationCenter.default.post(
                 name: .workstreamWorktreeReady,
                 object: nil,
@@ -319,7 +343,7 @@ extension Workstream {
             )
             logger.warning("[Atelier] Launcher: \(name, privacy: .public) ready at \(worktreePath, privacy: .public)")
 
-            return Launched(workstreamID: workstream.id, name: name, worktreePath: worktreePath)
+            return launched
         }
     }
 }

@@ -92,5 +92,35 @@ extension Workstream {
             // user's profile is missing most of what it will reach for.
             return CommandBuilder.inLoginShell(builder.command)
         }
+
+        /// Wraps an agent invocation in the workstream's tmux session, or returns
+        /// it unchanged when there is no tmux to wrap it in.
+        ///
+        /// `tmuxPath` is nil both when tmux mode is off and when tmux is not
+        /// installed, which is the same answer — the caller resolves that, this
+        /// owns what the wrapping *is*. Shared because the Coding Agent tab and
+        /// `create_workstream`'s seeded launch must land in the *same* session:
+        /// a second copy deriving the name differently would leave
+        /// `Workstream.Archiver` killing a session nothing is running in.
+        static func tmuxWrapped(
+            _ command: String,
+            tmuxPath: String?,
+            projectName: String,
+            workstreamName: String,
+            environmentVars: [String: String]
+        ) -> String {
+            guard let tmuxPath else { return command }
+            return TmuxSession.wrapCommand(
+                tmuxPath: tmuxPath,
+                sessionName: TmuxSession.sessionName(
+                    project: projectName,
+                    workstream: workstreamName,
+                    role: "agent"
+                ),
+                command: command,
+                environmentVars: environmentVars,
+                respawnOnExit: true
+            )
+        }
     }
 }

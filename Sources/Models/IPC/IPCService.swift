@@ -513,6 +513,170 @@ extension IPC {
             )
         }
 
+        /// Carries the agent-start result out of the launcher's `beforeReady`
+        /// closure, which runs in a different isolation domain from the actor
+        /// that needs the answer.
+        ///
+        /// `@unchecked Sendable` and unsynchronised because the access pattern
+        /// makes it safe rather than because the checker was in the way: both
+        /// fields are written inside one `MainActor.run`, and both are read only
+        /// after `launch` has returned, which happens-after that write. Nothing
+        /// else holds a reference.
+        private final class AgentStartOutcome: @unchecked Sendable {
+            var started = false
+            var failure: String?
+        }
+
+        /// What starting a Coding Agent needs from the live app, gathered in one
+        /// hop onto the main actor.
+        ///
+        /// Read *before* the worktree exists, so every reason an agent cannot
+        /// start is a refusal the caller gets instead of a workstream. The
+        /// `claude` lookup was already a pre-flight for that reason; the surface
+        /// handle is here for the same one — without it the tool would report an
+        /// agent started with nothing running it.
+        private struct AgentLaunchInputs {
+            let claudePath: String?
+            let supportsSessionName: Bool
+            /// Nil when tmux mode is off *and* when tmux is not installed. Those
+            /// are one answer here — do not wrap — which is why the setting is
+            /// resolved on this side rather than passed on.
+            let tmuxPath: String?
+            let canCreateSurfaces: Bool
+
+            @MainActor
+            static func read() -> AgentLaunchInputs {
+                let environment = WorkspaceActions.shared.appEnvironment
+                let tmuxMode = UserDefaults.standard.bool(forKey: "atelier.tmuxMode")
+                return AgentLaunchInputs(
+                    claudePath: environment?.toolStatus.claude.path,
+                    supportsSessionName: environment?.toolStatus.claudeSupportsSessionName ?? false,
+                    tmuxPath: tmuxMode ? environment?.toolStatus.tmux.path : nil,
+                    canCreateSurfaces: WorkspaceActions.shared.canCreateSurfaces
+                )
+            }
+
+            /// Why an agent cannot be started, or nil when one can. Both cases
+            /// name `prompt` as the way to proceed anyway, because a workstream
+            /// without an agent is still worth having.
+            var refusal: String? {
+                if claudePath == nil {
+                    return "Cannot start an agent: Atelier could not find the `claude` binary. "
+                        + "Omit `prompt` to create the workstream without one."
+                }
+                if !canCreateSurfaces {
+                    return "Cannot start an agent: Atelier's terminal is not ready yet. "
+                        + "Omit `prompt` to create the workstream without one, or try again in a moment."
+                }
+                return nil
+            }
+        }
+
+        /// The environment the new workstream's Coding Agent runs in.
+        ///
+        /// `ProcessCompose.PhaseEnvironment.variables` is the assembler for a
+        /// caller with no `ProcessCompose.PortPlan` to hand over — it resolves
+        /// `ports.yaml` itself — which is exactly this caller.
+        ///
+        /// Deliberately **not** `WorkspaceActions.environment(for:surfaceID:)`,
+        /// which blanks `TMUX`/`TMUX_PANE`. That is right for a terminal tab and
+        /// wrong here: the Coding Agent is the surface tmux mode wraps, and the
+        /// view's own `envVars` leaves those inherited. `ensureSurface` does not
+        /// compare environments, so a divergence here would never be corrected —
+        /// it would just be wrong for the life of the surface.
+        private nonisolated func codingAgentEnvironment(
+            target: Workstream.Launcher.Target,
+            launched: Workstream.Launcher.Launched
+        ) -> [String: String] {
+            var vars = ProcessCompose.PhaseEnvironment.variables(
+                workstreamID: launched.workstreamID,
+                projectName: target.projectName,
+                workstreamName: launched.name,
+                projectDirectory: target.directory,
+                worktreePath: launched.worktreePath,
+                defaultBranch: Git.Operations.defaultBranch(at: target.directory)
+            )
+            // The Coding Agent's surface id is the workstream id, so it
+            // addresses itself the way every other surface does.
+            vars["ATELIER_SURFACE_ID"] = launched.workstreamID.uuidString
+            return vars
+        }
+
+        /// The command the new workstream's Coding Agent runs.
+        ///
+        /// **The session id is the workstream's**, which is the opposite of
+        /// `agentCommand`'s rule and for the same underlying reason: this *is*
+        /// the Coding Agent, and `TerminalContainerView` will later resume that
+        /// session on this same surface. `open_agent_tab` must take the surface's
+        /// id instead precisely so a second agent does not end up here.
+        ///
+        /// Fresh rather than the view's resume-then-fresh pair: this workstream
+        /// was created moments ago and has no session to resume. The pair is
+        /// about recovering the session across a relaunch, a question that only
+        /// arises after this one has run.
+        private nonisolated func codingAgentCommand(
+            target: Workstream.Launcher.Target,
+            launched: Workstream.Launcher.Launched,
+            prompt: String,
+            claudePath: String,
+            bypassPermissions: Bool,
+            inputs: AgentLaunchInputs,
+            environment: [String: String]
+        ) -> String {
+            let mcpConfigPath = IPC.AgentSettings.isEnabled
+                ? IPC.Config.write(for: launched.workstreamID)
+                : nil
+            let systemPrompt = Workstream.AgentCommand.systemPrompt(
+                allowOutsideWorktree: UserDefaults.standard.bool(forKey: "atelier.allowOutsideWorktree"),
+                autoRenameBranch: UserDefaults.standard.bool(forKey: "atelier.autoRenameBranch"),
+                worktreePath: launched.worktreePath,
+                workstreamName: launched.name,
+                mcpConfigWritten: mcpConfigPath != nil
+            )
+            let fresh = Workstream.AgentCommand.fresh(
+                claudePath: claudePath,
+                sessionID: launched.workstreamID.uuidString.lowercased(),
+                sessionName: inputs.supportsSessionName ? launched.name : nil,
+                bypassPermissions: bypassPermissions,
+                systemPrompt: systemPrompt,
+                mcpConfigPath: mcpConfigPath,
+                initialPrompt: prompt
+            )
+            let command = Workstream.AgentCommand.tmuxWrapped(
+                fresh,
+                tmuxPath: inputs.tmuxPath,
+                projectName: target.projectName,
+                workstreamName: launched.name,
+                environmentVars: environment
+            )
+
+            // The launch log is how an agent that starts and does nothing gets
+            // diagnosed, and the Info tab reads it. This path would otherwise be
+            // the one agent start that left no entry.
+            LaunchLogger.log(LaunchLogEntry(
+                workstreamID: launched.workstreamID,
+                event: "agent-start",
+                finalCommand: command,
+                intermediateCommands: command == fresh ? [fresh] : [fresh, command],
+                environmentVariables: environment,
+                workingDirectory: launched.worktreePath,
+                toolPaths: LaunchLogEntry.ToolPaths(
+                    claude: claudePath,
+                    tmux: inputs.tmuxPath,
+                    ffRun: RunLauncher.executableURL()?.path
+                ),
+                settings: LaunchLogEntry.Settings(
+                    tmuxMode: UserDefaults.standard.bool(forKey: "atelier.tmuxMode"),
+                    bypassPermissions: bypassPermissions,
+                    autoRenameBranch: UserDefaults.standard.bool(forKey: "atelier.autoRenameBranch"),
+                    allowOutsideWorktree: UserDefaults.standard.bool(forKey: "atelier.allowOutsideWorktree")
+                ),
+                shell: CommandBuilder.userShell
+            ))
+
+            return command
+        }
+
         /// Creates a new workstream — worktree, branch, `bootstrap` — in the
         /// caller's project, and optionally starts an agent in it.
         ///
@@ -524,16 +688,20 @@ extension IPC {
         /// is deliberately the only copy of those preconditions, so this handler
         /// must never call `setupExistingWorktree` itself.
         ///
-        /// **The agent goes in a terminal tab, not the Coding Agent tab, and
-        /// that is not a shortcut.** The Coding Agent's surface id *is* the
-        /// workstream id, and `TerminalContainerView.preloadSurfaces` calls
-        /// `ensureSurface` for it with the command
-        /// `TerminalContainerView.buildClaudeCommand` builds — which takes no
-        /// initial prompt. `ensureSurface` destroys and respawns a surface whose
-        /// stored command differs, so seeding the Coding Agent with a prompt
-        /// would have the agent killed mid-turn the first time the user opened
-        /// the workstream. A tab's surface id is fresh and nothing reconciles it
-        /// against a rebuilt command.
+        /// **The agent goes in the workstream's Coding Agent tab**, on the
+        /// surface whose id *is* the workstream id — so the user opening the
+        /// workstream lands on the conversation rather than on an empty agent
+        /// beside a terminal tab holding the real one.
+        ///
+        /// That surface has to exist before `TerminalContainerView` ever renders
+        /// this workstream, because nobody is looking at it. The hazard is what
+        /// happens when they finally do: `preloadSurfaces` calls `ensureSurface`
+        /// with the command `buildClaudeCommand` builds, which carries no initial
+        /// prompt, and `ensureSurface` destroys a surface whose stored command
+        /// differs. `TerminalSurfaceCache.seedSurface` is what makes that safe —
+        /// the view *adopts* the seeded surface once instead of reconciling it.
+        /// The invariant lives there, at the consumer, rather than in an
+        /// obligation on this handler to produce a byte-identical command.
         private func createWorkstream(for request: Request) async -> Response {
             let name = request.arguments["name"]?.trimmingCharacters(in: .whitespacesAndNewlines)
             let prompt = request.arguments["prompt"]?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -557,56 +725,84 @@ extension IPC {
                 // directory on disk and a branch in the repository; refusing
                 // after it exists would leave the caller a workstream it was
                 // told it did not get.
-                let claudePath = await MainActor.run { WorkspaceActions.shared.appEnvironment?.toolStatus.claude.path }
-                if prompt?.isEmpty == false, claudePath == nil {
-                    return .failure(
-                        id: request.id,
-                        "Cannot start an agent: Atelier could not find the `claude` binary. Omit `prompt` to create the workstream without one."
-                    )
+                let inputs = await MainActor.run { AgentLaunchInputs.read() }
+                if prompt?.isEmpty == false, let refusal = inputs.refusal {
+                    return .failure(id: request.id, refusal)
                 }
 
+                // The agent starts inside `beforeReady`, which the launcher runs
+                // after the worktree exists and *before* it posts
+                // `.workstreamWorktreeReady`. That notification is what makes the
+                // workstream renderable, and the first render creates the Coding
+                // Agent's surface with the command the view builds — so seeding
+                // after it would be a race against a user clicking the sidebar
+                // row that has been sitting there since `.workstreamCreated`, and
+                // losing that race would drop the prompt in silence.
+                //
+                // The outcome comes back in a box because this actor cannot
+                // mutate a local from a closure the launcher runs. It is written
+                // on the main actor and read only after `launch` has returned.
+                let outcome = AgentStartOutcome()
                 let launched = try await Workstream.Launcher.shared.launch(
                     in: target,
                     requestedName: name,
-                    bypassPermissions: bypass
+                    bypassPermissions: bypass,
+                    beforeReady: { launched in
+                        guard let prompt, !prompt.isEmpty, let claudePath = inputs.claudePath else { return }
+                        // Built from what the launcher hands over rather than by
+                        // reading the workstream back out of `ProjectList`: the
+                        // append happened on `.workstreamCreated`, but the
+                        // notification that sets `worktreePath` has not been
+                        // posted yet — that is the point of running here.
+                        let environment = self.codingAgentEnvironment(target: target, launched: launched)
+                        let command = self.codingAgentCommand(
+                            target: target,
+                            launched: launched,
+                            prompt: prompt,
+                            claudePath: claudePath,
+                            bypassPermissions: bypass,
+                            inputs: inputs,
+                            environment: environment
+                        )
+                        await MainActor.run {
+                            do {
+                                try WorkspaceActions.shared.seedCodingAgent(
+                                    workstreamID: launched.workstreamID,
+                                    workingDirectory: launched.worktreePath,
+                                    command: command,
+                                    environment: environment
+                                )
+                                outcome.started = true
+                            } catch {
+                                outcome.failure = error.localizedDescription
+                            }
+                        }
+                    }
                 )
 
-                guard let prompt, !prompt.isEmpty else {
+                guard prompt?.isEmpty == false else {
                     return .success(id: request.id, .text(
                         "Created workstream \(launched.name) at \(launched.worktreePath). "
                             + "Its `bootstrap` is running in the background. No agent was started — pass `prompt` to start one."
                     ))
                 }
 
-                // Built here rather than via `WorkspaceActions.agentTabPlan`,
-                // which reads the workstream back out of `ProjectList`. The
-                // append happens on `.workstreamCreated`, but this workstream is
-                // seconds old and its `worktreePath` is set by a *second*
-                // notification; the launcher already holds both facts, so taking
-                // them from it avoids depending on that ordering.
-                let plan = WorkspaceActions.AgentTabPlan(
-                    workstreamID: launched.workstreamID,
-                    workstreamName: launched.name,
-                    projectName: target.projectName,
-                    projectDirectory: target.directory,
-                    workingDirectory: launched.worktreePath,
-                    bypassPermissions: bypass,
-                    claudePath: claudePath
-                )
-                let surfaceID = try await MainActor.run {
-                    try WorkspaceActions.shared.spawnTerminalTab(
-                        workstreamID: launched.workstreamID,
-                        title: nil,
-                        command: { surfaceID in agentCommand(plan: plan, prompt: prompt, surfaceID: surfaceID) },
-                        environment: { surfaceID in WorkspaceActions.environment(for: plan, surfaceID: surfaceID) }
-                    )
+                // The worktree exists whatever became of the agent, so this is a
+                // success carrying bad news rather than a failure — reporting it
+                // as an error would tell the caller nothing was created.
+                guard outcome.started else {
+                    return .success(id: request.id, .text(
+                        "Created workstream \(launched.name) at \(launched.worktreePath), but no agent was started. "
+                            + (outcome.failure ?? "Atelier gave no reason.")
+                    ))
                 }
 
                 return .success(id: request.id, .text(
-                    "Created workstream \(launched.name) at \(launched.worktreePath) and started an agent in it, "
-                        + "surface \(surfaceID.uuidString). Its `bootstrap` may still be running, so the worktree's "
-                        + "dependencies may not be installed yet. The agent is not addressable until it registers: "
-                        + "poll list_peers until a peer reports that surface id, then send_message to it."
+                    "Created workstream \(launched.name) at \(launched.worktreePath) and started an agent in its "
+                        + "Coding Agent tab, surface \(launched.workstreamID.uuidString). Its `bootstrap` may still be "
+                        + "running, so the worktree's dependencies may not be installed yet. The agent is not "
+                        + "addressable until it registers: poll list_peers until a peer reports that surface id, then "
+                        + "send_message to it."
                 ))
             } catch {
                 return .failure(id: request.id, error.localizedDescription)
