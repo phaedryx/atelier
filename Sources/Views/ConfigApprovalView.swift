@@ -17,7 +17,7 @@ import SwiftUI
 /// `execute` is deliberately not covered: it is attended. The user presses
 /// Start, its output arrives in a terminal surface in front of them, and Stop is
 /// one click away — so gating it would ask about a file the user has just chosen
-/// to run. What makes the difference is attendance, not display; the Environment
+/// to run. What makes the difference is attendance, not display; the Execution
 /// pane does not show the command Start runs, and never did.
 struct ConfigApprovalView: View {
     /// The repository-provided files, in the order they are fingerprinted.

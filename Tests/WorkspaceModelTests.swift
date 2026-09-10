@@ -419,7 +419,7 @@ final class WorkspaceModelCacheTests: XCTestCase {
 
     // MARK: - Singleton tabs
 
-    /// `doStartRun` uses this so a run always has an Environment tab to be
+    /// `doStartRun` uses this so a run always has an Execution tab to be
     /// stopped from. It must not steal focus: the browser path starts the run
     /// while opening a browser tab, and that tab has to stay active.
     func testEnsureSingletonAddsTheTabWithoutActivatingIt() {
@@ -436,11 +436,11 @@ final class WorkspaceModelCacheTests: XCTestCase {
             runStoppedManually: false
         )
         let model = WorkspaceModel(workstreamID: UUID(), snapshot: snapshot)
-        XCTAssertFalse(model.tabs.contains(WorkspaceTab.environment))
+        XCTAssertFalse(model.tabs.contains(WorkspaceTab.execution))
 
-        model.ensureSingleton(WorkspaceTab.environment)
+        model.ensureSingleton(WorkspaceTab.execution)
 
-        XCTAssertTrue(model.tabs.contains(WorkspaceTab.environment))
+        XCTAssertTrue(model.tabs.contains(WorkspaceTab.execution))
         XCTAssertEqual(model.activeTab, WorkspaceTab.agent, "focus must stay where it was")
     }
 
@@ -458,10 +458,10 @@ final class WorkspaceModelCacheTests: XCTestCase {
             runStoppedManually: false
         )
         let model = WorkspaceModel(workstreamID: UUID(), snapshot: snapshot)
-        model.ensureSingleton(WorkspaceTab.environment)
-        model.ensureSingleton(WorkspaceTab.environment)
+        model.ensureSingleton(WorkspaceTab.execution)
+        model.ensureSingleton(WorkspaceTab.execution)
 
-        XCTAssertEqual(model.tabs.filter { $0 == WorkspaceTab.environment }.count, 1)
+        XCTAssertEqual(model.tabs.filter { $0 == WorkspaceTab.execution }.count, 1)
         XCTAssertEqual(model.activeTab, .agent)
     }
 

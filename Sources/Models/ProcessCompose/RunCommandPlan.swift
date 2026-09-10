@@ -1,4 +1,4 @@
-// ABOUTME: Decides what the Environment tab's Start button may run, by dev-command source.
+// ABOUTME: Decides what the Execution tab's Start button may run, by dev-command source.
 // ABOUTME: Pure, so the one invariant it exists to hold can be tested without a view.
 
 import Foundation
@@ -53,7 +53,7 @@ extension ProcessCompose {
         ///   stand in for it.
         /// Whether Start may run anything at all.
         ///
-        /// The Environment pane's Start button is enabled on exactly this, and
+        /// The Execution pane's Start button is enabled on exactly this, and
         /// `doStartRun` refuses on exactly this, because they are the same question
         /// asked once. They used to be two: the button was enabled on
         /// `devCommand?.command != nil` while the run guarded the resolved command,

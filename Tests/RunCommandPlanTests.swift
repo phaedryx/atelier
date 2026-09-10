@@ -12,7 +12,7 @@ final class RunCommandPlanTests: XCTestCase {
     )
 
     /// The string a `.processCompose` source carries, for reference. It is what
-    /// the Environment pane *displays*; nothing may execute it.
+    /// the Execution pane *displays*; nothing may execute it.
     private let displayCommand = "process-compose up -U -f /repo/ws/process-compose.yaml"
 
     private func processComposeCommand() -> DevCommand {

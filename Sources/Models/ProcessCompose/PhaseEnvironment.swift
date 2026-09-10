@@ -58,7 +58,7 @@ extension ProcessCompose {
         /// A malformed file logs and yields an empty plan rather than refusing to
         /// run the phase. Nobody is watching an unattended phase, so throwing here
         /// would strand a worktree on a YAML error with no visible cause; the
-        /// Environment tab is where that error is meant to be read.
+        /// Execution tab is where that error is meant to be read.
         private static func portPlan(projectDirectory: String, worktreePath: String) -> ProcessCompose.PortPlan {
             do {
                 guard let config = try ProcessCompose.PortsConfig.load(from: projectDirectory) else { return .empty }

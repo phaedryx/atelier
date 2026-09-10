@@ -143,7 +143,7 @@ final class WorkspaceActions {
         switch tab {
         case .agent: workstreamID
         case let .terminal(id): id
-        case .info, .changes, .environment, .browser, .editor: nil
+        case .info, .changes, .execution, .browser, .editor: nil
         }
     }
 
@@ -152,7 +152,7 @@ final class WorkspaceActions {
         case let .terminal(id): model.terminalTitles[id]
         case let .browser(id): model.browserTitles[id]
         case let .editor(id): model.editorFilePaths[id]
-        case .info, .agent, .changes, .environment: nil
+        case .info, .agent, .changes, .execution: nil
         }
     }
 

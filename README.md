@@ -59,7 +59,7 @@ git worktree add "$def"
 ## Configuration
 
 Turn on **Enable process-compose** in Settings first — it is off by default, and
-nothing below runs until it is on, including the Environment tab's Start button.
+nothing below runs until it is on, including the Execution tab's Start button.
 
 ### What Atelier reads
 
@@ -100,7 +100,7 @@ process-compose up -f ../process-compose.yaml    # from inside a worktree
 |-----------|--------------|
 | `bootstrap` | Once, in the background, when a workstream is created |
 | `prepare` | Before every Start, to completion; a failure stops `execute` |
-| `execute` | The long-lived stack, shown in the Environment tab's process table |
+| `execute` | The long-lived stack, shown in the Execution tab's process table |
 | `dispose` | Once, when a workstream is archived |
 
 ### A worked example
@@ -317,11 +317,11 @@ repository has to be approved first, and again whenever it changes. A config you
 placed in the project directory by hand is never asked about — approval is gated
 by *where the file is*, not what is in it. `execute` is never gated because it is
 *attended*: you press Start, the stack's output lands in a terminal surface in
-front of you, and Stop is right there. The Environment tab shows which files are
+front of you, and Stop is right there. The Execution tab shows which files are
 in play, not the command Start runs.
 
 If a project has no `process-compose.yaml`, worktrees are still created and the
-Environment tab says there is nothing to run; a per-workstream command typed into
+Execution tab says there is nothing to run; a per-workstream command typed into
 Customize is the escape hatch. When Start cannot run for some other reason — the
 integration is switched off, or process-compose is not on disk where Atelier
 looks — the tab says which, and the Info tab reports what background setup did or

@@ -177,7 +177,7 @@ carries the `-dev` marker.
 
 ### Workstream lifecycle
 1. Creating a workstream: generates name, runs `git worktree add`; `AsyncSetupService` then runs the project's `bootstrap` namespace in the background
-2. Workspace view: only Info (Cmd+I) and Agent (Cmd+Return) are permanent; Changes and Environment open by default but close, reopen, and reorder like terminals/browsers, which are added on demand
+2. Workspace view: only Info (Cmd+I) and Agent (Cmd+Return) are permanent; Changes and Execution open by default but close, reopen, and reorder like terminals/browsers, which are added on demand
 3. Tmux mode: wraps Coding Agent only in `tmux new-session -A` on socket `-L atelier`
 4. Terminal tabs: close on shell exit (Ctrl+D). Agent respawns.
 5. Ending a workstream: two operations, not one — see below.
@@ -308,14 +308,14 @@ Start inert rather than reopening the bypass. `Tests/RunCommandPlanTests.swift` 
 including a test that no combination of inputs yields the display string; three of those fail
 if the fallback is put back. Do not replace this with another precondition check.
 
-**One decision, and it is reported.** `ProcessCompose.RunCommandPlan.canRun` is what enables the Environment
+**One decision, and it is reported.** `ProcessCompose.RunCommandPlan.canRun` is what enables the Execution
 pane's Start button, and `doStartRun` refuses on the same stored plan, so the two cannot
 disagree — they did, for a round: the button was enabled on `devCommand?.command != nil` while
 the run guarded the resolved command, and an unresolvable binary rendered an enabled Start that
 did nothing in silence. `TerminalContainerView.refreshDevCommand` resolves the dev command, the
 plan and the reason together, in one function, because *agreement* is the invariant here rather
 than freshness. `ProcessCompose.RunCommandPlan.unavailableReason` explains a `.nothing`, and
-`EnvironmentTabView.scriptInstructions` — the surface that already drew for "nothing to run" —
+`ExecutionTabView.scriptInstructions` — the surface that already drew for "nothing to run" —
 renders it: the integration switched off, a config that cannot be located, a binary that is not
 where the search looks. Background setup's own outcome, including `.completedWithNote`, is
 rendered on the Info tab, which is permanent; nothing observed `.asyncSetupStateChanged` before,
@@ -364,7 +364,7 @@ Three facts about this are load-bearing and easy to lose:
    pane shows the command Start runs", is the reason — the pane shows the loaded *files*, and
    even before that it showed a display-only string rather than what Start runs. The false
    version of this sentence was load-bearing in four places (`ScriptTrust`,
-   `ConfigApprovalView`, `EnvironmentTabView`, `WorkstreamInfoView`) and is corrected in all of
+   `ConfigApprovalView`, `ExecutionTabView`, `WorkstreamInfoView`) and is corrected in all of
    them. The decision to leave `execute` ungated stands; only its stated reason was wrong.
 
 `ProcessCompose.Config.locate` looks in the **worktree first, then the project directory**, and
@@ -443,7 +443,7 @@ port bound at the moment it looks, and which is why `fixed` exists for anything 
 the machine.
 
 ### Dev command resolution
-`DevCommand.Resolver` picks what the Environment tab's Start button runs, in order: the
+`DevCommand.Resolver` picks what the Execution tab's Start button runs, in order: the
 **per-workstream override** the user typed (stored at `atelier.devCommand.<workstreamID>`),
 then the located process-compose config. The override is the escape hatch for a project with no
 config, and it is the only reason `DevCommand.Source` still has two cases.
@@ -627,7 +627,7 @@ When adding, removing, or changing keyboard shortcuts:
 
 Current shortcuts:
 - **Cmd+I**: Info
-- **Cmd+1-9**: Switch tab (all tabs in display order). Changes and Environment
+- **Cmd+1-9**: Switch tab (all tabs in display order). Changes and Execution
   start at ⌘3/⌘4 but they close and reorder like any other tab, so nothing is
   bound to them by name — reopen from the tab bar or the command palette.
 - **Cmd+Shift+[/]**: Cycle tabs

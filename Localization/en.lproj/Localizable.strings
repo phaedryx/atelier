@@ -286,7 +286,7 @@
 "Atelier cannot start" = "Atelier cannot start";
 "The terminal engine (Ghostty) failed to initialize. This may indicate a system compatibility issue." = "The terminal engine (Ghostty) failed to initialize. This may indicate a system compatibility issue.";
 
-/* EnvironmentTabView */
+/* ExecutionTabView */
 "Setup" = "Setup";
 "Run" = "Run";
 
@@ -300,6 +300,7 @@
 "Info" = "Info";
 "Agent" = "Agent";
 "Changes" = "Changes";
+"Execution" = "Execution";
 
 /* Changes tab */
 "Uncommitted" = "Uncommitted";
@@ -369,7 +370,7 @@
 
 "Preparing workstream..." = "Preparing workstream...";
 
-/* Environment Tab */
+/* Execution Tab */
 
 /* Quick Actions */
 "Commit" = "Commit";
@@ -455,7 +456,7 @@
 "Show Info" = "Show Info";
 "Show Coding Agent" = "Show Coding Agent";
 "Show Changes" = "Show Changes";
-"Show Environment" = "Show Environment";
+"Show Execution" = "Show Execution";
 "New Editor" = "New Editor";
 "Close Tab" = "Close Tab";
 "Start/Rerun" = "Start/Rerun";

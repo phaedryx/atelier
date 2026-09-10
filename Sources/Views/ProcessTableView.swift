@@ -1,4 +1,4 @@
-// ABOUTME: The Environment tab's live process table with per-process controls.
+// ABOUTME: The Execution tab's live process table with per-process controls.
 // ABOUTME: State comes from process-compose's API; ports come from the port plan.
 
 import SwiftUI
@@ -218,7 +218,7 @@ struct ProcessSelectionView: View {
     /// like no scroll view at all.
     ///
     /// Sized to its rows in *both* directions, which is why there is no
-    /// `maxWidth: .infinity` and no horizontal padding here. `EnvironmentTabView`
+    /// `maxWidth: .infinity` and no horizontal padding here. `ExecutionTabView`
     /// renders this as the first child of the centred stack that holds Start,
     /// so a checklist that spanned the pane would put its checkboxes against
     /// the far left edge with the button centred a pane away — the list has to

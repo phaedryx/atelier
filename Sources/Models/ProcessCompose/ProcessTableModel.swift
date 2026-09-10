@@ -100,7 +100,7 @@ extension ProcessCompose {
                 // for the life of the run session, beside a live terminal surface.
                 // `@Published` fires `objectWillChange` from `willSet` with no
                 // equality check of its own, so an unguarded `error = nil` would
-                // invalidate the whole Environment tab at 1Hz even when nothing
+                // invalidate the whole Execution tab at 1Hz even when nothing
                 // changed — guarding only `processes` would achieve nothing.
                 if processes != latest {
                     processes = latest

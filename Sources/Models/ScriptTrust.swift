@@ -13,7 +13,7 @@ enum ScriptTrust {
     /// phases: `execute` is *attended* — a deliberate press, output in a
     /// terminal surface the user is looking at, Stop within reach — and is never
     /// held behind approval. It is attendance that decides, not display: the
-    /// string the Environment pane renders is not the command Start runs, which
+    /// string the Execution pane renders is not the command Start runs, which
     /// is `ProcessCompose.PhaseRunner`'s phase-scoped `prepare && execute`.
     ///
     /// Takes the whole list, never a single file. process-compose loads a base

@@ -9,7 +9,7 @@ private let logger = Logger(subsystem: "atelier", category: "dev-command")
 /// The command that starts a workstream's dev server, and where it came from.
 struct DevCommand: Equatable {
     enum Source: String, Equatable, Codable {
-        /// Per-workstream command saved by the user in the Environment pane.
+        /// Per-workstream command saved by the user in the Execution pane.
         case override
         /// The process-compose config located for this worktree.
         case processCompose
@@ -57,7 +57,7 @@ extension DevCommand {
         ///
         /// `.override` is the one unconstrained input in `ProcessCompose.RunCommandPlan`: it is
         /// the user's own text and runs literally. That is deliberate, and it is
-        /// also the shape of the fifth bypass — the Environment pane used to seed
+        /// also the shape of the fifth bypass — the Execution pane used to seed
         /// its editable field from the un-`-n`'d display command, and Save turned
         /// it into exactly such an override. The seeding is gone, but a value
         /// saved before it was fixed would be rehydrated by `savedOverride` and
@@ -166,7 +166,7 @@ extension DevCommand {
         /// It no longer does. `ProcessCompose.RunCommandPlan` maps a `.processCompose` source to
         /// `.phaseScoped`, and the command Start actually runs is built by
         /// `ProcessCompose.PhaseRunner.startCommand`, which is `-n`-scoped. The string below
-        /// survives only as the text the Environment pane displays.
+        /// survives only as the text the Execution pane displays.
         ///
         /// So the `isEnabled` guard is **not** the execution-side boundary any
         /// more, and previous versions of this comment saying it was were wrong.
@@ -177,14 +177,14 @@ extension DevCommand {
         /// It was the boundary once, and the hole reopened five times: an unhashed
         /// override file, `compose.yaml` winning discovery, the toggle being off,
         /// the binary being unresolvable while it was on, and finally the
-        /// Environment pane seeding its editable field from this very string,
+        /// Execution pane seeding its editable field from this very string,
         /// where Save turned it into a `.override` that *is* run literally.
         ///
         /// That last route is the one to keep in mind, because `.override` is an
         /// unconstrained passthrough by design: `ProcessCompose.RunCommandPlan` cannot tell a
         /// user's own text from this string. The invariant therefore rests on
         /// nothing ever seeding an override from a `.processCompose` command — see
-        /// `EnvironmentTabView.devCommandDisplayText`, which is what the pane
+        /// `ExecutionTabView.devCommandDisplayText`, which is what the pane
         /// renders instead. Reintroducing a path that executes `command` for a
         /// `.processCompose` source, or that pre-fills the override field with it,
         /// reopens the hole for the sixth time.
