@@ -305,6 +305,8 @@ private actor StubComposeClient: ProcessCompose.Controlling {
     private(set) var started: [String] = []
     private var inFlight = 0
 
+    var logsByName: [String: [String]] = [:]
+
     init(
         socketPath: String,
         replies: [Reply],
@@ -354,5 +356,9 @@ private actor StubComposeClient: ProcessCompose.Controlling {
 
     func restart(_ name: String) async throws {
         started.append(name)
+    }
+
+    func logs(name: String, tail _: Int) async throws -> [String] {
+        logsByName[name] ?? []
     }
 }

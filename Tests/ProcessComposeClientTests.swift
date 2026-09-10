@@ -59,6 +59,16 @@ final class ProcessComposeClientTests: XCTestCase {
         XCTAssertThrowsError(try ProcessCompose.Client.decodeProcesses(Data("not json".utf8)))
     }
 
+    func test_decodeLogs_readsTheLogsEnvelope() throws {
+        let json = Data(#"{"logs":["line-1","line-2","to-stderr"]}"#.utf8)
+        XCTAssertEqual(try ProcessCompose.Client.decodeLogs(json), ["line-1", "line-2", "to-stderr"])
+    }
+
+    func test_decodeLogs_missingKeyThrows() {
+        let json = Data(#"{"notlogs":[]}"#.utf8)
+        XCTAssertThrowsError(try ProcessCompose.Client.decodeLogs(json))
+    }
+
     func testBodyThrowsWhenNoHeaderBodySeparator() {
         let response = Data("HTTP/1.1 200 OK\r\nContent-Length: 2".utf8)
 
