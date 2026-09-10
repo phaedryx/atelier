@@ -287,7 +287,10 @@ final class ProcessTableModelTests: XCTestCase {
 /// Stands in for process-compose. An actor, so the counters are safe to read
 /// from the test, and reentrant across its own `await` — which is what lets it
 /// notice two listings in flight at once instead of hiding them.
-private actor StubComposeClient: ProcessCompose.Controlling {
+///
+/// Not `private`: `VerificationRunnerTests` drives the verification run loop
+/// with it, and a second copy of a stub this fiddly would drift from this one.
+actor StubComposeClient: ProcessCompose.Controlling {
     enum Reply {
         case list([ProcessCompose.ProcessEntry])
         case failure(ProcessCompose.Client.ClientError)
@@ -305,23 +308,45 @@ private actor StubComposeClient: ProcessCompose.Controlling {
     private(set) var started: [String] = []
     private var inFlight = 0
 
-    var logsByName: [String: [String]] = [:]
+    /// Per-process log fixtures. Passed to `init` rather than assigned: this is
+    /// an actor, so a write to a stored property from outside it does not
+    /// compile — the field was unreachable while it was only a `var`.
+    private let logsByName: [String: [String]]
+
+    /// Names `logs` was asked for, newest last.
+    private(set) var logRequests: [String] = []
+
+    /// Whether the control server has gone away.
+    ///
+    /// Models what `PhaseExecutor.shutDown` does: once the server is down, both
+    /// reads fail. That is what makes "fetch a failed check's log *before*
+    /// teardown" a testable property rather than a comment — a loop that
+    /// fetched afterwards gets nothing.
+    private var serverEnded = false
 
     init(
         socketPath: String,
         replies: [Reply],
         removesSocketOnStop: Bool = false,
         stopFailure: ProcessCompose.Client.ClientError? = nil,
-        latency: Duration = .milliseconds(40)
+        latency: Duration = .milliseconds(40),
+        logsByName: [String: [String]] = [:]
     ) {
         self.socketPath = socketPath
         self.replies = replies
         self.removesSocketOnStop = removesSocketOnStop
         self.stopFailure = stopFailure
         self.latency = latency
+        self.logsByName = logsByName
+    }
+
+    /// The server is gone; every later read throws, as the real one does.
+    func endServer() {
+        serverEnded = true
     }
 
     func processes() async throws -> [ProcessCompose.ProcessEntry] {
+        guard !serverEnded else { throw ProcessCompose.Client.ClientError.notRunning }
         processesCalls += 1
         inFlight += 1
         peakConcurrency = max(peakConcurrency, inFlight)
@@ -358,7 +383,9 @@ private actor StubComposeClient: ProcessCompose.Controlling {
         started.append(name)
     }
 
-    func logs(name: String, tail _: Int) async throws -> [String] {
-        logsByName[name] ?? []
+    func logs(name: String, tail: Int) async throws -> [String] {
+        guard !serverEnded else { throw ProcessCompose.Client.ClientError.notRunning }
+        logRequests.append(name)
+        return Array((logsByName[name] ?? []).suffix(tail))
     }
 }

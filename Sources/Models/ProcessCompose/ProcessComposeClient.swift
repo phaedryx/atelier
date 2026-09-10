@@ -112,8 +112,15 @@ extension ProcessCompose {
             let logs: [String]
         }
 
+        /// Wrapped like `decodeProcesses`, and for the same reason: a raw
+        /// `DecodingError` escaping here would put a decoder's own message in
+        /// front of a user or an agent instead of this file's localized text.
         static func decodeLogs(_ data: Data) throws -> [String] {
-            try JSONDecoder().decode(LogsEnvelope.self, from: data).logs
+            do {
+                return try JSONDecoder().decode(LogsEnvelope.self, from: data).logs
+            } catch {
+                throw ClientError.malformedResponse
+            }
         }
 
         func processes() async throws -> [ProcessCompose.ProcessEntry] {

@@ -25,6 +25,13 @@ final class PhaseExecutorTests: XCTestCase {
     }
 
     override func tearDown() {
+        // A `verify` run deliberately leaves its control server up, so any test
+        // that spawns one has to be sure it is gone even if it failed early.
+        ProcessCompose.PhaseExecutor.shutDown(
+            binary: binary,
+            socketPath: ProcessCompose.PhaseRunner.socketPath(for: workstreamID, phase: .verify),
+            workingDirectory: FileManager.default.temporaryDirectory.path
+        )
         try? FileManager.default.removeItem(at: dir)
         try? FileManager.default.removeItem(at: projectDir)
         try? FileManager.default.removeItem(atPath: ProcessCompose.PhaseRunner.socketPath(for: workstreamID, phase: .bootstrap))
@@ -292,6 +299,109 @@ final class PhaseExecutorTests: XCTestCase {
         )
 
         XCTAssertEqual(outcome, .skipped)
+    }
+
+    // MARK: - The verify phase's two parameters
+
+    /// `shutDownWhenDone: false` must genuinely hold the control server open
+    /// after the namespace has finished — that window is the only place a
+    /// verification run can read per-check exit codes and logs, and nothing
+    /// covered it while the parameter was only a defaulted argument.
+    func test_run_holdingTheServerOpenLeavesTheLogsAndExitCodesReadable() throws {
+        let config = try writeConfig("""
+        version: "0.5"
+        processes:
+          rspec:
+            namespace: verify
+            command: sh -c 'echo "1 example, 1 failure"; exit 4'
+            availability: { restart: "no" }
+        """)
+        let socketPath = ProcessCompose.PhaseRunner.socketPath(for: workstreamID, phase: .verify)
+
+        let outcome = ProcessCompose.PhaseExecutor.run(
+            phase: .verify, config: config, binary: binary, workstreamID: workstreamID,
+            workingDirectory: dir.path, environment: [:], timeout: 60,
+            selectedProcesses: [], shutDownWhenDone: false
+        )
+        XCTAssertEqual(outcome, .failed("rspec exited with code 4."))
+
+        // `isServerListening` connects, where `fileExists` would only prove a
+        // stale socket file was left behind — a different question, per the
+        // client's own note.
+        XCTAssertTrue(
+            ProcessCompose.Client.isServerListening(atSocketPath: socketPath),
+            "the control server must outlive the namespace when shutDownWhenDone is false"
+        )
+        let client = ProcessCompose.Client(socketPath: socketPath)
+        let entry = try XCTUnwrap(client.processesSync().first { $0.name == "rspec" })
+        XCTAssertEqual(entry.status, "Completed")
+        XCTAssertEqual(entry.exitCode, 4)
+        XCTAssertEqual(Verification.CheckResult.State(entry: entry), .failed(4))
+        // And the per-check log, which is the half that has no other source.
+        let logs = try awaitLogs(client: client, name: "rspec")
+        XCTAssertTrue(logs.contains { $0.contains("1 example, 1 failure") }, "\(logs)")
+
+        ProcessCompose.PhaseExecutor.shutDown(
+            binary: binary, socketPath: socketPath, workingDirectory: dir.path
+        )
+        XCTAssertFalse(ProcessCompose.Client.isServerListening(atSocketPath: socketPath))
+    }
+
+    /// The other half of the same gap: `selectedProcesses` must actually reach
+    /// the spawned command, so a run of one check does not run the whole suite.
+    func test_run_selectedProcessesRunsOnlyTheNamedChecks() throws {
+        let config = try writeConfig("""
+        version: "0.5"
+        processes:
+          rubocop:
+            namespace: verify
+            command: sh -c 'touch rubocop-ran'
+            availability: { restart: "no" }
+          rspec:
+            namespace: verify
+            command: sh -c 'touch rspec-ran'
+            availability: { restart: "no" }
+        """)
+
+        let outcome = ProcessCompose.PhaseExecutor.run(
+            phase: .verify, config: config, binary: binary, workstreamID: workstreamID,
+            workingDirectory: dir.path, environment: [:], timeout: 60,
+            selectedProcesses: ["rubocop"], shutDownWhenDone: true
+        )
+
+        XCTAssertEqual(outcome, .succeeded)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dir.appendingPathComponent("rubocop-ran").path))
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: dir.appendingPathComponent("rspec-ran").path),
+            "a check that was not selected must not run"
+        )
+    }
+
+    /// `logs` is async and the tests around it are not, and the log is written
+    /// by the process rather than by the manager, so it can lag the exit code by
+    /// a moment. Polls briefly rather than asserting on the first read.
+    private func awaitLogs(client: ProcessCompose.Client, name: String) throws -> [String] {
+        let deadline = Date().addingTimeInterval(5)
+        var lines: [String] = []
+        repeat {
+            let box = LogBox()
+            let waited = DispatchSemaphore(value: 0)
+            Task {
+                box.lines = try? await client.logs(name: name, tail: 200)
+                waited.signal()
+            }
+            _ = waited.wait(timeout: .now() + 5)
+            lines = box.lines ?? []
+            if !lines.isEmpty {
+                return lines
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        } while Date() < deadline
+        return lines
+    }
+
+    private final class LogBox: @unchecked Sendable {
+        var lines: [String]?
     }
 }
 

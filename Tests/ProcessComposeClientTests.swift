@@ -64,9 +64,15 @@ final class ProcessComposeClientTests: XCTestCase {
         XCTAssertEqual(try ProcessCompose.Client.decodeLogs(json), ["line-1", "line-2", "to-stderr"])
     }
 
-    func test_decodeLogs_missingKeyThrows() {
+    /// The same localized error `decodeProcesses` throws, not a raw
+    /// `DecodingError`: the runner fetches these logs in the one window they
+    /// exist, and a decoder's own message is not something to put in front of a
+    /// user or an agent.
+    func test_decodeLogs_missingKeyThrowsMalformedResponse() {
         let json = Data(#"{"notlogs":[]}"#.utf8)
-        XCTAssertThrowsError(try ProcessCompose.Client.decodeLogs(json))
+        XCTAssertThrowsError(try ProcessCompose.Client.decodeLogs(json)) { error in
+            XCTAssertEqual(error as? ProcessCompose.Client.ClientError, .malformedResponse)
+        }
     }
 
     func testBodyThrowsWhenNoHeaderBodySeparator() {
