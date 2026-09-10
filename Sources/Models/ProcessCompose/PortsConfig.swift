@@ -69,7 +69,7 @@ extension ProcessCompose {
         /// so a project can redefine `ATELIER_PORT`, which is deliberate and
         /// documented. The same merge let any other `ATELIER_*` name through: a
         /// declaration called `ATELIER_WORKTREE_DIR` replaced a filesystem path
-        /// with a port number in all four namespaces, and because the `FF_*`
+        /// with a port number in all five namespaces, and because the `FF_*`
         /// mirror runs last it propagated the corrupted value too. `ATELIER_PORT`
         /// stays allowed; the rest are refused here, where the file is read and a
         /// specific message is possible.
@@ -158,7 +158,7 @@ extension ProcessCompose {
                     kind = .assigned
                 case let (nil, .some(port)):
                     // A port is a 16-bit number and every consumer treats it as
-                    // one: it is exported into four namespaces' environments and
+                    // one: it is exported into five namespaces' environments and
                     // interpolated into the browser URL. `fixed: 70000` or
                     // `fixed: -1` parsed happily and failed later, somewhere else.
                     guard (1 ... 65535).contains(port) else {
