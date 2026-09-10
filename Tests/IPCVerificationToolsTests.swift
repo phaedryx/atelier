@@ -358,8 +358,10 @@ final class IPCVerificationToolsTests: XCTestCase {
         XCTAssertTrue(response.error?.contains("restart") == true, String(describing: response.error))
     }
 
-    /// Run ids are short, opaque and the tool's only argument, and every other
-    /// tool in this group acts on the caller's own workstream and no other.
+    /// A run id is the tool's only argument and ids are short, so a stale or
+    /// mistyped one must be told it is not this caller's run rather than handed
+    /// another workstream's results. Not a security boundary; every process here
+    /// runs as the user.
     func test_checkVerification_refusesARunFromAnotherWorkstream() async throws {
         await service.setVerificationRunner(runner)
         await runner.store(failingRun(workstreamID: UUID()))

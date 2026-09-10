@@ -76,6 +76,8 @@ extension IPC {
         case listTabs = "list_tabs"
         /// The review comments the user has left on the Changes diff.
         case readReviewComments = "read_review_comments"
+        /// A verification run's state and per-check results, by run id.
+        case checkVerification = "check_verification"
 
         /// Workspace actions.
         /// Opens a terminal tab in the caller's own workstream, optionally
@@ -91,8 +93,6 @@ extension IPC {
         /// Starts a verification run — the `verify` namespace — in the caller's
         /// own workstream, and answers with a run id rather than the result.
         case startVerification = "start_verification"
-        /// Reads a verification run's state and per-check results, by run id.
-        case checkVerification = "check_verification"
 
         /// Which of the three surfaces above this tool belongs to.
         ///
@@ -104,10 +104,9 @@ extension IPC {
             switch self {
             case .registerPeer, .listPeers, .sendMessage, .receiveMessages, .broadcast, .getPeerStatus:
                 .messaging
-            case .listTabs, .readReviewComments:
+            case .listTabs, .readReviewComments, .checkVerification:
                 .workspaceRead
-            case .openAgentTab, .openEditor, .requestAttention, .createWorkstream,
-                 .startVerification, .checkVerification:
+            case .openAgentTab, .openEditor, .requestAttention, .createWorkstream, .startVerification:
                 .workspaceAction
             }
         }

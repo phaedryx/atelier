@@ -55,9 +55,10 @@ extension IPC {
 
         /// A run by id, or nil when no run has that id.
         ///
-        /// Nil covers both "never existed" and "was started before Atelier
-        /// restarted" — runs are in-memory, like the peer store, and this side
-        /// says so rather than pretending to tell the two apart.
+        /// Nil covers both "never existed" and "did not outlive an Atelier
+        /// restart" — the runner keeps a workstream's most recent run, which the
+        /// staleness stamp needs anyway, and nothing older. This side does not
+        /// pretend to tell the two apart.
         func verificationRun(id: String) async -> VerificationRunInfo?
     }
 
@@ -86,7 +87,8 @@ extension IPC {
             case .notAvailable:
                 "Verification is not available: Atelier has no check runner wired up."
             case let .unknownRun(id):
-                "No verification run with id \(id). Run ids do not survive an Atelier restart — start a new run."
+                "No verification run with id \(id). Only a workstream's most recent run survives an Atelier restart; "
+                    + "older ids are gone. Start a new run."
             case .runBelongsElsewhere:
                 "That verification run belongs to a different workstream. You can only read runs in your own."
             }

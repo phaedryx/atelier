@@ -940,9 +940,12 @@ extension IPC {
 
         /// Reads one run, scoped to the caller's own workstream.
         ///
-        /// The scope check is not ceremony: a run id is short and opaque, it is
-        /// the tool's only argument, and every other tool in this group acts on
-        /// the caller's own workstream and no other.
+        /// Not a security boundary — every process in this feature runs as the
+        /// user, and `agent-ipc.md` says as much about the IPC token itself. The
+        /// scope check is there because a run id is the tool's only argument and
+        /// ids are short: an agent holding a stale or mistyped one should be told
+        /// it is not its run rather than handed somebody else's results. Which is
+        /// also what every other tool in this group does.
         private func checkVerification(for request: Request) async -> Response {
             guard let workstreamID = callerWorkstreamID(request) else {
                 return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)

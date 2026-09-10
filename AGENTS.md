@@ -748,8 +748,8 @@ checks rather than a comment:
 | Group | Tools | Trust story |
 |---|---|---|
 | Messaging | `register_peer`, `list_peers`, `send_message`, `receive_messages`, `broadcast`, `get_peer_status` | none needed — text between agents, nothing a user can see |
-| Workspace reads | `list_tabs`, `read_review_comments` | none needed — answers about the caller's own workstream |
-| Workspace actions | `open_agent_tab`, `open_editor`, `request_attention`, `create_workstream`, `start_verification`, `check_verification` | see below |
+| Workspace reads | `list_tabs`, `read_review_comments`, `check_verification` | none needed — answers about the caller's own workstream |
+| Workspace actions | `open_agent_tab`, `open_editor`, `request_attention`, `create_workstream`, `start_verification` | see below |
 
 The messaging six were once the whole enum. Calix's IPC core is the same six, and everything it
 grew on top — pane/tab control, LSP, shell integration — arrived as separate tool surfaces with
@@ -870,6 +870,13 @@ an agent sees is `atelier/verification`, and the compiler walked every site that
 assumed a sender peer existed. The store's inbox scan is what keeps a queued notice
 from being orphaned by its recipient's TTL — the same guarantee peer messages already
 had.
+
+**A run id outlives a restart only for the newest run in a workstream.** The runner
+keeps that one because the staleness stamp needs it anyway; every older id resolves to
+nil and `check_verification` says so. The scope check on a read is not a security
+boundary — every process in this feature runs as the user — it is there because a run
+id is the tool's only argument and ids are short, so a stale one should be told it is
+not this caller's run rather than handed somebody else's results.
 
 **The notice is addressed by surface, and the peer is resolved when it is posted.**
 Two agents in one worktree report the same workstream name, so the surface id is the
