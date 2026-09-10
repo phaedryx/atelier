@@ -57,19 +57,34 @@ func verificationIsStale(run: Verification.Run, currentStamp: String?) -> Bool {
 /// Present-tense wording for the tab's own empty state, when nothing can run
 /// yet.
 ///
-/// Reads the same four preconditions `PhasePolicy.plan` evaluates — the
-/// unattended-phase gate `Verification.Runner.start` calls before spawning
-/// anything — in the same order, so the *decision* stays `PhasePolicy.plan`'s
-/// alone; only the *rendering* is separate. `PhasePolicy`'s own strings are
-/// past tense ("so no `verify` ran"), because they report on bootstrap and
-/// dispose after the fact; this tab has not run anything yet, so none of
-/// these may read as a report on a run that already happened.
+/// A present-tense rendering of the same four preconditions `PhasePolicy.plan`
+/// evaluates — the unattended-phase gate `Verification.Runner.start` calls
+/// before spawning anything — in the same order. `PhasePolicy`'s own strings
+/// are past tense ("so no `verify` ran"), because they report on bootstrap
+/// and dispose after the fact; this tab has not run anything yet, so none of
+/// these may read as a report on a run that already happened. This function
+/// takes facts its caller has already resolved rather than doing any I/O
+/// itself — no config lookup, no binary resolution, no approval hash.
 ///
-/// Called by whichever caller resolved the four facts — `TerminalContainerView`,
-/// for the same reason `refreshDevCommand` resolves `ExecutionTabView`'s
-/// equivalent state and hands it in rather than letting the view re-derive
-/// it: see `VerificationTabView.unavailableReason`'s own doc. This function
-/// itself does no I/O; it only turns already-resolved facts into copy.
+/// **This function is not the decision, and must not be treated as one.**
+/// The call site — `TerminalContainerView`, the same way `refreshDevCommand`
+/// already resolves `ExecutionTabView`'s equivalent state — is required to
+/// take *whether anything can run* from `PhasePolicy.plan(phase: .verify, …)`
+/// itself, and to call this function only for the copy, only once `plan`
+/// has returned `.nothingToDo`. `ExecutionTabView.swift:117-122` is this
+/// codebase's own ruling on exactly that split: "Passed in, never re-derived
+/// here... the button's enablement and the run's guard are one decision."
+/// An unresolvable binary rendering an enabled button that explains nothing
+/// is the failure that ruling exists to prevent, and it is reachable again
+/// here if a caller lets this function's four booleans stand in for `plan`'s
+/// own verdict instead of following it.
+///
+/// **Nothing enforces that split.** This function hand-mirrors `plan`'s four
+/// preconditions in the same order; it does not call `plan` and cannot check
+/// that it agrees with it. The agreement is a convention the call site must
+/// honour, not a compiler-checked property — if `PhasePolicy` ever gains a
+/// fifth precondition, it has to be added here too, by hand, and nothing
+/// will fail to compile if that step is missed.
 ///
 /// - Parameter declared: the checks the located config declares in the
 ///   `verify` namespace, or `nil` when the config exists but could not be
