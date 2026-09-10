@@ -169,21 +169,30 @@ struct WorkspaceTabSnapshot {
     var runStoppedManually: Bool
 }
 
-/// The state a workstream's model starts life with. Tab lists are never
-/// persisted across launches, so a fresh workstream always opens with the same
-/// four tabs; only the last-active tab *kind* is restored.
+/// The state a workstream's model starts life with: the two permanent tabs and
+/// nothing else. Tab lists are never persisted across launches, so every
+/// workstream opens the same way and Changes and Execution are opened when they
+/// are wanted — from the tab bar's quick-add buttons, the command palette, or
+/// ⌘-shortcuts.
 ///
-/// That unconditional seed is what makes restoring a saved `.changes` or
-/// `.execution` safe — the tab it names is always there. Closing either is a
-/// within-session state; if that ever becomes persistent, `activeTab` below has
-/// to be reconciled against `tabs` rather than trusted.
+/// `activeTab` is therefore clamped rather than trusted. `savedTab` restores the
+/// last-active tab *kind*, and two of the four kinds it can name are no longer
+/// seeded; a `.changes` restored onto a strip with no Changes tab would render
+/// that pane with nothing selected in the strip, and with the quick-add button
+/// still offering to open what is already on screen. The saved kind survives
+/// where it still can — Info versus Agent — and falls back to Info where it
+/// cannot. Any future seed change has to keep the `tabs.contains` clamp: it is
+/// what holds `activeTab` inside `tabs`.
 func startupWorkspaceTabState(savedTab: RestorableWorkspaceTab?) -> WorkspaceTabSnapshot {
-    WorkspaceTabSnapshot(
-        tabs: [.info, .agent, .changes, .execution],
+    let tabs: [WorkspaceTab] = [.info, .agent]
+    let restored = (savedTab ?? .info).workspaceTab()
+
+    return WorkspaceTabSnapshot(
+        tabs: tabs,
         terminalCount: 0,
         browserCount: 0,
         editorCount: 0,
-        activeTab: (savedTab ?? .info).workspaceTab(),
+        activeTab: tabs.contains(restored) ? restored : .info,
         browserTitles: [:],
         terminalTitles: [:],
         editorFilePaths: [:],
@@ -628,6 +637,19 @@ struct TerminalContainerView: View {
         model.tabs.filter(\.isCloseable)
     }
 
+    /// The singleton tabs whose quick-add button is currently showing, in the
+    /// order the buttons appear.
+    ///
+    /// One list, read by both the buttons and the divider that separates them
+    /// from the add-another-one buttons, so the two cannot disagree about
+    /// whether the group is empty. Since `startupWorkspaceTabState` seeds
+    /// neither singleton, the usual state is both buttons showing; the empty
+    /// case is a workstream with both tabs open, and the divider has to
+    /// disappear with them rather than dangle at the head of the group.
+    private var closedSingletons: [SingletonQuickAdd] {
+        SingletonQuickAdd.all.filter { !model.tabs.contains($0.tab) }
+    }
+
     private var tabBar: some View {
         HStack(spacing: 0) {
             // Permanent tabs (Info, Agent)
@@ -652,19 +674,28 @@ struct TerminalContainerView: View {
                 // Shown only while the tab is closed. ⌘1-9 is positional over
                 // the tabs that are open, so no number reaches a closed one;
                 // this and the command palette are the way back.
-                if !model.tabs.contains(.changes) {
-                    TabBarActionButton(icon: WorkspaceTabKind.changes.icon, tooltip: "Show Changes") {
-                        model.activateSingleton(.changes)
+                ForEach(closedSingletons, id: \.tab) { singleton in
+                    TabBarActionButton(icon: singleton.tab.kind.icon, tooltip: singleton.tooltip) {
+                        model.activateSingleton(singleton.tab)
                     }
                 }
-                if !model.tabs.contains(.execution) {
-                    TabBarActionButton(icon: WorkspaceTabKind.execution.icon, tooltip: "Show Execution") {
-                        model.activateSingleton(.execution)
-                    }
+                // Marks the boundary the two halves of this group mean
+                // different things across: reopen the one there is only ever
+                // one of, versus add another of something there can be many
+                // of. Drawn only when the left half is non-empty.
+                if !closedSingletons.isEmpty {
+                    Rectangle()
+                        .fill(.separator)
+                        .frame(width: 1, height: 14)
+                        .padding(.horizontal, 4)
+                        .accessibilityHidden(true)
                 }
-                TabBarActionButton(icon: "terminal", tooltip: "New Terminal", action: addTerminal)
-                TabBarActionButton(icon: "globe", tooltip: "New Browser", action: addBrowser)
-                TabBarActionButton(icon: "doc.text", tooltip: "New Editor", action: openEditor)
+                // Icons come from the kind rather than a literal, the same way
+                // the singleton buttons above take theirs: a quick-add button
+                // and the tab it opens must not be able to drift apart.
+                TabBarActionButton(icon: WorkspaceTabKind.terminal.icon, tooltip: "New Terminal", action: addTerminal)
+                TabBarActionButton(icon: WorkspaceTabKind.browser.icon, tooltip: "New Browser", action: addBrowser)
+                TabBarActionButton(icon: WorkspaceTabKind.editor.icon, tooltip: "New Editor", action: openEditor)
             }
             .fixedSize()
 
@@ -2004,6 +2035,26 @@ private struct WorkspaceTabButton: View {
         .onTapGesture(perform: onSelect)
         .onHover { isHovering = $0 }
     }
+}
+
+/// One singleton tab's quick-add button, as data.
+///
+/// The tab bar's trailing group holds two kinds of button and the divider
+/// between them says so: everything in `all` reopens a tab there is exactly
+/// one of, everything after the divider adds another of a kind there can be
+/// many of. A new singleton kind is one entry here and nothing else — the
+/// buttons and the divider both read the list, so neither can be added
+/// without the other.
+private struct SingletonQuickAdd {
+    let tab: WorkspaceTab
+    /// Spelled out rather than derived from the kind's label: a key built by
+    /// interpolation is a key `genstrings` cannot see.
+    let tooltip: String
+
+    static let all: [SingletonQuickAdd] = [
+        SingletonQuickAdd(tab: .changes, tooltip: NSLocalizedString("Show Changes", comment: "Tab bar button tooltip")),
+        SingletonQuickAdd(tab: .execution, tooltip: NSLocalizedString("Show Execution", comment: "Tab bar button tooltip")),
+    ]
 }
 
 private struct TabBarActionButton: View {

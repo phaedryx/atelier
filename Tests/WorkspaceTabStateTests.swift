@@ -9,8 +9,8 @@ final class WorkspaceTabSnapshotTests: XCTestCase {
     func testStartupStateUsesSavedFixedTab() {
         let state = startupWorkspaceTabState(savedTab: .agent)
 
-        // The seed is always the four fixed tabs; only the active tab varies.
-        XCTAssertEqual(state.tabs, [.info, .agent, .changes, .execution])
+        // The seed is always the two permanent tabs; only the active tab varies.
+        XCTAssertEqual(state.tabs, [.info, .agent])
         XCTAssertEqual(state.activeTab, .agent)
     }
 
@@ -99,9 +99,22 @@ final class WorkspaceTabStateTests: XCTestCase {
         XCTAssertEqual(RestorableWorkspaceTab(activeTab: .execution), .execution)
     }
 
-    func testStartupTabsIncludeExecutionAfterChanges() {
+    func testStartupTabsOmitTheSingletons() {
         let state = startupWorkspaceTabState(savedTab: nil)
-        XCTAssertEqual(state.tabs, [.info, .agent, .changes, .execution])
+        XCTAssertEqual(state.tabs, [.info, .agent])
+        XCTAssertEqual(state.activeTab, .info)
+    }
+
+    func testStartupClampsASavedSingletonToInfo() {
+        // .changes and .execution still round-trip through WorkspaceStateStore
+        // — a workstream saved before this seed changed has one on disk — but
+        // neither tab is seeded any more, so restoring one would leave
+        // activeTab outside tabs.
+        for saved in [RestorableWorkspaceTab.changes, .execution] {
+            let state = startupWorkspaceTabState(savedTab: saved)
+            XCTAssertEqual(state.tabs, [.info, .agent])
+            XCTAssertEqual(state.activeTab, .info)
+        }
     }
 
     func testChangesTabRoundTrips() {
