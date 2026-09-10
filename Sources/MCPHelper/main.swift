@@ -255,6 +255,28 @@ let toolDefinitions: [ToolDefinition] = [
         ],
         required: ["reason"]
     ),
+    ToolDefinition(
+        tool: .createWorkstream,
+        description: """
+        Create a new workstream in this project — its own git worktree on its own
+        new branch, cut from the project's base branch — and with `prompt`, start
+        an agent in it. This is the tool for work that needs a SEPARATE BRANCH.
+        Use open_agent_tab instead when the work belongs on the branch you are
+        already on: a tab shares your worktree, a workstream does not, and one
+        worktree cannot hold two branches. The new workstream's `bootstrap` runs
+        in the background, so its dependencies may not be installed the moment
+        the agent starts. Creating it does not move the user's view — the row
+        appears in the sidebar and whatever they are looking at stays put.
+        Returns the workstream's name and path, and the new agent's surface id;
+        poll list_peers for a peer reporting that surface before messaging it.
+        """,
+        properties: [
+            "name": ["type": "string", "description": "Name for the workstream, used verbatim as the git branch name. Omit to have one generated. Must be a valid branch name and must not already be taken in this project."],
+            "prompt": ["type": "string", "description": "Instructions for the agent to start with. Omit to create the workstream without starting an agent."],
+            "bypass_permissions": ["type": "string", "description": "\"true\" to start the agent with --dangerously-skip-permissions. Omit for \"false\". Any other value is an error."],
+        ],
+        required: []
+    ),
 ]
 
 /// Shown to the agent once, at initialize.
@@ -269,7 +291,9 @@ open_editor puts a file on screen in front of the user, and request_attention ra
 
 open_agent_tab opens a terminal tab in your workstream, and with a prompt it starts another agent there. That agent shares your worktree, so give it work that collaborates on the change you are already making — a reviewer, a test-writer, a second pair of hands on the same branch. Work that belongs on its own branch needs its own workstream, not a tab. Poll list_tabs for the new surface's peer id before trying to message it.
 
-These tools act on your own workstream and no other. There is no way to reach another agent's tabs — to coordinate with an agent elsewhere, send it a message.
+create_workstream is the exception to that: it makes a NEW workstream, with its own worktree and its own branch, and with a prompt it starts an agent there. Reach for it when the work needs a branch of its own, and for open_agent_tab when it belongs on yours.
+
+The rest of these tools act on your own workstream and no other. There is no way to reach another agent's tabs — to coordinate with an agent elsewhere, send it a message.
 """
 
 // MARK: - JSON-RPC plumbing

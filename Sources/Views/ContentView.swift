@@ -464,6 +464,11 @@ struct ContentView: View {
             WorkspaceActions.shared.surfaceCache = surfaceCache
             WorkspaceActions.shared.projectList = projectList
             WorkspaceActions.shared.appEnvironment = appEnvironment
+            // Creating a workstream needs the same list, and stays out of
+            // `WorkspaceActions` on purpose: it is a workstream-lifecycle
+            // operation the sidebar could route through too, and an IPC-named
+            // type owning it would point the dependency the wrong way.
+            Workstream.Launcher.shared.projectList = projectList
             appEnvironment.refresh()
             appEnvironment.refreshAllRepoInfo(projects: projects)
             appEnvironment.refreshPathValidity(projects: projects)
@@ -532,7 +537,15 @@ struct ContentView: View {
                       let workstream = info["workstream"] as? Workstream,
                       let index = projects.firstIndex(where: { $0.id == projectID }) else { return }
                 projects[index].workstreams.append(workstream)
-                selection = .workstream(workstream.id)
+                // Every UI producer of this notification is a button the user
+                // just pressed, so selecting is the right default and they omit
+                // the key. `Workstream.Launcher` passes false: an agent creating
+                // a workstream over IPC must not pull the user out of the pane
+                // they are in. The row still appears here immediately, so the
+                // creation is visible without being disruptive.
+                if info["select"] as? Bool ?? true {
+                    selection = .workstream(workstream.id)
+                }
                 ProjectStore.save(projects)
                 logger.warning("[Atelier] workstreamCreated notification handled: \(workstream.name, privacy: .public)")
             }

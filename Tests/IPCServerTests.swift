@@ -517,6 +517,7 @@ final class IPCServerTests: XCTestCase {
             [
                 "register_peer", "list_peers", "send_message", "receive_messages", "broadcast", "get_peer_status",
                 "list_tabs", "read_review_comments", "open_editor", "open_agent_tab", "request_attention",
+                "create_workstream",
             ]
         )
         // Every advertised name must be a real `IPC.Tool`. `toolDefinitions` and
@@ -528,11 +529,13 @@ final class IPCServerTests: XCTestCase {
         }
         // A `Tool` case with no definition is deliberate — it is how a case
         // lands ahead of its handler — but it must be *deliberate*, so pin the
-        // ones currently unadvertised rather than letting the set drift.
+        // ones currently unadvertised rather than letting the set drift. Every
+        // case now has one; a new tool lands here as a failure until it is
+        // either advertised or listed as knowingly hidden.
         let undefined = IPC.Tool.allCases.map(\.rawValue).filter { !advertised.contains($0) }
         XCTAssertEqual(
             undefined.sorted(),
-            ["create_workstream"],
+            [],
             "a tool was added to IPC.Tool without a definition, or advertised before its handler landed"
         )
 
