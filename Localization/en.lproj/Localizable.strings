@@ -467,6 +467,16 @@
 "Command Palette" = "Command Palette";
 "Type a command…" = "Type a command…";
 "No matching commands" = "No matching commands";
+"Go To" = "Go To";
+"Next Tab" = "Next Tab";
+"Previous Tab" = "Previous Tab";
+"Focus Address Bar" = "Focus Address Bar";
+"Next Workstream" = "Next Workstream";
+"Previous Workstream" = "Previous Workstream";
+"Next Project" = "Next Project";
+"Previous Project" = "Previous Project";
+"Toggle Sidebar" = "Toggle Sidebar";
+"Settings: %@" = "Settings: %@";
 
 /* Clone from GitHub repo */
 "Clone from GitHub repo" = "Clone from GitHub repo";

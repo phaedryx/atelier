@@ -21,6 +21,10 @@ extension Notification.Name {
     /// object: the workstream's `UUID`. Posted when a blocked-agent notification
     /// is clicked, so the sidebar selects the workstream that was waiting.
     static let focusWorkstream = Notification.Name("atelier.focusWorkstream")
+    /// object: the project's `UUID`. The named-destination counterpart to
+    /// `.switchToProject`, which carries no payload and can only mean "the
+    /// project the selected workstream belongs to".
+    static let focusProject = Notification.Name("atelier.focusProject")
 }
 
 final class ProjectList: ObservableObject {
@@ -240,6 +244,14 @@ struct ContentView: View {
                     with: promptPaletteCommands(for: prompts)
                 )
             }
+            // Same shape, same reason: `@Published` replays the current list on
+            // subscription, so this seeds the go-to family at launch and
+            // rebuilds it whenever a project or workstream is added, renamed or
+            // removed. Subscribing to the publisher rather than `onChange(of:)`
+            // is what gets the launch seeding for free.
+            .onReceive(projectList.$items) { items in
+                syncGotoCommands(projects: items)
+            }
             .onReceive(NotificationCenter.default.publisher(for: .toggleSidebar)) { _ in
                 NSApp.sendAction(#selector(NSSplitViewController.toggleSidebar(_:)), to: nil, from: nil)
             }
@@ -417,7 +429,14 @@ struct ContentView: View {
             }
     }
 
-    private var navigationViewBase: some View {
+    /// The split view and the receivers that change what is *selected*.
+    ///
+    /// Split out of `navigationViewBase` below, and it has to stay split: the
+    /// two together are one modifier chain of twenty-odd `.onReceive`s, and the
+    /// Swift type-checker gives up on it ("unable to type-check this expression
+    /// in reasonable time"). Adding a receiver to either half is fine; merging
+    /// them back is not.
+    private var selectionReceivingSplitView: some View {
         NavigationSplitView {
             ProjectSidebar(
                 projects: $projectList.items,
@@ -476,110 +495,119 @@ struct ContentView: View {
             else { return }
             selection = .workstream(wsID)
         }
-        .onReceive(NotificationCenter.default.publisher(for: .nextWorkstream)) { _ in
-            cycleWorkstream(direction: 1)
+        .onReceive(NotificationCenter.default.publisher(for: .focusProject)) { notification in
+            focusProject(from: notification)
         }
-        .onReceive(NotificationCenter.default.publisher(for: .prevWorkstream)) { _ in
-            cycleWorkstream(direction: -1)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .nextProject)) { _ in
-            cycleProject(direction: 1)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .prevProject)) { _ in
-            cycleProject(direction: -1)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .archiveWorkstream)) { _ in
-            if let wsID = selection?.workstreamID {
-                workstreamToRemove = wsID
+    }
+
+    /// The rest of the chain: cycling, workstream lifecycle, and the polls.
+    /// See `selectionReceivingSplitView` above for why this is two properties.
+    private var navigationViewBase: some View {
+        selectionReceivingSplitView
+            .onReceive(NotificationCenter.default.publisher(for: .nextWorkstream)) { _ in
+                cycleWorkstream(direction: 1)
             }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .workstreamCreated)) { notification in
-            guard let info = notification.userInfo,
-                  let projectID = info["projectID"] as? UUID,
-                  let workstream = info["workstream"] as? Workstream,
-                  let index = projects.firstIndex(where: { $0.id == projectID }) else { return }
-            projects[index].workstreams.append(workstream)
-            selection = .workstream(workstream.id)
-            ProjectStore.save(projects)
-            logger.warning("[Atelier] workstreamCreated notification handled: \(workstream.name, privacy: .public)")
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .workstreamWorktreeReady)) { notification in
-            guard let info = notification.userInfo,
-                  let workstreamID = info["workstreamID"] as? UUID,
-                  let worktreePath = info["worktreePath"] as? String else { return }
-            for pi in projects.indices {
-                if let wi = projects[pi].workstreams.firstIndex(where: { $0.id == workstreamID }) {
-                    projects[pi].workstreams[wi].worktreePath = worktreePath
-                    ProjectStore.save(projects)
-                    appEnvironment.refreshPathValidity(projects: projects)
-                    // Project/Workstream equate by id only, so onChange(of: projectList.items)
-                    // doesn't fire when worktreePath flips from nil to a real value. Refresh
-                    // the agent-state lookup explicitly so hook events for this new workstream
-                    // can resolve to its UUID.
-                    refreshAgentStateLookup(projects: projects)
-                    // Same reason: a brand-new worktree is exactly the one whose
-                    // branch the agent is about to rename, so it has to start
-                    // being watched now rather than on some later mutation.
-                    syncHeadWatcher(projects: projects)
-                    // And again: this is the moment a Shortcut workstream first has a path
-                    // to key its story by. Without this the story staged at creation is
-                    // never promoted and the info tab shows nothing for the whole session.
-                    syncShortcutStoryIDs(projects: projects)
-                    logger.warning("[Atelier] workstreamWorktreeReady: updated \(workstreamID, privacy: .public) with path \(worktreePath, privacy: .public)")
-                    // Run the project's `bootstrap` namespace in the background.
-                    let projectPath = projects[pi].directory
-                    // Names, not just paths: bootstrap runs with the same
-                    // `ATELIER_PROJECT` / `ATELIER_WORKSTREAM` the workstream's
-                    // terminals get, and only the project model knows them.
-                    let projectName = projects[pi].name
-                    let workstreamName = projects[pi].workstreams[wi].name
-                    Task {
-                        await AsyncSetupService.shared.setupExistingWorktree(
-                            workstreamID: workstreamID,
-                            projectName: projectName,
-                            workstreamName: workstreamName,
-                            projectPath: projectPath,
-                            worktreePath: worktreePath
-                        )
-                    }
-                    return
+            .onReceive(NotificationCenter.default.publisher(for: .prevWorkstream)) { _ in
+                cycleWorkstream(direction: -1)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nextProject)) { _ in
+                cycleProject(direction: 1)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .prevProject)) { _ in
+                cycleProject(direction: -1)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .archiveWorkstream)) { _ in
+                if let wsID = selection?.workstreamID {
+                    workstreamToRemove = wsID
                 }
             }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .workstreamCreationFailed)) { notification in
-            guard let info = notification.userInfo,
-                  let projectID = info["projectID"] as? UUID,
-                  let workstreamID = info["workstreamID"] as? UUID,
-                  let pi = projects.firstIndex(where: { $0.id == projectID }) else { return }
-            projects[pi].workstreams.removeAll { $0.id == workstreamID }
-            if case let .workstream(selectedID) = selection, selectedID == workstreamID {
-                selection = .project(projectID)
+            .onReceive(NotificationCenter.default.publisher(for: .workstreamCreated)) { notification in
+                guard let info = notification.userInfo,
+                      let projectID = info["projectID"] as? UUID,
+                      let workstream = info["workstream"] as? Workstream,
+                      let index = projects.firstIndex(where: { $0.id == projectID }) else { return }
+                projects[index].workstreams.append(workstream)
+                selection = .workstream(workstream.id)
+                ProjectStore.save(projects)
+                logger.warning("[Atelier] workstreamCreated notification handled: \(workstream.name, privacy: .public)")
             }
-            ProjectStore.save(projects)
-            logger.warning("[Atelier] workstreamCreationFailed: removed \(workstreamID, privacy: .public)")
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .projectCreated)) { notification in
-            guard let project = notification.userInfo?["project"] as? Project else { return }
-            projects.append(project)
-            selection = .project(project.id)
-            ProjectStore.save(projects)
-            appEnvironment.refreshPathValidity(projects: projects)
-            appEnvironment.refreshAllRepoInfo(projects: projects)
-            logger.warning("[Atelier] projectCreated notification handled: \(project.name, privacy: .public)")
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .purgeWorkstream)) { notification in
-            if let wsID = notification.object as? UUID {
-                confirmPurge(wsID)
+            .onReceive(NotificationCenter.default.publisher(for: .workstreamWorktreeReady)) { notification in
+                guard let info = notification.userInfo,
+                      let workstreamID = info["workstreamID"] as? UUID,
+                      let worktreePath = info["worktreePath"] as? String else { return }
+                for pi in projects.indices {
+                    if let wi = projects[pi].workstreams.firstIndex(where: { $0.id == workstreamID }) {
+                        projects[pi].workstreams[wi].worktreePath = worktreePath
+                        ProjectStore.save(projects)
+                        appEnvironment.refreshPathValidity(projects: projects)
+                        // Project/Workstream equate by id only, so onChange(of: projectList.items)
+                        // doesn't fire when worktreePath flips from nil to a real value. Refresh
+                        // the agent-state lookup explicitly so hook events for this new workstream
+                        // can resolve to its UUID.
+                        refreshAgentStateLookup(projects: projects)
+                        // Same reason: a brand-new worktree is exactly the one whose
+                        // branch the agent is about to rename, so it has to start
+                        // being watched now rather than on some later mutation.
+                        syncHeadWatcher(projects: projects)
+                        // And again: this is the moment a Shortcut workstream first has a path
+                        // to key its story by. Without this the story staged at creation is
+                        // never promoted and the info tab shows nothing for the whole session.
+                        syncShortcutStoryIDs(projects: projects)
+                        logger.warning("[Atelier] workstreamWorktreeReady: updated \(workstreamID, privacy: .public) with path \(worktreePath, privacy: .public)")
+                        // Run the project's `bootstrap` namespace in the background.
+                        let projectPath = projects[pi].directory
+                        // Names, not just paths: bootstrap runs with the same
+                        // `ATELIER_PROJECT` / `ATELIER_WORKSTREAM` the workstream's
+                        // terminals get, and only the project model knows them.
+                        let projectName = projects[pi].name
+                        let workstreamName = projects[pi].workstreams[wi].name
+                        Task {
+                            await AsyncSetupService.shared.setupExistingWorktree(
+                                workstreamID: workstreamID,
+                                projectName: projectName,
+                                workstreamName: workstreamName,
+                                projectPath: projectPath,
+                                worktreePath: worktreePath
+                            )
+                        }
+                        return
+                    }
+                }
             }
-        }
-        .onReceive(Timer.publish(every: 15, on: .main, in: .common).autoconnect()) { _ in
-            appEnvironment.refreshAllRepoInfo(projects: projects)
-            appEnvironment.refreshPathValidity(projects: projects)
-            appEnvironment.refreshAllBranchPRs(projects: projects)
-            appEnvironment.fetchOrigin(projects: projects)
-            syncWorkstreamNamesFromBranches()
-        }
-        .modifier(UsagePolling(store: usageStore))
+            .onReceive(NotificationCenter.default.publisher(for: .workstreamCreationFailed)) { notification in
+                guard let info = notification.userInfo,
+                      let projectID = info["projectID"] as? UUID,
+                      let workstreamID = info["workstreamID"] as? UUID,
+                      let pi = projects.firstIndex(where: { $0.id == projectID }) else { return }
+                projects[pi].workstreams.removeAll { $0.id == workstreamID }
+                if case let .workstream(selectedID) = selection, selectedID == workstreamID {
+                    selection = .project(projectID)
+                }
+                ProjectStore.save(projects)
+                logger.warning("[Atelier] workstreamCreationFailed: removed \(workstreamID, privacy: .public)")
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .projectCreated)) { notification in
+                guard let project = notification.userInfo?["project"] as? Project else { return }
+                projects.append(project)
+                selection = .project(project.id)
+                ProjectStore.save(projects)
+                appEnvironment.refreshPathValidity(projects: projects)
+                appEnvironment.refreshAllRepoInfo(projects: projects)
+                logger.warning("[Atelier] projectCreated notification handled: \(project.name, privacy: .public)")
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .purgeWorkstream)) { notification in
+                if let wsID = notification.object as? UUID {
+                    confirmPurge(wsID)
+                }
+            }
+            .onReceive(Timer.publish(every: 15, on: .main, in: .common).autoconnect()) { _ in
+                appEnvironment.refreshAllRepoInfo(projects: projects)
+                appEnvironment.refreshPathValidity(projects: projects)
+                appEnvironment.refreshAllBranchPRs(projects: projects)
+                appEnvironment.fetchOrigin(projects: projects)
+                syncWorkstreamNamesFromBranches()
+            }
+            .modifier(UsagePolling(store: usageStore))
     }
 
     /// The palette lives in its own property: `navigationViewBase`'s modifier
@@ -736,6 +764,30 @@ struct ContentView: View {
 
     /// Update workstream names to match their branch name.
     /// Called periodically so that when the agent renames a branch, the sidebar reflects it.
+    /// Selects the project a `.focusProject` notification names, ignoring one
+    /// that names a project no longer in the list — the go-to command family is
+    /// rebuilt from that list, but a stale command could still be in flight from
+    /// an open palette.
+    ///
+    /// Extracted rather than inlined in the modifier chain: `body`'s run of
+    /// `.onReceive`s is long enough that one more multi-statement closure tips
+    /// the type-checker over its time limit.
+    private func focusProject(from notification: Notification) {
+        guard let projectID = notification.object as? UUID,
+              projects.contains(where: { $0.id == projectID })
+        else { return }
+        selection = .project(projectID)
+    }
+
+    /// Rebuilds the palette's go-to family from the project list. Extracted for
+    /// the same reason as `focusProject(from:)` above.
+    private func syncGotoCommands(projects: [Project]) {
+        commandRegistry.sync(
+            idPrefix: gotoCommandPrefix,
+            with: gotoPaletteCommands(for: projects)
+        )
+    }
+
     private func syncWorkstreamNamesFromBranches() {
         var changed = false
         for pi in projects.indices {
