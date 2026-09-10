@@ -59,13 +59,14 @@ git worktree add "$def"
 ## Configuration
 
 Turn on **Enable process-compose** in Settings first — it is off by default, and
-nothing below runs until it is on, including the Execution tab's Start button.
+nothing below runs until it is on, including the Execution tab's Start button
+and the Verification tab's Run button.
 
 ### What Atelier reads
 
 | File | Where Atelier looks | What it holds |
 |------|---------------------|---------------|
-| `process-compose.yaml` | the worktree, then the project directory | the commands, in four namespaces |
+| `process-compose.yaml` | the worktree, then the project directory | the commands, in five namespaces |
 | `process-compose.override.yml` | the worktree | per-worktree additions to a project-directory config |
 | `ports.yml` (or `ports.yaml`) | the project directory only | the port variables Atelier supplies |
 
@@ -102,6 +103,7 @@ process-compose up -f ../process-compose.yaml    # from inside a worktree
 | `prepare` | Before every Start, to completion; a failure stops `execute` |
 | `execute` | The long-lived stack, shown in the Execution tab's process table |
 | `dispose` | Once, when a workstream is archived |
+| `verify` | On demand, from the Verification tab; never chained into Start |
 
 ### A worked example
 
@@ -312,10 +314,11 @@ binary — not the directory holding it.
 
 ### Approval, and when there is no config
 
-`bootstrap` and `dispose` run unattended, so a config that came with the
-repository has to be approved first, and again whenever it changes. A config you
-placed in the project directory by hand is never asked about — approval is gated
-by *where the file is*, not what is in it. `execute` is never gated because it is
+`bootstrap`, `dispose` and `verify` all run with their output captured rather
+than shown in a terminal, so a config that came with the repository has to be
+approved first, and again whenever it changes. A config you placed in the
+project directory by hand is never asked about — approval is gated by *where
+the file is*, not what is in it. `execute` is never gated because it is
 *attended*: you press Start, the stack's output lands in a terminal surface in
 front of you, and Stop is right there. The Execution tab shows which files are
 in play, not the command Start runs.

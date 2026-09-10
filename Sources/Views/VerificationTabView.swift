@@ -50,8 +50,7 @@ func verificationCanRun(isLive: Bool) -> Bool {
 /// `showsProcessSelection` gives for hiding Execution's checklist
 /// (`ExecutionTabView.swift:83`). This tab used to keep the list visible and
 /// merely `.disabled(isLive)` it; that let a user click a box that could not
-/// take effect, which is the confusing state Tad flagged after seeing the tab
-/// run.
+/// take effect, which is a confusing state to be in while a run is going.
 ///
 /// The empty-list guard is not cosmetic: an empty list would make
 /// `ProcessSelectionView`'s own `.onAppear` read the stored selection as
@@ -404,6 +403,12 @@ struct VerificationTabView: View {
             }
         }
         .padding(16)
+        // `alignment: .top` is `Alignment(.center, .top)`, so this frame centres
+        // its content horizontally by default. The VStack above stays
+        // left-aligned only because `actionRow`'s `HStack` ends in a `Spacer()`
+        // that forces the row — and with it the VStack — to full width.
+        // Removing that `Spacer()` in an unrelated change would silently
+        // re-centre the whole tab.
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
@@ -430,6 +435,8 @@ struct VerificationTabView: View {
                 .buttonStyle(.bordered)
             }
 
+            // Load-bearing: this is what keeps `content`'s outer frame from
+            // centring the whole VStack — see the comment on that frame.
             Spacer()
         }
     }

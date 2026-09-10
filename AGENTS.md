@@ -110,9 +110,9 @@ carries the `-dev` marker.
 - `Sources/Models/` - Data models, git operations, tmux, name generator, app constants
 - `Sources/Models/IPC/` - Agent-to-agent messaging (server, store, protocol, nudges)
 - **Model types are namespaced**, not prefixed: `IPC.Request`, `Git.RepoInfo`,
-  `Shortcut.Story`, `ProcessCompose.Config`. Thirteen namespaces —  `IPC`,
+  `Shortcut.Story`, `ProcessCompose.Config`. Fourteen namespaces —  `IPC`,
   `Shortcut`, `Git`, `GitHub`, `Worktree`, `Workstream`, `Project`, `RunState`,
-  `Port`, `Usage`, `QuickAction`, `DevCommand`, `ProcessCompose`. Each is
+  `Port`, `Usage`, `QuickAction`, `DevCommand`, `ProcessCompose`, `Verification`. Each is
   declared once, in the file owning most of its members; every other file
   extends it. For `IPC` and `RunState` that host file is fixed by the helper
   targets, which compile individual model files by path (`project.yml:179-181`
@@ -174,10 +174,20 @@ carries the `-dev` marker.
 - **Tool detection** runs at startup in `AppEnvironment.refresh()`
 - **Sidebar state** (selection, expanded sections) stored in UserDefaults (`atelier.selection`, `atelier.expandedProjects`)
 - **Process-compose approval** stored in UserDefaults (`atelier.approvedConfigFiles`), keyed by project directory against a SHA-256 of every repository-provided file the config will load
+- **Verification** keeps two per-workstream keys, both in `Verification.Store`.
+  `atelier.verifyRun.<workstreamID>` holds the most recent run, stamp included —
+  only the latest, deliberately: history needs a retention policy and would be
+  read by nothing, since the tab shows one run and an agent resolving an older
+  id is worth less than a store that cannot grow without bound.
+  `atelier.verifySelection.<workstreamID>` holds which checks the next run
+  starts; empty means all, stored as the *absence* of the key, not an empty
+  array. This is a **different key** from `atelier.processSelection.<id>`
+  (`ProcessTableModel`'s, for the Execution tab's checklist) — one key for both
+  would make checking a check in Verification uncheck a process in Execution.
 
 ### Workstream lifecycle
 1. Creating a workstream: generates name, runs `git worktree add`; `AsyncSetupService` then runs the project's `bootstrap` namespace in the background
-2. Workspace view: a workstream opens with only Info (Cmd+I) and Agent (Cmd+Return), which are also the only permanent tabs. Changes and Execution are singletons — at most one of each — opened on demand from the tab bar's quick-add buttons, the command palette, or their toggles, and they close and reorder like terminals/browsers once open. `startupWorkspaceTabState` seeds the two permanent tabs and clamps the restored `activeTab` into that list; the seed and the clamp move together, because a saved `.changes` restored onto a strip with no Changes tab renders the pane with nothing selected
+2. Workspace view: a workstream opens with only Info (Cmd+I) and Agent (Cmd+Return), which are also the only permanent tabs. Changes, Execution and Verification are singletons — at most one of each — opened on demand from the tab bar's quick-add buttons, the command palette, or their toggles, and they close and reorder like terminals/browsers once open. `startupWorkspaceTabState` seeds the two permanent tabs and clamps the restored `activeTab` into that list; the seed and the clamp move together, because a saved `.changes` restored onto a strip with no Changes tab renders the pane with nothing selected
 3. Tmux mode: wraps Coding Agent only in `tmux new-session -A` on socket `-L atelier`
 4. Terminal tabs: close on shell exit (Ctrl+D). Agent respawns.
 5. Ending a workstream: two operations, not one — see below.
@@ -321,7 +331,7 @@ where the search looks. Background setup's own outcome, including `.completedWit
 rendered on the Info tab, which is permanent; nothing observed `.asyncSetupStateChanged` before,
 so those notes were written and discarded.
 
-**Four namespaces**, driven by `ProcessCompose.PhaseRunner` and `ProcessCompose.PhaseExecutor`:
+**Five namespaces**, driven by `ProcessCompose.PhaseRunner` and `ProcessCompose.PhaseExecutor`:
 
 | Namespace | When | Interactive? |
 |-----------|------|--------------|
@@ -329,6 +339,7 @@ so those notes were written and discarded.
 | `prepare` | to completion before each Start, chained `&&` ahead of `execute` | no |
 | `execute` | the long-lived stack, attached to a terminal surface and a process table | yes |
 | `dispose` | once, at archive (`Workstream.Archiver.runDispose`) | no |
+| `verify` | on demand, from the Verification tab | no |
 
 `prepare` is chained only when `namespacePresence` says `.present` — never on `.unknown`.
 process-compose does not exit when told to run an empty namespace, it idles forever, so
@@ -396,6 +407,73 @@ located, a binary to run it with, and approval of every repository-provided file
 unattended phases. It is deliberately the *only* copy: a second, inlined set in
 `Workstream.Archiver` could not be tested and would not follow a change made here. Any new
 unattended execution path for repository-provided commands must go through it.
+`Verification.Runner.start` calls it too (`VerificationRunner.swift:347-363`), not because `verify`
+runs automatically the way `bootstrap` and `dispose` do, but on the same underlying argument its own
+comment gives: captured output means nobody is watching a TTY, so the reasoning that leaves
+`execute` ungated does not apply — to a user press or to an agent call. See below.
+
+### The verify namespace
+Six decisions from writing `verify` cost a review round each, and each is the kind of thing a later
+reader would plausibly "simplify" away without knowing why:
+
+1. **The log window is one-shot.** Per-check output lives in the control server that ran the
+   namespace, and the run loop (`Verification.Runner.execute`, `VerificationRunner.swift:438-499`)
+   tears that server down only after `seal` has returned — so the 200-line tail
+   `captureFailedOutput` fetches first (`VerificationRunner.swift:604-655`) is all that exists
+   anywhere afterward. No UI or agent-facing copy may imply a fuller log can be fetched later; the
+   tab's own truncation notice says as much ("There is nothing more to fetch: the run's own output
+   no longer exists anywhere", `VerificationTabView.swift:498`). 200 lines is not an arbitrary
+   round number — it was sized against `IPC.Store`'s 65,536-byte-per-message cap
+   (`IPCStore.swift:62`), which *throws rather than truncating* (`IPCStore.swift:176` and `:196`),
+   so an oversized completion notice would be lost silently while an agent waits for it.
+   `outputTruncated` means "there was more at capture time", never "more is retrievable".
+2. **Teardown has exactly one owner.** `spawner.shutDown` is called once, from the run loop, only
+   after `seal` returns (`VerificationRunner.swift:484-490`). Not from a `defer` — that can run
+   before the log fetch, and the output is gone by the time `seal` wants it. Not from
+   `stop(workstreamID:)` (`VerificationRunner.swift:250-253`) — Stop and the run loop would then
+   race two teardowns on one socket, the hazard `shutDownWhenDone: false` exists to avoid; `stop`
+   only sets a flag. A missed trailing teardown is recoverable because `ProcessCompose.PhaseExecutor.run`
+   shuts the socket down again at its own top, before spawning, the next time `start` is called.
+3. **A Stop is not acted on until the control server has answered.** `shouldStop` withholds a
+   pending Stop until `state.sawServer` is true (`VerificationRunner.swift:517-537`), because
+   `PhaseExecutor.shutDown` returns immediately when the socket file does not exist yet
+   (`PhaseExecutor.swift:452-453`) — a Stop observed before `up` binds would make that teardown a
+   no-op while the suite kept running: `isLive` would clear while the suite was still live, and a
+   second `start` would be admitted onto the same socket.
+4. **Liveness is `Verification.Runner.isLive(_:)`, never `Run.isFinished`.** The run loop publishes
+   each check's state as the poll sees it, so a run's rows can all read terminal while the spawn is
+   still winding down and nothing has been sealed or persisted — `isFinished` goes true at that
+   moment; `isLive` does not (`VerificationRunner.swift:205-214`). `verificationCanRun`
+   (`VerificationTabView.swift:32-43`) gates the Run button on `isLive` for the same reason.
+   `Run.isFinished` is a row-state property, not a liveness signal: using it here would let a second
+   `start` rebind `<id>-verify.sock` while the first run's spawn is still winding down and its
+   server is still there — the reason `isLive` is keyed on `sealedRunIDs` instead.
+5. **The Verification tab's availability decision is `PhasePolicy.plan`'s; only the wording is
+   separate.** `verificationAvailability` calls `plan(phase: .verify, …)` for the decision and
+   `verificationUnavailableReason` only to phrase it in the present tense
+   (`VerificationTabView.swift:113-245`), because `Plan.nothingToDo` carries a past-tense string and
+   no discriminated case. **Nothing enforces the agreement** —
+   `verificationUnavailableReason` hand-mirrors `plan`'s four preconditions in the same order; a
+   fifth precondition added to `plan` has to be added here too, by hand, and nothing will fail to
+   compile if that step is missed. `.run` is not by itself availability, either: `plan` knows nothing
+   about namespace *contents*, so an empty or unparseable `verify` namespace still returns `.run` —
+   `verificationAvailability` reads the declared list off `plan`'s own returned config as a fifth
+   fact, so Run cannot be enabled for a project `start` would refuse.
+6. **A parse failure is not "declares nothing".** `declaredProcesses(in:)` returns nil, not `[]`,
+   when a file cannot be parsed (`ProcessComposeConfig.swift:107-134`). `Verification.Runner.start`
+   throws `Failure.unavailable` on that nil rather than letting `resolveChecks` see an empty list
+   (`VerificationRunner.swift:374-386`), and `verificationUnavailableReason` keeps `declared` as an
+   `Optional` through its own guard chain for the same reason (`VerificationTabView.swift:113-162`).
+   Coalescing either one to `[]` early would report a broken config to the user as "this project
+   declares no verify checks" — the same message a project with genuinely no verify checks gets,
+   and the only diagnostic either path gives.
+
+**No agent can start a verify run yet.** `Verification.Runner`'s own doc already talks about "a run
+an agent started through `start_verification`" (`VerificationRunner.swift:12-17`), and that is why
+the type is app-level rather than owned by the tab — so an IPC adapter can attach to `runs` and
+`onFinish` later without moving ownership. But no such tool exists today: `IPC.Tool`
+(`IPCProtocol.swift`) has no `start_verification` or `check_verification` case, and nothing under
+`Sources/MCPHelper` mentions verification. The Verification tab is the only caller right now.
 
 ### ports.yaml
 A **`ports.yaml`** in the project directory declares the port variables Atelier supplies, so
@@ -471,7 +549,11 @@ many-branch repository, or any package-manager install.
 Pick a deadline from `ProcessRunner.Timeout` rather than inlining a number:
 `local` for reads and ref-level writes, `network` for anything reaching a remote,
 `userCommand` for work whose size the user controls, `install` for package
-managers. The distinction that matters is not local-versus-remote but whether the
+managers, `suite` for a project's own test or lint suite run through the `verify`
+namespace. `suite` is 1800s, the same bound as `install`, because `userCommand`'s
+300s is too short for a real suite — the bound exists to break a wedge rather
+than to enforce a pace, and Stop is the real escape for a run that is merely
+slow. The distinction that matters is not local-versus-remote but whether the
 repository's size sets the duration: `git status` is `local`, while `git worktree
 add` checks out a whole tree and goes through `Git.Operations.runOnWholeTree`. Git spawns also set `GIT_TERMINAL_PROMPT=0` and `GIT_ASKPASS`, because
 a GUI app has no terminal on which to answer a credential prompt, so the prompt
@@ -752,9 +834,9 @@ When adding, removing, or changing keyboard shortcuts:
 Current shortcuts:
 - **Cmd+I**: Info
 - **Cmd+1-9**: Switch tab (all tabs in display order). Positional, so no
-  number reaches a closed tab — and Changes and Execution start closed. Open
-  them from the tab bar's quick-add buttons or the command palette; nothing is
-  bound to them by name.
+  number reaches a closed tab — and Changes, Execution and Verification start
+  closed. Open them from the tab bar's quick-add buttons or the command
+  palette; nothing is bound to them by name.
 - **Cmd+Shift+[/]**: Cycle tabs
 - **Cmd+Return**: Focus Coding Agent
 - **Cmd+P**: Find File (Editor)
