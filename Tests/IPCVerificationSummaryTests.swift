@@ -196,6 +196,21 @@ final class IPCVerificationSummaryTests: XCTestCase {
         }
     }
 
+    /// An even share below the floor used to mean nobody got output at all —
+    /// a cliff rather than a degradation, one failing check either side of it.
+    func test_message_givesOutputToAsManyFailuresAsTheBudgetAllows() {
+        let many = (0 ..< 31).map { index in
+            check("check-\(index)", .failed, exitCode: 1, duration: 1, output: "boom \(index)\nstack line for \(index)")
+        }
+        let message = IPC.VerificationSummary.message(for: run(checks: many))
+
+        XCTAssertLessThanOrEqual(message.utf8.count, IPC.VerificationSummary.maxMessageBytes)
+        XCTAssertTrue(message.contains("    boom 0"), "the first failure's output should still be there: \(message)")
+        for index in 0 ..< 31 {
+            XCTAssertTrue(message.contains("✗ check-\(index)"), "check-\(index)'s verdict is missing")
+        }
+    }
+
     // MARK: - Bounding the read
 
     func test_bounded_trimsEachChecksOutputAndSaysThatItDid() {

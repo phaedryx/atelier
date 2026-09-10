@@ -163,15 +163,23 @@ extension IPC {
             // The newline that joins each block to the line above it comes out of
             // the same budget, so it is charged here rather than discovered as a
             // few bytes of overshoot per failing check.
-            let share = min(maxFailureTailBytes, budget / failing.count - 1)
-            guard share >= minTailBytes else { return [:] }
+            let even = budget / failing.count - 1
+            // An even split below the floor is not worth reading, so past that
+            // point the budget goes to as many failures as the floor allows,
+            // in order, rather than to none of them. Thirty failing checks
+            // would otherwise take the notice from "some output" to "no output"
+            // in one step.
+            let allowance = min(maxFailureTailBytes, max(even, minTailBytes))
 
             var result: [String: String] = [:]
+            var remaining = budget
             for check in failing {
+                guard remaining >= allowance + 1 else { break }
                 guard let output = check.outputTail,
-                      let block = indentedTail(of: output, allowance: share)
+                      let block = indentedTail(of: output, allowance: allowance)
                 else { continue }
                 result[check.name] = block
+                remaining -= block.utf8.count + 1
             }
             return result
         }

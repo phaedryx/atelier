@@ -33,13 +33,19 @@ extension IPC {
         /// and the two halves of the feature can land in either order.
         private var verification: VerificationControlling?
 
-        /// Runs whose completion notice has already been posted.
+        /// Starts whose completion notice has already been posted.
         ///
         /// The seam promises `onFinish` fires once per run, and a second call
-        /// would post a duplicate notice into an inbox with a hundred-message
-        /// cap. Free to guard, and a duplicate is unpleasant to diagnose from the
-        /// agent's end. One short string per run for the app's lifetime.
-        private var noticedRuns: Set<String> = []
+        /// would put a duplicate into an inbox with a hundred-message cap. Free
+        /// to guard, and unpleasant to diagnose from the agent's end.
+        ///
+        /// **Keyed per start rather than by run id**, which is the runner's value
+        /// and only promised unique for the app's lifetime — and a workstream's
+        /// most recent run outlives a restart, so that promise spans a boundary
+        /// this set does not. Keyed by id, a legitimate second run that happened
+        /// to reuse one would be silently swallowed and deliver nothing. A token
+        /// minted here cannot collide with anything.
+        private var deliveredNotices: Set<UUID> = []
 
         init(store: Store = Store()) {
             self.store = store
@@ -909,14 +915,26 @@ extension IPC {
             // the time.
             let surfaceID = request.client.surfaceID.flatMap(UUID.init(uuidString:))
 
+            let onFinish: @Sendable (VerificationRunInfo) -> Void
+            if let surfaceID {
+                let delivery = UUID()
+                onFinish = { [weak self] info in
+                    Task { await self?.postVerificationNotice(info, to: surfaceID, delivery: delivery) }
+                }
+            } else {
+                // Nothing Atelier launched, so there is no pane to address and no
+                // inbox that could be found again. The run is still worth
+                // starting — `check_verification` serves it — so this is a
+                // deliberate no-op rather than a refusal, and the answer below
+                // says as much.
+                onFinish = { _ in }
+            }
+
             do {
                 let start = try await runner.startVerification(
                     workstreamID: workstreamID,
                     checks: checks,
-                    onFinish: { [weak self] info in
-                        guard let self, let surfaceID else { return }
-                        Task { await self.postVerificationNotice(info, to: surfaceID) }
-                    }
+                    onFinish: onFinish
                 )
                 return .success(id: request.id, .text(startAnswer(for: start, deliverable: surfaceID != nil)))
             } catch {
@@ -974,8 +992,8 @@ extension IPC {
         /// under a new one — so a peer id captured ten minutes ago can be dead
         /// while the pane it belonged to has an agent sitting in it. The surface
         /// is the stable address; the peer is looked up through it.
-        private func postVerificationNotice(_ info: VerificationRunInfo, to surfaceID: UUID) async {
-            guard noticedRuns.insert(info.runID).inserted else { return }
+        private func postVerificationNotice(_ info: VerificationRunInfo, to surfaceID: UUID, delivery: UUID) async {
+            guard deliveredNotices.insert(delivery).inserted else { return }
             guard let peerID = await peersBySurface()[surfaceID].flatMap({ UUID(uuidString: $0.id) }) else { return }
 
             do {
@@ -1018,7 +1036,7 @@ extension IPC {
             await store.cleanup()
             contexts.removeAll()
             verification = nil
-            noticedRuns.removeAll()
+            deliveredNotices.removeAll()
         }
     }
 }

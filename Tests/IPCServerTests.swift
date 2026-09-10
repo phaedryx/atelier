@@ -5,6 +5,30 @@
 import Darwin
 import XCTest
 
+/// A canned verification run, so the stdio test can prove a structured payload
+/// survives the wire and the helper's rendering. `Sources/MCPHelper/main.swift`
+/// is a separate target that `AtelierTests` cannot import, so driving the real
+/// binary is the only way `renderText` ever executes.
+private actor StubVerificationRunner: IPC.VerificationControlling {
+    private let run: IPC.VerificationRunInfo
+
+    init(run: IPC.VerificationRunInfo) {
+        self.run = run
+    }
+
+    func startVerification(
+        workstreamID _: UUID,
+        checks _: [String],
+        onFinish _: @escaping @Sendable (IPC.VerificationRunInfo) -> Void
+    ) async throws -> IPC.VerificationStart {
+        IPC.VerificationStart(runID: run.runID, started: run.checks.map(\.name))
+    }
+
+    func verificationRun(id: String) async -> IPC.VerificationRunInfo? {
+        id == run.runID ? run : nil
+    }
+}
+
 final class IPCServerTests: XCTestCase {
     private var server: IPC.Server!
     private var service: IPC.Service!
@@ -467,6 +491,26 @@ final class IPCServerTests: XCTestCase {
             surfaceID: UUID()
         )
         _ = await service._testRegister(name: "planner", role: "writes plans", context: context)
+
+        // The helper runs as an agent inside this workstream, so a run it reads
+        // has to belong to it.
+        let callerWorkstreamID = UUID()
+        await service.setVerificationRunner(StubVerificationRunner(run: IPC.VerificationRunInfo(
+            runID: "v7f3a11c",
+            workstreamID: callerWorkstreamID.uuidString,
+            workstreamName: "sly-cobalt-parser",
+            state: .finished,
+            startedSecondsAgo: 50,
+            durationSeconds: 48.1,
+            checks: [
+                IPC.VerificationCheckInfo(
+                    name: "rspec", state: .failed, exitCode: 1, durationSeconds: 48.1,
+                    outputTail: "3 examples, 1 failure\n./spec/models/contact_spec.rb:42",
+                    outputTruncated: true
+                ),
+            ],
+            isStale: false
+        )))
         _ = try waitForEndpoint()
 
         let process = Process()
@@ -474,6 +518,7 @@ final class IPCServerTests: XCTestCase {
         var environment = ProcessInfo.processInfo.environment
         environment["ATELIER_PROJECT_DIR"] = "/repos/atelier"
         environment["ATELIER_WORKSTREAM"] = "sly-cobalt-parser"
+        environment["ATELIER_WORKSTREAM_ID"] = callerWorkstreamID.uuidString
         environment["ATELIER_SURFACE_ID"] = UUID().uuidString
         process.environment = environment
 
@@ -489,13 +534,14 @@ final class IPCServerTests: XCTestCase {
             #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
             #"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
             #"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_peers","arguments":{}}}"#,
+            #"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"check_verification","arguments":{"run_id":"v7f3a11c"}}}"#,
         ]
         input.fileHandleForWriting.write(Data((requests.joined(separator: "\n") + "\n").utf8))
 
         var replies: [[String: Any]] = []
         var buffer = Data()
         let deadline = Date().addingTimeInterval(10)
-        while replies.count < 3, Date() < deadline {
+        while replies.count < 4, Date() < deadline {
             buffer.append(output.fileHandleForReading.availableData)
             let (lines, remainder) = IPC.Framing.lines(from: buffer)
             buffer = remainder
@@ -505,7 +551,7 @@ final class IPCServerTests: XCTestCase {
                 }
             }
         }
-        XCTAssertEqual(replies.count, 3, "helper did not answer all three requests")
+        XCTAssertEqual(replies.count, 4, "helper did not answer all four requests")
 
         let initialize = try XCTUnwrap(replies.first?["result"] as? [String: Any])
         XCTAssertEqual(initialize["protocolVersion"] as? String, "2025-06-18")
@@ -552,6 +598,21 @@ final class IPCServerTests: XCTestCase {
             text.contains("surface=\(context.surfaceID?.uuidString ?? "")"),
             "expected the peer's surface id in: \(text)"
         )
+
+        // The only exercise `renderText`'s verification case ever gets. It lives
+        // in the helper target, which `AtelierTests` cannot import, so nothing
+        // short of driving the binary proves a structured run survives the wire
+        // and comes out as something an agent can read.
+        let verification = try XCTUnwrap(replies[3]["result"] as? [String: Any])
+        XCTAssertEqual(verification["isError"] as? Bool, false)
+        let rendered = try XCTUnwrap(
+            (verification["content"] as? [[String: Any]])?.first?["text"] as? String
+        )
+        XCTAssertTrue(rendered.contains("run v7f3a11c — finished in 48.1s"), rendered)
+        XCTAssertTrue(rendered.contains("failed rspec exit=1 48.1s"), rendered)
+        XCTAssertTrue(rendered.contains("    3 examples, 1 failure"), rendered)
+        XCTAssertTrue(rendered.contains("    ./spec/models/contact_spec.rb:42"), rendered)
+        XCTAssertTrue(rendered.contains("output trimmed"), "the runner already trimmed this tail: \(rendered)")
     }
 }
 
