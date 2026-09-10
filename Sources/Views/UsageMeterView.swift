@@ -8,16 +8,6 @@ import SwiftUI
 struct UsageMeterView: View {
     @EnvironmentObject private var usageStore: Usage.Store
 
-    /// Which fifth of the plan window the usage falls in: 0 = 0–19%, 4 = 80–100%.
-    static func band(percentUsed: Int) -> Int {
-        min(max(percentUsed, 0) / 20, 4)
-    }
-
-    /// Blue → green → yellow → orange → red across the five bands.
-    static func bandColor(_ band: Int) -> Color {
-        [.blue, .green, .yellow, .orange, .red][min(max(band, 0), 4)]
-    }
-
     var body: some View {
         if let report = usageStore.report {
             VStack(spacing: 3) {
@@ -59,7 +49,7 @@ struct UsageMeterView: View {
                         Capsule()
                             .fill(.quaternary)
                         Capsule()
-                            .fill(Self.bandColor(Self.band(percentUsed: percent)))
+                            .fill(MeterBand.color(MeterBand.band(percentUsed: percent)))
                             .frame(width: max(0, proxy.size.width * Double(percent) / 100))
                     }
                 }

@@ -1,5 +1,5 @@
 // ABOUTME: Tests for ContextMeter's token formatting and the combined
-// ABOUTME: capacity/quality severity coloring.
+// ABOUTME: capacity/quality band selection.
 
 @testable import Atelier
 import XCTest
@@ -20,46 +20,46 @@ final class ContextMeterTests: XCTestCase {
         XCTAssertEqual(ContextMeter.compactTokenCount(-5), "0")
     }
 
-    // MARK: - Severity matrix
+    // MARK: - Token count: quality only
 
-    private let threshold = ContextLimits.qualityCautionThreshold
+    private let caution = ContextLimits.qualityCautionThreshold
+    private let critical = ContextLimits.qualityCriticalThreshold
 
-    func testCapacityAloneDrivesColorOnSmallWindows() {
-        // 100k of a 200k window = 50% capacity, under quality threshold.
-        XCTAssertEqual(ContextMeter.severity(fraction: 0.5, usedTokens: 100_000), 0)
-        // 70% capacity -> orange.
-        XCTAssertEqual(ContextMeter.severity(fraction: 0.7, usedTokens: 140_000), 1)
-        // 85%+ capacity -> red.
-        XCTAssertEqual(ContextMeter.severity(fraction: 0.9, usedTokens: 180_000), 2)
+    func testTokenCountIsUncoloredWhileHealthy() {
+        XCTAssertNil(ContextMeter.qualityBand(usedTokens: 0))
+        XCTAssertNil(ContextMeter.qualityBand(usedTokens: 106_000))
+        // One token under caution is still healthy.
+        XCTAssertNil(ContextMeter.qualityBand(usedTokens: caution - 1))
     }
 
-    func testQualityThresholdFloorsAtOrangeOnLargeWindows() {
-        // Exactly at the threshold -> caution.
-        XCTAssertEqual(ContextMeter.severity(fraction: 0.25, usedTokens: threshold), 1)
-        // One token under -> still green.
-        XCTAssertEqual(ContextMeter.severity(fraction: 0.25, usedTokens: threshold - 1), 0)
+    func testCautionThresholdTurnsTheTokenCountOrange() {
+        XCTAssertEqual(ContextMeter.qualityBand(usedTokens: caution), 3)
+        XCTAssertEqual(ContextMeter.qualityBand(usedTokens: 250_000), 3)
+        XCTAssertEqual(ContextMeter.qualityBand(usedTokens: critical - 1), 3)
     }
 
-    func testQualityAloneNeverExceedsOrangeBelowCritical() {
-        // Past caution but under critical on a roomy window: orange.
-        XCTAssertEqual(ContextMeter.severity(fraction: 0.25, usedTokens: 250_000), 1)
+    func testCriticalThresholdTurnsTheTokenCountRed() {
+        XCTAssertEqual(ContextMeter.qualityBand(usedTokens: critical), 4)
+        XCTAssertEqual(ContextMeter.qualityBand(usedTokens: 900_000), 4)
     }
 
-    func testQualityCriticalThresholdForcesRedOnAnyWindow() {
-        // Exactly at the critical line -> red even with a roomy window.
-        XCTAssertEqual(ContextMeter.severity(fraction: 0.25, usedTokens: threshold + 100_000), 2)
-        // One token under -> still orange.
-        XCTAssertEqual(
-            ContextMeter.severity(fraction: 0.25, usedTokens: threshold + 100_000 - 1), 1
-        )
-        // Capacity and quality agree deep in the decay zone.
-        XCTAssertEqual(ContextMeter.severity(fraction: 0.9, usedTokens: 400_000), 2)
+    /// Quality reads the absolute count, so it says the same thing about 250k
+    /// tokens whether they nearly fill a 200k window or take a quarter of a 1M
+    /// one — the window size is the bar's business, not the number's.
+    func testQualityIgnoresTheWindowSize() {
+        XCTAssertEqual(ContextMeter.qualityBand(usedTokens: 250_000), 3)
+        XCTAssertNil(ContextMeter.qualityBand(usedTokens: 190_000))
     }
 
-    /// Calm meters render neutral gray — vivid green pulled too much attention.
-    func testSeverityColorsAreGrayOrangeRed() {
-        XCTAssertEqual(ContextMeter.severityColor(0), .gray)
-        XCTAssertEqual(ContextMeter.severityColor(1), .orange)
-        XCTAssertEqual(ContextMeter.severityColor(2), .red)
+    /// The two channels are independent: a nearly full small window is a red
+    /// bar with an uncolored count, and a roomy window past caution is a blue
+    /// bar with an orange count.
+    func testTheTwoChannelsAreIndependent() {
+        // 190k of a 200k window: 95% capacity, under the quality threshold.
+        XCTAssertEqual(MeterBand.band(percentUsed: 95), 4)
+        XCTAssertNil(ContextMeter.qualityBand(usedTokens: 190_000))
+        // 250k of a 1M window: a quarter full, well into the decay zone.
+        XCTAssertEqual(MeterBand.band(percentUsed: 25), 1)
+        XCTAssertEqual(ContextMeter.qualityBand(usedTokens: 250_000), 3)
     }
 }
