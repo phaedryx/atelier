@@ -309,7 +309,6 @@ extension Verification {
             run.wasStopped = stopped
             runs[workstreamID] = run
             sealedRunIDs.insert(runID)
-            stopRequested.remove(workstreamID)
             Verification.Store.save(run)
             onFinish?(run)
             return run
@@ -449,9 +448,9 @@ extension Verification {
                 state.outcome = await spawner.run(request)
             }
 
-            while state.outcome == nil, !stopRequested.contains(workstreamID) {
+            while state.outcome == nil, !shouldStop(state, workstreamID) {
                 await refreshLiveRows(runID: runID, client: client, state: state)
-                guard state.outcome == nil, !stopRequested.contains(workstreamID) else { break }
+                guard state.outcome == nil, !shouldStop(state, workstreamID) else { break }
                 try? await Task.sleep(for: pollInterval)
             }
 
@@ -460,10 +459,15 @@ extension Verification {
             // stop path the running checks are still `Running` here, which is
             // exactly what `seal` relabels as `.stopped` — the reason Stop does
             // not stop the processes itself.
-            let entries = await verifyProcesses(client: client)
+            let entries = await verifyProcesses(client: client) ?? []
             apply(entries, runID: runID, state: state)
             await captureFailedOutput(from: entries, runID: runID, client: client)
             seal(runID: runID, from: entries, stopped: stopped)
+            // Cleared here, next to where it is read, rather than inside `seal`:
+            // a `seal` that returns nil would otherwise leave the flag set and
+            // the workstream's *next* run would break out of its poll loop on
+            // its first pass.
+            stopRequested.remove(workstreamID)
             await spawner.shutDown(request)
 
             // Only now, and only to log it: on the stop path the spawn is still
@@ -475,30 +479,55 @@ extension Verification {
             }
         }
 
+        /// Whether the loop should stop polling and seal a stopped run.
+        ///
+        /// **A Stop is not acted on until the control server has answered at
+        /// least once**, and that condition is load-bearing rather than
+        /// defensive. `PhaseExecutor.shutDown` returns immediately when the
+        /// socket file is not there yet, so a Stop observed before the namespace
+        /// binds would make the loop's teardown a no-op while the run was
+        /// already sealed: `isLive` would report false with the suite genuinely
+        /// running, a second `start` would be admitted, and that second run
+        /// would poll and publish the *first* suite's rows until its own
+        /// pre-spawn `shutDown` killed the first suite mid-flight. In the narrow
+        /// case where the socket has just appeared it is worse — `down` against
+        /// a half-started server, then the socket file unlinked, stranding a
+        /// server even `stopAllServers` can no longer reach.
+        ///
+        /// The wait is bounded: the spawn either binds, or fails and returns
+        /// through `pollToCompletion`'s `.serverGone` path, and the loop's other
+        /// exit condition is exactly that.
+        private func shouldStop(_ state: RunLoopState, _ workstreamID: UUID) -> Bool {
+            state.sawServer && stopRequested.contains(workstreamID)
+        }
+
         /// One live poll: read the namespace and publish what it says.
         private func refreshLiveRows(
             runID: String, client: ProcessCompose.Controlling, state: RunLoopState
         ) async {
-            let entries = await verifyProcesses(client: client)
+            guard let entries = await verifyProcesses(client: client) else { return }
+            state.sawServer = true
             apply(entries, runID: runID, state: state)
         }
 
-        /// The `verify` namespace's rows, or none.
+        /// The `verify` namespace's rows, or **nil when the server did not
+        /// answer at all** — which is a different fact from "answered with
+        /// nothing", and the one `shouldStop` needs.
         ///
         /// Every failure is swallowed, because none of them is this loop's to
         /// report: before the server binds, every poll throws `.notRunning`, and
         /// after it goes away the run's own result is the report. Returning
         /// nothing rather than throwing is also what keeps the tail of `execute`
         /// free of a `return` that would skip the teardown.
-        private func verifyProcesses(client: ProcessCompose.Controlling) async -> [ProcessCompose.ProcessEntry] {
+        private func verifyProcesses(client: ProcessCompose.Controlling) async -> [ProcessCompose.ProcessEntry]? {
             do {
                 return try await client.processes()
                     .filter { $0.namespace == ProcessCompose.Phase.verify.namespace }
             } catch ProcessCompose.Client.ClientError.notRunning {
-                return []
+                return nil
             } catch {
                 logger.debug("verify poll failed: \(error.localizedDescription, privacy: .public)")
-                return []
+                return nil
             }
         }
 
@@ -569,7 +598,12 @@ extension Verification {
                         lines.joined(separator: "\n"), lines.count >= Self.logTailLines
                     )
                 } catch {
-                    logger.debug(
+                    // A warning, not a debug line: unlike the poll's swallowed
+                    // `.notRunning`, this loss is permanent by design — the
+                    // window is one-shot and the output stops existing a few
+                    // lines below, so a failed check ends up with no explanation
+                    // anywhere.
+                    logger.warning(
                         "verify logs for \(name, privacy: .public) failed: \(error.localizedDescription, privacy: .public)"
                     )
                 }
@@ -595,6 +629,10 @@ extension Verification {
             /// which is what lets one linear function both publish live rows and
             /// own the teardown.
             var outcome: ProcessCompose.PhaseExecutor.Outcome?
+
+            /// Whether the control server has answered a poll yet. What gates
+            /// acting on a Stop; see `shouldStop`.
+            var sawServer = false
 
             /// When each check was first *seen* running.
             private var startedAt: [String: Date] = [:]

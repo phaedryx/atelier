@@ -342,28 +342,21 @@ final class VerificationRunnerTests: XCTestCase {
     }
 
     /// Live rows are published while the suite runs, not only at the end: the
-    /// tab reads `runs` at 1Hz and a result that only appeared at the end would
-    /// leave it blank for the length of a suite.
+    /// tab reads `runs` and a result that appeared only at the end would leave
+    /// it blank for the length of a suite.
     ///
-    /// Asserted twice over — a `.running` row observed while the loop is still
-    /// polling, and the duration that survives into the sealed result, which
-    /// can only be set by a poll that saw the check running and a later one
-    /// that saw it end.
+    /// The spawn is parked, so the check stays `Running` until this test itself
+    /// ends the run. The sample below is therefore not racing a state that
+    /// moves on — it either appears or the deadline reports that it never did.
     func test_execute_publishesLiveRowsWhileTheSuiteRuns() async {
         let id = UUID()
         addTeardownBlock { Verification.Store.clear(for: id) }
-        let running = StubComposeClient.Reply.list([
-            entry("rspec", status: "Running", isRunning: true, exitCode: 0),
-        ])
         let client = StubComposeClient(
             socketPath: "/nonexistent",
-            replies: [
-                running, running, running,
-                .list([entry("rspec", status: "Completed", isRunning: false, exitCode: 0)]),
-            ],
+            replies: [.list([entry("rspec", status: "Running", isRunning: true, exitCode: 0)])],
             latency: .zero
         )
-        let spawner = StubSpawner(client: client, finishAfter: .milliseconds(80))
+        let spawner = StubSpawner(client: client, finishAfter: nil)
         let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
         runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
         let sawRunning = Flag()
@@ -376,12 +369,82 @@ final class VerificationRunnerTests: XCTestCase {
                 }
                 try? await Task.sleep(for: .milliseconds(1))
             }
+            // Ends the run whether or not the row was seen, so a failure here
+            // reports the missing row rather than stalling the loop.
+            runner.stop(workstreamID: id)
         }
 
         XCTAssertTrue(sawRunning.value, "a running check must be visible in `runs` mid-suite")
+        XCTAssertEqual(runner.run(id: "abcd1234")?.checks.first?.state, .stopped)
+    }
+
+    /// The duration a poll measured survives into the sealed result: it can only
+    /// be set by a read that saw the check running and a later one that saw it
+    /// end, so it is also second evidence that the loop polls rather than
+    /// waiting.
+    func test_execute_timesACheckItSawStartAndFinish() async {
+        let id = UUID()
+        addTeardownBlock { Verification.Store.clear(for: id) }
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: [
+                .list([entry("rspec", status: "Running", isRunning: true, exitCode: 0)]),
+                .list([entry("rspec", status: "Completed", isRunning: false, exitCode: 0)]),
+            ],
+            latency: .zero
+        )
+        let spawner = StubSpawner(client: client, finishAfter: .milliseconds(30))
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
+
+        await drive(runner, request(workstreamID: id, checks: ["rspec"]), runID: "abcd1234")
+
         let check = runner.run(id: "abcd1234")?.checks.first
         XCTAssertEqual(check?.state, .passed)
         XCTAssertNotNil(check?.duration, "a check seen running and then finished must be timed")
+    }
+
+    /// A Stop can land before the namespace has bound its socket, and acting on
+    /// it there would be worse than waiting.
+    ///
+    /// `PhaseExecutor.shutDown` returns immediately when the socket file is not
+    /// there, so sealing then would leave a live server with no owner: `isLive`
+    /// false while the suite runs, a second `start` admitted, and that run
+    /// publishing the first suite's rows until its own pre-spawn teardown killed
+    /// the first suite. So the loop waits for the server to answer — and the
+    /// sealed row proves it waited, because a seal against a server that never
+    /// answered would have produced `.notRun`.
+    func test_execute_aStopBeforeTheServerAnswersWaitsForIt() async {
+        let id = UUID()
+        addTeardownBlock { Verification.Store.clear(for: id) }
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: [
+                .failure(.notRunning),
+                .failure(.notRunning),
+                .list([entry("rspec", status: "Running", isRunning: true, exitCode: 0)]),
+            ],
+            latency: .zero
+        )
+        // Parked, so the namespace really is still running: only the loop's
+        // teardown ends it.
+        let spawner = StubSpawner(client: client, finishAfter: nil)
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
+        // Before the loop has polled once — the window where the socket does not
+        // exist yet.
+        runner.stop(workstreamID: id)
+
+        await drive(runner, request(workstreamID: id, checks: ["rspec"]), runID: "abcd1234")
+
+        XCTAssertEqual(
+            runner.run(id: "abcd1234")?.checks.first?.state, .stopped,
+            "the loop must wait for the server rather than seal against no answer"
+        )
+        XCTAssertEqual(runner.run(id: "abcd1234")?.wasStopped, true)
+        XCTAssertFalse(runner.isLive(id), "a sealed run whose server this loop tore down")
+        let shutDowns = await spawner.shutDowns
+        XCTAssertEqual(shutDowns, 1, "still exactly one teardown, and still this loop's")
     }
 
     /// At the line limit the honest answer is "possibly truncated" — a tail
