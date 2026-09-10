@@ -99,4 +99,48 @@ final class ProcessRunnerTests: XCTestCase {
         )
         XCTAssertEqual(data.flatMap { String(data: $0, encoding: .utf8) }, "probe")
     }
+
+    // MARK: - Standard input
+
+    /// `atelier-hook` takes its whole payload on stdin, so a child that reads
+    /// stdin has to be feedable. Without this the hook script's `INPUT=$(cat)`
+    /// sees the app's own (closed) stdin and posts an empty body.
+    func testWritesStandardInputToTheChild() {
+        let data = ProcessRunner.run(
+            executable: "/bin/cat",
+            arguments: [],
+            standardInput: Data("payload".utf8),
+            timeout: 10
+        )
+        XCTAssertEqual(data.flatMap { String(data: $0, encoding: .utf8) }, "payload")
+    }
+
+    /// A child reading stdin must see EOF, not a pipe that stays open: `cat`
+    /// with an unclosed stdin never exits, and the call would only return when
+    /// the deadline killed it.
+    func testClosesStandardInputSoTheChildSeesEOF() {
+        let started = Date()
+        let data = ProcessRunner.run(
+            executable: "/bin/cat",
+            arguments: [],
+            standardInput: Data("payload".utf8),
+            timeout: 10
+        )
+        XCTAssertNotNil(data, "cat should have exited on EOF rather than being killed at the deadline")
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5, "the write end was left open")
+    }
+
+    /// The deadlock this type exists to prevent, on the input side: a payload
+    /// past the pipe buffer blocks the writer until the child drains it, so the
+    /// write cannot happen on the thread that later waits for the child.
+    func testWritesAStandardInputPayloadLargerThanThePipeBuffer() {
+        let payload = String(repeating: "x", count: 512 * 1024)
+        let data = ProcessRunner.run(
+            executable: "/bin/cat",
+            arguments: [],
+            standardInput: Data(payload.utf8),
+            timeout: 20
+        )
+        XCTAssertEqual(data?.count, payload.utf8.count)
+    }
 }

@@ -211,7 +211,19 @@ struct AtelierApp: App {
         HookEventReceiver.shared.onEvent = { projectDir, event in
             HookEventRouter.shared.route(projectDir: projectDir, event: event)
             MainActor.assumeIsolated {
+                // An event that arrived *is* proof the channel delivers — better
+                // proof than a synthetic ping, and free. Recorded first so a row
+                // never renders "No Signal" in the same pass that a real event
+                // came in.
+                HookChannelProbe.shared.noteTraffic()
                 Workstream.AgentStateTracker.shared.handle(projectDir: projectDir, event: event)
+            }
+        }
+        // The probe's own round trip: it sends a nonce out through the real
+        // `atelier-hook` script and recognises it coming back in here.
+        HookEventReceiver.shared.onPing = { nonce in
+            MainActor.assumeIsolated {
+                HookChannelProbe.shared.noteNonce(nonce)
             }
         }
         // A permission request is the one hook Atelier answers rather than
@@ -240,6 +252,11 @@ struct AtelierApp: App {
             PermissionApprovalStore.shared.onAnswered = { workstreamID in
                 Workstream.AgentStateTracker.shared.permissionAnswered(workstreamID: workstreamID)
             }
+            // Prolonged silence is a question about the channel, not a verdict
+            // on the agent. The probe debounces, so the sweep can ask freely.
+            Workstream.AgentStateTracker.shared.onProlongedSilence = {
+                HookChannelProbe.shared.verify()
+            }
         }
         HookEventReceiver.shared.start()
 
@@ -252,6 +269,22 @@ struct AtelierApp: App {
             HookInstaller.install(hookScriptPath: hookURL.path)
         } else if let hookURL = Bundle.main.url(forResource: "atelier-hook", withExtension: nil) {
             HookInstaller.install(hookScriptPath: hookURL.path)
+        }
+
+        // Verify the delivery path once the install above has had its say. This
+        // is the moment a botched install, a stale port file, or hook entries a
+        // different Atelier install rewrote is both most likely and most
+        // fixable, so it runs regardless of the probe's usual debounce.
+        //
+        // Deferred rather than called inline: the listener has only just been
+        // asked to start and has no port yet, and the script reads the port file
+        // the listener writes when it binds.
+        MainActor.assumeIsolated {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                MainActor.assumeIsolated {
+                    HookChannelProbe.shared.verify(force: true)
+                }
+            }
         }
 
         // Earlier builds installed an OpenCode plugin into the user's global

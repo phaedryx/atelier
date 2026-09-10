@@ -412,6 +412,9 @@
 "Stalled" = "Stalled";
 "Working" = "Working";
 "Waiting for approval" = "Waiting for approval";
+"No Signal" = "No Signal";
+"Not receiving agent events" = "Not receiving agent events";
+"Claude Code hook events are not reaching Atelier, so agent status cannot be reported. Check that Atelier's hooks are still installed in ~/.claude/settings.json." = "Claude Code hook events are not reaching Atelier, so agent status cannot be reported. Check that Atelier's hooks are still installed in ~/.claude/settings.json.";
 
 /* Permission approval */
 "Claude wants to run %@" = "Claude wants to run %@";

@@ -498,6 +498,107 @@ properties and the same comment.
 - URL scheme: `atelier://`
 - Bundle ID: `com.github.phaedryx.atelier`
 
+### Agent status: silence, and what it is allowed to mean
+
+Every signal Atelier has about an agent comes from a Claude Code hook, and no hook fires
+*during* anything. `PreToolUse` fires when a tool starts and nothing else arrives until
+`PostToolUse`; between two tool calls the model can generate for a minute with no hook at all.
+So **silence is the app's only raw material, and silence is ambiguous** — a build, a long
+response, a slow MCP call and a wedged agent are indistinguishable from the outside.
+
+`Workstream.AgentStateTracker.sweepForStalls` therefore reads silence in two stages, and the
+distinction is the whole point:
+
+| | `silenceThreshold` (45s) | `wedgeThreshold` (300s) |
+|---|---|---|
+| Renders | **nothing** — the row stays Working | `.stalled`, the yellow dot |
+| Does | asks `HookChannelProbe` whether events are still arriving | reports a wedge |
+
+The 45-second mark used to set the yellow dot directly. That was wrong far more often than
+right, because everything in the first sentence of this section passes 45 seconds routinely.
+The question 45 seconds of silence actually raises is *whether the app is still listening*, and
+no amount of further silence answers it — only the probe can.
+
+Three exemptions keep the 300s tier honest, and each has a bound:
+
+- **A tool in flight** (`AgentRun.isRunningTool`, set between `PreToolUse` and `PostToolUse`).
+  This is the one the original complaint was about. Tracked separately from `activity` because
+  `activity` is display text and may be nil for a tool the mapper had no phrase for; the sweep
+  needs the fact.
+- **Compaction** (`isCompacting`), which emits nothing between `PreCompact` and `PostCompact`.
+- **A permission prompt**, which is waiting on the user, not stalling.
+
+The first two are bounded by `longWorkGrace` (1800s), which must stay larger than
+`wedgeThreshold` or it never binds. The bound exists because the event that would *lift* the
+exemption may never arrive — the agent died mid-tool, or the POST carrying it was dropped — and
+a missing end-event must not suppress the sweep for the rest of the session.
+
+**`HookEventReceiver.isMetaTool` is consulted by both `PreToolUse` and `PostToolUse`, and that
+is not an accident.** The two hooks bracket a running tool, and a bracket that opens without
+closing — or closes without opening — is worse than no bracket. `mcp__*` was once filtered on
+the `PreToolUse` side only, so an MCP call reported nothing going in and a stray `toolDone`
+coming out; the sweep saw a silent agent with no tool in flight and had nothing to exempt,
+which is why a slow MCP server read as a wedge. MCP calls are ordinary tool calls, frequently
+the slowest, and belong inside a bracket. Only `Skill` and `ToolSearch` are filtered, on both
+sides.
+
+### The hook channel is checked, not assumed
+
+`HookChannelProbe` answers the one question absence cannot: **are hook events arriving at all?**
+
+`Resources/Scripts/atelier-hook` posts with `curl -s --max-time 1 -o /dev/null 2>/dev/null` and
+exits 0 when the port file is missing. **Every channel failure is therefore silent by
+construction** — an app that relaunched on a new port, a removed port file, hook entries another
+Atelier install rewrote, or a POST that simply took longer than a second under load. All of them
+render identically to a busy agent.
+
+So the probe does not reason about silence. It writes a real payload to the real script's stdin
+(`{"hook_event_name": "AtelierPing", "nonce": …}`, which the script wraps as `event_input` like
+any hook event) and waits for that nonce to come back out of `HookEventReceiver.onPing`. A nonce
+that returns has proved the whole path end to end: port file, curl, its timeout, the listener,
+the parser. Calling the listener directly would prove only that the app can reach itself.
+
+Facts worth keeping:
+
+- **The ping produces no `AgentEvent`.** It is answered before `mapHookEvent`. An envelope that
+  touched a roster would reset the very stall clock the probe was sent to explain, making the
+  probe's own traffic the reason the channel looked healthy.
+- **Real traffic is better evidence than a ping, and free.** Any delivered hook event calls
+  `noteTraffic`, which verifies the channel, cancels a check in flight, and clears `.down` the
+  moment events resume rather than at the end of the debounce. It runs on *every* event, so
+  `State` deliberately carries no timestamps and `markVerified` publishes only on a transition —
+  a date in the published state would invalidate the sidebar on every tool call. The timestamps
+  live beside it, unpublished.
+- **Two attempts, not one.** `curl --max-time 1` drops a slow POST, so a single unanswered ping
+  is expected and must not repaint anything.
+- **Checked at launch and on suspicion, never on a timer.** Launch (forced, past the debounce)
+  is where a botched install or stale port file is most likely and most fixable; after that only
+  when the sweep reports prolonged silence, debounced to `minimumInterval`. A healthy app spawns
+  nothing. The sweep calls through `AgentStateTracker.onProlongedSilence` rather than the
+  singleton, so the sweep stays testable and the tracker keeps knowing nothing about how the
+  channel gets checked.
+
+**Two surfaces, not one, and the second is not redundant.** `HookChannelBanner` sits in the
+sidebar's bottom bar, gated on the probe's verdict and *nothing else*. A row only draws a status
+line once `hasLiveSession` is true, and `liveSessionIDs` is only populated from `handle` — so a
+channel that was already broken when the app launched leaves every row silent and would have had
+nothing to speak through. `ensureSweepTimer` is called from `handle` too, so in that same case
+the sweep never runs and `onProlongedSilence` never fires either: the forced launch check is the
+only one that happens, and the banner is the only thing that can show it. Dropping the banner as
+"redundant with the row word" is the mistake to avoid — it removes the surface for exactly the
+case the probe exists to catch.
+
+**`AgentStatusLabel` decides what a row may claim, and `channelDown` masks `.working` and
+`.stalled` — nothing else.** Those two are held up by the *continued arrival* of events: "still
+working" means no `Stop` has come in, and `.stalled` is inferred from absence outright. Neither
+survives learning that the app has stopped hearing, so both become **No Signal** (grey, because
+the fault is Atelier's own plumbing and nothing is asked of the user). The rest are positive
+facts a delivered hook established, and losing the channel afterwards does not unmake them —
+masking `.needsAttention(.permission)` would be the worst of it, since the agent is stopped
+until someone answers. `AgentStatusLabel` also exists because the row and the roster cards had
+already drifted: the row grew a permission state and a live-session-aware idle that the cards
+never learned.
+
 ### System prompts
 
 The Coding Agent receives additional system prompts via `--append-system-prompt` based on

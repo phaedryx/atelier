@@ -155,7 +155,7 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
 
     func testStaleRunSweepsToStalled() {
         handle(.waiting(agentId: "main"))
-        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.stallThreshold + 10)
+        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.wedgeThreshold + 10)
 
         tracker.sweepForStalls(now: Date())
         XCTAssertEqual(tracker.runs(for: wsID)[0].state, .stalled)
@@ -171,11 +171,148 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.state(for: wsID), .working)
     }
 
+    /// Silence past the *silence* threshold is a reason to go check the hook
+    /// channel, not a reason to say anything about the agent. A build, a long
+    /// model response, or a slow MCP call all reach 45 seconds routinely, which
+    /// is what made the old yellow dot at that mark wrong far more often than
+    /// it was right.
+    func test_silenceShortOfTheWedgeThreshold_keepsTheRowWorking() {
+        handle(.waiting(agentId: "main"))
+        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.silenceThreshold + 10)
+
+        tracker.sweepForStalls(now: Date())
+
+        XCTAssertEqual(tracker.runs(for: wsID)[0].state, .working)
+        XCTAssertEqual(tracker.state(for: wsID), .working)
+    }
+
+    // MARK: - A tool in flight is not a stall
+
+    /// The complaint this whole change came from: `PreToolUse` fires when the
+    /// agent starts a command and nothing else arrives until it returns, so a
+    /// build reported a wedged agent while it was working perfectly.
+    func test_aRunWithAToolInFlight_isNotSwept() {
+        handle(.waiting(agentId: "main"))
+        handle(.toolStart(agentId: "main", tool: "Bash", activity: "Running command"))
+        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.wedgeThreshold + 60)
+
+        tracker.sweepForStalls(now: Date())
+
+        XCTAssertEqual(
+            tracker.runs(for: wsID)[0].state, .working,
+            "a tool between PreToolUse and PostToolUse is running, not stalled"
+        )
+        XCTAssertEqual(tracker.state(for: wsID), .working)
+    }
+
+    /// The bracket has to *close* for the exemption to lift. This is the case
+    /// the old sweep got right and must keep getting right.
+    func test_aRunWhoseToolFinishedThenWentSilent_stalls() {
+        handle(.waiting(agentId: "main"))
+        handle(.toolStart(agentId: "main", tool: "Bash", activity: "Running command"))
+        handle(.toolDone(agentId: "main"))
+        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.wedgeThreshold + 60)
+
+        tracker.sweepForStalls(now: Date())
+
+        XCTAssertEqual(tracker.runs(for: wsID)[0].state, .stalled)
+    }
+
+    /// Bounded, for the same reason compaction's exemption is: a `PostToolUse`
+    /// that never arrives — the event was dropped, or the agent died mid-tool —
+    /// must not suppress the sweep for the rest of the session.
+    func test_aToolInFlightPastTheGrace_stallsAnyway() {
+        handle(.waiting(agentId: "main"))
+        handle(.toolStart(agentId: "main", tool: "Bash", activity: "Running command"))
+        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.longWorkGrace + 60)
+
+        tracker.sweepForStalls(now: Date())
+
+        XCTAssertEqual(tracker.runs(for: wsID)[0].state, .stalled)
+    }
+
+    /// An MCP call is now bracketed like any other tool, so the exemption
+    /// covers it. Before this it produced no `PreToolUse` at all and a slow
+    /// server read as a wedge.
+    func test_anMCPCallInFlight_isNotSwept() {
+        handle(.waiting(agentId: "main"))
+        handle(.toolStart(agentId: "main", tool: "mcp__scenius__read", activity: "scenius/read"))
+        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.wedgeThreshold + 60)
+
+        tracker.sweepForStalls(now: Date())
+
+        XCTAssertEqual(tracker.runs(for: wsID)[0].state, .working)
+    }
+
+    // MARK: - Asking the channel whether it is still there
+
+    /// The sweep's new job at the silence threshold. Whether the agent is quiet
+    /// or the app has stopped hearing is not something more silence can answer,
+    /// so the sweep asks the probe instead.
+    func test_silence_requestsAChannelCheck() {
+        var requests = 0
+        tracker.onProlongedSilence = { requests += 1 }
+
+        handle(.waiting(agentId: "main"))
+        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.silenceThreshold + 10)
+        tracker.sweepForStalls(now: Date())
+
+        XCTAssertEqual(requests, 1)
+    }
+
+    func test_aFreshRun_requestsNoChannelCheck() {
+        var requests = 0
+        tracker.onProlongedSilence = { requests += 1 }
+
+        handle(.waiting(agentId: "main"))
+        backdateMainRun(secondsAgo: 5)
+        tracker.sweepForStalls(now: Date())
+
+        XCTAssertEqual(requests, 0, "a reporting agent is its own proof the channel works")
+    }
+
+    /// A tool in flight explains the silence, but it does not prove the channel
+    /// is up — the `PostToolUse` that should have arrived may be exactly what
+    /// went missing. The check is cheap and debounced; ask anyway.
+    func test_silenceWithAToolInFlight_stillRequestsAChannelCheck() {
+        var requests = 0
+        tracker.onProlongedSilence = { requests += 1 }
+
+        handle(.waiting(agentId: "main"))
+        handle(.toolStart(agentId: "main", tool: "Bash", activity: "Running command"))
+        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.silenceThreshold + 10)
+        tracker.sweepForStalls(now: Date())
+
+        XCTAssertEqual(requests, 1)
+    }
+
+    /// One question about the channel, however many rows have gone quiet. The
+    /// probe debounces too, but the sweep should not be making the call once
+    /// per run in the first place.
+    func test_severalQuietRuns_requestOneChannelCheck() {
+        var requests = 0
+        tracker.onProlongedSilence = { requests += 1 }
+
+        handle(.waiting(agentId: "main"))
+        handle(.created(agentId: "ses_one", name: "one"))
+        handle(.created(agentId: "ses_two", name: "two"))
+        for agent in ["main", "ses_one", "ses_two"] {
+            tracker._backdateRun(
+                agentId: agent,
+                workstreamID: wsID,
+                lastEventAt: Date().addingTimeInterval(-(Workstream.AgentStateTracker.silenceThreshold + 10))
+            )
+        }
+        tracker.sweepForStalls(now: Date())
+
+        XCTAssertEqual(requests, 1)
+    }
+
     func testStalledSweepSkippedWhileAwaitingPermission() {
         tracker.currentSelection = wsID
         handle(.waiting(agentId: "main"))
         handle(.status(agentId: "main", status: "permissionRequired"))
-        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.stallThreshold + 10)
+        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.wedgeThreshold + 10)
 
         tracker.sweepForStalls(now: Date())
         // Waiting on the user is not stalling.
@@ -184,7 +321,7 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
 
     func testToolStartUnstallsRunAndRow() {
         handle(.waiting(agentId: "main"))
-        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.stallThreshold + 10)
+        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.wedgeThreshold + 10)
         tracker.sweepForStalls(now: Date())
         XCTAssertEqual(tracker.state(for: wsID), .stalled)
 
@@ -199,7 +336,7 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
     func testFreshSubagentKeepsRowWorkingWhenMainGoesQuiet() {
         handle(.waiting(agentId: "main"))
         handle(.created(agentId: "ses_build", name: "build"))
-        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.stallThreshold + 10)
+        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.wedgeThreshold + 10)
 
         tracker.sweepForStalls(now: Date())
         XCTAssertEqual(tracker.runs(for: wsID).first { $0.isMain }?.state, .stalled)
@@ -209,7 +346,7 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         tracker._backdateRun(
             agentId: "ses_build",
             workstreamID: wsID,
-            lastEventAt: Date().addingTimeInterval(-(Workstream.AgentStateTracker.stallThreshold + 10))
+            lastEventAt: Date().addingTimeInterval(-(Workstream.AgentStateTracker.wedgeThreshold + 10))
         )
         tracker.sweepForStalls(now: Date())
         XCTAssertEqual(tracker.state(for: wsID), .stalled)
@@ -629,7 +766,7 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
     func test_compactingRun_isNotSweptAsStalled() {
         handle(.waiting(agentId: "main"))
         handle(.compacting())
-        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.stallThreshold * 2)
+        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.wedgeThreshold * 2)
 
         tracker.sweepForStalls()
 
@@ -643,7 +780,7 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
     func test_compactingRun_stallsOnceTheGraceExpires() {
         handle(.waiting(agentId: "main"))
         handle(.compacting())
-        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.compactStallGrace + 60)
+        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.longWorkGrace + 60)
 
         tracker.sweepForStalls()
 
@@ -712,7 +849,7 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
     /// been answered slowly.
     func test_permissionAnswered_restartsTheStallClock() {
         awaitPermission()
-        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.stallThreshold * 2)
+        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.wedgeThreshold * 2)
 
         tracker.permissionAnswered(workstreamID: wsID)
         tracker.sweepForStalls()
@@ -724,7 +861,7 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
     /// silent run is waiting on a human, not wedged.
     func test_aHeldPermissionIsNotSweptAsStalled() {
         awaitPermission()
-        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.stallThreshold * 2)
+        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.wedgeThreshold * 2)
 
         tracker.sweepForStalls()
 
