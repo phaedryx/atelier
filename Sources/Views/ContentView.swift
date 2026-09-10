@@ -119,7 +119,16 @@ struct ContentView: View {
     /// Verification tab observes it through its own `@ObservedObject`, and a
     /// runner owned by the tab would lose every run the moment the tab closed
     /// or the user switched workstreams.
-    @StateObject private var verificationRunner = Verification.Runner()
+    ///
+    /// **`@State`, not `@StateObject`, and the difference is not cosmetic.**
+    /// Both give the object this view's lifetime; only `@StateObject`
+    /// subscribes to it. Nothing here renders from the runner, so a
+    /// subscription would re-evaluate this whole body on every `runs` publish —
+    /// about once a second for the length of a run — and each re-evaluation
+    /// re-initialises `TerminalContainerView`, whose `init` eagerly resolves
+    /// the dev command and so locates a process-compose config. `@State` keeps
+    /// the lifetime and drops the subscription.
+    @State private var verificationRunner = Verification.Runner()
     @ObservedObject private var agentStateTracker = Workstream.AgentStateTracker.shared
     @ObservedObject private var channelProbe = HookChannelProbe.shared
     @State private var saveWork: DispatchWorkItem?

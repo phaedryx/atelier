@@ -666,9 +666,9 @@ struct TerminalContainerView: View {
     ///
     /// One list, read by both the buttons and the divider that separates them
     /// from the add-another-one buttons, so the two cannot disagree about
-    /// whether the group is empty. Since `startupWorkspaceTabState` seeds
-    /// neither singleton, the usual state is both buttons showing; the empty
-    /// case is a workstream with both tabs open, and the divider has to
+    /// whether the group is empty. Since `startupWorkspaceTabState` seeds no
+    /// singleton at all, the usual state is every button showing; the empty
+    /// case is a workstream with all of them open, and the divider has to
     /// disappear with them rather than dangle at the head of the group.
     private var closedSingletons: [SingletonQuickAdd] {
         SingletonQuickAdd.all.filter { !model.tabs.contains($0.tab) }
@@ -1128,6 +1128,24 @@ struct TerminalContainerView: View {
             surfaceCache.updateOcclusion(visibleSurfaceIDs: visibleSurfaceIDs)
             WorkspaceStateStore.save(RestorableWorkspaceTab(activeTab: model.activeTab), for: workstreamID)
             appEnv.refreshWorktreeState(for: workingDirectory, projectDirectory: projectDirectory)
+            // Every other input to this is a Settings write or an approval, and
+            // the one thing the user can change without touching either is the
+            // config itself. Someone who reads "This project declares no verify
+            // checks", adds a `verify:` namespace, and comes back would
+            // otherwise still see the old answer until a Settings toggle or a
+            // relaunch. Unconditional on the tab: a config change is just as
+            // invisible to the Execution pane's own state, and this is cheap
+            // enough not to need a guard on which tab was opened.
+            //
+            // `refreshConfigApproval` comes along because it answers the same
+            // question about the same file, and observed on screen: with only
+            // the verify half refreshed here, editing a worktree's config left
+            // the Info tab still reading "Approved" from mount time while the
+            // Verification tab correctly said the changed file needs approval
+            // again. Approval is keyed on content, so a stale file list is also
+            // the wrong thing to hand the approval sheet.
+            refreshConfigApproval()
+            refreshVerificationAvailability()
         }
         .onChange(of: model.isActiveEditorDirty) {
             guard isActive else { return }
@@ -1646,84 +1664,42 @@ struct TerminalContainerView: View {
         refreshVerificationAvailability()
     }
 
-    /// Resolve the Verification tab's two availability inputs together, from
-    /// `PhasePolicy.plan`.
+    /// Resolve the Verification tab's two availability inputs together.
     ///
-    /// **The decision is `plan`'s, and this function does not make a second
-    /// one.** `Verification.Runner.start` calls
-    /// `PhasePolicy.plan(phase: .verify, …)` before it spawns anything, so the
-    /// tab's idea of "nothing can run" has to come from that same call — a
-    /// separate precondition chain here would be the duplicate
-    /// `ExecutionTabView.canStart`'s own doc records as a bug already paid for
-    /// once: "They used to be two […] and an unresolvable process-compose
-    /// binary rendered an enabled Start that did nothing and explained
-    /// nothing." `verificationUnavailableReason` is called for the *wording*
-    /// only, and is handed the very locals `plan` was given, so the two cannot
-    /// disagree about the facts. `plan`'s own strings are past tense ("so no
-    /// `verify` ran") because they report on bootstrap and dispose after the
-    /// fact; this tab has run nothing, so none of them may appear here.
-    ///
-    /// `.run` is not quite the whole of availability, and this is the part that
-    /// is easy to miss: `plan` answers the four preconditions and stops, so a
-    /// config that declares no `verify` processes — or that could not be parsed
-    /// at all — still comes back `.run`. `start` refuses both (`Failure.unavailable`
-    /// for a parse failure, `resolveChecks` for an empty declared list, because
-    /// `up -n verify` on an empty namespace never exits), so the declared list
-    /// is the fifth fact the wording needs. It is read only on the `.run`
-    /// branch: `plan` is what decides whether asking is meaningful.
+    /// The decision itself is `verificationAvailability`'s, which asks
+    /// `PhasePolicy.plan(phase: .verify, …)` — the same gate
+    /// `Verification.Runner.start` calls — and is where the reasoning and the
+    /// tests live. This function's whole job is the four facts it feeds in.
     ///
     /// Called from `refreshDevCommand`, so every trigger that re-resolves the
-    /// Execution tab's equivalent state re-resolves this too, and from the two
-    /// approval paths — approval is one of the four facts and
-    /// `refreshDevCommand` does not observe it.
+    /// Execution tab's equivalent state re-resolves this too; from the
+    /// container's `.onAppear` and from `.onChange(of: model.activeTab)`; and
+    /// from the two approval paths, because approval is one of the four facts
+    /// and `refreshDevCommand` has no reason to watch it — Start is never
+    /// gated by it.
     private func refreshVerificationAvailability() {
         // Located unconditionally, the way `refreshConfigApproval` does it and
         // `processComposeConfig(for:)` deliberately does not: that one is
         // narrowed to the *run*, so it disappears behind a per-workstream
         // override — and verify is not the run.
-        let isEnabled = ProcessCompose.Settings.isEnabled
-        let config = ProcessCompose.Config.locate(
-            worktree: workingDirectory, projectDirectory: projectDirectory
+        let availability = verificationAvailability(
+            isEnabled: ProcessCompose.Settings.isEnabled,
+            config: ProcessCompose.Config.locate(
+                worktree: workingDirectory, projectDirectory: projectDirectory
+            ),
+            binary: ProcessCompose.Settings.resolveBinary(),
+            // The same closure `AsyncSetupService` and
+            // `Verification.Runner.start` hand `PhasePolicy.plan`, because it
+            // reaches the same gate. `requiresApproval` is folded in inside
+            // `verificationAvailability`, not here.
+            isApproved: {
+                ScriptTrust.isApproved(
+                    configFiles: $0.repositoryProvidedFiles, for: projectDirectory
+                )
+            }
         )
-        let binary = ProcessCompose.Settings.resolveBinary()
-        // Folds in `requiresApproval` so it means what `plan`'s guard means: a
-        // config the user placed in the project directory needs no approval.
-        // Resolved to a `Bool` up front, rather than left as `plan`'s closure,
-        // so the fact `plan` judged and the fact the wording is produced from
-        // are literally the same value.
-        let isApproved = config.map {
-            !$0.requiresApproval || ScriptTrust.isApproved(
-                configFiles: $0.repositoryProvidedFiles, for: projectDirectory
-            )
-        } ?? false
-        let plan = PhasePolicy.plan(
-            phase: .verify,
-            isEnabled: isEnabled,
-            config: config,
-            binary: binary,
-            isApproved: { _ in isApproved }
-        )
-
-        let declared: [String]? = switch plan {
-        case let .run(planConfig, _):
-            // Read off the plan's own config rather than by locating a second
-            // time — the rule `declaredExecuteProcesses` follows, so the list
-            // the checklist offers and the config `start` will run are one
-            // config. nil means "could not be parsed" and is never folded into
-            // an empty list: `verificationUnavailableReason` tells the two
-            // apart, and they need different words.
-            planConfig.declaredProcesses(in: ProcessCompose.Phase.verify.namespace)
-        case .nothingToDo:
-            nil
-        }
-        declaredVerifyChecks = declared ?? []
-        verifyUnavailableReason = verificationUnavailableReason(
-            isEnabled: isEnabled,
-            hasConfig: config != nil,
-            hasBinary: binary != nil,
-            isApproved: isApproved,
-            declared: declared
-        )
+        declaredVerifyChecks = availability.declared
+        verifyUnavailableReason = availability.reason
     }
 
     /// Re-reads ports.yaml and resolves it for this worktree. A malformed file
@@ -2222,6 +2198,7 @@ private struct SingletonQuickAdd {
     static let all: [SingletonQuickAdd] = [
         SingletonQuickAdd(tab: .changes, tooltip: NSLocalizedString("Show Changes", comment: "Tab bar button tooltip")),
         SingletonQuickAdd(tab: .execution, tooltip: NSLocalizedString("Show Execution", comment: "Tab bar button tooltip")),
+        SingletonQuickAdd(tab: .verification, tooltip: NSLocalizedString("Show Verification", comment: "Tab bar button tooltip")),
     ]
 }
 

@@ -143,6 +143,89 @@ func verificationUnavailableReason(
     return nil
 }
 
+/// Everything the Verification tab needs to know about whether it can run:
+/// the checks to offer, and the wording for why it cannot.
+///
+/// **The decision is `PhasePolicy.plan`'s.** `Verification.Runner.start` calls
+/// `plan(phase: .verify, …)` before it spawns anything, so this asks the same
+/// question of the same function rather than re-deriving an answer beside it —
+/// `ExecutionTabView.canStart`'s doc records what the second copy cost: "They
+/// used to be two […] and an unresolvable process-compose binary rendered an
+/// enabled Start that did nothing and explained nothing."
+/// `verificationUnavailableReason` is called for the *wording* only, from the
+/// very parameters `plan` was handed, so the two cannot disagree about the
+/// facts. `plan`'s own strings are past tense ("so no `verify` ran") and never
+/// reach this surface.
+///
+/// The agreement is structural rather than hopeful. `isApproved` is taken as
+/// `plan`'s own closure — asked only where a config exists — and the one
+/// expression below folds in `requiresApproval` exactly as `plan`'s guard
+/// does, then feeds *that* to both `plan` and the wording. So `plan` returns
+/// `.run` **iff** all four preconditions hold, which is **iff**
+/// `verificationUnavailableReason`'s first four guards all fall through, and
+/// `VerificationTabViewTests` pins that biconditional against `plan` itself.
+/// A `Bool` parameter here could not promise it: passing `false` for a config
+/// in the project directory, which needs no approval, made this function
+/// refuse what `plan` was happily running — caught by that test, which is the
+/// reason this parameter is a closure.
+///
+/// **`.run` is not the whole of availability**, and that is why the declared
+/// list is consulted here rather than left to the caller. `plan` answers four
+/// preconditions and stops, so a config whose `verify` namespace is empty — or
+/// that could not be parsed at all — still comes back `.run`, while `start`
+/// refuses both: `Failure.unavailable` for the parse failure, and
+/// `resolveChecks` for an empty declared list, because `up -n verify` on an
+/// empty namespace never exits. The list is read off `plan`'s **own returned
+/// config**, never a second `locate`, so the checks offered and the config
+/// `start` will run are one config, and nil-for-unparseable survives the trip.
+///
+/// A free function for the reason `PhasePolicy` gives for being one — "Pure, so
+/// the branch order can be tested without an actor or a subprocess". It takes
+/// facts its caller has already resolved and performs no lookup of its own
+/// beyond reading the located config's own files.
+///
+/// - Parameter isApproved: whether the user has approved this config's
+///   repository-provided files. Passed as a closure, and with no default, for
+///   the reasons `PhasePolicy.plan` gives for its own: it is only asked where a
+///   config exists, and every call site has to state its policy.
+/// - Returns: `declared` is empty whenever nothing can run, and `reason` is nil
+///   exactly when something can.
+func verificationAvailability(
+    isEnabled: Bool,
+    config: ProcessCompose.Config?,
+    binary: String?,
+    isApproved: (ProcessCompose.Config) -> Bool
+) -> (declared: [String], reason: String?) {
+    // `plan`'s approval guard, as a value: a config the user placed in the
+    // project directory needs no approval, so "not approved" is not a refusal
+    // there. Computed once and handed to both `plan` and the wording below, so
+    // neither can be judging a different fact from the other.
+    let approvalHolds = config.map { !$0.requiresApproval || isApproved($0) } ?? false
+    let plan = PhasePolicy.plan(
+        phase: .verify,
+        isEnabled: isEnabled,
+        config: config,
+        binary: binary,
+        isApproved: { _ in approvalHolds }
+    )
+    let declared: [String]? = switch plan {
+    case let .run(planConfig, _):
+        planConfig.declaredProcesses(in: ProcessCompose.Phase.verify.namespace)
+    case .nothingToDo:
+        nil
+    }
+    return (
+        declared: declared ?? [],
+        reason: verificationUnavailableReason(
+            isEnabled: isEnabled,
+            hasConfig: config != nil,
+            hasBinary: binary != nil,
+            isApproved: approvalHolds,
+            declared: declared
+        )
+    )
+}
+
 /// The Verification tab. Runs a project's declared `verify` checks and shows
 /// each one's result.
 ///
@@ -199,6 +282,18 @@ struct VerificationTabView: View {
     /// will read whatever the tree looks like when it actually runs `git`,
     /// which is at least as current as a request queued behind it.
     @State private var isRefreshingStaleness = false
+    /// A refresh that arrived while one was already in flight, to be run once
+    /// it lands.
+    ///
+    /// The in-flight guard alone is right for a burst of git-activity
+    /// notifications — the running hop reads the tree at least as late as a
+    /// request queued behind it — but it is wrong for the run-completion
+    /// trigger, and silently so: a hop started when the run *began* may have
+    /// read the tree before a check that writes to it had finished, and
+    /// dropping the completion request would leave that pre-run answer
+    /// standing. One pending bit rather than a queue, because every waiting
+    /// request wants the same thing: one more read, after this one.
+    @State private var stalenessRefreshPending = false
 
     var body: some View {
         Group {
@@ -213,6 +308,26 @@ struct VerificationTabView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .worktreeGitActivity)) { notification in
             guard notification.object as? String == worktreePath else { return }
+            refreshStaleness()
+        }
+        // A run appearing. `.onAppear` cannot cover this: `refreshStaleness`
+        // bails while there is no run to compare against, so on the first run
+        // of a session nothing had ever computed `currentStamp` and
+        // `verificationIsStale` read nil as stale — a result rendered stale the
+        // instant it arrived. It also covers a run started after uncommitted
+        // edits that caused no git-directory activity, where the last computed
+        // stamp predates the edits and a current result would read as stale.
+        .onChange(of: currentRun?.id) {
+            refreshStaleness()
+        }
+        // A run *ending*, which is the case the trigger above cannot answer: a
+        // check that writes to the tree — a formatter, codegen — leaves
+        // `run.stamp` at what the tree looked like before it ran, so a
+        // genuinely stale result would render fresh until something else
+        // recomputed. Keyed on the runner's own liveness for the reason
+        // `verificationCanRun` is: every row goes terminal a moment before the
+        // run seals, so `Run.isFinished` would fire this too early.
+        .onChange(of: isLive) {
             refreshStaleness()
         }
     }
@@ -499,11 +614,17 @@ struct VerificationTabView: View {
     /// `currentRun` does), and `HeadWatcher` can fire at up to ~5Hz during
     /// ordinary agent activity — its own doc says the watched directory is
     /// noisy — so a computation already in flight absorbs a burst instead of
-    /// queuing a matching burst of `git` spawns behind it.
+    /// queuing a matching burst of `git` spawns behind it. Absorbed, not
+    /// discarded: see `stalenessRefreshPending` for why the run-completion
+    /// trigger cannot afford to have its request dropped.
     private func refreshStaleness() {
         guard currentRun != nil else { return }
-        guard !isRefreshingStaleness else { return }
+        guard !isRefreshingStaleness else {
+            stalenessRefreshPending = true
+            return
+        }
         isRefreshingStaleness = true
+        stalenessRefreshPending = false
         stalenessGeneration += 1
         let token = stalenessGeneration
         let path = worktreePath
@@ -518,8 +639,14 @@ struct VerificationTabView: View {
                 // reappearing) may have started and finished while this git
                 // hop was in flight; an older completion must not overwrite
                 // its answer.
-                guard token == stalenessGeneration else { return }
-                currentStamp = stamp
+                if token == stalenessGeneration {
+                    currentStamp = stamp
+                }
+                // Runs after the assignment above, so a pending request only
+                // ever replaces this answer with a later one.
+                if stalenessRefreshPending {
+                    refreshStaleness()
+                }
             }
         }
     }

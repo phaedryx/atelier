@@ -10,11 +10,11 @@ final class WorkspaceTabKindTests: XCTestCase {
             XCTAssertFalse(kind.isCloseable, "\(kind.id) must be permanent")
         }
         // Singletons: one of each, fixed label, but they close like any tab.
-        for kind in [WorkspaceTabKind.changes, .execution] {
+        for kind in [WorkspaceTabKind.changes, .execution, .verification] {
             XCTAssertTrue(kind.isCloseable, "\(kind.id) must be closeable")
             XCTAssertNil(kind.shortcutBadge, "\(kind.id) badges are positional")
         }
-        for kind in [WorkspaceTabKind.info, .agent, .changes, .execution] {
+        for kind in [WorkspaceTabKind.info, .agent, .changes, .execution, .verification] {
             XCTAssertNotNil(kind.staticLabel, "\(kind.id) has a fixed label")
         }
     }
