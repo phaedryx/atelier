@@ -47,7 +47,11 @@ window.editorAPI = {
   // Create or update a model and switch the editor to it.
   // filePath gives the model a file:// URI so the TypeScript worker can
   // resolve imports between open files and infer file types from the path.
-  openFile(modelId, text, languageId, filePath) {
+  // `line`, when given, is a 1-based line to scroll to and place the cursor on.
+  // Revealing here rather than in a separate call keeps it atomic: a caller that
+  // opened a file and then revealed would race the model swap, and land the
+  // cursor in whatever was open before.
+  openFile(modelId, text, languageId, filePath, line) {
     // Dispose listener BEFORE setValue() so the old listener doesn't
     // catch it and send a false dirty event to Swift.
     if (contentChangedListener) contentChangedListener.dispose()
@@ -78,6 +82,13 @@ window.editorAPI = {
       const dirty = model.getAlternativeVersionId() !== model._cleanVersionId
       postToSwift({ type: 'contentChanged', modelId, dirty })
     })
+    if (line) {
+      // Clamp: the caller's line came from outside and the file may have
+      // changed since. Monaco throws on an out-of-range line.
+      const target = Math.max(1, Math.min(line, model.getLineCount()))
+      editor.revealLineInCenter(target)
+      editor.setPosition({ lineNumber: target, column: 1 })
+    }
     editor.focus()
   },
 

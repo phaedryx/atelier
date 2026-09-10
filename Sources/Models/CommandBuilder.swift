@@ -38,8 +38,19 @@ struct CommandBuilder {
         } else {
             fallbackCmd = fallback
         }
-        let posixCmd = "\(primary) || \(fallbackCmd)"
-        let shArgQuote = isFish(shell) ? fishQuote(posixCmd) : shellQuote(posixCmd)
+        return inLoginShell("\(primary) || \(fallbackCmd)", shell: shell)
+    }
+
+    /// Run one command through the user's login shell, so it sees the PATH their
+    /// profile builds.
+    ///
+    /// Two layers, and both are load-bearing: the login shell loads profiles,
+    /// then `exec sh` gives POSIX syntax regardless of whether that shell is
+    /// zsh, bash or fish. Factored out of `withFallback`, which is the same
+    /// wrapping around a `||` pair — a single command needs the wrapping without
+    /// needing a fallback to invent.
+    static func inLoginShell(_ command: String, shell: String = userShell) -> String {
+        let shArgQuote = isFish(shell) ? fishQuote(command) : shellQuote(command)
         let shCmd = "exec sh -c \(shArgQuote)"
         // Quoted for the same reason `RunLauncher.runScriptCommand` quotes it:
         // $SHELL can sit under a path with a space.

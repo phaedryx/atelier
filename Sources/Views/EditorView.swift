@@ -11,6 +11,14 @@ struct EditorView: View {
     let initialFilePath: String?
     let bridge: MonacoEditorBridge
     let modelId: String
+    /// The line this tab was asked to open at, consumed on first load.
+    ///
+    /// A closure rather than an `Int?` because taking the value mutates the
+    /// model: the view is recreated on every navigation, and a plain value would
+    /// be re-read and re-scrolled each time, dragging the user back to a line
+    /// they had already scrolled away from. Defaults to "no line", so every
+    /// existing call site is unaffected.
+    var initialLine: () -> Int? = { nil }
     @Binding var isDirtyState: Bool
     var onFileChanged: ((String?) -> Void)?
     var onExpandFolder: ((String) -> Void)?
@@ -507,7 +515,13 @@ struct EditorView: View {
             let content = try String(contentsOf: url, encoding: .utf8)
             let fileName = (relativePath as NSString).lastPathComponent
             let langId = Self.monacoLanguageId(for: fileName)
-            bridge.openFile(modelId: modelId, text: content, languageId: langId, filePath: fullPath)
+            bridge.openFile(
+                modelId: modelId,
+                text: content,
+                languageId: langId,
+                filePath: fullPath,
+                line: initialLine()
+            )
             isDirtyState = false
             fileLoaded = true
             loadError = nil
