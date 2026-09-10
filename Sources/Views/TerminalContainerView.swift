@@ -577,8 +577,13 @@ struct TerminalContainerView: View {
         let finalCommand: String
         var intermediates = intermediates
         if useTmux, let tmuxPath = appEnv.toolStatus.tmux.path {
-            let session = TmuxSession.sessionName(project: projectName, workstream: workstreamName, role: "agent")
-            finalCommand = TmuxSession.wrapCommand(tmuxPath: tmuxPath, sessionName: session, command: cmd, environmentVars: envVars, respawnOnExit: true)
+            finalCommand = Workstream.AgentCommand.tmuxWrapped(
+                cmd,
+                tmuxPath: tmuxPath,
+                projectName: projectName,
+                workstreamName: workstreamName,
+                environmentVars: envVars
+            )
             intermediates.append(finalCommand)
         } else {
             finalCommand = cmd
@@ -2524,6 +2529,9 @@ final class TerminalSurfaceCache: ObservableObject {
     private(set) var failedSurfaces: [UUID: String] = [:]
     /// Tracks when each surface was created, for detecting immediate process death.
     private var creationTimes: [UUID: Date] = [:]
+    /// Surfaces created outside the view, running a command the view did not
+    /// choose. See `seedSurface` and the adoption branch in `ensureSurface`.
+    private var seededSurfaces: Set<UUID> = []
     /// Surfaces that died within this interval after creation are treated as launch failures.
     private static let healthCheckWindow: TimeInterval = 2.0
 
@@ -2575,9 +2583,73 @@ final class TerminalSurfaceCache: ObservableObject {
         return view
     }
 
+    /// Creates a surface whose command a non-view caller chose, and records that
+    /// the view must *adopt* it rather than reconcile it.
+    ///
+    /// `create_workstream` starts the Coding Agent for a workstream nobody is
+    /// looking at, so the surface has to exist before `TerminalContainerView`
+    /// ever renders — and it runs a command that view would never build, because
+    /// it carries the agent's initial prompt. `ensureSurface` compares stored
+    /// commands and destroys a surface whose command differs, so without the
+    /// marker the first render would kill that agent mid-turn.
+    ///
+    /// The marker is one-shot on purpose. Making the two commands *equal* was the
+    /// other option, and it would stake a running agent's life on byte-equality
+    /// between two builders reading eight settings each; one divergence — an MCP
+    /// config path that resolved in one and not the other — is the same kill,
+    /// just harder to see. Adoption drops the requirement entirely: the view's
+    /// command is recorded on its first pass, and from there this surface is an
+    /// ordinary one, so a later settings change still respawns it and a respawn
+    /// after the agent exits uses the view's resume-first command rather than
+    /// replaying the prompt.
+    /// - Returns: whether the surface was created here. `false` means one already
+    ///   existed, so `command` never ran — the caller must report that rather
+    ///   than what it intended to do.
+    func seedSurface(
+        for id: UUID,
+        app: ghostty_app_t,
+        workingDirectory: String,
+        command: String,
+        environmentVars: [String: String]
+    ) -> Bool {
+        // A surface that already exists is the view's, and the view is the
+        // authority on it — seeding over the top would be the destroy-and-respawn
+        // this whole mechanism exists to avoid. `Launcher.beforeReady` is what
+        // makes this the unreachable case rather than the racy one; the check
+        // stays because what it guards is an agent's prompt going missing in
+        // silence, and reporting that is worth two lines.
+        if surfaces[id] != nil {
+            return false
+        }
+        seededSurfaces.insert(id)
+        _ = surface(
+            for: id,
+            app: app,
+            workingDirectory: workingDirectory,
+            command: command,
+            environmentVars: environmentVars
+        )
+        return true
+    }
+
     /// Creates the surface for `id`, replacing any existing surface whose
     /// stored command differs. A matching surface is returned untouched.
+    ///
+    /// A seeded surface is adopted instead of compared, once: its recorded
+    /// params become the ones passed here, and the marker is cleared. See
+    /// `seedSurface`.
     func ensureSurface(for id: UUID, app: ghostty_app_t, workingDirectory: String, command: String?, initialInput: String? = nil, environmentVars: [String: String] = [:]) -> TerminalView {
+        if seededSurfaces.contains(id), let seeded = surfaces[id] {
+            seededSurfaces.remove(id)
+            logger.info("Adopting seeded surface \(id) — keeping the running agent, recording the view's command")
+            surfaceParams[id] = SurfaceParams(
+                workingDirectory: workingDirectory,
+                command: command,
+                initialInput: initialInput,
+                environmentVars: environmentVars
+            )
+            return seeded
+        }
         if let existing = surfaces[id],
            let params = surfaceParams[id],
            params.command == command,
@@ -2685,6 +2757,10 @@ final class TerminalSurfaceCache: ObservableObject {
         surfaceParams.removeValue(forKey: id)
         failedSurfaces.removeValue(forKey: id)
         creationTimes.removeValue(forKey: id)
+        // The marker describes a surface, not an id: leaving it behind would
+        // make the *next* surface for this id adopt whatever the view passed,
+        // skipping a reconciliation that is then the correct answer.
+        seededSurfaces.remove(id)
     }
 
     /// Every surface id this workstream can have created, derived from the

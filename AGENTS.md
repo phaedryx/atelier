@@ -587,14 +587,37 @@ Two further things about it that are not guesses:
   defaulting to true so every UI producer is unchanged; the launcher passes false. An agent
   spinning up a workstream must not pull the user out of the pane they are working in, and the
   sidebar row appears optimistically either way.
-- **Its agent goes in a terminal tab, never the Coding Agent tab.** The Coding Agent's surface
-  id *is* the workstream id, and `TerminalContainerView.preloadSurfaces` calls `ensureSurface`
-  for it with whatever `buildClaudeCommand` builds — which takes no initial prompt.
-  `ensureSurface` destroys and respawns a surface whose stored command differs, so seeding the
-  Coding Agent with a prompt would kill that agent mid-turn the first time the user opened the
-  workstream. A tab's surface id is fresh and nothing reconciles it against a rebuilt command.
-  Changing this needs `buildClaudeCommand` extracted the rest of the way out of the view, not a
-  second command builder.
+- **Its agent goes in the Coding Agent tab**, on the surface whose id *is* the workstream id, so
+  the user opening that workstream lands on the conversation. Nobody is looking at the workstream
+  when it is created, so the surface has to exist before `TerminalContainerView` renders — and it
+  runs a command carrying the initial prompt, which that view would never build.
+  `TerminalContainerView.preloadSurfaces` then calls `ensureSurface` with `buildClaudeCommand`'s
+  output, and `ensureSurface` destroys a surface whose stored command differs.
+  **`TerminalSurfaceCache.seedSurface` is what makes that safe, and the mechanism is adoption,
+  not agreement.** A seeded surface is marked once; the view's first `ensureSurface` for it
+  records the view's command and clears the marker instead of comparing. From there it is an
+  ordinary surface — a later settings change still respawns it, and a respawn after the agent
+  exits uses the view's resume-first command rather than replaying the prompt. The rejected
+  alternative was making the two commands *equal*, which would stake a running agent's life on
+  byte-equality between two builders reading eight settings each; one divergence — an MCP config
+  path resolving in one and not the other — is the same mid-turn kill, only harder to see. The
+  invariant belongs at the consumer, the way `ProcessCompose.RunCommandPlan`'s does, rather than
+  as an obligation on every future caller.
+  **The seed runs before `.workstreamWorktreeReady`, and that ordering is load-bearing** — it is
+  what `Launcher.launch`'s `beforeReady` hook exists for. That notification is what makes the
+  workstream renderable; the optimistic sidebar row has been clickable since
+  `.workstreamCreated`, seconds earlier, so a user who selects the new row is rendering it the
+  instant the path lands. Seeding after the post is a race, and losing it means the view's
+  surface wins and the prompt is dropped in silence. `seedSurface` returns whether it actually
+  created the surface, and the handler reports "no agent was started" rather than the success it
+  intended, because a lost prompt that reads as success is the worse half of the bug.
+  Two things the handler must still get right on its own, because `ensureSurface` will not
+  correct them: the **environment**, which is never compared, so a divergence is permanent —
+  `WorkspaceActions.environment(for:surfaceID:)` is the wrong source here, because it blanks
+  `TMUX`/`TMUX_PANE`, which is right for a terminal tab and wrong for the surface tmux mode
+  wraps — and the **tmux session name**, which goes through
+  `Workstream.AgentCommand.tmuxWrapped` so the seeded agent lands in the session
+  `Workstream.Archiver` kills.
 
 Two agents in one worktree is a supported shape, not a mistake — `/ping-pong`-style pairing
 wants it. They are distinguishable because every Atelier-launched terminal exports its own
