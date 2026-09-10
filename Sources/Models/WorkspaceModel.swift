@@ -184,7 +184,7 @@ final class WorkspaceModel: ObservableObject {
         editorInitialLines.removeValue(forKey: id)
     }
 
-    /// Shows one of the singleton tabs (Changes, Execution), reopening it at
+    /// Shows one of the singleton tabs (Changes, Execution, Verification), reopening it at
     /// the end of the strip if the user closed it. Instanced kinds have no
     /// business here — there can be many of each, so "the" tab is meaningless.
     func activateSingleton(_ tab: WorkspaceTab) {
@@ -221,11 +221,12 @@ final class WorkspaceModel: ObservableObject {
     /// that is not open is. That used to be a doc-comment contract enforced by
     /// nothing: the splice below ran ahead of the per-kind switch, so passing
     /// `.info` removed the tab and the `case .info, .agent` arm only skipped the
-    /// per-tab state cleanup — the tab was gone either way. Changes and
-    /// Execution are ordinary closeable tabs: they carry no per-tab state to
-    /// clear, and everything durable behind them (the diff bridge, the
-    /// annotation store, the dev server) belongs to the workstream rather than
-    /// the tab, so closing one frees nothing.
+    /// per-tab state cleanup — the tab was gone either way. Changes, Execution
+    /// and Verification are ordinary closeable tabs: they carry no per-tab
+    /// state to clear, and everything durable behind them (the diff bridge, the
+    /// annotation store, the dev server, the app-level verification runner)
+    /// belongs to the workstream rather than the tab, so closing one frees
+    /// nothing.
     @discardableResult
     func removeTab(_ tab: WorkspaceTab) -> Bool {
         guard tab.kind.isCloseable else { return false }
@@ -240,7 +241,7 @@ final class WorkspaceModel: ObservableObject {
         case let .editor(id):
             editorFilePaths.removeValue(forKey: id)
             editorDirtyState.removeValue(forKey: id)
-        case .info, .agent, .changes, .execution:
+        case .info, .agent, .changes, .execution, .verification:
             break
         }
 

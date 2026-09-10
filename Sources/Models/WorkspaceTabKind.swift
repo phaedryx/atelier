@@ -9,11 +9,11 @@ import Foundation
 /// `tabContent`; the remaining per-kind switches (restore mapping, occlusion,
 /// seeding, removal) are exhaustive, so the compiler walks you to each one.
 ///
-/// Only Info and Agent are permanent. Changes and Execution are singletons —
-/// there is exactly one of each — but they close and reopen like any terminal
-/// or browser, and they sit in the same draggable strip. The tab bar's
-/// quick-add buttons take that split as data in `SingletonQuickAdd.all`, so a
-/// new singleton kind needs an entry there too.
+/// Only Info and Agent are permanent. Changes, Execution and Verification are
+/// singletons — there is exactly one of each — but they close and reopen like
+/// any terminal or browser, and they sit in the same draggable strip. The tab
+/// bar's quick-add buttons take that split as data in `SingletonQuickAdd.all`,
+/// so a new singleton kind needs an entry there too.
 struct WorkspaceTabKind: Equatable, Hashable {
     /// Stable identifier; doubles as the drag identifier for the singleton
     /// kinds, which have no instance UUID to drag by.
@@ -51,6 +51,10 @@ struct WorkspaceTabKind: Equatable, Hashable {
     static let execution = WorkspaceTabKind(
         id: "execution", isCloseable: true, icon: "play.circle",
         staticLabel: NSLocalizedString("Execution", comment: ""), shortcutBadge: nil
+    )
+    static let verification = WorkspaceTabKind(
+        id: "verification", isCloseable: true, icon: "checkmark.circle",
+        staticLabel: NSLocalizedString("Verification", comment: ""), shortcutBadge: nil
     )
     static let terminal = WorkspaceTabKind(
         id: "terminal", isCloseable: true, icon: "terminal",

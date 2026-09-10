@@ -110,6 +110,16 @@ struct ContentView: View {
     @StateObject private var surfaceCache = TerminalSurfaceCache()
     @StateObject private var appEnvironment = AppEnvironment()
     @StateObject private var usageStore = Usage.Store()
+    /// One runner for the app's lifetime, not one per tab.
+    ///
+    /// `<id>-verify.sock` admits exactly one server, so "one run per
+    /// workstream" needs a single enforcement point — see
+    /// `Verification.Runner`'s own doc. Held here, beside the other app-level
+    /// services, and handed to `TerminalContainerView` as a plain `let`: the
+    /// Verification tab observes it through its own `@ObservedObject`, and a
+    /// runner owned by the tab would lose every run the moment the tab closed
+    /// or the user switched workstreams.
+    @StateObject private var verificationRunner = Verification.Runner()
     @ObservedObject private var agentStateTracker = Workstream.AgentStateTracker.shared
     @ObservedObject private var channelProbe = HookChannelProbe.shared
     @State private var saveWork: DispatchWorkItem?
@@ -203,7 +213,8 @@ struct ContentView: View {
                     workstreamLabel: workstream.label,
                     bypassPermissions: workstream.bypassPermissions,
                     isActive: true,
-                    model: workspaceModel
+                    model: workspaceModel,
+                    verificationRunner: verificationRunner
                 )
                 .id(workstreamID)
                 .navigationTitle(appEnvironment.taskDescription(for: workstream.worktreePath) ?? workstream.label)

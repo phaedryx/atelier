@@ -71,4 +71,17 @@ final class WorkspaceTabKindTests: XCTestCase {
         XCTAssertTrue(WorkspaceTab.changes.isCloseable)
         XCTAssertTrue(WorkspaceTab.terminal(UUID()).isCloseable)
     }
+
+    /// Verification is the third singleton: exactly one per workstream, a fixed
+    /// label, and no named key of its own — so its badge is positional like
+    /// Changes' and Execution's.
+    func test_verificationKind_isACloseableSingleton() {
+        XCTAssertEqual(WorkspaceTabKind.verification.id, "verification")
+        XCTAssertTrue(WorkspaceTabKind.verification.isCloseable)
+        XCTAssertNotNil(WorkspaceTabKind.verification.staticLabel)
+        XCTAssertNil(WorkspaceTabKind.verification.shortcutBadge)
+        XCTAssertEqual(WorkspaceTabKind.verification.icon, "checkmark.circle")
+        XCTAssertEqual(WorkspaceTab.verification.kind, .verification)
+        XCTAssertEqual(WorkspaceTab.verification.dragIdentifier, "verification")
+    }
 }
