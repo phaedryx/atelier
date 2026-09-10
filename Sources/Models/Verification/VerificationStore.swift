@@ -37,8 +37,16 @@ extension Verification {
         }
 
         static func save(_ run: Verification.Run) {
-            guard let data = try? JSONEncoder().encode(run) else { return }
-            UserDefaults.standard.set(data, forKey: key(for: run.workstreamID))
+            do {
+                let data = try JSONEncoder().encode(run)
+                UserDefaults.standard.set(data, forKey: key(for: run.workstreamID))
+            } catch {
+                // A failure to encode a run (e.g. NaN in duration) leaves the
+                // store holding a stale prior result, which the tab renders as
+                // that workstream's latest: worth logging audibly so that stale
+                // state is not silent.
+                logger.warning("Failed to encode verification run: \(error.localizedDescription, privacy: .public)")
+            }
         }
 
         static func clear(for workstreamID: UUID) {

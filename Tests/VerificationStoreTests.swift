@@ -61,4 +61,23 @@ final class VerificationStoreTests: XCTestCase {
             ProcessCompose.TableModel.selectionKey(for: workstreamID)
         )
     }
+
+    /// An encode failure (e.g. NaN in duration) must not crash and must log.
+    /// Because a failed save leaves the prior run in the store, it is worth
+    /// logging audibly rather than silently. This test confirms save() does not
+    /// throw and does not corrupt the store on an encode failure.
+    func test_save_withNaNDurationLogsButDoesNotCrash() {
+        // Set a prior run to confirm the stale one persists.
+        Verification.Store.save(run(id: "prior", stamp: "s1"))
+
+        // Create a run with NaN duration, which JSONEncoder rejects by default.
+        var badRun = run(id: "failing", stamp: "s2")
+        badRun.checks[0].duration = Double.nan
+
+        // save() must not throw.
+        Verification.Store.save(badRun)
+
+        // The store should still hold the prior run, not the one that failed.
+        XCTAssertEqual(Verification.Store.latest(for: workstreamID)?.id, "prior")
+    }
 }
