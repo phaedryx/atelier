@@ -49,6 +49,15 @@ final class AppEnvironment: ObservableObject {
     /// GitHub remote detection cache per project directory (lightweight git check)
     private var githubRemoteCache: [String: Bool] = [:]
 
+    /// Browser URL for each project's GitHub origin, keyed by the repository's home like
+    /// `githubRemoteCache` and filled from the same git call in the same sweep. It exists
+    /// because the other two sources cannot answer for a `.bare` container: `githubRepoCache`
+    /// is only ever written by `refreshGitHubInfo`, which lives on views the sidebar does not
+    /// draw, and `repoInfoCache` is keyed by the *checkout*, so a lookup by `directory` misses
+    /// it outright. Between them a container-layout project had no GitHub URL until its
+    /// overview had been opened — and none at all without `gh`.
+    private var githubBrowserURLCache: [String: URL] = [:]
+
     // GitHub info cache
     private var githubRepoCache: [String: GitHub.RepoInfo] = [:]
     private var githubPRCache: [String: [GitHub.PR]] = [:]
@@ -308,9 +317,18 @@ final class AppEnvironment: ObservableObject {
 
     /// Browser-openable GitHub URL for a project directory.
     /// Prefers the canonical URL from `gh`, falls back to converting the git remote URL.
+    ///
+    /// The middle branch is the one that answers for every project: it is filled by the
+    /// routine path-validity sweep, keyed by the same `directory` callers ask with, and needs
+    /// no `gh`. The `repoInfoCache` branch is kept because it is the freshest answer for an
+    /// ordinary clone, where `directory` and `checkout` are the same string — but it is
+    /// nothing to rely on, since in the container layout that key is never written.
     func githubURL(for directory: String) -> URL? {
         if let ghURL = githubRepoCache[directory]?.url {
             return URL(string: ghURL)
+        }
+        if let fromRemote = githubBrowserURLCache[directory] {
+            return fromRemote
         }
         if let remoteURL = repoInfoCache[directory]?.remoteURL {
             return GitHub.Operations.browserURL(from: remoteURL)
@@ -384,6 +402,7 @@ final class AppEnvironment: ObservableObject {
             var missing: Set<UUID> = []
             var gitRepoResults: [String: Bool] = [:]
             var githubRemoteResults: [String: Bool] = [:]
+            var githubBrowserURLResults: [String: URL] = [:]
             var portResults: Set<UUID> = []
             var descriptionResults: [String: String] = [:]
 
@@ -412,7 +431,13 @@ final class AppEnvironment: ObservableObject {
                 // below. `repoInfo` is the exception, and is keyed by the
                 // checkout, because `git status` in a container fails outright.
                 gitRepoResults[project.directory] = Git.Operations.isGitRepo(at: project.directory)
-                githubRemoteResults[project.directory] = GitHub.Operations.hasGitHubRemote(at: project.directory)
+                // One `git remote get-url` answers both: whether this is a GitHub project,
+                // and where it lives in a browser. Asking `gh` for the second is what left
+                // the sidebar without either until some other view happened to appear.
+                let githubRemote = GitHub.Operations.githubRemoteURL(at: project.directory)
+                githubRemoteResults[project.directory] = githubRemote != nil
+                githubBrowserURLResults[project.directory] = githubRemote
+                    .flatMap(GitHub.Operations.browserURL(from:))
 
                 for ws in project.workstreams {
                     if RunState.Store.loadValidated(for: ws.id)?.detectedPorts.isEmpty == false {
@@ -503,6 +528,7 @@ final class AppEnvironment: ObservableObject {
                     self.missingProjectIDs = missing
                     self.gitRepoCache.merge(gitRepoResults) { _, new in new }
                     self.githubRemoteCache.merge(githubRemoteResults) { _, new in new }
+                    self.githubBrowserURLCache.merge(githubBrowserURLResults) { _, new in new }
                     self.worktreeStateCache.merge(worktreeStates) { _, new in new }
                     self.activePortCache = portResults
                     self.taskDescriptionCache = descriptionResults

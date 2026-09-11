@@ -241,11 +241,37 @@ extension GitHub {
         /// one call site cannot silently go missing from another and decode as its default.
         private static let prFields = "number,title,state,headRefName,url,isDraft,reviewDecision,statusCheckRollup"
 
+        /// `origin`'s URL when it points at GitHub, or nil when there is no origin, no git,
+        /// or the remote lives somewhere else.
+        ///
+        /// One subprocess answers both questions the sidebar asks of a project: whether it is
+        /// a GitHub project at all, and where it lives in a browser. They used to come from
+        /// different places — this Bool from git, the URL only ever from `gh repo view` — and
+        /// nothing the sidebar draws calls `gh`, so a project could have a GitHub remote and
+        /// no GitHub URL at the same time for a whole session.
+        static func githubRemoteURL(at path: String) -> String? {
+            guard let gitPath,
+                  let remote = run(gitPath, args: ["remote", "get-url", "origin"], in: path),
+                  remote.contains("github.com") else { return nil }
+            return remote
+        }
+
         /// Check if the project has a GitHub remote.
         static func hasGitHubRemote(at path: String) -> Bool {
-            guard let gitPath,
-                  let remote = run(gitPath, args: ["remote", "get-url", "origin"], in: path) else { return false }
-            return remote.contains("github.com")
+            githubRemoteURL(at: path) != nil
+        }
+
+        /// Whether a project row shows the GitHub button. Both conditions are required: a repo
+        /// to make a worktree in, and an origin on GitHub for the branch to come from.
+        ///
+        /// Named here rather than spelled inline in the row, the shape `Shortcut.Settings`
+        /// already uses for its own button, because *which* cached fact this reads is the whole
+        /// bug it was carrying. Asking `AppEnvironment.githubURL` instead hid the button for
+        /// every container-layout project: that cache is written only by `refreshGitHubInfo`,
+        /// which runs on views the sidebar does not draw, and needs `gh` besides — while
+        /// nothing behind the button does.
+        static func shouldShowBranchButton(isGitRepo: Bool, hasGitHubRemote: Bool) -> Bool {
+            isGitRepo && hasGitHubRemote
         }
 
         /// Convert a git remote URL to a browser-openable HTTPS URL.
