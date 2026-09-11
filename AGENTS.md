@@ -616,11 +616,50 @@ via FSEvents and retargets the embedded browser when a port is detected.
 
 ### Child processes
 Everything that spawns a child goes through `ProcessRunner`, which enforces a
-deadline and drains stdout and stderr on separate threads. Both halves matter:
+deadline and drains stdout and stderr concurrently. Both halves matter:
 `readDataToEndOfFile()` followed by `waitUntilExit()` never returns if the child
 hangs, and draining one stream while the other fills deadlocks any child whose
 output passes the ~64 KB pipe buffer — reachable for `git fetch` on a
 many-branch repository, or any package-manager install.
+
+**Concurrently, but not on two threads** — `ProcessRunner.PipeDrain` reads each
+pipe through a `DispatchSource`, and the reason is not style. EOF is not the
+child's to give: it arrives when the *last* holder of the write end closes it,
+and a grandchild the child left behind holds the same one, which `sh -c
+'server &'` in a project's own command produces routinely. A thread blocked on
+that read never comes back. At two per call against a libdispatch global pool
+that tops out around 64, a few dozen such calls starved the pool and then
+*every* later capture timed out waiting for a thread rather than for its child —
+`/usr/bin/true` included, which is what made the symptom look unrelated to the
+cause. A source occupies no thread while it waits, so exhaustion is no longer
+reachable. The drain owns a `dup` of the pipe's descriptor and closes it in its
+cancel handler, leaving `Pipe`'s own `FileHandle` owning the original; one
+descriptor with two owners is a double close on a number the kernel has since
+reissued. Note the failure mode this does *not* compound: a capture that times
+out because no thread was free parks nothing — its blocks sit queued and run
+later. Only a drain that got a thread and then blocked on a live grandchild's
+pipe leaked permanently.
+
+**The deadline kills the process group, not just the child.** When the child
+exits immediately and leaves a grandchild behind, Foundation has already reaped
+the child by the time the deadline fires — `terminate()` has nothing to signal,
+and the survivor goes on running. `Process` spawns each child as its own group
+leader (`pgid == pid`, measured) and a backgrounded grandchild inherits that
+group, so the group is the only handle left on it. Two facts make that safe, and
+both were measured rather than reasoned about, because the cost of being wrong
+is signalling a stranger:
+
+- **A pid live as a group id is never reissued.** A group was orphaned, then
+  ~98,000 forks drove the pid counter a full lap past it (`kern.maxproc` is
+  12,000) and the number was never allocated. So `kill(-pid)` after the leader
+  is reaped can only reach the group Atelier created; an empty group answers
+  ESRCH and nothing happens. `ProcessRunner.kill` also guards `pid > 1`, because
+  `kill` reads 0 as "my own group" and -1 as "everything" — and a `Process` that
+  never launched reports 0.
+- **A daemon is out of reach, which is the wanted behaviour.** Anything calling
+  `setsid` leaves the group by definition. The tmux server is exactly that: it
+  lands in its own group and survives this (verified), which it must, since it
+  is meant to outlive the client command that started it.
 
 Pick a deadline from `ProcessRunner.Timeout` rather than inlining a number:
 `local` for reads and ref-level writes, `network` for anything reaching a remote,
