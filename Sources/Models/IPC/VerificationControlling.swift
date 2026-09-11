@@ -53,13 +53,18 @@ extension IPC {
             onFinish: @escaping @Sendable (VerificationRunInfo) -> Void
         ) async throws -> VerificationStart
 
-        /// A run by id, or nil when no run has that id.
+        /// A run by id within one workstream, or nil when that workstream has
+        /// no run with that id.
         ///
-        /// Nil covers both "never existed" and "did not outlive an Atelier
-        /// restart" — the runner keeps a workstream's most recent run, which the
-        /// staleness stamp needs anyway, and nothing older. This side does not
-        /// pretend to tell the two apart.
-        func verificationRun(id: String) async -> VerificationRunInfo?
+        /// **Scoped by workstream because only a workstream can be looked up
+        /// after a restart.** Live runs are in memory and findable by id alone,
+        /// but the only one that outlives a restart is a workstream's most
+        /// recent — kept because the staleness stamp needs it — and it is stored
+        /// under that workstream's key. Handed only an id, this could answer
+        /// about a live run and then lie about every older one by saying it
+        /// never existed. The caller's scoping is not what this parameter is
+        /// for; `IPC.Service` does that itself, against the run it gets back.
+        func verificationRun(id: String, in workstreamID: UUID) async -> VerificationRunInfo?
     }
 
     /// What a start answers with: the run's id, and the checks it actually

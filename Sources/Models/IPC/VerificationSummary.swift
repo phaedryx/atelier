@@ -34,6 +34,9 @@ extension IPC {
         /// Below this there is no room for output worth reading, so the notice
         /// carries verdicts alone and says the output was trimmed.
         static let minTailBytes = 200
+        /// Bytes of a run-level failure reason. It is a process's stderr in the
+        /// case that matters, so its length is not this side's to assume.
+        static let maxFailureDetailBytes = 600
 
         /// Cap on all the output in one `check_verification` answer.
         static let maxReadOutputBytes = 16_000
@@ -81,7 +84,12 @@ extension IPC {
             let header = headerLine(for: run)
             let pointer = run.checks.isEmpty ? nil : pointerLine(runID: run.runID)
 
+            let failure = run.failureDetail.map(failureLine)
+
             var budget = maxMessageBytes - header.utf8.count
+            if let failure {
+                budget -= failure.utf8.count + 1
+            }
             if run.isStale {
                 budget -= staleNotice.utf8.count + 1
             }
@@ -100,6 +108,10 @@ extension IPC {
             let tails = failureTails(for: included.map(\.check), budget: budget - spent)
 
             var lines = [header]
+            // Before the verdicts: it explains why they all say "not run".
+            if let failure {
+                lines.append(failure)
+            }
             if run.isStale {
                 lines.append(staleNotice)
             }
@@ -250,7 +262,8 @@ extension IPC {
                 startedSecondsAgo: run.startedSecondsAgo,
                 durationSeconds: run.durationSeconds,
                 checks: checks,
-                isStale: run.isStale
+                isStale: run.isStale,
+                failureDetail: run.failureDetail
             )
         }
 
@@ -309,6 +322,14 @@ extension IPC {
             case .running:
                 return "~ \(check.name)\(elapsed)  running"
             }
+        }
+
+        /// A run-level failure, bounded like everything else here — it comes
+        /// from a process's stderr in the spawn-failure case, so its length is
+        /// not something this side chose.
+        private static func failureLine(_ detail: String) -> String {
+            let trimmed = detail.trimmingCharacters(in: .whitespacesAndNewlines)
+            return "The run itself failed: " + clamped(trimmed, to: maxFailureDetailBytes).text
         }
 
         private static let staleNotice =

@@ -417,6 +417,9 @@ func renderText(_ payload: IPC.Payload?) -> String {
         if let duration = run.durationSeconds {
             lines[0] += " in \(IPC.durationText(duration))"
         }
+        if let failureDetail = run.failureDetail {
+            lines.append("The run itself failed: \(failureDetail)")
+        }
         if run.isStale {
             lines.append("STALE: the worktree has changed since this run started, so these results no longer describe the code on disk.")
         }

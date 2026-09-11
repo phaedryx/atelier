@@ -226,6 +226,40 @@ final class WorkspaceActions {
         let claudePath: String?
     }
 
+    /// What `Verification.Runner.start` needs to identify a workstream.
+    ///
+    /// Its own type rather than `AgentTabPlan`, which is named for what it is
+    /// for and carries a `claudePath` this has no use for. The four strings
+    /// must stay the ones `VerificationTabView` passes — `projectDirectory` is
+    /// `Project.directory` (the repository's home, never its checkout, which is
+    /// what `ProcessCompose.Config.locate` and `ports.yaml` depend on), and
+    /// `worktreePath` is `Workstream.workingDirectory(checkout:)`. Two callers
+    /// resolving them differently would run one project's YAML under two
+    /// environments.
+    struct VerificationTarget: Sendable {
+        let workstreamName: String
+        let projectName: String
+        let projectDirectory: String
+        let worktreePath: String
+    }
+
+    /// Resolved through `resolve` rather than `context(workstreamID:)`, which
+    /// requires the surface cache and builds a `WorkspaceModel` — a running
+    /// suite has nothing to do with a workstream's tabs, and demanding them
+    /// would make a verification read fail wherever the workspace is not up.
+    func verificationTarget(workstreamID: UUID) throws -> VerificationTarget {
+        guard let projectList else { throw Failure.appNotReady }
+        guard let found = Self.resolve(workstreamID: workstreamID, in: projectList.items) else {
+            throw Failure.unknownWorkstream
+        }
+        return VerificationTarget(
+            workstreamName: found.workstream.name,
+            projectName: found.project.name,
+            projectDirectory: found.project.directory,
+            worktreePath: found.workstream.workingDirectory(checkout: found.project.checkout)
+        )
+    }
+
     func agentTabPlan(workstreamID: UUID) throws -> AgentTabPlan {
         let context = try context(workstreamID: workstreamID)
         return AgentTabPlan(

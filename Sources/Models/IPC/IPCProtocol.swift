@@ -283,6 +283,16 @@ extension IPC {
         /// Whether the worktree has changed since the run started, so a pass no
         /// longer describes the code on disk.
         let isStale: Bool
+        /// Why the **run itself** produced no per-check answer, when that is
+        /// what happened.
+        ///
+        /// Distinct from a check failing, and deliberately not set for one: a
+        /// suite where `rspec` failed is explained by that check's own state and
+        /// output. This is for a spawn that never got far enough to report on
+        /// anything, which otherwise reaches an agent as a list of checks that
+        /// all say "not run" and no reason anywhere. It is the only place that
+        /// reason exists.
+        let failureDetail: String?
     }
 
     /// Whether a verification run is still going, finished on its own, or was

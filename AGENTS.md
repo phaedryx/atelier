@@ -857,8 +857,25 @@ start would kill the first mid-suite; and `onFinish` must fire on every terminal
 because a path that does not is a completion notice that never arrives.
 
 **Approval is not rechecked here.** `ProcessCompose.PhasePolicy.plan` is the gate and
-it lives behind the seam; the handler passes the runner's refusal through verbatim.
-Adding a check in `IPC.Service` is the inlined second copy that section forbids.
+it lives behind the seam — `Verification.Runner.start` calls it, and that function is the
+only legal entrance to the runner. `IPC.VerificationRunnerBridge` therefore never touches
+`Runner.execute`, which spawns repository-provided commands with captured output and no
+TTY and performs no gate of its own. The handler passes the runner's refusal through
+verbatim; adding a check in `IPC.Service` is the inlined second copy that section forbids.
+
+**The bridge routes completions per run, because `Runner.onFinish` is one slot that fires
+for every run the app performs** — including the ones the user pressed Run for.
+`IPC.VerificationRunnerBridge` holds the callback `start_verification` was handed, keyed
+by run id, so a run nobody asked about finishes silently. Two consequences: constructing
+a second bridge silently unsubscribes the first, which is why `ContentView` builds exactly
+one; and nothing may `await` between `Runner.start` returning and the callback being
+registered, or a fast failure fires into a slot that is not there yet.
+
+**A run's state is read from its own rows, never from `Runner.isLive`.** They answer
+different questions: `isLive` means "may a new run start on this workstream's socket" and
+stays true through sealing *and* teardown, so a state read from it would report a run as
+still running in the very notice announcing it finished. `wasStopped` then `isFinished` is
+the projection, and `isLive` is left to the thing it is for.
 
 **`IPC.Message.from` is a `Sender` enum, and that is what an app-originated message
 cost.** Every other message in the store has a peer on both ends; a run finishing has

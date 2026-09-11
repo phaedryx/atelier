@@ -974,7 +974,7 @@ extension IPC {
             guard let runID = request.arguments["run_id"], !runID.isEmpty else {
                 return .failure(id: request.id, WorkspaceActions.Failure.missingArgument("run_id").localizedDescription)
             }
-            guard let info = await runner.verificationRun(id: runID) else {
+            guard let info = await runner.verificationRun(id: runID, in: workstreamID) else {
                 return .failure(id: request.id, VerificationFailure.unknownRun(runID).localizedDescription)
             }
             guard info.workstreamID.caseInsensitiveCompare(workstreamID.uuidString) == .orderedSame else {

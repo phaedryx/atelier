@@ -48,7 +48,7 @@ private actor StubVerificationRunner: IPC.VerificationControlling {
         return start
     }
 
-    func verificationRun(id: String) async -> IPC.VerificationRunInfo? {
+    func verificationRun(id: String, in _: UUID) async -> IPC.VerificationRunInfo? {
         runs[id]
     }
 }
@@ -117,7 +117,8 @@ final class IPCVerificationToolsTests: XCTestCase {
             startedSecondsAgo: 50,
             durationSeconds: 50,
             checks: checks,
-            isStale: false
+            isStale: false,
+            failureDetail: nil
         )
     }
 

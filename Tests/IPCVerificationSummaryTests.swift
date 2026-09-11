@@ -30,7 +30,8 @@ final class IPCVerificationSummaryTests: XCTestCase {
         state: IPC.VerificationRunState = .finished,
         duration: Double? = 50,
         checks: [IPC.VerificationCheckInfo],
-        isStale: Bool = false
+        isStale: Bool = false,
+        failureDetail: String? = nil
     ) -> IPC.VerificationRunInfo {
         IPC.VerificationRunInfo(
             runID: id,
@@ -40,7 +41,8 @@ final class IPCVerificationSummaryTests: XCTestCase {
             startedSecondsAgo: 51,
             durationSeconds: duration,
             checks: checks,
-            isStale: isStale
+            isStale: isStale,
+            failureDetail: failureDetail
         )
     }
 
@@ -142,6 +144,31 @@ final class IPCVerificationSummaryTests: XCTestCase {
             message.split(separator: "\n").first?.contains("1 of 2 checks failed") == true,
             "the skipped check is not a failure: \(message)"
         )
+    }
+
+    /// A spawn that never got far enough to report leaves every check
+    /// `.notRun`, and the reason exists in exactly one place. Without it an
+    /// agent gets a list of checks that all say "not run" and nothing to act on.
+    func test_message_leadsWithARunLevelFailureAheadOfTheVerdicts() {
+        let message = IPC.VerificationSummary.message(for: run(
+            duration: 0.4,
+            checks: [check("rspec", .notRun), check("rubocop", .notRun)],
+            failureDetail: "process-compose: error parsing process-compose.yaml: line 12"
+        ))
+
+        let lines = message.split(separator: "\n").map(String.init)
+        XCTAssertTrue(lines[1].hasPrefix("The run itself failed: "), message)
+        XCTAssertTrue(lines[1].contains("line 12"), message)
+        XCTAssertTrue(message.contains("· rspec  not run"), message)
+    }
+
+    func test_message_boundsARunLevelFailureLikeEverythingElse() {
+        let message = IPC.VerificationSummary.message(for: run(
+            checks: [check("rspec", .notRun)],
+            failureDetail: String(repeating: "spew ", count: 50_000)
+        ))
+
+        XCTAssertLessThanOrEqual(message.utf8.count, IPC.VerificationSummary.maxMessageBytes)
     }
 
     func test_message_saysWhenTheResultsNoLongerDescribeTheWorktree() {

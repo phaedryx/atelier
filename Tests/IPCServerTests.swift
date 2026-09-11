@@ -24,7 +24,7 @@ private actor StubVerificationRunner: IPC.VerificationControlling {
         IPC.VerificationStart(runID: run.runID, started: run.checks.map(\.name))
     }
 
-    func verificationRun(id: String) async -> IPC.VerificationRunInfo? {
+    func verificationRun(id: String, in _: UUID) async -> IPC.VerificationRunInfo? {
         id == run.runID ? run : nil
     }
 }
@@ -509,7 +509,8 @@ final class IPCServerTests: XCTestCase {
                     outputTruncated: true
                 ),
             ],
-            isStale: false
+            isStale: false,
+            failureDetail: nil
         )))
         _ = try waitForEndpoint()
 
