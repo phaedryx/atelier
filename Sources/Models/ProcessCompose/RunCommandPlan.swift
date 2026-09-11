@@ -29,6 +29,15 @@ extension ProcessCompose {
     /// — and if that cannot be produced the answer is `.nothing`. A new precondition
     /// added tomorrow makes this return `.nothing` rather than reopening the
     /// bypass, because there is no branch left that returns the un-`-n`'d string.
+    ///
+    /// One such precondition has since been added, and it is the reason this type
+    /// is also where `execute`'s own presence is checked: `up -n execute` against a
+    /// namespace no process declares idles forever rather than failing, so the
+    /// honest answer is `.nothing` plus a reason, not an empty TUI. It belongs here
+    /// and not in `PhaseRunner.startCommand` because `canRun` is what enables the
+    /// Start button — deciding it further down would leave the button enabled over
+    /// a run that does nothing, which is the exact disagreement this type exists to
+    /// prevent.
     enum RunCommandPlan: Equatable {
         /// Run this string as-is. Only ever the user's own per-workstream override,
         /// which they typed and which no gate applies to.
@@ -96,13 +105,23 @@ extension ProcessCompose {
             case .processCompose:
                 if config == nil {
                     return NSLocalizedString(
-                        "This project's process-compose.yaml could not be located, so there is nothing to start.",
+                        "This project's process-compose config could not be located, so there is nothing to start.",
                         comment: ""
                     )
                 }
                 if binary == nil {
                     return NSLocalizedString(
                         "process-compose was not found. Install it, or set its path in Settings, then try again.",
+                        comment: ""
+                    )
+                }
+                // Mirrors `plan`'s fifth precondition, in the same order, and
+                // nothing but a test enforces the agreement — see
+                // `RunCommandPlanTests`, which asserts `canRun` and this function
+                // answer the same question for this case.
+                if config?.namespacePresence(ProcessCompose.Phase.execute.namespace) == .empty {
+                    return NSLocalizedString(
+                        "This project's process-compose config declares no execute processes, so there is nothing to start.",
                         comment: ""
                     )
                 }
@@ -125,6 +144,22 @@ extension ProcessCompose {
                 return .literal(devCommand.command)
             case .processCompose:
                 guard let config, let binary else { return .nothing }
+                // The fifth precondition, and the only one about the config's
+                // *contents*. `up -n execute` against a namespace nobody declared
+                // does not fail and does not exit — measured against v1.122.0, it
+                // idles indefinitely with no output — so Start would open a TUI
+                // with an empty process list and no way out but Stop.
+                //
+                // `.empty` only, never `.unknown`. `.empty` is a fact: every
+                // loaded file parsed and none of them put a process in `execute`.
+                // `.unknown` is a failure to *read* — a top-level `include:`, a
+                // `namespace` given as a list — and refusing there would turn a
+                // parse gap into a permanently dead Start button. That is the same
+                // asymmetry `ProcessCompose.PhaseRunner.startCommand` applies to
+                // `prepare`, for the same reason.
+                guard config.namespacePresence(ProcessCompose.Phase.execute.namespace) != .empty else {
+                    return .nothing
+                }
                 return .phaseScoped(config: config, binary: binary)
             }
         }

@@ -135,7 +135,7 @@ func verificationUnavailableReason(
     }
     guard hasConfig else {
         return NSLocalizedString(
-            "Add a process-compose.yaml to this worktree or the project directory to declare checks.",
+            "Add an atelier.process-compose.yaml to this worktree or the project directory to declare checks.",
             comment: "Verification tab: unavailable because no config was located"
         )
     }

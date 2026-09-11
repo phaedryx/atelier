@@ -5,24 +5,16 @@
 import XCTest
 
 final class PhasePolicyTests: XCTestCase {
-    /// `requiresApproval` is derived from where the loaded files live, so these
+    /// `requiresApproval` is derived from where the loaded file lives, so these
     /// fixtures are the two shapes that differ: one in a worktree (repository
-    /// content, gated) and one in the project directory with no worktree
-    /// override beside it (the user's own, never gated).
+    /// content, gated) and one in the project directory (the user's own, never
+    /// gated).
     private let repositoryConfig = ProcessCompose.Config(
-        path: "/repo/wt/process-compose.yaml", isRepositoryProvided: true, overridePath: nil
+        path: "/repo/wt/process-compose.yaml", isRepositoryProvided: true
     )
     private let userConfig = ProcessCompose.Config(
-        path: "/repo/process-compose.yaml", isRepositoryProvided: false, overridePath: nil
+        path: "/repo/process-compose.yaml", isRepositoryProvided: false
     )
-    /// The user's own base config with a worktree override beside it. The base
-    /// needs no approval; the override is repository content and does.
-    private let userConfigWithRepositoryOverride = ProcessCompose.Config(
-        path: "/repo/process-compose.yaml",
-        isRepositoryProvided: false,
-        overridePath: "/repo/wt/process-compose.override.yaml"
-    )
-
     private func note(_ plan: PhasePolicy.Plan) -> String? {
         guard case let .nothingToDo(message) = plan else { return nil }
         return message
@@ -52,7 +44,7 @@ final class PhasePolicyTests: XCTestCase {
     func testMissingConfigRunsNothing() {
         let plan = PhasePolicy.plan(phase: .bootstrap, isEnabled: true, config: nil, binary: "/bin/pc", isApproved: approved)
 
-        XCTAssertEqual(note(plan)?.contains("no process-compose.yaml"), true, String(describing: plan))
+        XCTAssertEqual(note(plan)?.contains("no process-compose config"), true, String(describing: plan))
     }
 
     /// A missing binary must never look like a broken worktree — the worktree
@@ -97,27 +89,6 @@ final class PhasePolicyTests: XCTestCase {
 
         XCTAssertEqual(plan, .run(config: userConfig, binary: "/bin/pc"))
         XCTAssertFalse(asked, "a user-placed config must not be run past the approval store")
-    }
-
-    /// A worktree override beside the user's own project-directory config is
-    /// repository content that process-compose names with `-f` and runs. Gating
-    /// on `isRepositoryProvided` alone left this path completely ungated.
-    func testWorktreeOverrideBesideAUserConfigIsGated() {
-        let plan = PhasePolicy.plan(
-            phase: .bootstrap, isEnabled: true, config: userConfigWithRepositoryOverride,
-            binary: "/bin/pc", isApproved: unapproved
-        )
-
-        XCTAssertEqual(note(plan)?.contains("have not been approved"), true, String(describing: plan))
-    }
-
-    func testWorktreeOverrideBesideAUserConfigRunsOnceApproved() {
-        let plan = PhasePolicy.plan(
-            phase: .bootstrap, isEnabled: true, config: userConfigWithRepositoryOverride,
-            binary: "/bin/pc", isApproved: approved
-        )
-
-        XCTAssertEqual(plan, .run(config: userConfigWithRepositoryOverride, binary: "/bin/pc"))
     }
 
     /// `dispose` answers to the same preconditions as `bootstrap` — it is the

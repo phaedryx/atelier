@@ -69,13 +69,21 @@ final class ExecutionTabViewTests: XCTestCase {
     func testAProcessComposeSourceIsShownAsItsFiles() {
         let display = devCommandDisplayText(
             devCommand: processComposeCommand(),
-            loadedFiles: ["/repo/ws/process-compose.yaml", "/repo/ws/process-compose.override.yml"]
+            loadedFiles: ["/repo/atelier.process-compose.yaml"]
         )
 
-        XCTAssertEqual(
-            display,
-            "/repo/ws/process-compose.yaml  /repo/ws/process-compose.override.yml"
+        XCTAssertEqual(display, "/repo/atelier.process-compose.yaml")
+    }
+
+    /// `loadedFiles` is a list, and the display joins it, so that the pane stays
+    /// honest if a config ever loads more than one file again.
+    func testSeveralLoadedFilesAreAllShown() {
+        let display = devCommandDisplayText(
+            devCommand: processComposeCommand(),
+            loadedFiles: ["/repo/a.yaml", "/repo/b.yaml"]
         )
+
+        XCTAssertEqual(display, "/repo/a.yaml  /repo/b.yaml")
     }
 
     /// The footgun this closes: the pane rendered `process-compose up -U -f …`

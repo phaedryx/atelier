@@ -110,36 +110,33 @@ final class WorkstreamArchiverDisposeTests: XCTestCase {
         XCTAssertEqual(planned.path, path)
     }
 
-    /// A worktree override beside the user's own project-directory config is
-    /// repository content that dispose would execute, so archiving must gate on
-    /// it too — the bypass that `isRepositoryProvided` alone missed.
-    func testDisposeIsRefusedForAWorktreeOverrideBesideAUserConfig() throws {
-        _ = try writeConfig(in: project)
-        let override = try writeConfig(in: worktree, named: "process-compose.override.yml")
+    /// The gate follows the file that will be *loaded*, not merely the files
+    /// that exist. A repository running process-compose for its own reasons
+    /// checks in a generic `process-compose.yaml`; an `atelier.`-prefixed config
+    /// in the project directory outranks it, so dispose runs the user's own file
+    /// and asks about nothing.
+    ///
+    /// Asserting only "it ran" would pass just as well if the repository's file
+    /// had been the one planned, so the planned path is checked too — being
+    /// ungated is only correct because the file is the user's.
+    func testDisposeRunsTheAtelierNamedConfigAndIgnoresTheRepositorysOwn() throws {
+        let mine = try writeConfig(in: project, named: "atelier.process-compose.yaml")
+        _ = try writeConfig(in: worktree)
 
-        // Which file fired the gate. "have not been approved" reads the same whichever
-        // one it was, so asserting only the message would have passed just as well if
-        // the user's own project-directory config had been the file gated — the exact
-        // over-reach this test is named for.
         let config = try XCTUnwrap(
             ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path)
         )
-        XCTAssertEqual(config.repositoryProvidedFiles, [override],
-                       "only the worktree override is repository content here")
+        XCTAssertEqual(config.loadedFiles, [mine])
+        XCTAssertEqual(config.repositoryProvidedFiles, [],
+                       "the repository's own file is not loaded, so there is nothing to approve")
 
         let plan = Workstream.Archiver.disposePlan(
             worktreePath: worktree.path, projectDirectory: project.path
         )
-        XCTAssertEqual(note(plan)?.contains("have not been approved"), true, String(describing: plan))
-
-        // And that it was that file: approving it alone clears the refusal.
-        ScriptTrust.approve(configFiles: [override], for: project.path)
-        let approved = Workstream.Archiver.disposePlan(
-            worktreePath: worktree.path, projectDirectory: project.path
-        )
-        guard case .run = approved else {
-            return XCTFail("approving the override alone must clear the refusal, got \(approved)")
+        guard case let .run(planned, _) = plan else {
+            return XCTFail("expected a run, got \(plan)")
         }
+        XCTAssertEqual(planned.path, mine)
     }
 
     func testDisposeNeedsNoApprovalForTheUsersOwnConfig() throws {

@@ -226,10 +226,12 @@ final class DevCommandTests: XCTestCase {
         )
     }
 
-    /// Every file is named, so a worktree override beside a project-directory
-    /// base is named too — but only when it is really there, since
-    /// process-compose treats a missing `-f` file as fatal.
-    func testPassesWorktreeOverrideAlongsideProjectConfig() throws {
+    /// One config is one file. A `process-compose.override.yaml` in the
+    /// worktree is not merged into a project-directory base any more — a
+    /// worktree that wants its own arrangement names its own
+    /// `atelier.process-compose.yaml` instead — so the override name must not
+    /// reach the command.
+    func testDoesNotPassAWorktreeOverrideAlongsideProjectConfig() throws {
         let project = try makeProjectContainer()
         try writeProcessCompose(named: "process-compose.yaml", in: project)
         try writeProcessCompose(named: "process-compose.override.yaml")
@@ -238,8 +240,25 @@ final class DevCommandTests: XCTestCase {
             DevCommand.Resolver.detectProcessCompose(in: tmpDir.path, projectDirectory: project.path)
         )
 
+        XCTAssertFalse(command.command.contains("override"), command.command)
         XCTAssertTrue(command.command.hasSuffix(
-            "-f \(CommandBuilder.shellQuote(tmpDir.appendingPathComponent("process-compose.override.yaml").path))"
+            "-f \(CommandBuilder.shellQuote(project.appendingPathComponent("process-compose.yaml").path))"
+        ), command.command)
+    }
+
+    /// An `atelier.`-prefixed file in the worktree outranks everything, so it is
+    /// the one Start's file list names.
+    func testAtelierNamedWorktreeConfigWins() throws {
+        let project = try makeProjectContainer()
+        try writeProcessCompose(named: "process-compose.yaml", in: project)
+        try writeProcessCompose(named: "atelier.process-compose.yaml")
+
+        let command = try XCTUnwrap(
+            DevCommand.Resolver.detectProcessCompose(in: tmpDir.path, projectDirectory: project.path)
+        )
+
+        XCTAssertTrue(command.command.hasSuffix(
+            "-f \(CommandBuilder.shellQuote(tmpDir.appendingPathComponent("atelier.process-compose.yaml").path))"
         ), command.command)
     }
 

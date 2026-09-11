@@ -344,7 +344,7 @@ struct ExecutionTabView: View {
                     sourceTag(for: devCommand.source)
                 }
             } else {
-                Text("No dev command found. Add a process-compose.yaml, or set a command below.")
+                Text("No dev command found. Add an atelier.process-compose.yaml, or set a command below.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
@@ -442,7 +442,7 @@ struct ExecutionTabView: View {
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
             Text(reason ?? NSLocalizedString(
-                "Add a process-compose.yaml to this worktree or the project directory, or set a command with Customize above.",
+                "Add an atelier.process-compose.yaml to this worktree or the project directory, or set a command with Customize above.",
                 comment: ""
             ))
             .font(.system(size: 11))

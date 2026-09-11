@@ -41,7 +41,7 @@ final class PhaseExecutorTests: XCTestCase {
     private func writeConfig(_ body: String) throws -> ProcessCompose.Config {
         let path = dir.appendingPathComponent("process-compose.yaml")
         try body.write(to: path, atomically: true, encoding: .utf8)
-        return ProcessCompose.Config(path: path.path, isRepositoryProvided: true, overridePath: nil)
+        return ProcessCompose.Config(path: path.path, isRepositoryProvided: true)
     }
 
     private func runBootstrap(
@@ -134,7 +134,7 @@ final class PhaseExecutorTests: XCTestCase {
             command: sh -c 'touch bootstrap-marker'
             availability: { restart: "no" }
         """.write(to: path, atomically: true, encoding: .utf8)
-        let config = ProcessCompose.Config(path: path.path, isRepositoryProvided: false, overridePath: nil)
+        let config = ProcessCompose.Config(path: path.path, isRepositoryProvided: false)
 
         XCTAssertEqual(runBootstrap(config), .succeeded)
         XCTAssertTrue(
