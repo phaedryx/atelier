@@ -93,10 +93,10 @@ Because of that, the version committed in `project.yml` is the deliberate
 placeholder `0.0.0` / `0.0.0-dev`, and it means nothing: it is what a debug build
 reports. Do not read it as the current version, and do not bump it to "keep it
 current" — it is overwritten at build time by `scripts/set-version.sh` and
-nowhere else. That script has exactly two callers, and both restore `project.yml`
-afterwards so the bump is never committed: the release workflow, which passes the
-version derived from the tag, and `./scripts/dev.sh release`, which passes
-`git describe`. (It used to carry `0.1.79`, inherited from Factory Floor, which
+nowhere else. That script has three callers, and all of them restore
+`project.yml` afterwards so the bump is never committed: the release workflow and
+`scripts/release.sh`, which pass the version derived from the tag, and
+`./scripts/dev.sh release`, which passes `git describe`. (It used to carry `0.1.79`, inherited from Factory Floor, which
 made every local build claim a released version it had long since diverged from.)
 `CFBundleVersion` stays numeric because it must be period-separated integers, so
 it receives only the `X.Y.Z` core; the suffix naming the commit rides on

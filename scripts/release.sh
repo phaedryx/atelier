@@ -32,8 +32,12 @@ APP_PATH="${BUILD_DIR}/${APP_NAME}.app"
 
 echo "==> Building ${APP_NAME} v${VERSION}..."
 # set-version.sh rewrites the tracked project.yml, so put it back on the way out
-# rather than leaving a stray version bump staged in the working tree.
-trap 'git checkout -- project.yml 2>/dev/null || true' EXIT
+# rather than leaving a stray version bump staged in the working tree. Restore
+# from a copy rather than with `git checkout --`, which would also discard an
+# uncommitted edit that was there before this script ran.
+PROJECT_YML_BACKUP="$(mktemp)"
+cp project.yml "$PROJECT_YML_BACKUP"
+trap 'cp "$PROJECT_YML_BACKUP" project.yml; rm -f "$PROJECT_YML_BACKUP"' EXIT
 "$(dirname "${BASH_SOURCE[0]}")/set-version.sh" "$VERSION" >/dev/null
 xcodegen generate
 rm -rf "$BUILD_DIR/derived"
