@@ -67,7 +67,17 @@ func verificationShowsChecklist(isLive: Bool, declaredProcesses: [String]) -> Bo
 /// `nil` for `currentStamp` is not evidence of freshness: it means the
 /// fingerprint could not be computed this pass (or has not been computed
 /// yet), which is a reason to distrust the result, not to trust it.
+///
+/// An empty `run.stamp` is the other direction, and is not the same fact: it
+/// means the run's own baseline has not been captured yet — `Runner.start`
+/// leaves it empty and `Runner.execute` fills it off the main actor, within
+/// milliseconds — so there is nothing to compare against rather than something
+/// that failed to match. A real fingerprint is always `head|count|digest`, so
+/// `""` cannot arise any other way. Without this branch a run rendered the
+/// "no longer reflects the worktree's current content" banner for the first
+/// instant of its life, over a suite that had not even started.
 func verificationIsStale(run: Verification.Run, currentStamp: String?) -> Bool {
+    guard !run.stamp.isEmpty else { return false }
     guard let currentStamp else { return true }
     return currentStamp != run.stamp
 }
@@ -226,9 +236,17 @@ func verificationAvailability(
         binary: binary,
         isApproved: { _ in approvalHolds }
     )
+    // `runnableChecks` is `Verification.Runner`'s own filter, and calling it
+    // here rather than repeating it is the point: `Runner.start` resolves the
+    // user's selection against the same filtered list, so the checklist cannot
+    // offer a check the runner would refuse or silently drop. A process named
+    // like a flag — `-n` is legal YAML — is dropped by `PhaseRunner.command`
+    // before it reaches the shell, and offering it made the *only*-selected
+    // case run the entire namespace. See `runnableChecks`.
     let declared: [String]? = switch plan {
     case let .run(planConfig, _):
         planConfig.declaredProcesses(in: ProcessCompose.Phase.verify.namespace)
+            .map(Verification.Runner.runnableChecks)
     case .nothingToDo:
         nil
     }
@@ -646,11 +664,26 @@ struct VerificationTabView: View {
     /// discarded: see `stalenessRefreshPending` for why the run-completion
     /// trigger cannot afford to have its request dropped.
     private func refreshStaleness() {
-        guard currentRun != nil else { return }
+        // **The in-flight guard comes first, and the order is the whole point.**
+        // `currentRun` falls through to `Verification.Store.latest` — a
+        // UserDefaults read plus a JSON decode of a run that may carry several
+        // 200-line outputs — on the main actor. Evaluating it first meant the
+        // guard that exists to absorb a ~5Hz burst of `.worktreeGitActivity`
+        // was paid for by the very decode it was meant to avoid.
+        //
+        // Semantics are unchanged: the pending re-run re-evaluates
+        // `currentRun` for itself. The one difference is that a call arriving
+        // with no run *and* a refresh in flight now sets the pending bit, and
+        // the re-entrant call at completion returns on the nil guard without
+        // clearing it — so the bit stays set until some later call gets past
+        // both guards and clears it, costing at most one redundant refresh at
+        // the tail of a future hop. `currentRun` falls through to the store, so
+        // it barely ever goes nil once a run has existed at all.
         guard !isRefreshingStaleness else {
             stalenessRefreshPending = true
             return
         }
+        guard currentRun != nil else { return }
         isRefreshingStaleness = true
         stalenessRefreshPending = false
         stalenessGeneration += 1

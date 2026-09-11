@@ -53,8 +53,63 @@ final class VerificationRunnerTests: XCTestCase {
         switch Verification.Runner.resolveChecks(requested: ["-n"], declared: ["rspec"]) {
         case let .success(names): XCTFail("expected a refusal, got \(names)")
         case let .failure(failure):
-            XCTAssertEqual(failure, .unknownChecks(["-n"], valid: ["rspec"]))
+            XCTAssertEqual(failure, .unrunnableChecks(["-n"]))
         }
+    }
+
+    /// And refuses one the project genuinely *declares*, which is the hole the
+    /// "not declared" test above could not reach: `-n` is legal YAML, so it
+    /// was declared, offered, resolved, and then dropped on the way to the
+    /// shell. "No such check" would be a lie here — the user would grep, find
+    /// it, and be stuck — so it gets its own refusal.
+    func test_resolveChecks_refusesADeclaredFlagShapedName() {
+        switch Verification.Runner.resolveChecks(requested: ["-n"], declared: ["-n", "rspec"]) {
+        case let .success(names): XCTFail("expected a refusal, got \(names)")
+        case let .failure(failure):
+            XCTAssertEqual(failure, .unrunnableChecks(["-n"]))
+            XCTAssertEqual(
+                failure.errorDescription,
+                "process-compose cannot start a check whose name begins with \"-\": -n. "
+                    + "Rename it in process-compose.yaml."
+            )
+        }
+    }
+
+    /// **The inversion.** `-n` as the *only* selection used to reach
+    /// `PhaseRunner.command`, be filtered out of the trailing names, leave
+    /// `selectedProcesses` empty — and `up -n verify` then runs the entire
+    /// namespace, the exact opposite of what was selected, through a guard
+    /// that exists for security. The refusal above is what stops it, and
+    /// `runnableChecks` is what stops it being offered in the first place.
+    func test_resolveChecks_aLoneFlagShapedSelectionNeverResolvesToEverything() {
+        let declared = ["-n", "rspec", "rubocop"]
+        switch Verification.Runner.resolveChecks(requested: ["-n"], declared: declared) {
+        case let .success(names):
+            XCTFail("a refusal became a run of \(names)")
+        case let .failure(failure):
+            XCTAssertEqual(failure, .unrunnableChecks(["-n"]))
+        }
+        // And through the filter the checklist and `start` both apply, the
+        // name is not offered at all — so the selection cannot be made.
+        XCTAssertEqual(
+            Verification.Runner.runnableChecks(declared), ["rspec", "rubocop"]
+        )
+    }
+
+    /// One of several: the run must not come back missing a check nobody
+    /// declined. Filtering `declared` is what keeps the checklist and the
+    /// runner talking about the same set, so nothing is offered that would
+    /// seal `.notRun` for no stated reason.
+    func test_runnableChecks_dropsFlagShapedNamesAndKeepsTheRest() {
+        XCTAssertEqual(
+            Verification.Runner.runnableChecks(["rspec", "-n", "rubocop", "--file"]),
+            ["rspec", "rubocop"]
+        )
+        // A run of "everything" then names only what can actually be started.
+        let resolved = try? Verification.Runner.resolveChecks(
+            requested: [], declared: Verification.Runner.runnableChecks(["-n", "rspec"])
+        ).get()
+        XCTAssertEqual(resolved, ["rspec"])
     }
 
     func test_start_refusesWhileARunIsInFlight() {
@@ -695,6 +750,169 @@ final class VerificationRunnerTests: XCTestCase {
         XCTAssertNil(runner.run(id: "abcd1234")?.failureDetail)
     }
 
+    /// **The `exit_on_failure` shape, which is the defect this pins.**
+    ///
+    /// `PhaseExecutor.PollResult.serverGone`'s own doc records that a project
+    /// may shut itself down — `restart: exit_on_failure` does exactly that,
+    /// **even with `--keep-project`** — and fail-fast is a plausible thing for
+    /// a verify namespace to want. So: the check fails, the live poll publishes
+    /// `.failed(1)`, the project self-terminates, and the final read comes back
+    /// with nothing. `seal` used to overwrite the failure with `.notRun` and
+    /// the banner then claimed the run never started its checks, over a suite
+    /// the user had just watched run and fail.
+    func test_execute_preservesAFailureWhenTheFinalReadComesBackEmpty() async {
+        let id = UUID()
+        addTeardownBlock { Verification.Store.clear(for: id) }
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: [
+                .list([entry("rspec", status: "Completed", isRunning: false, exitCode: 1)]),
+                // The server is gone from here on — the shape a self-terminating
+                // project really produces, and `verifyProcesses` turns it into
+                // the same empty list an answered-with-nothing poll would give.
+                .failure(.notRunning),
+            ],
+            latency: .zero
+        )
+        let spawner = StubSpawner(
+            client: client, finishAfter: .milliseconds(40),
+            outcome: .failed("rspec exited with code 1.")
+        )
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
+
+        await drive(runner, request(workstreamID: id, checks: ["rspec"]), runID: "abcd1234")
+
+        let sealed = runner.run(id: "abcd1234")
+        XCTAssertEqual(
+            sealed?.checks.map(\.state), [.failed(1)],
+            "the failure the live rows already established must survive an empty final read"
+        )
+        XCTAssertEqual(sealed?.failedNames, ["rspec"])
+        XCTAssertNil(
+            sealed?.failureDetail,
+            "a run that self-terminated after a real failure did not fail to start its checks"
+        )
+        XCTAssertEqual(
+            Verification.Store.latest(for: id)?.checks.map(\.state), [.failed(1)],
+            "and the persisted run must say the same thing"
+        )
+    }
+
+    /// The `exit_on_end` shape, which is the same defect one step quieter: a
+    /// whole passing suite ends the project, the final read is empty, and the
+    /// run persisted as "nothing ran" with no banner to hint at it.
+    func test_execute_preservesPassesWhenTheFinalReadComesBackEmpty() async {
+        let id = UUID()
+        addTeardownBlock { Verification.Store.clear(for: id) }
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: [
+                .list([
+                    entry("rspec", status: "Completed", isRunning: false, exitCode: 0),
+                    entry("rubocop", status: "Completed", isRunning: false, exitCode: 0),
+                ]),
+                .failure(.notRunning),
+            ],
+            latency: .zero
+        )
+        let spawner = StubSpawner(client: client, finishAfter: .milliseconds(40))
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec", "rubocop"])
+
+        await drive(
+            runner, request(workstreamID: id, checks: ["rspec", "rubocop"]), runID: "abcd1234"
+        )
+
+        let sealed = runner.run(id: "abcd1234")
+        XCTAssertEqual(sealed?.checks.map(\.state), [.passed, .passed])
+        XCTAssertEqual(sealed?.wasStopped, false)
+        XCTAssertNil(sealed?.failureDetail)
+    }
+
+    /// **The executor's own deadline, which is the other way a `.failed`
+    /// outcome reaches the gate.** `PhaseExecutor.run` returns `.failed` with
+    /// the checks still executing — the run loop's teardown, a line later, is
+    /// what kills them — so every row is `.running` at seal time and the final
+    /// read is non-empty. A suite that ran for its whole timeout must not be
+    /// reported as one that failed to *start* its checks, which is what a gate
+    /// keyed on terminal states alone would say.
+    func test_execute_doesNotRecordFailureDetailWhenTheDeadlineEndedALiveSuite() async {
+        let id = UUID()
+        addTeardownBlock { Verification.Store.clear(for: id) }
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: [.list([entry("rspec", status: "Running", isRunning: true, exitCode: 0)])],
+            latency: .zero
+        )
+        let spawner = StubSpawner(
+            client: client, finishAfter: .milliseconds(30),
+            outcome: .failed("verify timed out.")
+        )
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
+
+        await drive(runner, request(workstreamID: id, checks: ["rspec"]), runID: "abcd1234")
+
+        let sealed = runner.run(id: "abcd1234")
+        XCTAssertEqual(sealed?.checks.map(\.state), [.stopped], "a live row is relabelled, not kept")
+        XCTAssertNil(
+            sealed?.failureDetail,
+            "a suite that ran to the deadline did not fail to start its checks"
+        )
+    }
+
+    /// A check the server never mentioned at all still seals `.notRun`, which
+    /// is what preserving terminal states must not cost: the row is still
+    /// `.pending` when sealing starts, and the relabel below the mapping is
+    /// what answers it.
+    func test_execute_aCheckTheServerNeverReportedStillSealsNotRun() async {
+        let id = UUID()
+        addTeardownBlock { Verification.Store.clear(for: id) }
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: [.list([entry("rspec", status: "Completed", isRunning: false, exitCode: 0)])],
+            latency: .zero
+        )
+        let spawner = StubSpawner(client: client, finishAfter: .milliseconds(10))
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec", "gone"])
+
+        await drive(runner, request(workstreamID: id, checks: ["rspec", "gone"]), runID: "abcd1234")
+
+        XCTAssertEqual(runner.run(id: "abcd1234")?.checks.map(\.state), [.passed, .notRun])
+    }
+
+    /// The staleness baseline is captured by the run loop, off the main actor,
+    /// rather than by `start` — which is synchronous on it and would spawn
+    /// `git rev-parse`, `git diff --stat`, `git ls-files` and batched
+    /// `git hash-object` on every press. It still has to land, and land before
+    /// the run is sealed, or the persisted result could never be called stale.
+    func test_execute_capturesTheStalenessStampOffTheMainActor() async {
+        let id = UUID()
+        addTeardownBlock { Verification.Store.clear(for: id) }
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: [.list([entry("rspec", status: "Completed", isRunning: false, exitCode: 0)])],
+            latency: .zero
+        )
+        let spawner = StubSpawner(client: client, finishAfter: .milliseconds(10))
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
+        XCTAssertEqual(runner.run(id: "abcd1234")?.stamp, "", "not captured before the loop runs")
+
+        await drive(runner, request(workstreamID: id, checks: ["rspec"]), runID: "abcd1234")
+
+        XCTAssertFalse(
+            runner.run(id: "abcd1234")?.stamp.isEmpty ?? true,
+            "the loop must fill the stamp before sealing"
+        )
+        XCTAssertEqual(
+            Verification.Store.latest(for: id)?.stamp, runner.run(id: "abcd1234")?.stamp,
+            "and the persisted run must carry it too"
+        )
+    }
+
     /// Liveness is the runner's own bookkeeping, not `Run.isFinished`.
     ///
     /// Every row here reports a terminal state on the first poll, so the run
@@ -714,7 +932,14 @@ final class VerificationRunnerTests: XCTestCase {
         runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
 
         await drive(runner, request(workstreamID: id, checks: ["rspec"]), runID: "abcd1234") {
-            try? await Task.sleep(for: .milliseconds(30))
+            // Waited for rather than slept past: the loop now captures the
+            // staleness stamp — four git spawns, off the actor — before it
+            // spawns anything, so how long it takes to publish its first poll
+            // is not a number a test may assume.
+            let deadline = Date().addingTimeInterval(2)
+            while runner.run(id: "abcd1234")?.isFinished != true, Date() < deadline {
+                try? await Task.sleep(for: .milliseconds(1))
+            }
             XCTAssertEqual(runner.run(id: "abcd1234")?.isFinished, true, "rows are terminal")
             runner.stop(workstreamID: id)
         }

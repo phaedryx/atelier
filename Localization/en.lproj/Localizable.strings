@@ -578,6 +578,7 @@
 "Verification run %@ is already running in this workstream." = "Verification run %@ is already running in this workstream.";
 "This project declares no verify processes." = "This project declares no verify processes.";
 "No such check: %@. This project declares: %@." = "No such check: %@. This project declares: %@.";
+"process-compose cannot start a check whose name begins with \"-\": %@. Rename it in process-compose.yaml." = "process-compose cannot start a check whose name begins with \"-\": %@. Rename it in process-compose.yaml.";
 "This project's process-compose files could not be parsed, so its verify checks are unknown." = "This project's process-compose files could not be parsed, so its verify checks are unknown.";
 "This project's verify namespace declared no processes to run." = "This project's verify namespace declared no processes to run.";
 

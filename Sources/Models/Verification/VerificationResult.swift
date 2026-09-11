@@ -80,7 +80,14 @@ extension Verification {
         let startedAt: Date
         /// `Git.Operations.diffFingerprint` at the moment the run started. What
         /// makes a later result honest about being stale.
-        let stamp: String
+        ///
+        /// `var`, and briefly empty: computing it is four-plus serial git
+        /// spawns, so `Runner.start` — synchronous on the main actor — leaves
+        /// it empty and `Runner.execute` fills it off the actor, before the
+        /// spawn and long before the run is sealed. `""` therefore means "not
+        /// captured yet" and never "no diff"; `verificationIsStale` reads it
+        /// that way, and a real fingerprint is always `head|count|digest`.
+        var stamp: String
         var checks: [CheckResult]
         var wasStopped: Bool
         /// Why the *run itself* failed to produce a per-check answer, when

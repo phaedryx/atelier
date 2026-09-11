@@ -415,8 +415,8 @@ comment gives: captured output means nobody is watching a TTY, so the reasoning 
 `execute` ungated does not apply — to a user press or to an agent call. See below.
 
 ### The verify namespace
-Six decisions from writing `verify` cost a review round each, and each is the kind of thing a later
-reader would plausibly "simplify" away without knowing why:
+Eight decisions from writing `verify` cost a review round each, and each is the kind of thing a
+later reader would plausibly "simplify" away without knowing why:
 
 1. **The log window is one-shot.** Per-check output lives in the control server that ran the
    namespace, and the run loop (`Verification.Runner.execute`, `VerificationRunner.swift:438-499`)
@@ -469,6 +469,35 @@ reader would plausibly "simplify" away without knowing why:
    Coalescing either one to `[]` early would report a broken config to the user as "this project
    declares no verify checks" — the same message a project with genuinely no verify checks gets,
    and the only diagnostic either path gives.
+7. **`seal` never overwrites a state the live rows established.** A check missing from the final
+   `processes()` read keeps what the polls saw; only a row still `.pending` (or `.running`) is
+   relabelled, by the switch below the mapping. The `else { .notRun }` that used to stand there was
+   false whenever the read *failed*, because `execute` passes `verifyProcesses(...) ?? []` — and it
+   fails routinely: `PhaseExecutor.PollResult.serverGone` records that a project may shut itself
+   down, and `restart: exit_on_failure` does exactly that **even with `--keep-project`**. A
+   fail-fast verify suite therefore published `.failed(1)`, self-terminated, and sealed every check
+   `.notRun`, discarding the failure the user had just watched. For the same reason the
+   `failureDetail` banner is gated on the *rows* — `Runner.serverReportedAnyCheck`, i.e. some row is
+   no longer `.pending` — and not on `entries.isEmpty`, which was the same question only while an
+   empty read also meant empty rows. **That predicate is "was any check ever reported", never "did
+   any check finish"**: `PhaseExecutor.run` returns `.failed` with the checks still executing when
+   its own deadline ends a run, so a terminal-states test would fire "the run itself failed to start
+   its checks" over a suite that ran for its whole `Timeout.suite`. Cost, accepted and unfixable
+   here: when the server is genuinely gone `captureFailedOutput` gets nothing, so the preserved
+   `.failed` row carries no log.
+8. **A check named like a flag is filtered out at the verify layer, not at `PhaseRunner.command`.**
+   That filter — trailing process names beginning with `-` are dropped — is a load-bearing
+   flag-injection guard shared with `execute` and must not be weakened. But it did not compose with
+   `resolveChecks`, which refused only names that were *not declared*: a process genuinely named
+   `-n` is legal YAML, so it was declared, offered in the checklist, resolved, and then silently
+   dropped on the way to the shell. As the *only* selection it was worse than a missing row —
+   `selectedProcesses` became empty and `up -n verify` ran the **whole namespace**, inverting the
+   user's selection through a security guard. `Verification.Runner.runnableChecks` is the one copy
+   of the filter and both `start` and `verificationAvailability` call it, so the checklist and the
+   runner cannot disagree about what exists; `resolveChecks` applies it to its own `declared`
+   argument too, so the guarantee does not depend on a caller remembering, and additionally refuses
+   such a name asked for explicitly, with `Failure.unrunnableChecks` rather than "No such check",
+   which would be a lie about a name the YAML really declares.
 
 **No agent can start a verify run yet.** `Verification.Runner`'s own doc already talks about "a run
 an agent started through `start_verification`" (`VerificationRunner.swift:12-17`), and that is why

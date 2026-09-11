@@ -53,6 +53,23 @@ final class VerificationTabViewTests: XCTestCase {
         XCTAssertTrue(verificationIsStale(run: run, currentStamp: nil))
     }
 
+    /// A run whose own baseline has not been captured yet is not stale, and
+    /// that is the opposite direction from a missing `currentStamp`.
+    /// `Runner.start` publishes the run with an empty stamp and `Runner.execute`
+    /// fills it off the main actor a few milliseconds later — computing it on
+    /// the actor was four-plus serial git spawns on every press. Without this
+    /// branch the "no longer reflects the worktree's current content" banner
+    /// rendered over a suite that had not even started. A real fingerprint is
+    /// always `head|count|digest`, so "" cannot mean anything else.
+    func test_isStale_treatsAnUncapturedStampAsNotYetComparable() {
+        let run = Verification.Run(
+            id: "abcd1234", workstreamID: UUID(), startedAt: Date(), stamp: "",
+            checks: [], wasStopped: false
+        )
+        XCTAssertFalse(verificationIsStale(run: run, currentStamp: "head|10|aaaa"))
+        XCTAssertFalse(verificationIsStale(run: run, currentStamp: nil))
+    }
+
     // MARK: - Row glyphs
 
     func test_rowGlyph_distinguishesEveryState() {
@@ -180,6 +197,32 @@ final class VerificationTabViewTests: XCTestCase {
         XCTAssertNil(result.reason)
         // Only the `verify` namespace, sorted — `execute`'s process is not a check.
         XCTAssertEqual(result.declared, ["rspec", "rubocop"])
+    }
+
+    /// A process named like a flag is legal YAML and `declaredProcesses` finds
+    /// it — but `PhaseRunner.command` drops a trailing name beginning with `-`
+    /// as a flag-injection guard, so process-compose never sees it. Offering it
+    /// in the checklist made "one of several" seal `.notRun` for no stated
+    /// reason, and the *only* selection run the entire namespace. The checklist
+    /// and `Runner.start` filter through the one shared function, so what is
+    /// offered here is exactly what a run can address.
+    func test_availability_doesNotOfferAFlagShapedCheck() throws {
+        let result = try verificationAvailability(
+            isEnabled: true,
+            config: makeConfig(yaml: """
+            version: "0.5"
+            processes:
+              "-n":
+                namespace: verify
+                command: echo a
+              rspec:
+                namespace: verify
+                command: echo b
+            """),
+            binary: Self.binaryPath, isApproved: { _ in true }
+        )
+        XCTAssertNil(result.reason)
+        XCTAssertEqual(result.declared, ["rspec"])
     }
 
     /// One case per precondition `PhasePolicy.plan` evaluates. Each is

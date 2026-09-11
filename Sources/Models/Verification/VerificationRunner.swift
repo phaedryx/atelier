@@ -165,6 +165,11 @@ extension Verification {
             case nothingDeclared
             case unavailable(String)
             case unknownChecks([String], valid: [String])
+            /// Names process-compose cannot start, however they were asked
+            /// for. Separate from `unknownChecks` because "No such check: -n"
+            /// is a lie when the YAML genuinely declares one — a user would
+            /// grep, find it, and have nowhere to go.
+            case unrunnableChecks([String])
 
             var errorDescription: String? {
                 switch self {
@@ -180,6 +185,11 @@ extension Verification {
                     String(format: NSLocalizedString(
                         "No such check: %@. This project declares: %@.", comment: ""
                     ), unknown.joined(separator: ", "), valid.joined(separator: ", "))
+                case let .unrunnableChecks(names):
+                    String(format: NSLocalizedString(
+                        "process-compose cannot start a check whose name begins with \"-\": %@. Rename it in process-compose.yaml.",
+                        comment: "Verification: a declared check named like a flag, which cannot be run"
+                    ), names.joined(separator: ", "))
                 }
             }
         }
@@ -213,9 +223,39 @@ extension Verification {
         /// filters trailing names beginning with `-` as a flag-injection guard,
         /// so an unvalidated name does not fail loudly, it silently vanishes and
         /// the run comes back missing a check nobody declined.
+        ///
+        /// **That filter and "not declared" did not compose, and the flag-shaped
+        /// guard below is half of closing it.** A check genuinely named `-n` is
+        /// legal YAML, so it was declared, offered in the checklist, and passed
+        /// this function — and then dropped by `PhaseRunner.command` on its way
+        /// to the shell. One of several, it sealed `.notRun` for no stated
+        /// reason. The *only* selection, the filtered list was empty,
+        /// `selectedProcesses.isEmpty` became true, and `up -n verify` ran the
+        /// **whole namespace** — the exact inversion of the user's selection,
+        /// through a guard that exists for security.
+        ///
+        /// The other half is `runnableChecks`, which keeps such a name out of
+        /// `declared` in the first place, so this guard only ever answers a
+        /// caller that named one explicitly: a stale stored selection, or an
+        /// agent through the IPC handler. Refusing rather than dropping is the
+        /// point — the caller asked for something by name.
         static func resolveChecks(
             requested: [String], declared: [String]
         ) -> Result<[String], Failure> {
+            // Before the unknown-name filter, so a declared `-n` is told what
+            // is actually wrong with it rather than that it does not exist.
+            let unrunnable = requested.filter(isFlagShaped)
+            guard unrunnable.isEmpty else {
+                return .failure(.unrunnableChecks(unrunnable))
+            }
+            // Filtered here too, so this function is self-sufficient rather
+            // than relying on every caller having remembered to wrap its own
+            // `declared` — the "guard the precondition at each call site" shape
+            // `ProcessCompose.RunCommandPlan`'s note records being reopened
+            // four times before the invariant moved to the consumer. The
+            // parked `start_verification` handler is the next caller, and would
+            // plausibly hand `declaredProcesses` straight through.
+            let declared = runnableChecks(declared)
             guard !declared.isEmpty else { return .failure(.nothingDeclared) }
             guard !requested.isEmpty else { return .success(declared) }
             let unknown = requested.filter { !declared.contains($0) }
@@ -223,6 +263,29 @@ extension Verification {
                 return .failure(.unknownChecks(unknown, valid: declared))
             }
             return .success(requested)
+        }
+
+        /// The declared checks a run may actually address, with the ones
+        /// process-compose cannot start dropped.
+        ///
+        /// **One copy, called from both `start` and `verificationAvailability`.**
+        /// The checklist offering a check the runner would silently drop is the
+        /// disagreement this exists to prevent, and two independent filters
+        /// would recreate it. `PhaseRunner.command` drops a trailing process
+        /// name beginning with `-` before it reaches the shell — a load-bearing
+        /// flag-injection guard shared with `execute`, and not the place to fix
+        /// this — and process-compose could not start such a process by name
+        /// anyway, so nothing runnable is withheld.
+        nonisolated static func runnableChecks(_ declared: [String]) -> [String] {
+            declared.filter { !isFlagShaped($0) }
+        }
+
+        /// Whether `PhaseRunner.command` would drop this name.
+        ///
+        /// Matches that filter exactly: a leading `-`, which is what
+        /// process-compose's own argument parser would read as a flag.
+        private nonisolated static func isFlagShaped(_ name: String) -> Bool {
+            name.hasPrefix("-")
         }
 
         /// The run with this id, whichever workstream it belongs to.
@@ -332,11 +395,28 @@ extension Verification {
                 var sealed = check
                 if let entry = byName[check.name] {
                     sealed.state = .init(entry: entry)
-                } else {
-                    // A check the server never reported did not run. Not a
-                    // failure: nothing failed.
-                    sealed.state = .notRun
                 }
+                // **No `else`, and its absence is the fix.** A check missing
+                // from this read keeps whatever the live polls established,
+                // because "the final read said nothing about it" and "the final
+                // read failed" are the same value by the time they get here:
+                // `execute` passes `await verifyProcesses(client:) ?? []`, so a
+                // server that has gone away arrives as an empty list.
+                //
+                // It goes away routinely. `PhaseExecutor.PollResult.serverGone`
+                // records that a project may shut itself down — `restart:
+                // exit_on_failure` does exactly that, **even with
+                // `--keep-project`** — which is a plausible thing for a verify
+                // namespace to want. Writing `.notRun` here discarded the
+                // `.failed(1)` the user had just watched arrive, and the
+                // `exit_on_end` shape lost a whole passing suite the same way.
+                //
+                // The live rows are the last non-empty snapshot; nothing else
+                // needs to be kept for this. A check that never reached a
+                // terminal state is still `.pending` or `.running` at this
+                // point, and the switch below is what turns those into
+                // `.notRun` and `.stopped` — so a name the server genuinely
+                // never reported still seals `.notRun`.
                 // A sealed run is over — the teardown that ends its processes
                 // is the next thing the run loop does — so a row still
                 // reporting live work is relabelled whatever ended the run, not
@@ -440,14 +520,24 @@ extension Verification {
                     comment: ""
                 ))
             }
-            let resolved = try Self.resolveChecks(requested: checks, declared: declared).get()
+            // Filtered here and in `verificationAvailability`, through the one
+            // shared function, so the checks the checklist offers and the
+            // checks a run can address are the same set — see `runnableChecks`.
+            let resolved = try Self.resolveChecks(
+                requested: checks, declared: Self.runnableChecks(declared)
+            ).get()
 
             let runID = makeRunID()
-            let stamp = Git.Operations.diffFingerprint(
-                worktreePath: worktreePath, projectPath: projectDirectory, mode: "uncommitted"
-            )
+            // Empty, and filled by `execute` before it spawns anything.
+            // `diffFingerprint` spawns `git rev-parse`, `git diff --stat`, `git
+            // ls-files` and batched `git hash-object`; this function is
+            // synchronous on the main actor — for the reason its own refusals
+            // are, a second Run press must find `runs[workstreamID]` already
+            // written — so computing it here stalled the UI on four-plus serial
+            // process spawns every time Run was pressed. The tab's own
+            // `refreshStaleness` has always done this off the main actor.
             runs[workstreamID] = Verification.Run(
-                id: runID, workstreamID: workstreamID, startedAt: Date(), stamp: stamp,
+                id: runID, workstreamID: workstreamID, startedAt: Date(), stamp: "",
                 checks: resolved.map {
                     .init(name: $0, state: .pending, duration: nil, output: nil)
                 },
@@ -514,6 +604,21 @@ extension Verification {
             let client = spawner.controlClient(for: request)
             let state = RunLoopState()
 
+            // The staleness baseline, taken here rather than in `start`: it is
+            // four-plus serial git spawns and `start` is synchronous on the
+            // main actor. Awaited — not fired and forgotten — for two reasons:
+            // it lands before the spawn, so a check that writes to the tree
+            // cannot be folded into the baseline it will be measured against;
+            // and it lands before `seal`, so the persisted run carries the
+            // stamp rather than racing it. Milliseconds after the press, which
+            // is still "the moment the run started" for staleness.
+            let stamp = await Self.captureStamp(
+                worktreePath: request.worktreePath, projectDirectory: request.projectDirectory
+            )
+            if runs[workstreamID]?.id == runID {
+                runs[workstreamID]?.stamp = stamp
+            }
+
             // The spawn blocks a background thread for the length of the suite,
             // so it runs as its own task and the loop below asks whether it has
             // finished rather than awaiting it. Awaiting it here instead would
@@ -538,21 +643,31 @@ extension Verification {
             await captureFailedOutput(from: entries, runID: runID, client: client)
             // Set on the stored run *before* `seal`, so `seal`'s own copy —
             // `var run = runs[workstreamID]` — carries it into both the
-            // published run and `Verification.Store.save`. Only when
-            // `entries` is empty: a non-empty read means process-compose
-            // reported *something* about our checks — passed, failed,
-            // skipped — and that per-check state already explains itself.
-            // This matters beyond the obvious "a check genuinely failed"
-            // case: process-compose reports a `Skipped` check (one whose
-            // `depends_on` failed) with `exit_code: 1`, which alone is enough
-            // to make `PhaseExecutor` call the whole namespace `.failed` —
-            // and that must not read as the run breaking when the row itself
-            // already says `.skipped`, not `.failed`. Only a poll that came
-            // back with nothing at all — the spawn never bound a socket, or
-            // process-compose refused the config outright — leaves nothing
-            // else to explain a non-succeeded outcome, and that is exactly
-            // when every check seals `.notRun`.
-            if entries.isEmpty, let outcome = state.outcome, let detail = Self.failureDetail(for: outcome) {
+            // published run and `Verification.Store.save`. Only when the server was
+            // never heard from about any check: a row a poll reported on
+            // already explains itself — `.passed`, `.failed`, `.skipped`, or
+            // still `.running` when the executor's own deadline ended the run —
+            // and duplicating the same fact up here would misdescribe an
+            // ordinary test failure, or a timeout, as the run failing to start. That matters beyond the obvious "a check
+            // genuinely failed" case: process-compose reports a `Skipped`
+            // check (one whose `depends_on` failed) with `exit_code: 1`, which
+            // alone is enough to make `PhaseExecutor` call the whole namespace
+            // `.failed` — and that must not read as the run breaking when the
+            // row itself already says `.skipped`.
+            //
+            // **Asked of the rows, not of `entries`.** The test used to be
+            // `entries.isEmpty`, which was the same question only while an
+            // empty final read also meant empty rows. Now that `seal`
+            // preserves what the live polls established, a namespace that shut
+            // itself down after a failure — `restart: exit_on_failure`, see
+            // `seal` — arrives here with an empty `entries` and a row that
+            // says `.failed(1)`, and claiming "the run itself failed to start
+            // its checks" over a suite that ran and failed is exactly the lie
+            // being fixed. A spawn that never bound a socket still leaves
+            // every row `.pending`, so it still gets its detail.
+            if !Self.serverReportedAnyCheck(runs[workstreamID]?.checks ?? []),
+               let outcome = state.outcome, let detail = Self.failureDetail(for: outcome)
+            {
                 runs[workstreamID]?.failureDetail = detail
             }
             // Before `seal`, because `seal` is what makes `isLive` false by
@@ -580,6 +695,44 @@ extension Verification {
             if let outcome = state.outcome, outcome != .succeeded {
                 logger.info("verify run \(runID, privacy: .public): \(String(describing: outcome), privacy: .public)")
             }
+        }
+
+        /// `Git.Operations.diffFingerprint`, off the main actor.
+        ///
+        /// The same hop `PhaseSpawner.run` uses, and for the same reason: this
+        /// is `git rev-parse`, `git diff --stat`, `git ls-files` and batched
+        /// `git hash-object`, which `VerificationTabView.refreshStaleness`
+        /// already refuses to run on the actor.
+        private static func captureStamp(
+            worktreePath: String, projectDirectory: String
+        ) async -> String {
+            await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    continuation.resume(returning: Git.Operations.diffFingerprint(
+                        worktreePath: worktreePath, projectPath: projectDirectory,
+                        mode: "uncommitted"
+                    ))
+                }
+            }
+        }
+
+        /// Whether the control server was ever heard from about any check.
+        ///
+        /// The question the `failureDetail` banner needs, and deliberately not
+        /// "did any check finish": the banner's headline is *"the run itself
+        /// failed to start its checks"*, so the only fact that falsifies it is
+        /// a poll having reported on one. `.pending` is exactly "never seen" —
+        /// `apply` leaves a name the server has not mentioned alone, and a run
+        /// is seeded entirely `.pending`.
+        ///
+        /// **A narrower predicate gets the executor's own deadline wrong.**
+        /// `PhaseExecutor.run` returns `.failed` with the checks still
+        /// executing, so every row is `.running` when the gate is asked; a test
+        /// for terminal states alone would fire the banner over a suite that
+        /// ran for its whole timeout — the same lie this gate was changed to
+        /// fix, pointed the other way.
+        static func serverReportedAnyCheck(_ checks: [Verification.CheckResult]) -> Bool {
+            checks.contains { $0.state != .pending }
         }
 
         /// What `Run.failureDetail` should say for a non-`.succeeded` outcome,
