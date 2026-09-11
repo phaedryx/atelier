@@ -82,6 +82,14 @@ extension Workstream {
                 builder.option("--mcp-config", mcpConfigPath)
             }
             if let initialPrompt, !initialPrompt.isEmpty {
+                // `--` ends option parsing: `--mcp-config <configs...>` is
+                // variadic in the CLI, so without it a prompt following that
+                // option is consumed as a second config path — a ~2KB
+                // "filename" the CLI dies opening (ENAMETOOLONG), before any
+                // session exists, losing the prompt. Emitted with the prompt
+                // rather than after the config so an option added between
+                // them cannot reopen the hole.
+                builder.flag("--")
                 // Positional, and quoted here because `arg` deliberately does not
                 // quote — every other value on this command goes through
                 // `option`, which does.

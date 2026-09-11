@@ -288,6 +288,33 @@ final class AgentCommandTests: XCTestCase {
         )
     }
 
+    /// `--mcp-config <configs...>` is variadic in the Claude Code CLI: it
+    /// consumes every following argument until the next option, including a
+    /// positional prompt. Without a `--` terminator ahead of the prompt, the
+    /// prompt is read as a second config path — a ~2KB "filename" — and the
+    /// agent dies at launch with ENAMETOOLONG before a session exists, losing
+    /// the prompt. `--` must come with the prompt itself, not with the config,
+    /// so a future option added between them cannot reopen the hole.
+    func testInitialPromptIsSeparatedFromOptionsByDoubleDash() {
+        let command = fresh(
+            mcpConfigPath: "/cache/mcp/x.json",
+            initialPrompt: "review the diff and report back"
+        )
+        // Matched as ranges rather than one literal, because the login-shell
+        // wrapping re-escapes the prompt's quotes — the same reason
+        // testInitialPromptWithQuotesIsEscaped asserts against `shellQuote`.
+        let separator = command.range(of: " -- ")
+        let prompt = command.range(of: "review the diff and report back")
+        XCTAssertNotNil(separator, "expected -- before the positional prompt in: \(command)")
+        XCTAssertNotNil(prompt, command)
+        if let separator, let prompt {
+            XCTAssertTrue(
+                separator.upperBound <= prompt.lowerBound,
+                "expected -- to precede the prompt in: \(command)"
+            )
+        }
+    }
+
     /// The whole prompt has to survive as one argument, however many shells it
     /// is wrapped in on the way.
     func testInitialPromptSurvivesTheShellWrapping() {
