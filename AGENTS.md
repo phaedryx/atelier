@@ -748,8 +748,8 @@ checks rather than a comment:
 | Group | Tools | Trust story |
 |---|---|---|
 | Messaging | `register_peer`, `list_peers`, `send_message`, `receive_messages`, `broadcast`, `get_peer_status` | none needed — text between agents, nothing a user can see |
-| Workspace reads | `list_tabs`, `read_review_comments` | none needed — answers about the caller's own workstream |
-| Workspace actions | `open_agent_tab`, `open_editor`, `request_attention`, `create_workstream` | see below |
+| Workspace reads | `list_tabs`, `read_review_comments`, `check_verification` | none needed — answers about the caller's own workstream |
+| Workspace actions | `open_agent_tab`, `open_editor`, `request_attention`, `create_workstream`, `start_verification` | see below |
 
 The messaging six were once the whole enum. Calix's IPC core is the same six, and everything it
 grew on top — pane/tab control, LSP, shell integration — arrived as separate tool surfaces with
@@ -832,6 +832,91 @@ Two further things about it that are not guesses:
   wraps — and the **tmux session name**, which goes through
   `Workstream.AgentCommand.tmuxWrapped` so the seeded agent lands in the session
   `Workstream.Archiver` kills.
+
+### The verification tools, and the first message Atelier sends itself
+
+`start_verification` runs the project's `verify` namespace against the caller's own
+worktree and answers with a **run id**, never a result: a real suite outlives an MCP
+tool call. The result reaches the agent two ways — a summary posted into its inbox
+when the run ends, and `check_verification(run_id)`, which exists because delivery is
+a pull and the nudge is best-effort, so an agent that never reads its inbox must
+still be able to find out.
+
+**The seam is declared on the IPC side and the runner conforms**:
+`IPC.VerificationControlling` (`Sources/Models/IPC/VerificationControlling.swift`),
+mirroring `ProcessCompose.Controlling`. It carries `IPC.VerificationRunInfo` rather
+than the runner's `Verification.Run` — the projection `PeerInfo` is to the store's
+`Peer`, and for the same reasons: seconds-ago instead of a `Date` needing a shared
+encoding strategy on both ends, a bounded output tail instead of a suite's whole log,
+`isStale` instead of the stamp. The `CheckResult.State` → `VerificationCheckState`
+mapping is therefore the runner's, which is where the two measured process-compose
+traps already live. Its doc comment carries the rest of the contract, and two clauses
+there are load-bearing: a start must **refuse while a run is in flight** for that
+workstream, because `PhaseExecutor.run` calls `shutDown` at the *top* and a second
+start would kill the first mid-suite; and `onFinish` must fire on every terminal path,
+because a path that does not is a completion notice that never arrives.
+
+**Approval is not rechecked here.** `ProcessCompose.PhasePolicy.plan` is the gate and
+it lives behind the seam — `Verification.Runner.start` calls it, and that function is the
+only legal entrance to the runner. `IPC.VerificationRunnerBridge` therefore never touches
+`Runner.execute`, which spawns repository-provided commands with captured output and no
+TTY and performs no gate of its own. The handler passes the runner's refusal through
+verbatim; adding a check in `IPC.Service` is the inlined second copy that section forbids.
+
+**The bridge routes completions per run, because `Runner.onFinish` is one slot that fires
+for every run the app performs** — including the ones the user pressed Run for.
+`IPC.VerificationRunnerBridge` holds the callback `start_verification` was handed, keyed
+by run id, so a run nobody asked about finishes silently. Two consequences: constructing
+a second bridge silently unsubscribes the first, which is why `ContentView` builds exactly
+one; and nothing may `await` between `Runner.start` returning and the callback being
+registered, or a fast failure fires into a slot that is not there yet.
+
+**A run's state is read from its own rows, never from `Runner.isLive`.** They answer
+different questions: `isLive` means "may a new run start on this workstream's socket" and
+stays true through sealing *and* teardown, so a state read from it would report a run as
+still running in the very notice announcing it finished. `wasStopped` then `isFinished` is
+the projection, and `isLive` is left to the thing it is for.
+
+**`IPC.Message.from` is a `Sender` enum, and that is what an app-originated message
+cost.** Every other message in the store has a peer on both ends; a run finishing has
+no peer behind it. A reserved *peer* registered in the store would have to be filtered
+out of `listPeers`, out of a `broadcast` audience and out of `peersBySurface`, each one
+a place to forget; a sentinel UUID would let an agent try to `send_message` back to
+something that cannot read. `Store.deliverSystemMessage` is the entry point, the label
+an agent sees is `atelier/verification`, and the compiler walked every site that had
+assumed a sender peer existed. The store's inbox scan is what keeps a queued notice
+from being orphaned by its recipient's TTL — the same guarantee peer messages already
+had.
+
+**A run id outlives a restart only for the newest run in a workstream.** The runner
+keeps that one because the staleness stamp needs it anyway; every older id resolves to
+nil and `check_verification` says so. The scope check on a read is not a security
+boundary — every process in this feature runs as the user — it is there because a run
+id is the tool's only argument and ids are short, so a stale one should be told it is
+not this caller's run rather than handed somebody else's results.
+
+**The notice is addressed by surface, and the peer is resolved when it is posted.**
+Two agents in one worktree report the same workstream name, so the surface id is the
+only discriminator; and a helper whose old socket has not closed yet re-registers under
+a *new* peer id, so an id captured when the run started can be dead while its pane has
+an agent sitting in it.
+
+**The captured tail is the only copy of a check's output that survives its run.** The
+log lives in process-compose's control server, and the runner shuts that down once the
+run is sealed — so there is no fuller copy in the Verification tab, in
+`check_verification`, or on disk, and `outputTruncated` means "there was more at capture
+time" rather than "more can be fetched". Every string that flag drives has to say so:
+copy that reads as retrievable sends an agent looking for a log that is nowhere, and the
+honest pointer is re-running that one check. (The tab spec's original "on demand for a
+passed check" was impossible for the same reason and has been withdrawn.)
+
+**Two bounds that are not tuning.** `IPC.Store` refuses content over 64KB outright, so
+an oversized notice is not trimmed on delivery — it is lost, silently, exactly when the
+agent is waiting for it; `VerificationSummary` assembles against a 6KB budget, verdicts
+before output, and points at `check_verification` for the rest. And a run that finished
+having run **nothing** must never render as a pass: `up -n` on an empty namespace never
+exits so `PhaseExecutor` returns `.skipped` without spawning, and an undecodable config
+declares no processes at all, which makes "0 of 0 failed" both true and a green suite.
 
 Two agents in one worktree is a supported shape, not a mistake — `/ping-pong`-style pairing
 wants it. They are distinguishable because every Atelier-launched terminal exports its own

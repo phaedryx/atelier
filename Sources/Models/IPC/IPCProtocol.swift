@@ -76,6 +76,8 @@ extension IPC {
         case listTabs = "list_tabs"
         /// The review comments the user has left on the Changes diff.
         case readReviewComments = "read_review_comments"
+        /// A verification run's state and per-check results, by run id.
+        case checkVerification = "check_verification"
 
         /// Workspace actions.
         /// Opens a terminal tab in the caller's own workstream, optionally
@@ -88,6 +90,9 @@ extension IPC {
         /// Creates a new workstream — worktree, branch, `bootstrap` — and
         /// optionally starts an agent there.
         case createWorkstream = "create_workstream"
+        /// Starts a verification run — the `verify` namespace — in the caller's
+        /// own workstream, and answers with a run id rather than the result.
+        case startVerification = "start_verification"
 
         /// Which of the three surfaces above this tool belongs to.
         ///
@@ -99,9 +104,9 @@ extension IPC {
             switch self {
             case .registerPeer, .listPeers, .sendMessage, .receiveMessages, .broadcast, .getPeerStatus:
                 .messaging
-            case .listTabs, .readReviewComments:
+            case .listTabs, .readReviewComments, .checkVerification:
                 .workspaceRead
-            case .openAgentTab, .openEditor, .requestAttention, .createWorkstream:
+            case .openAgentTab, .openEditor, .requestAttention, .createWorkstream, .startVerification:
                 .workspaceAction
             }
         }
@@ -249,6 +254,111 @@ extension IPC {
         let isOrphaned: Bool
     }
 
+    /// A verification run as reported to an agent.
+    ///
+    /// A **projection** of the runner's `Verification.Run`, not that type: the
+    /// same relationship `PeerInfo` has to the store's `Peer`, and
+    /// `TabInfo`/`ReviewCommentInfo` to what `WorkspaceActions` reads. Every
+    /// model that crosses this boundary gets one, and this one has to differ —
+    /// seconds-ago rather than a `Date` that would need a shared encoding
+    /// strategy on both ends, a bounded output tail rather than a whole suite's
+    /// log, and `isStale` rather than the stamp it is computed from.
+    ///
+    /// Declared here rather than beside the seam because `renderText` in
+    /// `Sources/MCPHelper/main.swift` renders it, and `AtelierMCP` compiles
+    /// exactly one file out of `Models/IPC/` — this one (`project.yml:198-200`).
+    struct VerificationRunInfo: Codable {
+        let runID: String
+        /// The workstream the run belongs to. Carried so a read can be scoped to
+        /// the caller's own workstream: `check_verification` takes only a run id,
+        /// and run ids are short and guessable.
+        let workstreamID: String
+        /// The workstream's display name, for the agent to read back.
+        let workstreamName: String?
+        let state: VerificationRunState
+        let startedSecondsAgo: Int
+        /// Wall-clock seconds the run took. Nil while it is still going.
+        let durationSeconds: Double?
+        let checks: [VerificationCheckInfo]
+        /// Whether the worktree has changed since the run started, so a pass no
+        /// longer describes the code on disk.
+        let isStale: Bool
+        /// Why the **run itself** produced no per-check answer, when that is
+        /// what happened.
+        ///
+        /// Distinct from a check failing, and deliberately not set for one: a
+        /// suite where `rspec` failed is explained by that check's own state and
+        /// output. This is for a spawn that never got far enough to report on
+        /// anything, which otherwise reaches an agent as a list of checks that
+        /// all say "not run" and no reason anywhere. It is the only place that
+        /// reason exists.
+        let failureDetail: String?
+    }
+
+    /// Whether a verification run is still going, finished on its own, or was
+    /// stopped. There is no `failed` case: a run that finished with failing
+    /// checks still *finished*, and which checks failed is per-check.
+    enum VerificationRunState: String, Codable, CaseIterable {
+        case running
+        case finished
+        case stopped
+    }
+
+    /// One check's result within a run.
+    struct VerificationCheckInfo: Codable {
+        let name: String
+        let state: VerificationCheckState
+        /// The process's exit code. Only meaningful for `.failed`, and nil
+        /// otherwise — a `Pending` check and a passing one both report 0 from
+        /// process-compose, so an exit code alone cannot tell them apart.
+        let exitCode: Int?
+        let durationSeconds: Double?
+        /// The tail of this check's output as captured while the run was live,
+        /// bounded again before it is sent. Nil when there is none to show — a
+        /// passing check usually has none stored.
+        let outputTail: String?
+        /// Whether there was more output than this **at capture time**.
+        ///
+        /// Not a promise that more can be fetched. The log lives in
+        /// process-compose's control server, which the runner shuts down once
+        /// the run is sealed, so the tail captured in that window is the only
+        /// copy that exists afterwards — in the Verification tab, here, or on
+        /// disk. An agent that reads "truncated" as "retrievable" goes looking
+        /// for a fuller log that is not anywhere, which is why every string this
+        /// flag drives says so.
+        let outputTruncated: Bool
+    }
+
+    /// A check's state, as an agent sees it.
+    ///
+    /// Mapped from `Verification.CheckResult.State` **by the runner**, which is
+    /// where the two measured traps live: a `Pending` check reads as a pass if
+    /// you look at `exitCode` alone, and a `Skipped` one carries exit 1 and so
+    /// renders as a failure it never had.
+    enum VerificationCheckState: String, Codable, CaseIterable {
+        case notRun = "not_run"
+        case pending
+        case running
+        case passed
+        case failed
+        /// A dependency failed, so this check never ran.
+        case skipped
+        /// The run was stopped while this check was running.
+        case stopped
+    }
+
+    /// Seconds as an agent should read them.
+    ///
+    /// Minutes appear because a real suite runs for tens of them and `1503.2s`
+    /// is arithmetic homework. Declared here rather than beside the rest of the
+    /// verification formatting because `renderText` in the helper needs it, and
+    /// `AtelierMCP` compiles this file alone out of `Models/IPC/`.
+    static func durationText(_ seconds: Double) -> String {
+        guard seconds >= 60 else { return String(format: "%.1fs", seconds) }
+        let minutes = Int(seconds) / 60
+        return "\(minutes)m " + String(format: "%.1fs", seconds - Double(minutes * 60))
+    }
+
     /// The result of a successful call.
     enum Payload: Codable {
         case peers([PeerInfo])
@@ -256,6 +366,7 @@ extension IPC {
         case messages([MessageInfo])
         case tabs([TabInfo])
         case reviewComments([ReviewCommentInfo])
+        case verificationRun(VerificationRunInfo)
         case text(String)
     }
 

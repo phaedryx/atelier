@@ -100,7 +100,7 @@ final class IPCStoreTests: XCTestCase {
         )
 
         // Assert
-        XCTAssertEqual(message.from, peerA.id)
+        XCTAssertEqual(message.from, .peer(peerA.id))
         XCTAssertEqual(message.to, peerB.id)
         XCTAssertEqual(message.content, "hello from A")
         XCTAssertFalse(message.id.uuidString.isEmpty,
@@ -1377,6 +1377,86 @@ final class IPCStoreTests: XCTestCase {
         // inert until an id is reused. Read it directly.
         let stillPinned = await store._testIsPinned(peerId: peer.id)
         XCTAssertFalse(stillPinned)
+        let listed = await store.listPeers()
+        XCTAssertTrue(listed.isEmpty)
+    }
+
+    // ==================== App-originated messages (verification completion) ====================
+
+    func test_deliverSystemMessage_landsInTheInboxWithNoPeerBehindIt() async throws {
+        let store = makeStore()
+        let peer = await store.registerPeer(name: "agent", role: "")
+
+        let delivered = try await store.deliverSystemMessage(
+            from: "atelier/verification", to: peer.id, content: "run v-7f3a11 finished"
+        )
+
+        XCTAssertNotNil(delivered)
+        let inbox = await store.receiveMessages(for: peer.id)
+        XCTAssertEqual(inbox.count, 1)
+        XCTAssertEqual(inbox.first?.content, "run v-7f3a11 finished")
+        XCTAssertEqual(
+            inbox.first?.from,
+            .system("atelier/verification"),
+            "an app-originated message has no sender peer, and the sender must say so rather than borrow a peer id"
+        )
+    }
+
+    func test_deliverSystemMessage_toAPeerThatIsGone_deliversNothing() async throws {
+        let store = makeStore()
+        let peer = await store.registerPeer(name: "agent", role: "")
+        await store.removePeer(id: peer.id)
+
+        let delivered = try await store.deliverSystemMessage(
+            from: "atelier/verification", to: peer.id, content: "run v-7f3a11 finished"
+        )
+
+        XCTAssertNil(delivered, "there is nobody to tell; the run's results stay readable through check_verification")
+    }
+
+    func test_deliverSystemMessage_oversizeContent_throwsRatherThanTruncating() async {
+        let store = makeStore()
+        let peer = await store.registerPeer(name: "agent", role: "")
+        let tooBig = String(repeating: "x", count: 65_537)
+
+        do {
+            _ = try await store.deliverSystemMessage(from: "atelier/verification", to: peer.id, content: tooBig)
+            XCTFail("expected the content cap to be enforced for an app-originated message too")
+        } catch {
+            XCTAssertTrue(
+                error.localizedDescription.contains("64KB"),
+                "expected the store's content cap, got: \(error.localizedDescription)"
+            )
+        }
+    }
+
+    func test_anUndeliveredSystemMessage_keepsItsRecipientFromExpiring() async throws {
+        let store = makeStore()
+        let peer = await store.registerPeer(name: "agent", role: "")
+        _ = try await store.deliverSystemMessage(
+            from: "atelier/verification", to: peer.id, content: "run v-7f3a11 finished"
+        )
+
+        // A suite can outrun the TTL comfortably, and the agent that started it is
+        // idle by definition while it waits. The same guarantee the store already
+        // makes for a peer message has to hold here: an undelivered message cannot
+        // be orphaned by its recipient expiring.
+        await store._testSetPeerLastSeen(peerId: peer.id, date: Date().addingTimeInterval(-3600))
+
+        let inbox = await store.receiveMessages(for: peer.id)
+        XCTAssertEqual(inbox.count, 1, "the queued completion notice should have kept the peer alive")
+    }
+
+    func test_deliverSystemMessage_doesNotResurrectAnExpiredPeer() async throws {
+        let store = makeStore()
+        let peer = await store.registerPeer(name: "agent", role: "")
+        await store._testSetPeerLastSeen(peerId: peer.id, date: Date().addingTimeInterval(-3600))
+
+        let delivered = try await store.deliverSystemMessage(
+            from: "atelier/verification", to: peer.id, content: "run v-7f3a11 finished"
+        )
+
+        XCTAssertNil(delivered, "a peer past its TTL with an empty inbox is gone; delivering would revive it")
         let listed = await store.listPeers()
         XCTAssertTrue(listed.isEmpty)
     }

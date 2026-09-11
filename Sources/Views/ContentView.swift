@@ -495,6 +495,13 @@ struct ContentView: View {
             WorkspaceActions.shared.surfaceCache = surfaceCache
             WorkspaceActions.shared.projectList = projectList
             WorkspaceActions.shared.appEnvironment = appEnvironment
+            // `start_verification` and `check_verification` act through the same
+            // runner the Verification tab does — one run per workstream needs one
+            // enforcement point. Built here because the bridge takes `onFinish`,
+            // which is a single slot: constructing a second one would silently
+            // unsubscribe the first.
+            let verificationBridge = IPC.VerificationRunnerBridge(runner: verificationRunner)
+            Task { await IPC.Service.shared.setVerificationRunner(verificationBridge) }
             // Creating a workstream needs the same list, and stays out of
             // `WorkspaceActions` on purpose: it is a workstream-lifecycle
             // operation the sidebar could route through too, and an IPC-named

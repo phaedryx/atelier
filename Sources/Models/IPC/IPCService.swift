@@ -24,8 +24,36 @@ extension IPC {
         private let store: Store
         private var contexts: [UUID: PeerContext] = [:]
 
+        /// The check runner the verification tools act through, once the app has
+        /// one. Nil until then, and both tools say so rather than pretending.
+        ///
+        /// Injected rather than constructed here for the reason
+        /// `IPC.VerificationControlling` exists: this actor holds the protocol
+        /// and never the runner's type, so the tools are testable against a stub
+        /// and the two halves of the feature can land in either order.
+        private var verification: VerificationControlling?
+
+        /// Starts whose completion notice has already been posted.
+        ///
+        /// The seam promises `onFinish` fires once per run, and a second call
+        /// would put a duplicate into an inbox with a hundred-message cap. Free
+        /// to guard, and unpleasant to diagnose from the agent's end.
+        ///
+        /// **Keyed per start rather than by run id**, which is the runner's value
+        /// and only promised unique for the app's lifetime — and a workstream's
+        /// most recent run outlives a restart, so that promise spans a boundary
+        /// this set does not. Keyed by id, a legitimate second run that happened
+        /// to reuse one would be silently swallowed and deliver nothing. A token
+        /// minted here cannot collide with anything.
+        private var deliveredNotices: Set<UUID> = []
+
         init(store: Store = Store()) {
             self.store = store
+        }
+
+        /// Wires up the check runner. Called once, by whatever builds it.
+        func setVerificationRunner(_ runner: VerificationControlling?) {
+            verification = runner
         }
 
         // MARK: - Dispatch
@@ -58,6 +86,10 @@ extension IPC {
                 return await requestAttention(for: request)
             case .createWorkstream:
                 return await createWorkstream(for: request)
+            case .startVerification:
+                return await startVerification(for: request)
+            case .checkVerification:
+                return await checkVerification(for: request)
             }
         }
 
@@ -160,10 +192,23 @@ extension IPC {
             var infos: [MessageInfo] = []
             let now = Date()
             for message in messages {
-                let senderName = await store.peerStatus(id: message.from)?.name ?? "unknown"
+                // A `.system` message has no peer to look up and no peer id to
+                // report: what an agent sees is the reserved label, which is
+                // deliberately not something `send_message` would accept — there
+                // is nothing inside Atelier for it to reply to.
+                let from: String
+                let senderName: String
+                switch message.from {
+                case let .peer(senderID):
+                    from = senderID.uuidString
+                    senderName = await store.peerStatus(id: senderID)?.name ?? "unknown"
+                case let .system(label):
+                    from = label
+                    senderName = label
+                }
                 infos.append(MessageInfo(
                     id: message.id.uuidString,
-                    from: message.from.uuidString,
+                    from: from,
                     fromName: senderName,
                     content: message.content,
                     sentSecondsAgo: Int(now.timeIntervalSince(message.timestamp))
@@ -257,8 +302,15 @@ extension IPC {
         /// aimed at a busy agent, or aimed at a session Atelier didn't launch costs
         /// the sender nothing.
         private func nudge(_ recipients: [UUID], from senderID: UUID) async {
-            guard AgentSettings.nudgeEnabled else { return }
             let senderName = await store.peerStatus(id: senderID)?.name ?? "another agent"
+            await nudge(recipients, senderName: senderName)
+        }
+
+        /// The same courtesy for a notice that has no sender peer — a
+        /// verification run finishing. The name is only ever logged: the text
+        /// typed into a pane deliberately says nothing the sender chose.
+        private func nudge(_ recipients: [UUID], senderName: String) async {
+            guard AgentSettings.nudgeEnabled else { return }
 
             for recipient in recipients {
                 guard let context = contexts[recipient], let surfaceID = context.surfaceID else { continue }
@@ -833,6 +885,137 @@ extension IPC {
             }
         }
 
+        // MARK: - Verification
+
+        /// Starts a verification run in the caller's own workstream and answers
+        /// with its run id.
+        ///
+        /// **The answer is the id, not the result.** A real suite runs for
+        /// minutes and an MCP tool call does not, so the result arrives two other
+        /// ways: a notice posted into this agent's inbox when the run ends, and
+        /// `check_verification` for an agent that never reads its inbox.
+        ///
+        /// Nothing here decides whether the run is *allowed*. The preconditions —
+        /// the integration switch, a located config, a binary, and approval of
+        /// every repository-provided file — are `ProcessCompose.PhasePolicy.plan`,
+        /// deliberately the only copy, and they live behind the seam. A refusal
+        /// arrives as the runner's error and is passed through verbatim.
+        private func startVerification(for request: Request) async -> Response {
+            guard let workstreamID = callerWorkstreamID(request) else {
+                return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
+            }
+            guard let runner = verification else {
+                return .failure(id: request.id, VerificationFailure.notAvailable.localizedDescription)
+            }
+
+            let checks = VerificationSummary.checks(from: request.arguments["checks"])
+            // The caller is addressed by surface, never by workstream: two agents
+            // in one worktree report the same workstream name, and a notice
+            // addressed by workstream would land in the wrong pane's inbox half
+            // the time.
+            let surfaceID = request.client.surfaceID.flatMap(UUID.init(uuidString:))
+
+            let onFinish: @Sendable (VerificationRunInfo) -> Void
+            if let surfaceID {
+                let delivery = UUID()
+                onFinish = { [weak self] info in
+                    Task { await self?.postVerificationNotice(info, to: surfaceID, delivery: delivery) }
+                }
+            } else {
+                // Nothing Atelier launched, so there is no pane to address and no
+                // inbox that could be found again. The run is still worth
+                // starting — `check_verification` serves it — so this is a
+                // deliberate no-op rather than a refusal, and the answer below
+                // says as much.
+                onFinish = { _ in }
+            }
+
+            do {
+                let start = try await runner.startVerification(
+                    workstreamID: workstreamID,
+                    checks: checks,
+                    onFinish: onFinish
+                )
+                return .success(id: request.id, .text(startAnswer(for: start, deliverable: surfaceID != nil)))
+            } catch {
+                return .failure(id: request.id, error.localizedDescription)
+            }
+        }
+
+        /// What an agent is told when a run starts. Says where the result will
+        /// appear, because the one thing it must not do is wait here.
+        private nonisolated func startAnswer(for start: VerificationStart, deliverable: Bool) -> String {
+            let names = start.started.isEmpty ? "the whole verify namespace" : start.started.joined(separator: ", ")
+            let delivery = deliverable
+                ? "When it finishes, a summary lands in your inbox from \(VerificationSummary.sender) — "
+                + "receive_messages to read it, and remember delivery is a pull, so check at your next natural boundary."
+                : "Nothing will be posted to your inbox: Atelier does not know which terminal you are running in, "
+                + "so poll check_verification instead."
+            return "Started verification run \(start.runID): \(names). It runs in the background — do not wait on it. "
+                + delivery
+                + " check_verification(run_id: \"\(start.runID)\") reads it at any point, including while it is still running."
+        }
+
+        /// Reads one run, scoped to the caller's own workstream.
+        ///
+        /// Not a security boundary — every process in this feature runs as the
+        /// user, and `agent-ipc.md` says as much about the IPC token itself. The
+        /// scope check is there because a run id is the tool's only argument and
+        /// ids are short: an agent holding a stale or mistyped one should be told
+        /// it is not its run rather than handed somebody else's results. Which is
+        /// also what every other tool in this group does.
+        private func checkVerification(for request: Request) async -> Response {
+            guard let workstreamID = callerWorkstreamID(request) else {
+                return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
+            }
+            guard let runner = verification else {
+                return .failure(id: request.id, VerificationFailure.notAvailable.localizedDescription)
+            }
+            guard let runID = request.arguments["run_id"], !runID.isEmpty else {
+                return .failure(id: request.id, WorkspaceActions.Failure.missingArgument("run_id").localizedDescription)
+            }
+            guard let info = await runner.verificationRun(id: runID, in: workstreamID) else {
+                return .failure(id: request.id, VerificationFailure.unknownRun(runID).localizedDescription)
+            }
+            guard info.workstreamID.caseInsensitiveCompare(workstreamID.uuidString) == .orderedSame else {
+                return .failure(id: request.id, VerificationFailure.runBelongsElsewhere.localizedDescription)
+            }
+            return .success(id: request.id, .verificationRun(VerificationSummary.bounded(info)))
+        }
+
+        /// Posts a finished run's summary into the inbox of whatever agent now
+        /// occupies `surfaceID`.
+        ///
+        /// **Resolved at delivery time, not when the run started.** A helper that
+        /// reconnects normally keeps its peer id, but one whose old socket has not
+        /// closed yet is told the id belongs to another session and re-registers
+        /// under a new one — so a peer id captured ten minutes ago can be dead
+        /// while the pane it belonged to has an agent sitting in it. The surface
+        /// is the stable address; the peer is looked up through it.
+        private func postVerificationNotice(_ info: VerificationRunInfo, to surfaceID: UUID, delivery: UUID) async {
+            guard deliveredNotices.insert(delivery).inserted else { return }
+            guard let peerID = await peersBySurface()[surfaceID].flatMap({ UUID(uuidString: $0.id) }) else { return }
+
+            do {
+                // Nil means the agent has gone. Ordinary, and not worth
+                // reporting anywhere: the run's results stay readable through
+                // check_verification, and there is nobody left to tell.
+                guard try await store.deliverSystemMessage(
+                    from: VerificationSummary.sender,
+                    to: peerID,
+                    content: VerificationSummary.message(for: info)
+                ) != nil else { return }
+            } catch {
+                // The only throw is the store's content cap, and
+                // `VerificationSummary.message` is bounded an order of magnitude
+                // below it. Reaching here means that bound was broken, which is a
+                // bug in the formatter rather than something an agent can act on.
+                return
+            }
+
+            await nudge([peerID], senderName: VerificationSummary.sender)
+        }
+
         // MARK: - Test Support
 
         func _testRegister(name: String, role: String, context: PeerContext) async -> Peer {
@@ -852,6 +1035,8 @@ extension IPC {
         func _testReset() async {
             await store.cleanup()
             contexts.removeAll()
+            verification = nil
+            deliveredNotices.removeAll()
         }
     }
 }
