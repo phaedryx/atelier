@@ -106,15 +106,33 @@ final class WorkspaceTabStateTests: XCTestCase {
     }
 
     func testStartupClampsASavedSingletonToInfo() {
-        // .changes and .execution still round-trip through WorkspaceStateStore
-        // — a workstream saved before this seed changed has one on disk — but
-        // neither tab is seeded any more, so restoring one would leave
-        // activeTab outside tabs.
-        for saved in [RestorableWorkspaceTab.changes, .execution] {
+        // .changes, .execution and .verification still round-trip through
+        // WorkspaceStateStore — a workstream saved before this seed changed has
+        // one on disk — but none of the three is seeded any more, so restoring
+        // one would leave activeTab outside tabs.
+        for saved in [RestorableWorkspaceTab.changes, .execution, .verification] {
             let state = startupWorkspaceTabState(savedTab: saved)
             XCTAssertEqual(state.tabs, [.info, .agent])
             XCTAssertEqual(state.activeTab, .info)
         }
+    }
+
+    func test_restorable_verificationRoundTrips() {
+        let restorable = RestorableWorkspaceTab(activeTab: .verification)
+        XCTAssertEqual(restorable, .verification)
+        XCTAssertEqual(restorable.rawValue, "verification")
+        XCTAssertEqual(restorable.workspaceTab(), .verification)
+    }
+
+    /// Verification is a singleton like Changes and Execution, and the seed no
+    /// longer carries any of them — the invariant that every
+    /// `RestorableWorkspaceTab` case must be seeded is gone, replaced by
+    /// `startupWorkspaceTabState`'s `tabs.contains` clamp. So a saved
+    /// `.verification` is safe precisely because it is *not* restored.
+    func test_startupState_doesNotSeedVerification() {
+        let state = startupWorkspaceTabState(savedTab: .verification)
+        XCTAssertFalse(state.tabs.contains(.verification))
+        XCTAssertEqual(state.activeTab, .info)
     }
 
     func testChangesTabRoundTrips() {

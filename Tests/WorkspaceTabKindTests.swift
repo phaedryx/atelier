@@ -10,11 +10,11 @@ final class WorkspaceTabKindTests: XCTestCase {
             XCTAssertFalse(kind.isCloseable, "\(kind.id) must be permanent")
         }
         // Singletons: one of each, fixed label, but they close like any tab.
-        for kind in [WorkspaceTabKind.changes, .execution] {
+        for kind in [WorkspaceTabKind.changes, .execution, .verification] {
             XCTAssertTrue(kind.isCloseable, "\(kind.id) must be closeable")
             XCTAssertNil(kind.shortcutBadge, "\(kind.id) badges are positional")
         }
-        for kind in [WorkspaceTabKind.info, .agent, .changes, .execution] {
+        for kind in [WorkspaceTabKind.info, .agent, .changes, .execution, .verification] {
             XCTAssertNotNil(kind.staticLabel, "\(kind.id) has a fixed label")
         }
     }
@@ -70,5 +70,18 @@ final class WorkspaceTabKindTests: XCTestCase {
         XCTAssertFalse(WorkspaceTab.info.isCloseable)
         XCTAssertTrue(WorkspaceTab.changes.isCloseable)
         XCTAssertTrue(WorkspaceTab.terminal(UUID()).isCloseable)
+    }
+
+    /// Verification is the third singleton: exactly one per workstream, a fixed
+    /// label, and no named key of its own — so its badge is positional like
+    /// Changes' and Execution's.
+    func test_verificationKind_isACloseableSingleton() {
+        XCTAssertEqual(WorkspaceTabKind.verification.id, "verification")
+        XCTAssertTrue(WorkspaceTabKind.verification.isCloseable)
+        XCTAssertNotNil(WorkspaceTabKind.verification.staticLabel)
+        XCTAssertNil(WorkspaceTabKind.verification.shortcutBadge)
+        XCTAssertEqual(WorkspaceTabKind.verification.icon, "checkmark.circle")
+        XCTAssertEqual(WorkspaceTab.verification.kind, .verification)
+        XCTAssertEqual(WorkspaceTab.verification.dragIdentifier, "verification")
     }
 }

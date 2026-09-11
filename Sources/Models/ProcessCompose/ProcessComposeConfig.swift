@@ -104,8 +104,8 @@ extension ProcessCompose {
             return Set(processes.values.compactMap(\.namespace))
         }
 
-        /// The processes this config declares in a namespace, or nil if any file
-        /// could not be parsed.
+        /// The processes this config declares in a namespace, or nil if a file
+        /// could not be read or decoded.
         ///
         /// The selection UI needs these *before* anything is running, so it cannot
         /// read the live API: the whole point is choosing what `execute` will
@@ -113,16 +113,38 @@ extension ProcessCompose {
         /// it — a parse failure must never look like "this namespace is empty",
         /// which here would silently offer no choices at all.
         ///
+        /// **A file with no `processes:` key is skipped, not a parse failure**, and
+        /// that distinction is the whole difference between this and
+        /// `declaredNamespaces`. An override that sets only `environment:` or
+        /// `version:` is legal process-compose and is exactly the file
+        /// `namespacePresence` tolerates (`unknown = true; continue`) before going
+        /// on to call the namespace `.present`. Returning nil for the *config*
+        /// because one of its files declared no processes made a legal
+        /// base-plus-override pair report "these files could not be parsed, so the
+        /// verify checks are unknown" — a refusal, for a config process-compose
+        /// runs — and silently offered the Execution checklist no processes for the
+        /// same shape.
+        ///
         /// Later files win on name, matching process-compose's own override
         /// semantics, so a process moved to another namespace by an override file
         /// is reported under the namespace the override gives it.
         func declaredProcesses(in namespace: String) -> [String]? {
             var namespaceByProcess: [String: String] = [:]
             for file in loadedFiles {
-                guard let text = try? String(contentsOfFile: file, encoding: .utf8),
-                      let decoded = try? YAMLDecoder().decode(NamespaceFile.self, from: text),
-                      let processes = decoded.processes
-                else { return nil }
+                guard let text = try? String(contentsOfFile: file, encoding: .utf8) else { return nil }
+                guard let decoded = try? YAMLDecoder().decode(NamespaceFile.self, from: text) else {
+                    // A file holding no YAML document at all — empty, or nothing
+                    // but comments — makes Yams throw rather than decode to an
+                    // absent `processes:`. That is the same placeholder-override
+                    // case as the guard below and gets the same answer; anything
+                    // else really did fail to decode. Re-parsed only here, on the
+                    // failure path, because this function is called per render.
+                    if case .some(.none) = try? Yams.load(yaml: text) {
+                        continue
+                    }
+                    return nil
+                }
+                guard let processes = decoded.processes else { continue }
                 for (name, process) in processes {
                     namespaceByProcess[name] = process.namespace ?? ""
                 }

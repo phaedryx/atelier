@@ -301,6 +301,7 @@
 "Agent" = "Agent";
 "Changes" = "Changes";
 "Execution" = "Execution";
+"Verification" = "Verification";
 
 /* Changes tab */
 "Uncommitted" = "Uncommitted";
@@ -460,6 +461,7 @@
 "Show Coding Agent" = "Show Coding Agent";
 "Show Changes" = "Show Changes";
 "Show Execution" = "Show Execution";
+"Show Verification" = "Show Verification";
 "New Editor" = "New Editor";
 "Close Tab" = "Close Tab";
 "Start/Rerun" = "Start/Rerun";
@@ -572,12 +574,41 @@
 "This project's process-compose files came with the repository and have not been approved, so no %@ ran." = "This project's process-compose files came with the repository and have not been approved, so no %@ ran.";
 "Approval covers this repository until any of these files changes. Start is never gated by it." = "Approval covers this repository until any of these files changes. Start is never gated by it.";
 
+/* Verification runner */
+"Verification run %@ is already running in this workstream." = "Verification run %@ is already running in this workstream.";
+"This project declares no verify processes." = "This project declares no verify processes.";
+"No such check: %@. This project declares: %@." = "No such check: %@. This project declares: %@.";
+"process-compose cannot start a check whose name begins with \"-\": %@. Rename it in process-compose.yaml." = "process-compose cannot start a check whose name begins with \"-\": %@. Rename it in process-compose.yaml.";
+"This project's process-compose files could not be parsed, so its verify checks are unknown." = "This project's process-compose files could not be parsed, so its verify checks are unknown.";
+"This project's verify namespace declared no processes to run." = "This project's verify namespace declared no processes to run.";
+
+/* Verification tab */
+"Run failed" = "Run failed";
+"Output" = "Output";
+"Nothing to verify yet" = "Nothing to verify yet";
+"This result no longer reflects the worktree's current content." = "This result no longer reflects the worktree's current content.";
+"The run itself failed to start its checks" = "The run itself failed to start its checks";
+"Showing the last lines captured. There is nothing more to fetch: the run's own output no longer exists anywhere." = "Showing the last lines captured. There is nothing more to fetch: the run's own output no longer exists anywhere.";
+"The process-compose integration is off. Turn it on in Settings to run checks." = "The process-compose integration is off. Turn it on in Settings to run checks.";
+"Add a process-compose.yaml to this worktree or the project directory to declare checks." = "Add a process-compose.yaml to this worktree or the project directory to declare checks.";
+"This project's process-compose files came with the repository and need your approval before checks can run." = "This project's process-compose files came with the repository and need your approval before checks can run.";
+"This project declares no verify checks." = "This project declares no verify checks.";
+
+/* Verification tab - per-check state, accessibility label */
+"Not run" = "Not run";
+"Pending" = "Pending";
+"Passed" = "Passed";
+"Failed" = "Failed";
+"Skipped" = "Skipped";
+"Stopped" = "Stopped";
+
 /* ports.yaml validation */
 "fixed: %d is not a port between 1 and 65535" = "fixed: %d is not a port between 1 and 65535";
 "is a name Atelier sets; choose another" = "is a name Atelier sets; choose another";
 "starts with FF_, which Atelier mirrors from ATELIER_*; declare the ATELIER_ name instead" = "starts with FF_, which Atelier mirrors from ATELIER_*; declare the ATELIER_ name instead";
 
 /* Process selection */
+"At least one check has to run." = "At least one check has to run.";
 "At least one process has to start." = "At least one process has to start.";
 "is not a usable variable name; use letters, digits and _, not starting with a digit" = "is not a usable variable name; use letters, digits and _, not starting with a digit";
 "pins port %d, which %@ already pins" = "pins port %d, which %@ already pins";

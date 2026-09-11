@@ -276,4 +276,20 @@ final class ExecutionTabViewTests: XCTestCase {
     func testClosingAnExecutionTabWithNoRunStopsNothing() {
         XCTAssertFalse(closingTabStopsRun(.execution, runStarted: false))
     }
+
+    // MARK: - Selection storage
+
+    func test_selectionStores_useDifferentKeys() {
+        let id = UUID()
+        addTeardownBlock {
+            ProcessSelectionStore.execute.write([], id)
+            ProcessSelectionStore.verify.write([], id)
+        }
+        ProcessSelectionStore.execute.write(["bff"], id)
+        ProcessSelectionStore.verify.write(["rspec"], id)
+        // Sharing one key would make checking a check in Verification uncheck a
+        // process in Execution.
+        XCTAssertEqual(ProcessSelectionStore.execute.read(id), ["bff"])
+        XCTAssertEqual(ProcessSelectionStore.verify.read(id), ["rspec"])
+    }
 }

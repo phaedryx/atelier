@@ -41,15 +41,18 @@ some behaviour that looks alarming is intended:
 - **The Coding Agent can modify files and run commands.** Its own permission
   prompts are the boundary, and turning on "Bypass permission prompts" removes
   that boundary deliberately.
-- **Repository-provided `bootstrap` and `dispose` processes require your
-  approval before they run.** Atelier reads a `process-compose.yaml` and its
-  override file, and runs four namespaces from it: `bootstrap` when a worktree
-  is created, `prepare` and `execute` when you press Start, and `dispose` when
-  a workstream is archived. `bootstrap` and `dispose` are the two that run
-  unattended, so those are the two behind approval. Atelier shows you the files
-  that will load, runs nothing until you approve, and asks again when their
-  contents change. A path that runs either of them without approval is a
-  vulnerability; please report it.
+- **Repository-provided `bootstrap`, `dispose`, and `verify` processes
+  require your approval before they run.** Atelier reads a
+  `process-compose.yaml` and its override file, and runs five namespaces from
+  it: `bootstrap` when a worktree is created, `prepare` and `execute` when you
+  press Start, `verify` when you press Run in the Verification tab, and
+  `dispose` when a workstream is archived. `bootstrap` and `dispose` run
+  unattended, with nobody watching; `verify` is a deliberate press, but its
+  output is captured rather than shown in a terminal, so the same requirement
+  applies to it too. Those three are the ones behind approval. Atelier shows
+  you the files that will load, runs nothing until you approve, and asks again
+  when their contents change. A path that runs any of them without approval is
+  a vulnerability; please report it.
 
   Approval keys off *location*, not content: a config inside the worktree is
   repository-provided and is gated, while one in the project directory beside

@@ -25,6 +25,15 @@ extension Notification.Name {
     /// `.switchToProject`, which carries no payload and can only mean "the
     /// project the selected workstream belongs to".
     static let focusProject = Notification.Name("atelier.focusProject")
+    /// object: the worktree path (`String`), from `Worktree.HeadWatcher`'s own
+    /// callback in `startHeadWatcher`. A hint, not a diff, exactly as the
+    /// watcher's own doc says: any git activity in that worktree, not only a
+    /// branch change. `VerificationTabView` is the first consumer — it uses
+    /// this to know when a worktree's uncommitted content may have moved, so
+    /// it can recompute staleness without polling `git hash-object` on a
+    /// timer. The subscription lives only as long as the view does, which is
+    /// what confines it to "while the tab is visible" with no extra state.
+    static let worktreeGitActivity = Notification.Name("atelier.worktreeGitActivity")
 }
 
 final class ProjectList: ObservableObject {
@@ -101,6 +110,25 @@ struct ContentView: View {
     @StateObject private var surfaceCache = TerminalSurfaceCache()
     @StateObject private var appEnvironment = AppEnvironment()
     @StateObject private var usageStore = Usage.Store()
+    /// One runner for the app's lifetime, not one per tab.
+    ///
+    /// `<id>-verify.sock` admits exactly one server, so "one run per
+    /// workstream" needs a single enforcement point — see
+    /// `Verification.Runner`'s own doc. Held here, beside the other app-level
+    /// services, and handed to `TerminalContainerView` as a plain `let`: the
+    /// Verification tab observes it through its own `@ObservedObject`, and a
+    /// runner owned by the tab would lose every run the moment the tab closed
+    /// or the user switched workstreams.
+    ///
+    /// **`@State`, not `@StateObject`, and the difference is not cosmetic.**
+    /// Both give the object this view's lifetime; only `@StateObject`
+    /// subscribes to it. Nothing here renders from the runner, so a
+    /// subscription would re-evaluate this whole body on every `runs` publish —
+    /// about once a second for the length of a run — and each re-evaluation
+    /// re-initialises `TerminalContainerView`, whose `init` eagerly resolves
+    /// the dev command and so locates a process-compose config. `@State` keeps
+    /// the lifetime and drops the subscription.
+    @State private var verificationRunner = Verification.Runner()
     @ObservedObject private var agentStateTracker = Workstream.AgentStateTracker.shared
     @ObservedObject private var channelProbe = HookChannelProbe.shared
     @State private var saveWork: DispatchWorkItem?
@@ -194,7 +222,8 @@ struct ContentView: View {
                     workstreamLabel: workstream.label,
                     bypassPermissions: workstream.bypassPermissions,
                     isActive: true,
-                    model: workspaceModel
+                    model: workspaceModel,
+                    verificationRunner: verificationRunner
                 )
                 .id(workstreamID)
                 .navigationTitle(appEnvironment.taskDescription(for: workstream.worktreePath) ?? workstream.label)
@@ -743,6 +772,12 @@ struct ContentView: View {
                 // sidebar name would then stay stale until the next tick. This
                 // is an in-memory walk that saves only on a real change.
                 syncWorkstreamNamesFromBranches()
+                // Broadcast last, and unconditionally — a listener does not
+                // know or care whether the branch name moved, only that git
+                // activity happened in this worktree. See the notification's
+                // own doc for why `VerificationTabView` is the reason this
+                // exists.
+                NotificationCenter.default.post(name: .worktreeGitActivity, object: worktreePath)
             }
         }
         headWatcher = watcher

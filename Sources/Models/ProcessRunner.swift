@@ -40,6 +40,10 @@ enum ProcessRunner {
         /// legitimately minutes, so this is the loosest bound there is — it
         /// exists to break a wedge, not to enforce a pace.
         static let install: TimeInterval = 1800
+        /// A project's own test or lint suite. `userCommand` is 300s, which a real
+        /// suite exceeds; this exists to break a wedge, not to enforce a pace — the
+        /// Verification tab's Stop button is the real escape.
+        static let suite: TimeInterval = 1800
     }
 
     /// A finished child: its exit status and both streams.

@@ -1,5 +1,5 @@
 // ABOUTME: Builds the process-compose command for each lifecycle phase.
-// ABOUTME: One config, four namespaces, one predictable control socket.
+// ABOUTME: One config, five namespaces, one predictable control socket.
 
 import Foundation
 
@@ -9,6 +9,10 @@ extension ProcessCompose {
         case prepare
         case execute
         case dispose
+        /// On demand, repeatedly, from the Verification tab. Unlike the
+        /// other four this is not a point in a workstream's life, which is why it is
+        /// the one headless phase that is ever asked to run a subset.
+        case verify
 
         var namespace: String {
             rawValue
@@ -71,8 +75,12 @@ extension ProcessCompose {
         /// `process-compose.yaml` is never read. Naming the files closes the class,
         /// not just that instance.
         ///
-        /// `loadedFiles` existence-filters, so the "a missing `-f` target is fatal"
-        /// hazard cannot be reached through it.
+        /// `loadedFiles` does **not** existence-filter: it always includes `path`,
+        /// the config `locate` found by checking it exists, and only the override
+        /// half goes through `firstPresent`. So a `-f` target that has since been
+        /// deleted is named and process-compose treats that as fatal — a window
+        /// nothing here closes, and a claim to the contrary once stood in this
+        /// doc block.
         ///
         /// `keepProject` holds the control server open after every process in the
         /// namespace has finished, so a caller can read their exit codes before
@@ -111,7 +119,7 @@ extension ProcessCompose {
 
             parts += ["-n", phase.namespace]
 
-            if phase == .execute, !selectedProcesses.isEmpty {
+            if phase == .execute || phase == .verify, !selectedProcesses.isEmpty {
                 // Shell-quoting protects the shell; it does not protect
                 // process-compose's own flag parser, which reads these as trailing
                 // arguments. A repository YAML may name a process whatever it

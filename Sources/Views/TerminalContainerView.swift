@@ -21,6 +21,7 @@ extension Notification.Name {
     static let toggleChanges = Notification.Name("atelier.toggleChanges")
     static let submitChangeReview = Notification.Name("atelier.submitChangeReview")
     static let toggleExecution = Notification.Name("atelier.toggleExecution")
+    static let toggleVerification = Notification.Name("atelier.toggleVerification")
     /// Runs the active workstream's `bootstrap` namespace again. Declared here
     /// rather than beside `.asyncSetupStateChanged`, which `AsyncSetupService`
     /// posts: like `.rerunScript`, this one is posted by the palette and named
@@ -38,6 +39,7 @@ enum RestorableWorkspaceTab: String, Codable {
     case agent
     case execution
     case changes
+    case verification
 
     init(activeTab: WorkspaceTab) {
         switch activeTab {
@@ -47,6 +49,8 @@ enum RestorableWorkspaceTab: String, Codable {
             self = .changes
         case .execution:
             self = .execution
+        case .verification:
+            self = .verification
         case .info, .terminal, .browser, .editor:
             self = .info
         }
@@ -62,6 +66,8 @@ enum RestorableWorkspaceTab: String, Codable {
             .changes
         case .execution:
             .execution
+        case .verification:
+            .verification
         }
     }
 }
@@ -110,13 +116,14 @@ func reorderedCustomTabs(_ tabs: [WorkspaceTab], dragging draggedTab: WorkspaceT
 }
 
 /// A tab in the workspace. Info and Agent are permanent; everything else — the
-/// Changes and Execution singletons included — closes, reopens, and reorders
-/// by drag.
+/// Changes, Execution and Verification singletons included — closes, reopens,
+/// and reorders by drag.
 enum WorkspaceTab: Hashable {
     case info
     case agent
     case changes
     case execution
+    case verification
     case terminal(UUID)
     case browser(UUID)
     case editor(UUID)
@@ -133,6 +140,7 @@ extension WorkspaceTab {
         case .agent: .agent
         case .changes: .changes
         case .execution: .execution
+        case .verification: .verification
         case .terminal: .terminal
         case .browser: .browser
         case .editor: .editor
@@ -171,12 +179,12 @@ struct WorkspaceTabSnapshot {
 
 /// The state a workstream's model starts life with: the two permanent tabs and
 /// nothing else. Tab lists are never persisted across launches, so every
-/// workstream opens the same way and Changes and Execution are opened when they
-/// are wanted — from the tab bar's quick-add buttons, the command palette, or
-/// ⌘-shortcuts.
+/// workstream opens the same way and Changes, Execution and Verification are
+/// opened when they are wanted — from the tab bar's quick-add buttons, the
+/// command palette, or ⌘-shortcuts.
 ///
 /// `activeTab` is therefore clamped rather than trusted. `savedTab` restores the
-/// last-active tab *kind*, and two of the four kinds it can name are no longer
+/// last-active tab *kind*, and three of the five kinds it can name are no longer
 /// seeded; a `.changes` restored onto a strip with no Changes tab would render
 /// that pane with nothing selected in the strip, and with the quick-add button
 /// still offering to open what is already on screen. The saved kind survives
@@ -259,6 +267,10 @@ struct TerminalContainerView: View {
     /// `@ObservedObject`: a computed property re-resolving it on each access
     /// would never subscribe, and the view would silently render stale tabs.
     @ObservedObject var model: WorkspaceModel
+    /// The app-level verification runner, created by `ContentView` and passed
+    /// through. Not an `@ObservedObject` here: nothing in this view renders
+    /// from it, and `VerificationTabView` — which does — observes it itself.
+    let verificationRunner: Verification.Runner
     @AppStorage("atelier.defaultBrowser") private var defaultBrowser: String = ""
     @AppStorage("atelier.tmuxMode") private var tmuxMode: Bool = false
     @AppStorage("atelier.autoRenameBranch") private var autoRenameBranch: Bool = false
@@ -337,6 +349,16 @@ struct TerminalContainerView: View {
     /// Why Start can do nothing, when it can do nothing and the pane's own copy
     /// does not already explain it. Set in the same refresh as `runPlan`.
     @State private var runUnavailableReason: String?
+    /// The Verification tab's two availability inputs, resolved together in
+    /// `refreshVerificationAvailability` and handed in.
+    ///
+    /// State rather than computed properties for the same two reasons `runPlan`
+    /// is: resolving them locates the config, stats the binary and hashes the
+    /// approval-relevant files, which has no business in a render pass — and
+    /// *agreement* is the invariant, since `Verification.Runner.start` guards
+    /// on the same `PhasePolicy.plan` the reason below was produced from.
+    @State private var declaredVerifyChecks: [String] = []
+    @State private var verifyUnavailableReason: String?
     /// True while `doStartRun` is awaiting `down` on a socket it has to reclaim.
     ///
     /// Start is otherwise synchronous, and that is what kept it safe to press
@@ -369,7 +391,8 @@ struct TerminalContainerView: View {
         workstreamLabel: String? = nil,
         bypassPermissions: Bool,
         isActive: Bool,
-        model: WorkspaceModel
+        model: WorkspaceModel,
+        verificationRunner: Verification.Runner
     ) {
         self.workstreamID = workstreamID
         self.workingDirectory = workingDirectory
@@ -380,6 +403,7 @@ struct TerminalContainerView: View {
         self.bypassPermissions = bypassPermissions
         self.isActive = isActive
         self.model = model
+        self.verificationRunner = verificationRunner
         _portDetector = StateObject(wrappedValue: Port.Detector(workstreamID: workstreamID))
         _processTable = StateObject(wrappedValue: ProcessCompose.TableModel(
             socketPath: ProcessCompose.PhaseRunner.socketPath(for: workstreamID)
@@ -408,7 +432,7 @@ struct TerminalContainerView: View {
         case .agent:
             [claudeID]
         case let .terminal(id): [id]
-        case .info, .changes, .execution, .browser, .editor: []
+        case .info, .changes, .execution, .verification, .browser, .editor: []
         }
     }
 
@@ -642,9 +666,9 @@ struct TerminalContainerView: View {
     ///
     /// One list, read by both the buttons and the divider that separates them
     /// from the add-another-one buttons, so the two cannot disagree about
-    /// whether the group is empty. Since `startupWorkspaceTabState` seeds
-    /// neither singleton, the usual state is both buttons showing; the empty
-    /// case is a workstream with both tabs open, and the divider has to
+    /// whether the group is empty. Since `startupWorkspaceTabState` seeds no
+    /// singleton at all, the usual state is every button showing; the empty
+    /// case is a workstream with all of them open, and the divider has to
     /// disappear with them rather than dangle at the head of the group.
     private var closedSingletons: [SingletonQuickAdd] {
         SingletonQuickAdd.all.filter { !model.tabs.contains($0.tab) }
@@ -815,6 +839,26 @@ struct TerminalContainerView: View {
                     onRestart: restartRun
                 )
             }
+        case .verification:
+            VerificationTabView(
+                workstreamID: workstreamID,
+                // Passed through exactly as it arrived. `workingDirectory` is
+                // `Workstream.workingDirectory(checkout:)` — `worktreePath ??
+                // checkout` — and `Worktree.HeadWatcher` is registered with
+                // `workstream.worktreePath`, so the string this view compares a
+                // `.worktreeGitActivity` notification against has to stay
+                // byte-identical to the one the watcher posts. Any
+                // normalization here (a trailing slash, `standardizedFileURL`,
+                // resolving a symlink) would silently stop the staleness banner
+                // updating on git activity, with no log and no fallback.
+                worktreePath: workingDirectory,
+                projectDirectory: projectDirectory,
+                projectName: projectName,
+                workstreamName: workstreamName,
+                declaredProcesses: declaredVerifyChecks,
+                unavailableReason: verifyUnavailableReason,
+                runner: verificationRunner
+            )
         case .agent:
             if sessionMode == .waitingForTools || appEnv.isDetecting {
                 terminalLoadingView(message: "Checking terminal tools...")
@@ -893,7 +937,16 @@ struct TerminalContainerView: View {
         }
     }
 
-    private var mainContent: some View {
+    /// The half of the chain that rebuilds the agent command and handles the
+    /// two tabs that are always there.
+    ///
+    /// Split out of `mainContent` for the reason `ContentView`'s
+    /// `selectionReceivingSplitView` is split out of its own base: the two
+    /// together are one modifier chain long enough that the Swift type-checker
+    /// gives up on it ("unable to type-check this expression in reasonable
+    /// time"), which is exactly what adding the `.toggleVerification` receiver
+    /// did. Adding a modifier to either half is fine; merging them back is not.
+    private var commandRebuildingContent: some View {
         mainLayout
             .onChange(of: tmuxMode) { rebuildClaudeCommand() }
             .onChange(of: bypassPermissions) { rebuildClaudeCommand() }
@@ -927,6 +980,12 @@ struct TerminalContainerView: View {
                 model.activeTab = .agent
                 PromptInjector.shared.inject(prompt.text, into: workstreamID)
             }
+    }
+
+    /// The half of the chain that opens, closes and reruns tabs. See
+    /// `commandRebuildingContent` for why this is two properties.
+    private var mainContent: some View {
+        commandRebuildingContent
             .onReceive(NotificationCenter.default.publisher(for: .rerunScript)) { _ in
                 guard isActive else { return }
                 guard resolvedRunCommand != nil else { return }
@@ -962,6 +1021,10 @@ struct TerminalContainerView: View {
             .onReceive(NotificationCenter.default.publisher(for: .toggleExecution)) { _ in
                 guard isActive else { return }
                 model.activateSingleton(.execution)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .toggleVerification)) { _ in
+                guard isActive else { return }
+                model.activateSingleton(.verification)
             }
             // On `mainContent`, which is mounted whatever the active tab is, so
             // the palette reaches this from the Agent tab and not only from
@@ -1037,6 +1100,20 @@ struct TerminalContainerView: View {
             }
             restoreRunState()
             syncProcessPolling()
+            // Here as well as in `refreshDevCommand`, and this is not
+            // belt-and-braces. `startWorkspace` — which is what calls
+            // `refreshDevCommand` on first mount — runs from a `.task` behind a
+            // 50ms sleep *and* a `Git.Operations.defaultBranch` hop, so until it
+            // lands `verifyUnavailableReason` is still its initial nil, which
+            // this tab reads as "everything is fine": an enabled Run over an
+            // empty check list. Observed, not theorised — a workstream whose
+            // repository-provided config was unapproved rendered exactly that.
+            // Nothing here touches git, so it can run at appear and close the
+            // window to a frame. (`Verification.Runner.start` calls
+            // `PhasePolicy.plan` itself and throws `Failure.unavailable`, which
+            // the tab renders, so even that frame explains itself rather than
+            // silently doing nothing.)
+            refreshVerificationAvailability()
         }
         .onDisappear {
             if isActive {
@@ -1051,6 +1128,24 @@ struct TerminalContainerView: View {
             surfaceCache.updateOcclusion(visibleSurfaceIDs: visibleSurfaceIDs)
             WorkspaceStateStore.save(RestorableWorkspaceTab(activeTab: model.activeTab), for: workstreamID)
             appEnv.refreshWorktreeState(for: workingDirectory, projectDirectory: projectDirectory)
+            // Every other input to this is a Settings write or an approval, and
+            // the one thing the user can change without touching either is the
+            // config itself. Someone who reads "This project declares no verify
+            // checks", adds a `verify:` namespace, and comes back would
+            // otherwise still see the old answer until a Settings toggle or a
+            // relaunch. Unconditional on the tab: a config change is just as
+            // invisible to the Execution pane's own state, and this is cheap
+            // enough not to need a guard on which tab was opened.
+            //
+            // `refreshConfigApproval` comes along because it answers the same
+            // question about the same file, and observed on screen: with only
+            // the verify half refreshed here, editing a worktree's config left
+            // the Info tab still reading "Approved" from mount time while the
+            // Verification tab correctly said the changed file needs approval
+            // again. Approval is keyed on content, so a stale file list is also
+            // the wrong thing to hand the approval sheet.
+            refreshConfigApproval()
+            refreshVerificationAvailability()
         }
         .onChange(of: model.isActiveEditorDirty) {
             guard isActive else { return }
@@ -1562,6 +1657,49 @@ struct TerminalContainerView: View {
             binary: binary,
             isEnabled: ProcessCompose.Settings.isEnabled
         )
+        // Same triggers, deliberately: the Verification tab answers to the
+        // integration switch and the binary path too, and Task 11's first
+        // version resolved them on `.onAppear` alone — so flipping the switch
+        // in Settings never reached the tab.
+        refreshVerificationAvailability()
+    }
+
+    /// Resolve the Verification tab's two availability inputs together.
+    ///
+    /// The decision itself is `verificationAvailability`'s, which asks
+    /// `PhasePolicy.plan(phase: .verify, …)` — the same gate
+    /// `Verification.Runner.start` calls — and is where the reasoning and the
+    /// tests live. This function's whole job is the four facts it feeds in.
+    ///
+    /// Called from `refreshDevCommand`, so every trigger that re-resolves the
+    /// Execution tab's equivalent state re-resolves this too; from the
+    /// container's `.onAppear` and from `.onChange(of: model.activeTab)`; and
+    /// from the two approval paths, because approval is one of the four facts
+    /// and `refreshDevCommand` has no reason to watch it — Start is never
+    /// gated by it.
+    private func refreshVerificationAvailability() {
+        // Located unconditionally, the way `refreshConfigApproval` does it and
+        // `processComposeConfig(for:)` deliberately does not: that one is
+        // narrowed to the *run*, so it disappears behind a per-workstream
+        // override — and verify is not the run.
+        let availability = verificationAvailability(
+            isEnabled: ProcessCompose.Settings.isEnabled,
+            config: ProcessCompose.Config.locate(
+                worktree: workingDirectory, projectDirectory: projectDirectory
+            ),
+            binary: ProcessCompose.Settings.resolveBinary(),
+            // The same closure `AsyncSetupService` and
+            // `Verification.Runner.start` hand `PhasePolicy.plan`, because it
+            // reaches the same gate. `requiresApproval` is folded in inside
+            // `verificationAvailability`, not here.
+            isApproved: {
+                ScriptTrust.isApproved(
+                    configFiles: $0.repositoryProvidedFiles, for: projectDirectory
+                )
+            }
+        )
+        declaredVerifyChecks = availability.declared
+        verifyUnavailableReason = availability.reason
     }
 
     /// Re-reads ports.yaml and resolves it for this worktree. A malformed file
@@ -1923,6 +2061,11 @@ struct TerminalContainerView: View {
         ScriptTrust.approve(configFiles: repositoryConfigFiles, for: projectDirectory)
         isReviewingConfig = false
         refreshConfigApproval()
+        // Approval is one of `PhasePolicy.plan`'s four facts, and it is the one
+        // `refreshDevCommand` has no reason to watch — Start is never gated by
+        // it. Without this the Verification tab would keep telling the user to
+        // approve a config they just approved.
+        refreshVerificationAvailability()
         // An unreadable file has no fingerprint, so `approve` was a no-op and
         // nothing has been trusted. Do not run anything on the strength of a
         // button press that did not take.
@@ -1968,6 +2111,7 @@ struct TerminalContainerView: View {
     private func revokeProcessConfig() {
         ScriptTrust.revokeConfigFiles(for: projectDirectory)
         refreshConfigApproval()
+        refreshVerificationAvailability()
     }
 
     private func terminalLoadingView(message: String) -> some View {
@@ -2054,6 +2198,7 @@ private struct SingletonQuickAdd {
     static let all: [SingletonQuickAdd] = [
         SingletonQuickAdd(tab: .changes, tooltip: NSLocalizedString("Show Changes", comment: "Tab bar button tooltip")),
         SingletonQuickAdd(tab: .execution, tooltip: NSLocalizedString("Show Execution", comment: "Tab bar button tooltip")),
+        SingletonQuickAdd(tab: .verification, tooltip: NSLocalizedString("Show Verification", comment: "Tab bar button tooltip")),
     ]
 }
 

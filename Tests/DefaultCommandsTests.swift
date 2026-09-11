@@ -43,6 +43,16 @@ final class DefaultCommandsTests: XCTestCase {
         wait(for: [posted], timeout: 1)
     }
 
+    func testVerificationCommandPostsToggleVerification() throws {
+        let commands = defaultPaletteCommands()
+        let verification = try XCTUnwrap(commands.first { $0.id == "tab.verification" })
+        let posted = expectation(forNotification: .toggleVerification, object: nil)
+
+        verification.action()
+
+        wait(for: [posted], timeout: 1)
+    }
+
     func testNewTerminalCommandPostsToggleTerminal() throws {
         let commands = defaultPaletteCommands()
         let terminal = try XCTUnwrap(commands.first { $0.id == "tab.newTerminal" })

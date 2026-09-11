@@ -228,7 +228,9 @@ struct ExecutionTabView: View {
             ) {
                 ProcessSelectionView(
                     workstreamID: workstreamID,
-                    declaredProcesses: declaredProcesses
+                    declaredProcesses: declaredProcesses,
+                    store: .execute,
+                    lastSelectedHelp: NSLocalizedString("At least one process has to start.", comment: "")
                 )
             }
 

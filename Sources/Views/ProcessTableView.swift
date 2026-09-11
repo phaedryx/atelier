@@ -148,6 +148,26 @@ func processSelectionOnLoad(stored: [String], declared: [String]) -> [String] {
     return surviving.isEmpty || surviving == Set(declared) ? [] : surviving.sorted()
 }
 
+/// Where a checklist's selection is stored.
+///
+/// Injected rather than reached for, because there are now two checklists over
+/// two namespaces: Execution's picks what `execute` starts, Verification's picks
+/// which checks run. One key for both would make checking `rspec` uncheck `bff`.
+struct ProcessSelectionStore: Sendable {
+    let read: @Sendable (UUID) -> [String]
+    let write: @Sendable ([String], UUID) -> Void
+
+    static let execute = ProcessSelectionStore(
+        read: { ProcessCompose.TableModel.selected(for: $0) },
+        write: { ProcessCompose.TableModel.setSelected($0, for: $1) }
+    )
+
+    static let verify = ProcessSelectionStore(
+        read: { Verification.selected(for: $0) },
+        write: { Verification.setSelected($0, for: $1) }
+    )
+}
+
 /// The height of one checklist row.
 ///
 /// Pinned rather than inferred. `processChecklistHeight` multiplies by it to
@@ -195,9 +215,14 @@ func processChecklistHeight(
 /// for choosing what to start was unreachable until after starting — the one
 /// moment it is no use.
 ///
-/// Rendered **before a run only**, which is `showsProcessSelection`'s call and
-/// documented there; a stale version of this comment claimed both states, and
-/// leaving it editable mid-run was the other half of the same defect.
+/// Rendered **before a run only**, for both callers — `showsProcessSelection`'s
+/// doc for Execution, `verificationShowsChecklist`'s for Verification. A stale
+/// version of this comment claimed Verification kept the list visible and
+/// merely `.disabled(isLive)` it during a run; that let a user click a box
+/// that could not take effect, since both runners read the stored selection
+/// only when their own Start/Run is pressed. Hiding it is the fix, and it is
+/// the same fix in both places even though the two runs look nothing alike —
+/// Execution's is a live process table, Verification's a headless one-shot.
 ///
 /// The choices come from the config rather than from the live API for the same
 /// reason it moved out of the table: before Start there is nothing running to
@@ -205,6 +230,8 @@ func processChecklistHeight(
 struct ProcessSelectionView: View {
     let workstreamID: UUID
     let declaredProcesses: [String]
+    let store: ProcessSelectionStore
+    let lastSelectedHelp: String
 
     @State private var selection: Set<String> = []
 
@@ -247,9 +274,7 @@ struct ProcessSelectionView: View {
                     .toggleStyle(.checkbox)
                     .frame(height: processChecklistRowHeight)
                     .disabled(isLastSelected(name))
-                    .help(isLastSelected(name)
-                        ? NSLocalizedString("At least one process has to start.", comment: "")
-                        : "")
+                    .help(isLastSelected(name) ? lastSelectedHelp : "")
                 }
             }
         }
@@ -258,13 +283,13 @@ struct ProcessSelectionView: View {
         .fixedSize(horizontal: true, vertical: false)
         .onAppear {
             let cleaned = processSelectionOnLoad(
-                stored: ProcessCompose.TableModel.selected(for: workstreamID),
+                stored: store.read(workstreamID),
                 declared: declaredProcesses
             )
             selection = Set(cleaned)
             // Written back, not just filtered for display: otherwise Start
             // keeps reading the stale name straight out of UserDefaults.
-            ProcessCompose.TableModel.setSelected(cleaned, for: workstreamID)
+            store.write(cleaned, workstreamID)
         }
     }
 
@@ -292,7 +317,7 @@ struct ProcessSelectionView: View {
                 guard let next = processSelectionAfterToggling(
                     name, on: isOn, current: selection, declared: declaredProcesses
                 ) else { return }
-                store(next)
+                persist(next)
             }
         )
     }
@@ -304,8 +329,8 @@ struct ProcessSelectionView: View {
         effectiveSelection == [name]
     }
 
-    private func store(_ canonical: [String]) {
+    private func persist(_ canonical: [String]) {
         selection = Set(canonical)
-        ProcessCompose.TableModel.setSelected(canonical, for: workstreamID)
+        store.write(canonical, workstreamID)
     }
 }

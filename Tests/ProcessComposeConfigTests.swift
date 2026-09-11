@@ -417,6 +417,53 @@ final class ProcessComposeConfigTests: XCTestCase {
         XCTAssertEqual(config.declaredProcesses(in: "execute"), [])
     }
 
+    /// An override with no `processes:` key at all is legal process-compose —
+    /// it may set only `environment:` or `version:` — and must not make the
+    /// whole config "unknown". It used to: `declaredProcesses` returned nil,
+    /// which the Verification tab renders as "this project's process-compose
+    /// files could not be parsed, so its verify checks are unknown" and
+    /// `Verification.Runner.start` throws, for a config process-compose runs
+    /// and `namespacePresence` calls `.present`. The Execution checklist
+    /// silently offered no processes for the same shape.
+    func testDeclaredProcessesSkipsAnOverrideWithNoProcessesKey() throws {
+        try write("process-compose.yaml", in: worktree, contents: """
+        processes:
+          rspec:   { namespace: verify, command: "true" }
+          rubocop: { namespace: verify, command: "true" }
+          bff:     { namespace: execute, command: "true" }
+        """)
+        try write("process-compose.override.yml", in: worktree, contents: """
+        version: "0.5"
+        environment:
+          - "RAILS_ENV=test"
+        """)
+        let config = try XCTUnwrap(
+            ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path)
+        )
+        // The override really is one of the files that will be loaded, so this
+        // is the shape that was broken and not a config the override misses.
+        XCTAssertEqual(config.loadedFiles.count, 2)
+
+        XCTAssertEqual(config.declaredProcesses(in: "verify"), ["rspec", "rubocop"])
+        XCTAssertEqual(config.declaredProcesses(in: "execute"), ["bff"])
+    }
+
+    /// The degenerate sibling of the case above: an override that is empty, or
+    /// holds nothing but a comment. A placeholder a project has not filled in
+    /// yet declares nothing; it is not a file Atelier failed to read.
+    func testDeclaredProcessesSkipsAnEmptyOverride() throws {
+        try write("process-compose.yaml", in: worktree, contents: """
+        processes:
+          rspec: { namespace: verify, command: "true" }
+        """)
+        try write("process-compose.override.yml", in: worktree, contents: "# nothing overridden yet\n")
+        let config = try XCTUnwrap(
+            ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path)
+        )
+
+        XCTAssertEqual(config.declaredProcesses(in: "verify"), ["rspec"])
+    }
+
     /// nil, never `[]`. An empty list means "this namespace has no processes"
     /// and would silently offer no choices; the caller has to be able to tell
     /// that apart from a file it could not read.

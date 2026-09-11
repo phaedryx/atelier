@@ -1,6 +1,7 @@
 // ABOUTME: Git operations for project and workstream management.
 // ABOUTME: Handles repo detection, init, worktree create/remove, and repo info.
 
+import CryptoKit
 import Foundation
 import OSLog
 
@@ -415,8 +416,16 @@ extension Git {
             let untracked = run(args: ["ls-files", "--others", "--exclude-standard"], in: worktreePath) ?? ""
             let stat = tracked + untracked + dirtyContentHashes(at: worktreePath)
 
-            // Not cryptographic — just enough to detect changes between tab visits.
-            return "\(head)|\(stat.count)|\(stat.hashValue)"
+            // Not cryptographic in purpose — but SHA-256 rather than `hashValue`,
+            // because `String.hashValue` is seeded per process. The Verification tab
+            // persists a run's stamp and compares it after a relaunch; a per-process
+            // seed would mark every restored result stale. ChangesView only ever tests
+            // two fingerprints for equality, so a stable digest is strictly better
+            // there too.
+            let digest = SHA256.hash(data: Data(stat.utf8))
+                .map { String(format: "%02x", $0) }
+                .joined()
+            return "\(head)|\(stat.count)|\(digest)"
         }
 
         /// `git hash-object` over every path whose working-tree content is not already

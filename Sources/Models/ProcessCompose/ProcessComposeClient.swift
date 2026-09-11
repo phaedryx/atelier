@@ -42,6 +42,10 @@ extension ProcessCompose {
         func start(_ name: String) async throws
         func stop(_ name: String) async throws
         func restart(_ name: String) async throws
+
+        /// The tail of one process's output, newest last. stderr is interleaved, as
+        /// process-compose captures both streams into one log.
+        func logs(name: String, tail: Int) async throws -> [String]
     }
 
     struct Client: ProcessCompose.Controlling {
@@ -104,6 +108,21 @@ extension ProcessCompose {
             }
         }
 
+        private struct LogsEnvelope: Decodable {
+            let logs: [String]
+        }
+
+        /// Wrapped like `decodeProcesses`, and for the same reason: a raw
+        /// `DecodingError` escaping here would put a decoder's own message in
+        /// front of a user or an agent instead of this file's localized text.
+        static func decodeLogs(_ data: Data) throws -> [String] {
+            do {
+                return try JSONDecoder().decode(LogsEnvelope.self, from: data).logs
+            } catch {
+                throw ClientError.malformedResponse
+            }
+        }
+
         func processes() async throws -> [ProcessCompose.ProcessEntry] {
             try processesSync()
         }
@@ -129,6 +148,16 @@ extension ProcessCompose {
 
         func restart(_ name: String) async throws {
             _ = try request(method: "POST", path: "/process/restart/\(escaped(name))")
+        }
+
+        /// `GET /process/logs/<name>/<endOffset>/<limit>`.
+        ///
+        /// Measured against v1.122.0: `endOffset: 0` means *from the end*, and
+        /// `limit` is how many lines back to take — `0/3` returns the last three.
+        /// The bare `/process/logs/<name>` route 404s, so both segments are always
+        /// sent.
+        func logs(name: String, tail: Int) async throws -> [String] {
+            try Self.decodeLogs(request(method: "GET", path: "/process/logs/\(escaped(name))/0/\(tail)"))
         }
 
         /// Percent-encode one path segment.

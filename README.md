@@ -59,13 +59,14 @@ git worktree add "$def"
 ## Configuration
 
 Turn on **Enable process-compose** in Settings first — it is off by default, and
-nothing below runs until it is on, including the Execution tab's Start button.
+nothing below runs until it is on, including the Execution tab's Start button
+and the Verification tab's Run button.
 
 ### What Atelier reads
 
 | File | Where Atelier looks | What it holds |
 |------|---------------------|---------------|
-| `process-compose.yaml` | the worktree, then the project directory | the commands, in four namespaces |
+| `process-compose.yaml` | the worktree, then the project directory | the commands, in five namespaces |
 | `process-compose.override.yml` | the worktree | per-worktree additions to a project-directory config |
 | `ports.yml` (or `ports.yaml`) | the project directory only | the port variables Atelier supplies |
 
@@ -102,6 +103,7 @@ process-compose up -f ../process-compose.yaml    # from inside a worktree
 | `prepare` | Before every Start, to completion; a failure stops `execute` |
 | `execute` | The long-lived stack, shown in the Execution tab's process table |
 | `dispose` | Once, when a workstream is archived |
+| `verify` | On demand, from the Verification tab; never chained into Start |
 
 ### A worked example
 
@@ -155,7 +157,7 @@ processes:
       # without Atelier. Under Atelier the names ports.yml declares are always
       # set, so a fallback that fires means ports.yml misspelled or forgot one —
       # which would otherwise be invisible, and would land every worktree on the
-      # same repo default. ATELIER_WORKTREE_DIR is set in all four namespaces
+      # same repo default. ATELIER_WORKTREE_DIR is set in all five namespaces
       # under Atelier and in no plain shell, so it is what tells the two apart.
       # Add a line here for each port ports.yml gains, or the new one is exactly
       # the case this guard was written to catch.
@@ -257,7 +259,7 @@ What it cannot do is tell "no Atelier" from "declared it wrong". A name
 repo default, in every worktree at once: exactly the collision the mechanism
 exists to prevent, arrived at silently. So `preflight` asserts the fallbacks go
 *unused* whenever Atelier is running the stack, branching on
-`ATELIER_WORKTREE_DIR` because it is set in all four namespaces under Atelier and
+`ATELIER_WORKTREE_DIR` because it is set in all five namespaces under Atelier and
 in no plain shell. Keep the defaults; make them prove they were unnecessary.
 
 An `assigned` port gets its own number per worktree; a `fixed: 4000` one is that
@@ -265,10 +267,10 @@ number everywhere, for values registered off the machine such as an OAuth
 redirect URI. At most one port may set `browser: true` — that is the one the
 embedded browser opens, and here it is the bff, because the bff is what serves
 the app. Pointing it at Vite gets you the dev server without the API. Every
-declared name is exported to every terminal surface and to all four namespaces,
+declared name is exported to every terminal surface and to all five namespaces,
 alongside `ATELIER_PROJECT_DIR`, `ATELIER_WORKTREE_DIR` and the rest of the
-`ATELIER_*` set, so `bootstrap` and `dispose` see the same environment `prepare`
-and `execute` do.
+`ATELIER_*` set, so `bootstrap`, `dispose` and `verify` see the same environment
+`prepare` and `execute` do.
 
 ### Three things that will bite you
 
@@ -312,10 +314,11 @@ binary — not the directory holding it.
 
 ### Approval, and when there is no config
 
-`bootstrap` and `dispose` run unattended, so a config that came with the
-repository has to be approved first, and again whenever it changes. A config you
-placed in the project directory by hand is never asked about — approval is gated
-by *where the file is*, not what is in it. `execute` is never gated because it is
+`bootstrap`, `dispose` and `verify` all run with their output captured rather
+than shown in a terminal, so a config that came with the repository has to be
+approved first, and again whenever it changes. A config you placed in the
+project directory by hand is never asked about — approval is gated by *where
+the file is*, not what is in it. `execute` is never gated because it is
 *attended*: you press Start, the stack's output lands in a terminal surface in
 front of you, and Stop is right there. The Execution tab shows which files are
 in play, not the command Start runs.
