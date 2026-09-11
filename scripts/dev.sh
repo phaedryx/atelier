@@ -23,6 +23,21 @@ ensure_ghostty_resources() {
   fi
 }
 
+# The version a local Release build reports. `--match` keeps the answer on
+# release tags only, so a stray tag cannot become the version; `--dirty` marks a
+# build made over uncommitted changes, which is otherwise indistinguishable from
+# the commit it was built on. With no matching tag in the history at all
+# `describe` fails, and the sha alone is not a version set-version.sh accepts.
+release_version() {
+  local described
+  described="$(git describe --tags --match 'v[0-9]*.[0-9]*.[0-9]*' --dirty 2>/dev/null || true)"
+  if [ -n "$described" ]; then
+    echo "${described#v}"
+  else
+    echo "0.0.0-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  fi
+}
+
 ensure_monaco_editor() {
   if [ ! -f "$MONACO_OUTPUT" ]; then
     echo "info: Monaco editor not built, running scripts/build-editor.sh..."
@@ -114,6 +129,23 @@ case "${1:-build}" in
     # symbol -- and would ship for no one even if it linked.
     ensure_ghostty_resources
     ensure_monaco_editor
+    # Stamp the version the same way the release workflow does, but derived from
+    # git rather than from a tag that does not exist yet. A local Release build is
+    # a build someone installs and then has to identify later, and the committed
+    # placeholder makes every one of them claim 0.0.0-dev. `git describe` says
+    # what it actually is -- `0.2.1-76-gbe4598a`, or `0.2.1-dirty` for a build
+    # made over uncommitted changes -- and cannot be mistaken for a release.
+    #
+    # project.yml is restored from a copy rather than with `git checkout --`,
+    # because this runs often enough that discarding an uncommitted edit to it
+    # would be a real loss. The trap also covers set-version.sh rejecting the
+    # version, which exits non-zero under `set -e` with the file half-written.
+    VERSION="$(release_version)"
+    PROJECT_YML_BACKUP="$(mktemp)"
+    cp project.yml "$PROJECT_YML_BACKUP"
+    trap 'cp "$PROJECT_YML_BACKUP" project.yml; rm -f "$PROJECT_YML_BACKUP"' EXIT
+    echo "==> Stamping version $VERSION"
+    ./scripts/set-version.sh "$VERSION" >/dev/null
     xcodegen generate
     xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
       -derivedDataPath "$RELEASE_DIR" -clonedSourcePackagesDirPath "$SPM_CACHE" \
