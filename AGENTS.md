@@ -1135,7 +1135,6 @@ Current shortcuts:
 - Use "workstream" for the sub-units of a project.
 
 ## Task Tracking
-Bugs, features, and deferred work go in GitHub issues at
-https://github.com/phaedryx/atelier/issues — there are templates for bug
-reports, feature requests, and fix prompts under `.github/ISSUE_TEMPLATE/`.
-There is no `TODO.md`; do not create one.
+There is no tracker. Bugs, features and deferred work are raised in
+conversation and acted on there — do not open a GitHub issue, and do not create
+a `TODO.md` or any other list file to hold them.
