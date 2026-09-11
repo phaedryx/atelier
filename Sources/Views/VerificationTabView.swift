@@ -314,11 +314,18 @@ struct VerificationTabView: View {
     @State private var stalenessRefreshPending = false
 
     var body: some View {
-        Group {
+        // One read of `currentRun` per body evaluation, threaded through both
+        // the content subviews and the run-appearing trigger below. That getter
+        // falls through to `Verification.Store.latest` whenever there is no live
+        // run — a UserDefaults read plus a JSON decode — and it used to be
+        // evaluated twice per body: once here for `.onChange(of:)` and once
+        // inside `content`.
+        let run = currentRun
+        return Group {
             if let unavailableReason {
                 unavailableView(reason: unavailableReason)
             } else {
-                content
+                content(run: run)
             }
         }
         .onAppear {
@@ -335,7 +342,7 @@ struct VerificationTabView: View {
         // instant it arrived. It also covers a run started after uncommitted
         // edits that caused no git-directory activity, where the last computed
         // stamp predates the edits and a current result would read as stale.
-        .onChange(of: currentRun?.id) {
+        .onChange(of: run?.id) {
             refreshStaleness()
         }
         // A run *ending*, which is the case the trigger above cannot answer: a
@@ -360,15 +367,12 @@ struct VerificationTabView: View {
         runner.isLive(workstreamID)
     }
 
-    private var content: some View {
-        // Read once per render and threaded through, rather than each of
-        // `failureDetailBanner`/`actionRow`/`resultRows` re-reading
-        // `currentRun`: with no live run, that getter falls through to
-        // `Verification.Store.latest`, a UserDefaults read plus a JSON
-        // decode, and three reads of an unchanging value in one render pass
-        // buys nothing.
-        let run = currentRun
-        return VStack(alignment: .leading, spacing: 12) {
+    /// The run is passed in rather than read here, so `body` reads it once for
+    /// the whole evaluation — see the note there. Each of
+    /// `failureDetailBanner`/`actionRow`/`resultRows` would otherwise re-read
+    /// `currentRun`, and with no live run that getter goes to UserDefaults.
+    private func content(run: Verification.Run?) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
             if let detail = run?.failureDetail {
                 failureDetailBanner(detail)
             }

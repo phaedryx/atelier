@@ -48,9 +48,40 @@ extension Verification {
         /// and the run loop, the single owner, acts on it.
         private var stopRequested: Set<UUID> = []
 
+        /// Workstreams whose run is sealed but whose teardown has not returned.
+        ///
+        /// **`isLive` has to stay true across this window, and the reason is a
+        /// socket, not a nicety.** `seal` inserts into `sealedRunIDs`, so
+        /// without this the Run button re-enables while `execute` is still
+        /// awaiting `spawner.shutDown` — and that teardown is `down -u <socket>`
+        /// at `Timeout.local` followed by unlinking the socket *file*. On the
+        /// Stop path `down` has live checks to terminate, so it is slow enough
+        /// for a second `start` — `PhaseEnvironment` (which shells out to git),
+        /// its own pre-spawn `down`, a shell spawn — to bind the same path
+        /// first. The old `removeItem` then deletes the new run's socket from
+        /// under its living server: every poll throws `.notRunning` so no rows
+        /// and no logs ever appear, `PhaseExecutor` waits out its whole budget
+        /// or calls it `.serverGone`, the loop's own teardown early-returns on
+        /// the missing file, and `stopAllServers` enumerates socket *files* at
+        /// quit so it cannot find it either — a suite left running against the
+        /// worktree's ports until `Timeout.suite` kills it, while the tab says
+        /// the run failed to start its checks.
+        ///
+        /// The cost is a Run button disabled for the length of the teardown
+        /// after results are already on screen. That is the trade, and it is
+        /// the cheap side of it. **Not** a second `shutDown` call: this type has
+        /// exactly one, in `execute`, and the single-owner rule is what the
+        /// `shouldStop` doc and three loop tests defend.
+        private var tearingDown: Set<UUID> = []
+
         /// Fired once per finished run, on the main actor. The IPC layer's
         /// completion message hangs off this; nothing else may assume it is the
         /// only subscriber.
+        ///
+        /// Reserved, not dead: nothing on this branch sets it. Its consumer is
+        /// the `VerificationControlling` adapter owned by the
+        /// `verification-ipc-tools` branch, which is not merged — the tab reads
+        /// `runs` directly and needs no callback.
         var onFinish: ((Verification.Run) -> Void)?
 
         /// Everything one verify run needs from process-compose, resolved by
@@ -194,11 +225,19 @@ extension Verification {
             return .success(requested)
         }
 
+        /// The run with this id, whichever workstream it belongs to.
+        ///
+        /// Reserved, not dead: nothing on this branch calls it in production.
+        /// It exists for `check_verification`, whose handler lives on the
+        /// unmerged `verification-ipc-tools` branch and is where the caller is
+        /// confined to its own workstream — see `makeRunID` on why that scoping
+        /// is not this type's. The tab looks runs up by workstream instead.
         func run(id: String) -> Verification.Run? {
             runs.values.first { $0.id == id }
         }
 
-        /// Whether this workstream has a run that has not been sealed.
+        /// Whether this workstream has a run that has not been sealed, **or one
+        /// that is sealed and still tearing its control server down**.
         ///
         /// **The only correct answer to "is a run live here", and the reason it
         /// is exported.** `Run.isFinished` is not that answer: the run loop
@@ -208,7 +247,16 @@ extension Verification {
         /// `<id>-verify.sock` under the first. Everything that gates on liveness
         /// — this type's own refusals, the tab's Run button, the IPC handler —
         /// reads this.
+        ///
+        /// The second clause is the same property one step later in the run's
+        /// life: sealing is not the end of the socket's life, only of the
+        /// result's, so a run that has been sealed still owns
+        /// `<id>-verify.sock` until its teardown returns. See `tearingDown` for
+        /// what a start admitted in that window does to the run that follows it.
         func isLive(_ workstreamID: UUID) -> Bool {
+            if tearingDown.contains(workstreamID) {
+                return true
+            }
             guard let run = runs[workstreamID] else { return false }
             return !sealedRunIDs.contains(run.id)
         }
@@ -371,11 +419,19 @@ extension Verification {
                 throw Failure.unavailable(reason)
             }
 
-            // `declaredProcesses` returns nil when a file could not be parsed —
-            // never fold that into an empty list. Doing so would report a
-            // malformed process-compose.yaml as "this project declares no verify
-            // processes", the same message a project with genuinely no verify
-            // checks gets, which is false and the only diagnostic this path gives.
+            // `declaredProcesses` returns nil when one of the loaded files could
+            // not be read or decoded — never fold that into an empty list. Doing
+            // so would report a malformed process-compose.yaml as "this project
+            // declares no verify processes", the same message a project with
+            // genuinely no verify checks gets, which is false and the only
+            // diagnostic this path gives.
+            //
+            // nil is narrower than it looks, and deliberately so: a file with no
+            // `processes:` key is skipped rather than making the whole config
+            // unknown, because an override setting only `environment:` or
+            // `version:` is legal process-compose and `namespacePresence` calls
+            // such a config `.present`. This guard used to refuse an ordinary
+            // base-plus-override pair outright.
             guard let declared = config.declaredProcesses(
                 in: ProcessCompose.Phase.verify.namespace
             ) else {
@@ -433,6 +489,24 @@ extension Verification {
         /// why every failure in the tail is swallowed into a default rather than
         /// guarded against.
         ///
+        /// The teardown is also the reason `isLive` stays true past `seal`:
+        /// `tearingDown` is inserted before sealing and removed after
+        /// `shutDown` returns, so nothing can be admitted onto this socket
+        /// while it is still being released. That is bookkeeping only — it adds
+        /// no second teardown.
+        ///
+        /// **This function performs no gate of its own.** It spawns
+        /// repository-provided process-compose commands with captured output
+        /// and no TTY, and the only thing standing between that and
+        /// `PhasePolicy.plan` is that `start` is its sole production caller:
+        /// `start` answers the four preconditions — integration enabled, a
+        /// located config, a resolvable binary, approval of every
+        /// repository-provided file — and hands the results here in a
+        /// `SpawnRequest`. Any future caller, the parked IPC adapter included,
+        /// **must enter through `start`**; calling this directly runs a
+        /// repository's YAML unattended and ungated, which is exactly what that
+        /// one gate exists to prevent.
+        ///
         /// Internal rather than private so a test can drive it with a seeded run
         /// and a stub spawner; `start` is its only production caller.
         func execute(_ request: SpawnRequest, runID: String) async {
@@ -481,13 +555,23 @@ extension Verification {
             if entries.isEmpty, let outcome = state.outcome, let detail = Self.failureDetail(for: outcome) {
                 runs[workstreamID]?.failureDetail = detail
             }
+            // Before `seal`, because `seal` is what makes `isLive` false by
+            // inserting into `sealedRunIDs` — and this workstream's socket is
+            // still this run's until the teardown below returns. See
+            // `tearingDown`. Still exactly one `shutDown` call, still this
+            // loop's, and still after `seal`.
+            tearingDown.insert(workstreamID)
             seal(runID: runID, from: entries, stopped: stopped)
-            // Cleared here, next to where it is read, rather than inside `seal`:
-            // a `seal` that returns nil would otherwise leave the flag set and
-            // the workstream's *next* run would break out of its poll loop on
-            // its first pass.
-            stopRequested.remove(workstreamID)
             await spawner.shutDown(request)
+            // Both cleared after the teardown rather than inside `seal`: a
+            // `seal` that returns nil would otherwise leave `stopRequested`
+            // set and the workstream's *next* run would break out of its poll
+            // loop on its first pass. After, not before, because `isLive` is
+            // true for the whole teardown, so `stop` can still be admitted
+            // while it runs and must not leave a flag behind either. Nothing
+            // reads `stopRequested` between here and the final snapshot above.
+            stopRequested.remove(workstreamID)
+            tearingDown.remove(workstreamID)
 
             // Only now, and only to log it: on the stop path the spawn is still
             // in flight until the teardown above ends its project, and leaving

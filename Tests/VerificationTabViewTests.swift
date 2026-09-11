@@ -247,9 +247,17 @@ final class VerificationTabViewTests: XCTestCase {
     /// The same for a config that does not parse: `plan` never reads it, so it
     /// still says `.run`. Its wording must differ from the empty case above —
     /// the two are not the same fact, and `Runner.start` does not conflate them.
+    ///
+    /// The fixture has to be YAML that genuinely fails to *decode*.
+    /// `processes:` given as a sequence is that; a mapping of unrelated keys is
+    /// not — it decodes fine with no `processes:` key, which
+    /// `Config.declaredProcesses` now skips rather than calling the whole config
+    /// unknown, because that is the shape of a legal override setting only
+    /// `environment:` or `version:`. This test used such a mapping and passed
+    /// for the wrong reason.
     func test_availability_refusesAnUnparseableConfigWithItsOwnWording() throws {
         let parseFailure = try verificationAvailability(
-            isEnabled: true, config: makeConfig(yaml: "this: is not a process-compose config\n"),
+            isEnabled: true, config: makeConfig(yaml: "processes: [this, is, not, a, mapping]\n"),
             binary: Self.binaryPath, isApproved: { _ in true }
         )
         let noneDeclared = try verificationAvailability(
@@ -259,6 +267,24 @@ final class VerificationTabViewTests: XCTestCase {
         XCTAssertNotNil(parseFailure.reason)
         XCTAssertEqual(parseFailure.declared, [])
         XCTAssertNotEqual(parseFailure.reason, noneDeclared.reason)
+    }
+
+    /// A config with no `processes:` key at all declares nothing; it is not a
+    /// parse failure, and must not be reported as one. The tab used to say "this
+    /// project's process-compose files could not be parsed" for it — for the
+    /// override half of a perfectly ordinary base-plus-override pair, which
+    /// `namespacePresence` calls `.present`.
+    func test_availability_treatsAMissingProcessesKeyAsDeclaringNothing() throws {
+        let noProcessesKey = try verificationAvailability(
+            isEnabled: true, config: makeConfig(yaml: "version: \"0.5\"\nenvironment:\n  - A=b\n"),
+            binary: Self.binaryPath, isApproved: { _ in true }
+        )
+        let noneDeclared = try verificationAvailability(
+            isEnabled: true, config: makeConfig(yaml: Self.noChecks),
+            binary: Self.binaryPath, isApproved: { _ in true }
+        )
+        XCTAssertEqual(noProcessesKey.declared, [])
+        XCTAssertEqual(noProcessesKey.reason, noneDeclared.reason)
     }
 
     /// **The biconditional this whole split rests on.** Across every

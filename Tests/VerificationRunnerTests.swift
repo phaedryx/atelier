@@ -519,6 +519,82 @@ final class VerificationRunnerTests: XCTestCase {
         XCTAssertEqual(shutDowns, 1, "Stop must not add a second teardown of its own")
     }
 
+    /// **`isLive` must not go false while the teardown is still in flight.**
+    /// `seal` inserts into `sealedRunIDs`, so without `tearingDown` the Run
+    /// button re-enables the moment results appear — while `execute` is still
+    /// awaiting `shutDown`, which is `down -u <socket>` at `Timeout.local`
+    /// followed by unlinking the socket file. A Run pressed in that window
+    /// binds the same path, and the old teardown's `removeItem` then deletes
+    /// the new run's socket from under its living server: no rows, no logs,
+    /// nothing that can end it, and a suite holding the worktree's ports until
+    /// `Timeout.suite`. "Press Stop, read the results, press Run again" is an
+    /// ordinary sequence, and the stop path is where `down` is slow.
+    ///
+    /// Sampled from inside `shutDown` because the window is not observable
+    /// from outside one, exactly as the sealing order is not.
+    func test_execute_staysLiveUntilTheTeardownReturns() async {
+        let id = UUID()
+        addTeardownBlock { Verification.Store.clear(for: id) }
+        let witness = TeardownWitness(workstreamID: id)
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: [.list([entry("rspec", status: "Running", isRunning: true, exitCode: 0)])],
+            latency: .zero
+        )
+        // Nil: the namespace is still running when the loop seals — the stop
+        // path, which is the one where the teardown has live checks to kill.
+        let spawner = StubSpawner(
+            client: client, finishAfter: nil, atShutDown: { witness.observe() }
+        )
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        witness.runner = runner
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
+
+        await drive(runner, request(workstreamID: id, checks: ["rspec"]), runID: "abcd1234") {
+            try? await Task.sleep(for: .milliseconds(30))
+            runner.stop(workstreamID: id)
+        }
+
+        XCTAssertEqual(witness.storedAtTeardown?.id, "abcd1234", "sealed before the teardown ran")
+        XCTAssertEqual(
+            witness.isLiveAtTeardown, true,
+            "a sealed run still owns <id>-verify.sock until its teardown returns"
+        )
+        XCTAssertFalse(runner.isLive(id), "and is live no longer once it has")
+        // The whole point of doing this with a flag rather than a second call.
+        let shutDowns = await spawner.shutDowns
+        XCTAssertEqual(shutDowns, 1, "still exactly one teardown, and still the run loop's")
+    }
+
+    /// A Stop that arrives *during* the teardown is admitted, because `isLive`
+    /// is true there — and must not survive into this workstream's next run,
+    /// which would break out of its poll loop on the first pass it sees a
+    /// server. That is why both flags clear after `shutDown` returns.
+    func test_execute_aStopDuringTeardownDoesNotLeakIntoTheNextRun() async {
+        let id = UUID()
+        addTeardownBlock { Verification.Store.clear(for: id) }
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: [.list([entry("rspec", status: "Completed", isRunning: false, exitCode: 0)])],
+            latency: .zero
+        )
+        let witness = TeardownWitness(workstreamID: id)
+        let spawner = StubSpawner(
+            client: client, finishAfter: .milliseconds(10), atShutDown: { witness.requestStop() }
+        )
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        witness.runner = runner
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
+
+        await drive(runner, request(workstreamID: id, checks: ["rspec"]), runID: "abcd1234")
+
+        // The second run must poll normally rather than sealing itself on its
+        // first pass, which is what a leaked stop flag would do.
+        runner.seedRunForTesting(workstreamID: id, runID: "bcde2345", checks: ["rspec"])
+        await drive(runner, request(workstreamID: id, checks: ["rspec"]), runID: "bcde2345")
+        XCTAssertEqual(runner.run(id: "bcde2345")?.wasStopped, false)
+    }
+
     /// A spawn that never binds a socket (bad binary path, config the daemon
     /// itself refuses) leaves every check `.notRun` — nothing in any one
     /// check's `output` explains that. `failureDetail` is the only place the
@@ -664,6 +740,7 @@ private final class TeardownWitness {
     weak var runner: Verification.Runner?
     var runAtTeardown: Verification.Run?
     var storedAtTeardown: Verification.Run?
+    var isLiveAtTeardown: Bool?
 
     init(workstreamID: UUID) {
         self.workstreamID = workstreamID
@@ -672,6 +749,14 @@ private final class TeardownWitness {
     func observe() {
         runAtTeardown = runner?.runs[workstreamID]
         storedAtTeardown = Verification.Store.latest(for: workstreamID)
+        isLiveAtTeardown = runner?.isLive(workstreamID)
+    }
+
+    /// A Stop asked for from inside the teardown. `tearingDown` keeps `isLive`
+    /// true there, so `stop` is admitted — the flag it sets must not outlive
+    /// this run.
+    func requestStop() {
+        runner?.stop(workstreamID: workstreamID)
     }
 }
 

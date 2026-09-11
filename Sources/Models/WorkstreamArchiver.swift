@@ -123,8 +123,9 @@ extension Workstream {
             return protected.contains(resolved) ? nil : path
         }
 
-        /// Purges a workstream by running its `dispose` phase, removing the git worktree from disk,
-        /// deleting the local branch, updating the default branch to latest,
+        /// Purges a workstream by stopping everything still running in its worktree — the dev
+        /// stack, a bootstrap, a verify run — then running its `dispose` phase, removing the git
+        /// worktree from disk, deleting the local branch, updating the default branch to latest,
         /// killing tmux sessions, and evicting terminal surfaces from the cache.
         @MainActor
         static func purge(
@@ -188,6 +189,41 @@ extension Workstream {
                     // reason.
                     await withCheckedContinuation { continuation in
                         DispatchQueue.global(qos: .utility).async {
+                            // A verify run is the same shape as the dev stack and
+                            // as a bootstrap: repository-provided processes
+                            // executing in this worktree, holding this worktree's
+                            // ports, behind a control server that `--keep-project`
+                            // deliberately outlives them. So it needs the same
+                            // treatment — stopped before `dispose` runs beside it
+                            // and long before `git worktree remove --force`
+                            // deletes the tree under a running rspec. Here rather
+                            // than beside `cancelBootstrap` because `shutDown`
+                            // blocks for up to `Timeout.local`, and this queue is
+                            // where the blocking work belongs; still before
+                            // `runDispose`, which is the ordering that matters.
+                            //
+                            // `PhaseExecutor.shutDown` directly, not
+                            // `Verification.Runner.stop`: the runner is
+                            // view-held state neither `purge` call site would
+                            // have to hand over, `stop` only sets a flag its run
+                            // loop acts on once the control server has answered
+                            // — so a run still spawning would not be stopped at
+                            // all — and it returns before the teardown lands.
+                            // This is `cancelBootstrap`'s own shape, one call
+                            // above. It is not the second racing teardown the
+                            // runner's single-owner rule forbids: nothing will
+                            // rebind this socket, because the workstream is being
+                            // destroyed, and whichever of the two teardowns runs
+                            // second finds the socket file gone and returns.
+                            if let composeBinary {
+                                ProcessCompose.PhaseExecutor.shutDown(
+                                    binary: composeBinary,
+                                    socketPath: ProcessCompose.PhaseRunner.socketPath(
+                                        for: workstreamID, phase: .verify
+                                    ),
+                                    workingDirectory: worktreePath ?? projectDir
+                                )
+                            }
                             if let worktreePath {
                                 // Before the worktree is removed:
                                 // `ProcessCompose.Config.locate` reads the worktree, and
@@ -217,6 +253,15 @@ extension Workstream {
                     // else called this, so `states` grew by one per archive for the
                     // life of the process.
                     await AsyncSetupService.shared.clearState(for: workstreamID)
+                    // Same reason, and last on purpose: the verify teardown above
+                    // makes the run loop seal, and `seal` writes the run to this
+                    // very key. Clearing it beside that teardown would be
+                    // overwritten a moment later. A seal that lands after even
+                    // this — dispose plus `worktree remove` is a long way for it
+                    // to be behind — would still leave the key, which is a
+                    // stranded UserDefaults entry for a workstream that no longer
+                    // exists and nothing else.
+                    Verification.Store.clear(for: workstreamID)
                 }
             }
             surfaceCache.removeWorkstreamSurfaces(for: workstreamID)

@@ -75,8 +75,12 @@ extension ProcessCompose {
         /// `process-compose.yaml` is never read. Naming the files closes the class,
         /// not just that instance.
         ///
-        /// `loadedFiles` existence-filters, so the "a missing `-f` target is fatal"
-        /// hazard cannot be reached through it.
+        /// `loadedFiles` does **not** existence-filter: it always includes `path`,
+        /// the config `locate` found by checking it exists, and only the override
+        /// half goes through `firstPresent`. So a `-f` target that has since been
+        /// deleted is named and process-compose treats that as fatal — a window
+        /// nothing here closes, and a claim to the contrary once stood in this
+        /// doc block.
         ///
         /// `keepProject` holds the control server open after every process in the
         /// namespace has finished, so a caller can read their exit codes before

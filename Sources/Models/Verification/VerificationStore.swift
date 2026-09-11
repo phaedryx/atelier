@@ -49,6 +49,12 @@ extension Verification {
             }
         }
 
+        /// Drops a workstream's stored run. `Workstream.Archiver.purge` is its
+        /// production caller — the key outlives the workstream otherwise — and
+        /// it is called last there, after the verify teardown that makes the run
+        /// loop seal, because `save` writes this same key. The parked
+        /// `VerificationControlling` adapter on the `verification-ipc-tools`
+        /// branch is the other intended consumer.
         static func clear(for workstreamID: UUID) {
             UserDefaults.standard.removeObject(forKey: key(for: workstreamID))
         }
