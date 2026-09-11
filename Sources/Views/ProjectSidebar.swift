@@ -209,8 +209,13 @@ struct ProjectSidebar: View {
                 onAddFromShortcut: { addWorkstreamFromShortcut(for: project.id) },
                 // Both halves are already cached in AppEnvironment and refreshed on its own
                 // schedule — asking git or gh from a row body would spawn a subprocess per render.
-                showGitHubButton: appEnv.isGitRepo(project.directory)
-                    && appEnv.githubURL(for: project.directory) != nil,
+                // `hasGitHubRemote` is the half that genuinely is: the path-validity sweep
+                // probes every project's own directory every 15s. `githubURL`, which used to
+                // stand here, is not — see `shouldShowBranchButton`.
+                showGitHubButton: GitHub.Operations.shouldShowBranchButton(
+                    isGitRepo: appEnv.isGitRepo(project.directory),
+                    hasGitHubRemote: appEnv.hasGitHubRemote(project.directory)
+                ),
                 onAddFromGitHub: { addWorkstreamFromGitHub(for: project.id) },
                 onDelete: { projectToDelete = project.id }
             )

@@ -225,6 +225,20 @@ move one carrying unpushed commits. Do not "simplify" that to a `reset --hard`.
 anything is created on purpose: git reports a missing branch and an already-checked-out branch as
 ordinary failures, which arrive after the optimistic sidebar row is already drawn.
 
+**The button that reaches all of this is gated on `AppEnvironment.hasGitHubRemote`, and which
+cached fact that is matters more than it looks.** The whole flow is git: a typed branch name,
+`remoteBranchTip`, `createWorktreeTrackingRemote`. None of it calls `gh`. It was gated on
+`githubURL(for:)` instead, and that hid the button outright for every container-layout project —
+`githubRepoCache` is written *only* by `refreshGitHubInfo`, which runs from `ProjectOverviewView`,
+`WorkstreamInfoView` and `TerminalContainerView` and from nothing the sidebar draws, and the other
+fallback is keyed by the project's *checkout*, so a lookup by `directory` cannot hit it however
+many views have appeared. The feature shipped invisible. `hasGitHubRemote` and the GitHub browser
+URL are now both filled by `refreshPathValidity`'s own sweep from one `git remote get-url`
+(`GitHub.Operations.githubRemoteURL`), keyed by `directory`, so the row never depends on which
+view the user happened to open — and `GitHub.Operations.shouldShowBranchButton` names the gate's
+inputs outside the view body, the shape `Shortcut.Settings.shouldShowButton` already uses, because
+a decision spelled inline in a row body is one nothing can pin.
+
 ### Remove vs purge
 `Workstream.Archiver` exports both, and they are not the same thing.
 
