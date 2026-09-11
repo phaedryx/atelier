@@ -567,6 +567,11 @@ struct TerminalContainerView: View {
             mcpConfigWritten: mcpConfigPath != nil
         )
 
+        // Registers `atelier-statusline` for this session only, chaining the
+        // user's own status line. Nil when they have none configured, and then
+        // the meter falls back to reading the transcript.
+        let settingsPath = StatusLine.Config.write(for: workstreamID, cwd: workingDirectory)
+
         var resume = CommandBuilder(basePath)
         resume.option("--resume", sessionID)
         if appEnv.toolStatus.claudeSupportsSessionName {
@@ -580,6 +585,9 @@ struct TerminalContainerView: View {
         }
         if let mcpConfigPath {
             resume.option("--mcp-config", mcpConfigPath)
+        }
+        if let settingsPath {
+            resume.option("--settings", settingsPath)
         }
 
         var fresh = CommandBuilder(basePath)
@@ -595,6 +603,9 @@ struct TerminalContainerView: View {
         }
         if let mcpConfigPath {
             fresh.option("--mcp-config", mcpConfigPath)
+        }
+        if let settingsPath {
+            fresh.option("--settings", settingsPath)
         }
 
         let cmd = CommandBuilder.withFallback(

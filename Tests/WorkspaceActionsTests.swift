@@ -227,6 +227,7 @@ final class AgentCommandTests: XCTestCase {
         bypassPermissions: Bool = false,
         systemPrompt: String? = nil,
         mcpConfigPath: String? = nil,
+        settingsPath: String? = nil,
         initialPrompt: String? = nil
     ) -> String {
         Workstream.AgentCommand.fresh(
@@ -236,8 +237,16 @@ final class AgentCommandTests: XCTestCase {
             bypassPermissions: bypassPermissions,
             systemPrompt: systemPrompt,
             mcpConfigPath: mcpConfigPath,
+            settingsPath: settingsPath,
             initialPrompt: initialPrompt
         )
+    }
+
+    func testFreshCarriesTheStatusLineSettingsWhenOneWasWritten() {
+        XCTAssertFalse(fresh().contains("--settings"))
+        let withSettings = fresh(settingsPath: "/tmp/statusline/ws.json")
+        XCTAssertTrue(withSettings.contains("--settings"))
+        XCTAssertTrue(withSettings.contains("/tmp/statusline/ws.json"))
     }
 
     func testFreshCarriesTheSessionID() {

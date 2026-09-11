@@ -99,8 +99,22 @@ extension Workstream {
 
         /// Context-window consumption of a workstream's main session.
         struct ContextUsage: Equatable {
+            /// Where the figures came from. Two channels report the same two
+            /// numbers and they do not agree in quality, so the value carries
+            /// which one it is rather than leaving the precedence to whichever
+            /// wrote last.
+            enum Source: Equatable {
+                /// Claude Code's own figures, off the status line. The window
+                /// size is reported rather than inferred.
+                case statusLine
+                /// Parsed out of the transcript tail, with the window inferred
+                /// by `ContextLimits` from the model string.
+                case transcript
+            }
+
             let usedTokens: Int
             let limitTokens: Int
+            var source: Source = .transcript
             var fraction: Double {
                 limitTokens > 0 ? Double(usedTokens) / Double(limitTokens) : 0
             }
@@ -157,6 +171,9 @@ extension Workstream {
         private var surfaceWorkstream: [UUID: UUID] = [:]
 
         private var lastContextReadAt: [UUID: Date] = [:]
+        /// Workstreams whose last transcript read found nothing, so the failure
+        /// is logged once per spell rather than once per hook event.
+        private var transcriptReadFailing: Set<UUID> = []
 
         /// Resolves a Claude `project_dir` payload to the matching workstream UUID.
         /// Set by `ContentView` whenever the project list changes.
@@ -269,6 +286,7 @@ extension Workstream {
             liveSessionIDs.remove(workstreamID)
             contextUsage.removeValue(forKey: workstreamID)
             lastContextReadAt.removeValue(forKey: workstreamID)
+            transcriptReadFailing.remove(workstreamID)
             for (surface, owner) in surfaceWorkstream where owner == workstreamID {
                 surfaceStates.removeValue(forKey: surface)
                 surfaceWorkstream.removeValue(forKey: surface)
@@ -290,6 +308,7 @@ extension Workstream {
             liveSessionIDs.removeAll()
             contextUsage.removeAll()
             lastContextReadAt.removeAll()
+            transcriptReadFailing.removeAll()
             surfaceStates.removeAll()
             surfaceWorkstream.removeAll()
             workstreamLookup = nil
@@ -475,12 +494,39 @@ extension Workstream {
         /// `contextReadInterval` — except at turn end (idle), where the final
         /// totals must land even if a read just happened. A failed read keeps any
         /// previous value.
+        ///
+        /// **The fallback channel.** A workstream whose status line has reported
+        /// is left alone: that channel carries Claude Code's own figures,
+        /// including the real window size, and re-deriving them here by
+        /// inference would swap a known number for a guessed one every five
+        /// seconds. The transcript stays for sessions with no status line
+        /// configured, which is where `StatusLine.Config.write` declines to
+        /// register.
         private func refreshContextUsage(wsID: UUID, projectDir: String, transcriptPath: String, force: Bool) {
+            // Before the throttle, and before the read: this is not a failed
+            // attempt to be retried sooner, it is a channel that has been
+            // superseded.
+            if contextUsage[wsID]?.source == .statusLine {
+                return
+            }
+
             let now = Date()
             if !force, let last = lastContextReadAt[wsID], now.timeIntervalSince(last) < Self.contextReadInterval {
                 return
             }
-            guard let reading = TranscriptContextReader.usage(transcriptPath: transcriptPath) else { return }
+            guard let reading = TranscriptContextReader.usage(transcriptPath: transcriptPath) else {
+                // Logged on the edge only. The read is retried on every hook
+                // event until it succeeds — deliberately, see below — so an
+                // unconditional line here would be one per tool call for the
+                // whole life of a session whose transcript never appears, which
+                // is exactly the session this is meant to make diagnosable.
+                if !transcriptReadFailing.contains(wsID) {
+                    transcriptReadFailing.insert(wsID)
+                    logger.info("Context usage unavailable: no readable transcript at \(transcriptPath, privacy: .public)")
+                }
+                return
+            }
+            transcriptReadFailing.remove(wsID)
             // Stamped only on a read that produced something. Stamping first burned
             // the whole interval on a failure, so a transcript that was mid-write
             // when it was first sampled stayed unread for another full interval —
@@ -499,7 +545,55 @@ extension Workstream {
                 configuredModel: ClaudeCodeSettings.configuredModel(cwd: projectDir),
                 usedTokens: reading.usedTokens
             )
-            contextUsage[wsID] = ContextUsage(usedTokens: reading.usedTokens, limitTokens: limit)
+            contextUsage[wsID] = ContextUsage(
+                usedTokens: reading.usedTokens,
+                limitTokens: limit,
+                source: .transcript
+            )
+        }
+
+        /// Records a status line's report of its session's context window.
+        ///
+        /// Takes over from the transcript for that workstream from here on, and
+        /// deliberately does **not** insert into `liveSessionIDs`: a rendered
+        /// status line is not evidence that an agent is alive in the sense the
+        /// row's status word means, and `HookChannelBanner` reads that set to
+        /// decide whether any row can speak at all. A workstream Atelier has
+        /// heard no hook from stays silent, which is the honest answer — the
+        /// hook channel really is down.
+        ///
+        /// **Only the main session's reading is taken**, the same restriction
+        /// the transcript path gets from `event.agentId == "main"`. Two agents
+        /// can share a worktree — `open_agent_tab` registers the status line for
+        /// the one it spawns too — and both report the same `project_dir`, so
+        /// without this the bar would alternate between two unrelated fill
+        /// levels. The Coding Agent tab's surface id *is* the workstream id,
+        /// which is what makes the main session identifiable here. Compared as
+        /// `UUID` rather than as text: `ATELIER_SURFACE_ID` is exported
+        /// uppercase and the workstream id is written lowercase, so a string
+        /// comparison would reject every real Coding Agent tab.
+        ///
+        /// A payload carrying no surface id is a Claude session started by hand
+        /// in the worktree, and it is taken for the same reason the hook channel
+        /// takes one: it is the only agent Atelier knows of there.
+        ///
+        /// An *unparseable* surface id is dropped rather than treated as an
+        /// absent one, and the asymmetry is deliberate. Absent means "no Atelier
+        /// surface exported one", which is a session this workstream owns by
+        /// elimination. A value that is there but is not a UUID means something
+        /// other than Atelier set `ATELIER_SURFACE_ID`, and a reading that
+        /// cannot be attributed to the main session must not be attributed to it
+        /// by default — the bar would then show a second agent's fill level.
+        func handleStatusLine(projectDir: String, surfaceID: String?, reading: StatusLine.Reading) {
+            guard let lookup = workstreamLookup, let wsID = lookup(projectDir) else { return }
+            if let surfaceID, UUID(uuidString: surfaceID) != wsID {
+                return
+            }
+            contextUsage[wsID] = ContextUsage(
+                usedTokens: reading.usedTokens,
+                limitTokens: reading.limitTokens,
+                source: .statusLine
+            )
         }
 
         private func updateMainState(wsID: UUID, event: AgentEvent) {

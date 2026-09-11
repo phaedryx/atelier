@@ -65,6 +65,7 @@ extension Workstream {
             bypassPermissions: Bool,
             systemPrompt: String?,
             mcpConfigPath: String?,
+            settingsPath: String?,
             initialPrompt: String?
         ) -> String {
             var builder = CommandBuilder(claudePath)
@@ -80,6 +81,9 @@ extension Workstream {
             }
             if let mcpConfigPath {
                 builder.option("--mcp-config", mcpConfigPath)
+            }
+            if let settingsPath {
+                builder.option("--settings", settingsPath)
             }
             if let initialPrompt, !initialPrompt.isEmpty {
                 // `--` ends option parsing: `--mcp-config <configs...>` is

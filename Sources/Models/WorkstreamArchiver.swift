@@ -42,6 +42,7 @@ extension Workstream {
             PermissionApprovalStore.shared.releaseAll(workstreamID: workstreamID)
             surfaceCache.removeWorkstreamSurfaces(for: workstreamID)
             IPC.Config.remove(for: workstreamID)
+            StatusLine.Config.remove(for: workstreamID)
             LaunchLogger.removeLog(for: workstreamID)
             project.workstreams.removeAll { $0.id == workstreamID }
         }

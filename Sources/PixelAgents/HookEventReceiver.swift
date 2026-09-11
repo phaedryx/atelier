@@ -40,6 +40,20 @@ final class HookEventReceiver: @unchecked Sendable {
     private let onEventLock = NSLock()
     private var storedOnEvent: ((String, AgentEvent) -> Void)?
 
+    /// Called on the main queue with (projectDir, surfaceID, reading) when a
+    /// status line reports its session's context window.
+    ///
+    /// Separate from `onEvent` because it is not an event: nothing about an
+    /// agent's turn is being reported, and routing it through `AgentEvent` would
+    /// put a roster-touching envelope on a channel that fires on a timer's
+    /// schedule as well as a turn's.
+    var onStatusLine: ((String, String?, StatusLine.Reading) -> Void)? {
+        get { onEventLock.withLock { storedOnStatusLine } }
+        set { onEventLock.withLock { storedOnStatusLine = newValue } }
+    }
+
+    private var storedOnStatusLine: ((String, String?, StatusLine.Reading) -> Void)?
+
     /// Called on the main queue with (projectDir, request, resolve) when an
     /// agent is blocked on a tool permission.
     ///
@@ -268,6 +282,18 @@ final class HookEventReceiver: @unchecked Sendable {
             return
         }
 
+        // The atelier-statusline script wraps Claude Code's status line payload
+        // as: { "payload": { ... }, "surface_id": "..." }. A different envelope
+        // from the hook one because the payload carries its own launch
+        // directory and no event name — there is nothing to map and no roster to
+        // touch, only two numbers to hand over.
+        if target == "/statusline" {
+            handleStatusLine(json: json)
+            sendResponse(on: connection, status: "200 OK", body: "{\"ok\":true}")
+            done()
+            return
+        }
+
         // The atelier-hook script wraps the Claude Code input as:
         //   { "event_input": { ... }, "project_dir": "..." }
         guard let projectDir = json["project_dir"] as? String else {
@@ -341,6 +367,27 @@ final class HookEventReceiver: @unchecked Sendable {
 
         sendResponse(on: connection, status: "200 OK", body: "{\"ok\":true}")
         done()
+    }
+
+    /// Hands one status line payload to `onStatusLine`, or drops it.
+    ///
+    /// Deliberately silent about a payload it cannot use: the status line runs
+    /// on every assistant message, and `context_window` is absent until the
+    /// session's first API response, so "nothing to report" is an ordinary
+    /// state rather than a fault. Nothing here touches a roster or a stall
+    /// clock — a rendered status line is not evidence an agent is alive, and
+    /// the row's status word and the channel banner both depend on that
+    /// distinction being kept.
+    private func handleStatusLine(json: [String: Any]) {
+        guard let payload = json["payload"] as? [String: Any],
+              let projectDir = StatusLine.projectDir(payload: payload),
+              let reading = StatusLine.reading(payload: payload)
+        else { return }
+
+        let surfaceID = (json["surface_id"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        DispatchQueue.main.async { [weak self] in
+            self?.onStatusLine?(projectDir, surfaceID, reading)
+        }
     }
 
     // MARK: - Permission Requests

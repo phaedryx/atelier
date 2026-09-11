@@ -14,6 +14,7 @@ final class HookEventReceiverTests: XCTestCase {
         receiver.onEvent = nil
         receiver.onPermissionRequest = nil
         receiver.onPing = nil
+        receiver.onStatusLine = nil
         super.tearDown()
     }
 
@@ -259,7 +260,7 @@ final class HookEventReceiverTests: XCTestCase {
     /// Opens a socket to the listener and writes one envelope to it. Returns the
     /// descriptor so the caller can hold the connection open until it has
     /// finished waiting — closing it here would race the receiver's read.
-    private func sendEnvelope(_ envelope: [String: Any], timeout: TimeInterval) throws -> Int32 {
+    private func sendEnvelope(_ envelope: [String: Any], timeout: TimeInterval, target: String = "/hook") throws -> Int32 {
         receiver.start()
 
         // Ask the listener for its port rather than reading hook-port: the file
@@ -275,7 +276,7 @@ final class HookEventReceiverTests: XCTestCase {
         let resolved = try XCTUnwrap(port, "hook receiver did not bind a port")
 
         let body = try JSONSerialization.data(withJSONObject: envelope)
-        let head = "POST /hook HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: \(body.count)\r\n\r\n"
+        let head = "POST \(target) HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: \(body.count)\r\n\r\n"
         var request = Data(head.utf8)
         request.append(body)
 
@@ -528,5 +529,69 @@ final class HookEventReceiverTests: XCTestCase {
         ], timeout: 10)
         defer { close(fd) }
         wait(for: [quiet], timeout: 1)
+    }
+
+    // MARK: - The status line channel
+
+    /// Posts one status line envelope and returns what `onStatusLine` was
+    /// handed, or nil if nothing was delivered inside `timeout`.
+    private func postStatusLine(
+        _ envelope: [String: Any],
+        timeout: TimeInterval = 10,
+        expectDelivery: Bool = true
+    ) throws -> (projectDir: String, surfaceID: String?, reading: StatusLine.Reading)? {
+        var received: (projectDir: String, surfaceID: String?, reading: StatusLine.Reading)?
+        let delivered = expectation(description: "status line delivered")
+        delivered.assertForOverFulfill = false
+        delivered.isInverted = !expectDelivery
+        receiver.onStatusLine = { projectDir, surfaceID, reading in
+            received = (projectDir, surfaceID, reading)
+            delivered.fulfill()
+        }
+
+        let fd = try sendEnvelope(envelope, timeout: timeout, target: "/statusline")
+        defer { close(fd) }
+        wait(for: [delivered], timeout: expectDelivery ? timeout : 1)
+        return received
+    }
+
+    func test_statusLinePayload_reachesTheAppWithItsFiguresAndSurface() throws {
+        let surfaceID = UUID().uuidString
+        let delivered = try XCTUnwrap(postStatusLine([
+            "payload": [
+                "workspace": ["project_dir": "/tmp/atelier-hook-test"],
+                "context_window": ["total_input_tokens": 45127, "context_window_size": 1_000_000],
+            ],
+            "surface_id": surfaceID,
+        ]))
+
+        XCTAssertEqual(delivered.projectDir, "/tmp/atelier-hook-test")
+        XCTAssertEqual(delivered.surfaceID, surfaceID)
+        XCTAssertEqual(delivered.reading, StatusLine.Reading(usedTokens: 45127, limitTokens: 1_000_000))
+    }
+
+    /// The status line runs on every assistant message, and `context_window` is
+    /// absent until the session's first API response. Nothing to report is an
+    /// ordinary state on this route, not a fault.
+    func test_statusLinePayload_withoutAContextWindowIsDropped() throws {
+        let delivered = try postStatusLine([
+            "payload": ["workspace": ["project_dir": "/tmp/atelier-hook-test"]],
+            "surface_id": "",
+        ], expectDelivery: false)
+
+        XCTAssertNil(delivered)
+    }
+
+    /// The hook route's envelope has `project_dir` at the top level; this one
+    /// carries the launch directory inside Claude Code's own payload. Posting a
+    /// hook envelope here must not be read as a status line.
+    func test_statusLineRoute_ignoresAHookEnvelope() throws {
+        let delivered = try postStatusLine([
+            "event_input": ["hook_event_name": "Stop", "agent_id": "main"],
+            "project_dir": "/tmp/atelier-hook-test",
+            "surface_id": "",
+        ], expectDelivery: false)
+
+        XCTAssertNil(delivered)
     }
 }
