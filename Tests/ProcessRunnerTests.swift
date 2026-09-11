@@ -143,4 +143,56 @@ final class ProcessRunnerTests: XCTestCase {
         )
         XCTAssertEqual(data?.count, payload.utf8.count)
     }
+
+    // MARK: - Drain threads and orphaned grandchildren
+
+    /// A `sleep` duration no other test or tool on the machine uses, so the
+    /// cleanup below cannot kill a bystander.
+    private static let sentinelSleep = "98765"
+
+    /// Enough leaky captures to exhaust libdispatch's global pool if each one
+    /// parks its two drain threads permanently. The pool tops out around 64
+    /// threads, so 50 captures (100 would-be parked threads) clears it with
+    /// margin — the number is a libdispatch implementation detail, not a
+    /// contract, which is why the assertion below is about a later capture
+    /// working rather than about any thread count.
+    private static let leakyCaptureCount = 50
+
+    override func tearDown() {
+        super.tearDown()
+        killSentinelStrays()
+    }
+
+    private func killSentinelStrays() {
+        let killer = Process()
+        killer.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        killer.arguments = ["-f", "^sleep \(Self.sentinelSleep)"]
+        killer.standardOutput = FileHandle.nullDevice
+        killer.standardError = FileHandle.nullDevice
+        try? killer.run()
+        killer.waitUntilExit()
+    }
+
+    /// A capture whose grandchild holds the pipe open must not strand its drain
+    /// threads. Each one that does parks two of libdispatch's global-pool
+    /// threads forever, and a few dozen such calls starve the pool — after
+    /// which *every* later `capture` times out, including ones whose child
+    /// exits instantly. The child here exits immediately; only the backgrounded
+    /// grandchild keeps the write end open.
+    func testRepeatedCapturesWithAGrandchildHoldingThePipeDoNotStarveLaterCaptures() {
+        for _ in 0 ..< Self.leakyCaptureCount {
+            _ = ProcessRunner.capture(
+                executable: "/bin/sh",
+                arguments: ["-c", "sleep \(Self.sentinelSleep) &"],
+                timeout: 0.25
+            )
+        }
+
+        let started = Date()
+        let output = ProcessRunner.capture(executable: "/usr/bin/true", arguments: [], timeout: 5)
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertNotNil(output, "a trivial capture timed out: the drain threads from the leaky captures are still parked")
+        XCTAssertLessThan(elapsed, 5, "a trivial capture should return immediately, not burn its deadline")
+    }
 }
