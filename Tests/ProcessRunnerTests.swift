@@ -173,12 +173,36 @@ final class ProcessRunnerTests: XCTestCase {
         killer.waitUntilExit()
     }
 
+    private func sentinelStrayCount() -> Int {
+        let finder = Process()
+        finder.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        finder.arguments = ["-f", "^sleep \(Self.sentinelSleep)"]
+        let pipe = Pipe()
+        finder.standardOutput = pipe
+        finder.standardError = FileHandle.nullDevice
+        guard (try? finder.run()) != nil else { return 0 }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        finder.waitUntilExit()
+        return String(data: data, encoding: .utf8)?
+            .split(separator: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .count ?? 0
+    }
+
     /// A capture whose grandchild holds the pipe open must not strand its drain
     /// threads. Each one that does parks two of libdispatch's global-pool
     /// threads forever, and a few dozen such calls starve the pool — after
     /// which *every* later `capture` times out, including ones whose child
     /// exits instantly. The child here exits immediately; only the backgrounded
     /// grandchild keeps the write end open.
+    ///
+    /// **This guards the pair, not the drains alone.** It would pass on the old
+    /// thread-based drains now that the deadline kills the process group: the
+    /// kill closes the pipe, the blocked read returns, and the thread comes
+    /// back. It was red against the drains alone, in the commit that replaced
+    /// them — so a bisect that lands after the group kill will not see this go
+    /// red for a drain regression, and `testKillingAtTheDeadlineReaps…` below
+    /// is the one that isolates the other half.
     func testRepeatedCapturesWithAGrandchildHoldingThePipeDoNotStarveLaterCaptures() {
         for _ in 0 ..< Self.leakyCaptureCount {
             _ = ProcessRunner.capture(
@@ -194,5 +218,22 @@ final class ProcessRunnerTests: XCTestCase {
 
         XCTAssertNotNil(output, "a trivial capture timed out: the drain threads from the leaky captures are still parked")
         XCTAssertLessThan(elapsed, 5, "a trivial capture should return immediately, not burn its deadline")
+    }
+
+    /// A child that backgrounds something and exits leaves that grandchild
+    /// running — and holding the pipe — past the deadline. By the time the
+    /// deadline fires Foundation has reaped the child, so `terminate()` has
+    /// nothing to signal; only the process group reaches the survivor.
+    func testKillingAtTheDeadlineReapsAGrandchildTheChildLeftBehind() {
+        killSentinelStrays()
+        XCTAssertEqual(sentinelStrayCount(), 0, "a stray from an earlier run would make this test meaningless")
+
+        XCTAssertNil(ProcessRunner.capture(
+            executable: "/bin/sh",
+            arguments: ["-c", "sleep \(Self.sentinelSleep) &"],
+            timeout: 0.5
+        ))
+
+        XCTAssertEqual(sentinelStrayCount(), 0, "the grandchild outlived the deadline: only the direct child was signalled")
     }
 }

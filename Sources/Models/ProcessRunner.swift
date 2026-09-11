@@ -237,17 +237,59 @@ enum ProcessRunner {
         )?.isSuccess ?? false
     }
 
-    /// SIGTERM, then SIGKILL if the child is still alive after the grace period.
+    /// SIGTERM, then SIGKILL if anything is still alive after the grace period.
+    ///
+    /// Signals the process *group*, not only the child. `Process` spawns each
+    /// child as its own group leader — `pgid == pid`, measured, not assumed —
+    /// and a grandchild the child backgrounds inherits that group. So for a
+    /// command shaped like `sh -c 'server &'`, which is an ordinary thing for a
+    /// project's own command to be, the shell has exited and been reaped long
+    /// before the deadline fires: `terminate()` has nothing left to signal, and
+    /// the server goes on running and holding the pipe. The group is the only
+    /// handle left on it.
+    ///
+    /// Signalling a group whose leader has already been reaped is safe because
+    /// the kernel will not reissue a pid that is still live as a group id.
+    /// Measured rather than recalled, because the failure mode if it were wrong
+    /// is signalling a stranger's process group: a group was orphaned, then
+    /// ~98,000 forks drove the pid counter a full lap past it, and the number
+    /// was never allocated. When the group is empty the signal fails with
+    /// ESRCH and nothing happens.
+    ///
+    /// A daemon is still out of reach, and deliberately so — anything that
+    /// calls `setsid` leaves the group by definition. That is the behaviour you
+    /// want: the tmux server is exactly such a child (verified — it lands in
+    /// its own group and survives this), and it is meant to outlive the client
+    /// command that started it.
     private static func kill(_ process: Process) {
+        let pid = process.processIdentifier
+        // `kill` reads a non-positive pid as "my own group" (0) or "everything
+        // I may signal" (-1), and a `Process` that never launched reports 0.
+        // This guard is the difference between killing a child and killing
+        // Atelier.
+        guard pid > 1 else { return }
+
+        // `terminate()` first, so Foundation's own bookkeeping runs. While the
+        // child is alive it already reaches the group; the explicit group
+        // signal is for the case it cannot, where only an orphan is left.
         process.terminate()
+        Foundation.kill(-pid, SIGTERM)
+
         let deadline = Date().addingTimeInterval(terminationGrace)
-        while process.isRunning, Date() < deadline {
+        while process.isRunning || groupIsAlive(pid), Date() < deadline {
             usleep(20000)
         }
         if process.isRunning {
-            Foundation.kill(process.processIdentifier, SIGKILL)
+            Foundation.kill(pid, SIGKILL)
         }
+        Foundation.kill(-pid, SIGKILL)
         process.waitUntilExit()
+    }
+
+    /// Whether any process is left in `pid`'s group. Signal 0 asks whether a
+    /// signal *could* be delivered without delivering one.
+    private static func groupIsAlive(_ pid: pid_t) -> Bool {
+        Foundation.kill(-pid, 0) == 0
     }
 
     /// Reads one pipe to EOF without occupying a thread while it waits.

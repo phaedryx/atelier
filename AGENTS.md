@@ -606,15 +606,26 @@ out because no thread was free parks nothing — its blocks sit queued and run
 later. Only a drain that got a thread and then blocked on a live grandchild's
 pipe leaked permanently.
 
-**A grandchild still outlives the deadline.** When the child exits immediately
-and leaves one behind, Foundation has already reaped the child by the time the
-deadline fires, so `kill(_:)` has nothing to signal and the grandchild survives.
-That is a process and descriptor leak, not a wedge — the pool no longer starves
-either way — and reaping it means signalling the process *group*, which is a
-separate change. `Process` does spawn the child as its own group leader
-(`pgid == pid`, measured) and the grandchild inherits that group, so the route
-exists; what it needs first is proof that a pid live as a group id cannot be
-reissued to a stranger.
+**The deadline kills the process group, not just the child.** When the child
+exits immediately and leaves a grandchild behind, Foundation has already reaped
+the child by the time the deadline fires — `terminate()` has nothing to signal,
+and the survivor goes on running. `Process` spawns each child as its own group
+leader (`pgid == pid`, measured) and a backgrounded grandchild inherits that
+group, so the group is the only handle left on it. Two facts make that safe, and
+both were measured rather than reasoned about, because the cost of being wrong
+is signalling a stranger:
+
+- **A pid live as a group id is never reissued.** A group was orphaned, then
+  ~98,000 forks drove the pid counter a full lap past it (`kern.maxproc` is
+  12,000) and the number was never allocated. So `kill(-pid)` after the leader
+  is reaped can only reach the group Atelier created; an empty group answers
+  ESRCH and nothing happens. `ProcessRunner.kill` also guards `pid > 1`, because
+  `kill` reads 0 as "my own group" and -1 as "everything" — and a `Process` that
+  never launched reports 0.
+- **A daemon is out of reach, which is the wanted behaviour.** Anything calling
+  `setsid` leaves the group by definition. The tmux server is exactly that: it
+  lands in its own group and survives this (verified), which it must, since it
+  is meant to outlive the client command that started it.
 
 Pick a deadline from `ProcessRunner.Timeout` rather than inlining a number:
 `local` for reads and ref-level writes, `network` for anything reaching a remote,
