@@ -42,6 +42,14 @@ uvx prek run --all-files            # run hooks on all files (optional)
 ./scripts/dev.sh release         # ad-hoc signed Release build — this is the one that works
 ```
 
+It stamps the version from `git describe` before building, so a local Release
+build reports what it actually is — `0.2.1-76-gbe4598a`, or `0.2.1-dirty` when
+built over uncommitted changes — rather than the `0.0.0-dev` placeholder. That
+matters because a local Release build is one somebody installs and then has to
+identify weeks later. `project.yml` is copied aside and restored on exit,
+including when the stamp fails, so the bump is never left in the working tree.
+Debug builds are untouched and still report `0.0.0-dev (Debug)`.
+
 `./scripts/release.sh <version>` builds a signed, notarized DMG, but requires
 `ATELIER_SIGNING_IDENTITY` and `ATELIER_TEAM_ID` and refuses to run without
 them. This project has no Developer ID, so it is kept only for if that changes.
@@ -82,14 +90,17 @@ The tag is the single source of truth for the version; `project.yml` is only
 rewritten at build time and the bump is never committed.
 
 Because of that, the version committed in `project.yml` is the deliberate
-placeholder `0.0.0` / `0.0.0-dev`, and it means nothing: any build made outside
-the release workflow reports it. Do not read it as the current version, and do
-not bump it to "keep it current" — the value is overwritten by
-`scripts/set-version.sh` during a tagged release and nowhere else. (It used to
-carry `0.1.79`, inherited from Factory Floor, which made every local build claim
-a released version it had long since diverged from.) `CFBundleVersion` stays
-numeric because it must be period-separated integers; only the display string
-carries the `-dev` marker.
+placeholder `0.0.0` / `0.0.0-dev`, and it means nothing: it is what a debug build
+reports. Do not read it as the current version, and do not bump it to "keep it
+current" — it is overwritten at build time by `scripts/set-version.sh` and
+nowhere else. That script has three callers, and all of them restore
+`project.yml` afterwards so the bump is never committed: the release workflow and
+`scripts/release.sh`, which pass the version derived from the tag, and
+`./scripts/dev.sh release`, which passes `git describe`. (It used to carry `0.1.79`, inherited from Factory Floor, which
+made every local build claim a released version it had long since diverged from.)
+`CFBundleVersion` stays numeric because it must be period-separated integers, so
+it receives only the `X.Y.Z` core; the suffix naming the commit rides on
+`CFBundleShortVersionString`, which is the string the app displays.
 
 ## Architecture
 
