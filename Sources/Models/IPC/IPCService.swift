@@ -552,6 +552,13 @@ extension IPC {
                 workstreamName: plan.workstreamName,
                 mcpConfigWritten: mcpConfigPath != nil
             )
+            // Resolved against the worktree, so a project that configures its
+            // own status line in `.claude/settings.json` is honoured the same
+            // way the Coding Agent tab honours it.
+            let settingsPath = StatusLine.Config.write(
+                for: plan.workstreamID,
+                cwd: plan.workingDirectory
+            )
             return Workstream.AgentCommand.fresh(
                 claudePath: claudePath,
                 // The surface's id, never the workstream's: see this method's
@@ -561,6 +568,7 @@ extension IPC {
                 bypassPermissions: plan.bypassPermissions,
                 systemPrompt: systemPrompt,
                 mcpConfigPath: mcpConfigPath,
+                settingsPath: settingsPath,
                 initialPrompt: prompt
             )
         }
@@ -685,6 +693,10 @@ extension IPC {
                 workstreamName: launched.name,
                 mcpConfigWritten: mcpConfigPath != nil
             )
+            let settingsPath = StatusLine.Config.write(
+                for: launched.workstreamID,
+                cwd: launched.worktreePath
+            )
             let fresh = Workstream.AgentCommand.fresh(
                 claudePath: claudePath,
                 sessionID: launched.workstreamID.uuidString.lowercased(),
@@ -692,6 +704,7 @@ extension IPC {
                 bypassPermissions: bypassPermissions,
                 systemPrompt: systemPrompt,
                 mcpConfigPath: mcpConfigPath,
+                settingsPath: settingsPath,
                 initialPrompt: prompt
             )
             let command = Workstream.AgentCommand.tmuxWrapped(

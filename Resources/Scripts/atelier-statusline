@@ -1,0 +1,33 @@
+#!/bin/sh
+# ABOUTME: Claude Code status line command that forwards the session payload to
+# ABOUTME: the Atelier app, then runs the user's own status line command and
+# ABOUTME: prints its output unchanged. Registered per session via --settings.
+INPUT=$(cat)
+
+# Posting is best-effort and must never cost the user their status line: a
+# missing port file, a quit app, or a slow POST all fall through to the inner
+# command below. Same port file the hook script reads, and it is deliberately
+# the release path for every build variant.
+PORT_FILE="$HOME/Library/Caches/atelier/hook-port"
+if [ -f "$PORT_FILE" ]; then
+  PORT=$(cat "$PORT_FILE")
+  # Interpolated into a JSON string, so the same escaping atelier-hook does.
+  # INPUT is raw on purpose — it is Claude Code's own JSON, not a string being
+  # embedded in one.
+  SURFACE_ID=$(printf '%s' "$ATELIER_SURFACE_ID" | tr -d '\000-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+  BODY="{\"payload\": ${INPUT}, \"surface_id\": \"${SURFACE_ID}\"}"
+  # --max-time 1 for the same reason the hook uses it, and more urgently:
+  # Claude Code cancels a status line script that is still running when the next
+  # update triggers, and the row is hidden while it runs.
+  curl -s -X POST "http://127.0.0.1:${PORT}/statusline" \
+    -H "Content-Type: application/json" \
+    -d "$BODY" \
+    --max-time 1 -o /dev/null 2>/dev/null
+fi
+
+# The user's own status line command, resolved by the app when this agent was
+# launched and passed through here verbatim. Absent when they have none, in
+# which case Atelier does not register this script at all and nothing reaches
+# here. The same stdin goes in, and whatever comes out is the status line.
+[ -n "$1" ] || exit 0
+printf '%s' "$INPUT" | sh -c "$1"

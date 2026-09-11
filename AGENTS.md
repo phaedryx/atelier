@@ -141,7 +141,7 @@ it receives only the `X.Y.Z` core; the suffix naming the commit rides on
 - `Sources/Terminal/` - Ghostty integration (TerminalApp singleton, TerminalView NSView)
 - `Sources/Views/` - SwiftUI views (sidebar, settings, project overview, workspace, browser, editor)
 - `Sources/Palette/` - Command palette (registry, default commands, fuzzy matcher)
-- `Sources/PixelAgents/` - Claude Code hook receiver, router, and installer; transcript context
+- `Sources/PixelAgents/` - Claude Code hook receiver, router, and installer; the status line channel and the transcript reader behind it
 - `Sources/WorktreeSetup/` - Background worktree setup (the `bootstrap` phase, and the policy that gates it)
 - `Sources/Launcher/` - `atelier-run` helper binary (port detection)
 - `Sources/MCPHelper/` - `atelier-mcp` helper binary (IPC bridge for agents)
@@ -823,6 +823,76 @@ Active prompts (combined when multiple are enabled):
 
 There are three, and the list above is the whole of it. Two of them were once the
 whole of it, which is why `SystemPrompts.swift` is worth reading before assuming.
+
+### Where the context meter's numbers come from
+
+The sidebar's context bar has two possible sources and they are not equal.
+
+**The status line is the first choice.** Hook payloads carry no token or context
+fields at all — `session_id`, `transcript_path`, `cwd`, `permission_mode`, the
+event's own fields, and that is the whole documented set. Claude Code hands the
+figures to exactly one interface, the status line command, which receives
+`context_window.total_input_tokens` and `context_window.context_window_size`
+already resolved, the second including whether the session is on a 1M window.
+That single field is why this channel exists: `ContextLimits` can only *infer*
+the window from a model string plus `ClaudeCodeSettings.configuredModel`, and it
+is not consulted at all on this path.
+
+**`statusLine` is a single command slot, so Atelier never writes it.** Unlike
+`hooks`, which is a list Atelier merges an entry into, that key holds one
+command — registering into it means taking it from whatever the user has.
+Instead `StatusLine.Config.write` produces a settings file naming
+`atelier-statusline`, and the agent is launched with `--settings <path>`
+alongside the `--mcp-config` it already gets. That layer sits above user
+settings, merges per key, lasts one session and writes to no file, so a Claude
+session started anywhere else is untouched. The file carries `statusLine` and
+nothing else, because a second key there would silently override the user's own
+value for it.
+
+Three consequences worth keeping:
+
+1. **No configured status line means no registration**, and that session falls
+   back to the transcript. Registering one anyway would give a user a status
+   line they never asked for: Claude Code hides most of the footer's keyboard
+   hints as soon as one is configured, and a script that prints nothing leaves
+   the row blank. `ClaudeCodeSettings.statusLineCommand` is the gate, and it
+   reads only `type: "command"` — an unrecognised shape has to mean "leave it
+   alone", never "there is nothing there".
+2. **The user's own status line is chained, and resolved at launch.**
+   `atelier-statusline` POSTs the payload, then runs the command it was handed
+   as `$1` with the same stdin and prints its output verbatim. The command is
+   resolved in Swift when the agent starts rather than re-read on every render,
+   because a `sh` script has no JSON parser — the same call `atelier-hook` makes
+   by taking a flag instead of sniffing its own stdin. The cost, and it is real:
+   a `/statusline` change reaches a running agent only when its surface
+   respawns.
+3. **Only the main session's reading is taken.** `open_agent_tab` registers
+   the status line for the agent it spawns too, and two agents in one worktree
+   report the same `project_dir` — so `handleStatusLine` drops a payload whose
+   surface id is not the workstream's own, the same restriction the transcript
+   path gets from `event.agentId == "main"`. The comparison is on `UUID` values,
+   never on the strings: `ATELIER_SURFACE_ID` is exported uppercase and the
+   workstream id is written lowercase, so comparing text would reject every real
+   Coding Agent tab. A payload with no surface id at all is a session started by
+   hand in the worktree and is taken.
+4. **A status line reading does not mark a session live.**
+   `AgentStateTracker.handleStatusLine` sets `contextUsage` and deliberately
+   does not touch `liveSessionIDs`, the roster, or any stall clock. The status
+   line renders on a timer as well as on a turn, so it is not evidence that an
+   agent is alive in the sense the row's status word means — and `hasLiveSession`
+   is what decides whether a row may speak at all, which `HookChannelBanner`
+   depends on.
+
+**The transcript is the fallback and stays one.** `TranscriptContextReader`
+parses `message.usage` out of the JSONL tail, which works, but Claude Code's own
+documentation says that entry format is internal and changes between versions.
+`refreshContextUsage` returns early for a workstream whose source is already
+`.statusLine` — before the throttle and before the read, since this is a channel
+that has been superseded rather than an attempt to retry. It also logs a missing
+or unreadable transcript on the *edge* only: the read is deliberately retried on
+every hook event until it succeeds, so an unconditional line there would be one
+per tool call for the whole life of the session it is meant to make
+diagnosable.
 
 ### Agent workspace tools (IPC)
 

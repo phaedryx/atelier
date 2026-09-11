@@ -219,6 +219,19 @@ struct AtelierApp: App {
                 Workstream.AgentStateTracker.shared.handle(projectDir: projectDir, event: event)
             }
         }
+        // The context meter's preferred source: Claude Code's own figures,
+        // including the window size, which the transcript reader can only infer.
+        // Not routed through `onEvent` — it reports no turn, touches no roster,
+        // and must not clear a stall clock.
+        HookEventReceiver.shared.onStatusLine = { projectDir, surfaceID, reading in
+            MainActor.assumeIsolated {
+                Workstream.AgentStateTracker.shared.handleStatusLine(
+                    projectDir: projectDir,
+                    surfaceID: surfaceID,
+                    reading: reading
+                )
+            }
+        }
         // The probe's own round trip: it sends a nonce out through the real
         // `atelier-hook` script and recognises it coming back in here.
         HookEventReceiver.shared.onPing = { nonce in

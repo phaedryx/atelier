@@ -806,6 +806,111 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.contextUsage[wsID]?.usedTokens, 20000)
     }
 
+    // MARK: - Status line channel
+
+    private func statusLineReading(_ used: Int, window: Int = 1_000_000, surface: String? = nil) {
+        if tracker.workstreamLookup == nil {
+            let expected = Workstream.AgentStateTracker.normalize(projectDir)
+            let mapped = wsID
+            tracker.workstreamLookup = { dir in
+                Workstream.AgentStateTracker.normalize(dir) == expected ? mapped : nil
+            }
+        }
+        tracker.handleStatusLine(
+            projectDir: projectDir,
+            surfaceID: surface,
+            reading: StatusLine.Reading(usedTokens: used, limitTokens: window)
+        )
+    }
+
+    func test_statusLineReading_reportsTheWindowItWasGivenRatherThanAnInferredOne() {
+        statusLineReading(250_000, window: 1_000_000)
+
+        XCTAssertEqual(tracker.contextUsage[wsID]?.usedTokens, 250_000)
+        XCTAssertEqual(tracker.contextUsage[wsID]?.limitTokens, 1_000_000)
+        XCTAssertEqual(tracker.contextUsage[wsID]?.source, .statusLine)
+    }
+
+    func test_statusLineReading_overridesATranscriptReading() throws {
+        let url = tempTranscriptURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try writeTranscript(url: url, usedTokens: 1234)
+        handle(.waiting(agentId: "main", transcriptPath: url.path))
+        XCTAssertEqual(tracker.contextUsage[wsID]?.source, .transcript)
+
+        statusLineReading(5678)
+
+        XCTAssertEqual(tracker.contextUsage[wsID]?.usedTokens, 5678)
+        XCTAssertEqual(tracker.contextUsage[wsID]?.source, .statusLine)
+    }
+
+    /// The transcript is the fallback, and it stays one: re-deriving these
+    /// figures by inference would swap a reported window for a guessed one every
+    /// five seconds.
+    func test_transcriptRead_doesNotOverwriteAStatusLineReading() throws {
+        let url = tempTranscriptURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        statusLineReading(5678)
+
+        try writeTranscript(url: url, usedTokens: 1234)
+        handle(.idle(agentId: "main", transcriptPath: url.path))
+
+        XCTAssertEqual(tracker.contextUsage[wsID]?.usedTokens, 5678)
+        XCTAssertEqual(tracker.contextUsage[wsID]?.source, .statusLine)
+    }
+
+    /// A status line renders on a timer as well as on a turn, so it is not
+    /// evidence that an agent is alive — and `hasLiveSession` is what lets a row
+    /// speak at all.
+    func test_statusLineReading_doesNotMarkTheSessionLive() {
+        statusLineReading(5678)
+
+        XCTAssertFalse(tracker.hasLiveSession(for: wsID))
+    }
+
+    /// The Coding Agent tab's surface id is the workstream id, and
+    /// `ATELIER_SURFACE_ID` is exported uppercase while the id is written
+    /// lowercase — so this has to match on the value, not the text.
+    func test_statusLineReading_fromTheMainSurfaceIsTakenWhateverTheCasing() {
+        statusLineReading(5678, surface: wsID.uuidString.uppercased())
+        XCTAssertEqual(tracker.contextUsage[wsID]?.usedTokens, 5678)
+
+        statusLineReading(6789, surface: wsID.uuidString.lowercased())
+        XCTAssertEqual(tracker.contextUsage[wsID]?.usedTokens, 6789)
+    }
+
+    /// A second agent sharing the worktree reports the same project_dir and an
+    /// unrelated context window. The bar is the main session's.
+    func test_statusLineReading_fromASpawnedTabIsIgnored() {
+        statusLineReading(5678, surface: wsID.uuidString)
+
+        statusLineReading(900_000, surface: UUID().uuidString)
+
+        XCTAssertEqual(tracker.contextUsage[wsID]?.usedTokens, 5678)
+    }
+
+    func test_statusLineReading_isDroppedForAnUnknownProject() {
+        tracker.workstreamLookup = { _ in nil }
+        tracker.handleStatusLine(
+            projectDir: "/tmp/not-a-workstream",
+            surfaceID: nil,
+            reading: StatusLine.Reading(usedTokens: 10, limitTokens: 20)
+        )
+
+        XCTAssertTrue(tracker.contextUsage.isEmpty)
+    }
+
+    /// A new session means a new window, and the meter is cleared for it — the
+    /// status line's own reading has to go the same way the transcript's does,
+    /// or a fresh agent inherits the last one's fill level.
+    func test_sessionStart_clearsAStatusLineReading() {
+        statusLineReading(5678)
+
+        handle(.sessionStarted())
+
+        XCTAssertNil(tracker.contextUsage[wsID])
+    }
+
     // MARK: - Answering a permission prompt in Atelier
 
     private func awaitPermission(surface: UUID? = nil) {
