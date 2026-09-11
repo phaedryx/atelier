@@ -9,11 +9,11 @@ final class PhaseRunnerTests: XCTestCase {
     private let binary = "/opt/homebrew/bin/process-compose"
 
     private var worktreeConfig: ProcessCompose.Config {
-        ProcessCompose.Config(path: "/repo/wt/process-compose.yaml", isRepositoryProvided: true, overridePath: nil)
+        ProcessCompose.Config(path: "/repo/wt/process-compose.yaml", isRepositoryProvided: true)
     }
 
     private var projectConfig: ProcessCompose.Config {
-        ProcessCompose.Config(path: "/repo/process-compose.yaml", isRepositoryProvided: false, overridePath: nil)
+        ProcessCompose.Config(path: "/repo/process-compose.yaml", isRepositoryProvided: false)
     }
 
     /// The socket path must be predictable — a bare `-U` generates one
@@ -94,8 +94,12 @@ final class PhaseRunnerTests: XCTestCase {
         XCTAssertTrue(command.contains("-n execute"), command)
     }
 
-    /// Every loaded file is named, in order, so nothing is left to discovery.
-    func testEveryLoadedFileIsNamed() throws {
+    /// Every loaded file is named, in order, so nothing is left to discovery —
+    /// and nothing *but* the loaded files is named. A sibling
+    /// `process-compose.override.yml` is not one of them: one config is one
+    /// file, and a file that slipped into the command would be repository
+    /// content executing without having been approved or displayed.
+    func testEveryLoadedFileIsNamedAndNothingElseIs() throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let config = try writeConfig("""
@@ -113,10 +117,11 @@ final class PhaseRunnerTests: XCTestCase {
             workstreamID: workstreamID, selectedProcesses: []
         )
 
-        XCTAssertEqual(config.loadedFiles.count, 2, "\(config.loadedFiles)")
+        XCTAssertEqual(config.loadedFiles.count, 1, "\(config.loadedFiles)")
         for file in config.loadedFiles {
             XCTAssertTrue(command.contains("-f \(file)"), command)
         }
+        XCTAssertFalse(command.contains("override"), command)
     }
 
     func testProjectConfigNamesTheFile() {
@@ -126,21 +131,6 @@ final class PhaseRunnerTests: XCTestCase {
         )
 
         XCTAssertTrue(command.contains("-f /repo/process-compose.yaml"), command)
-    }
-
-    func testOverrideIsNamedWhenPresent() {
-        let config = ProcessCompose.Config(
-            path: "/repo/process-compose.yaml",
-            isRepositoryProvided: false,
-            overridePath: "/repo/wt/process-compose.override.yaml"
-        )
-
-        let command = ProcessCompose.PhaseRunner.command(
-            phase: .execute, config: config, binary: binary,
-            workstreamID: workstreamID, selectedProcesses: []
-        )
-
-        XCTAssertTrue(command.contains("-f /repo/wt/process-compose.override.yaml"), command)
     }
 
     func testHeadlessPhasesDisableTheTUI() {
@@ -233,7 +223,7 @@ final class PhaseRunnerTests: XCTestCase {
             namespace: execute
             command: "true"
         """.write(to: path, atomically: true, encoding: .utf8)
-        let config = ProcessCompose.Config(path: path.path, isRepositoryProvided: false, overridePath: nil)
+        let config = ProcessCompose.Config(path: path.path, isRepositoryProvided: false)
 
         let command = ProcessCompose.PhaseRunner.startCommand(
             config: config, binary: binary,
@@ -257,7 +247,7 @@ final class PhaseRunnerTests: XCTestCase {
     private func writeConfig(_ body: String, in dir: URL) throws -> ProcessCompose.Config {
         let path = dir.appendingPathComponent("process-compose.yaml")
         try "processes:\n\(body)".write(to: path, atomically: true, encoding: .utf8)
-        return ProcessCompose.Config(path: path.path, isRepositoryProvided: true, overridePath: nil)
+        return ProcessCompose.Config(path: path.path, isRepositoryProvided: true)
     }
 
     /// A config that declares both namespaces keeps the existing chain.
@@ -322,26 +312,20 @@ final class PhaseRunnerTests: XCTestCase {
         XCTAssertFalse(command.contains("prepare"), command)
     }
 
-    /// The C3 repro, verbatim: an override file with no top-level `processes:`
-    /// key. `declaredNamespaces` returns nil for it, so `prepare` is `.unknown`
+    /// The C3 repro: a config with no top-level `processes:` key.
+    /// `declaredNamespaces` returns nil for it, so `prepare` is `.unknown`
     /// rather than `.empty` — and the previous code chained `up -n prepare`
     /// whenever the namespace was not *confidently* empty. process-compose does
-    /// not exit on an empty namespace, and nothing bounds the chained command,
-    /// so Start hung forever with no output.
+    /// not exit on an empty namespace (measured against v1.122.0: still running
+    /// after 12s with no output), and nothing bounds the chained command, so
+    /// Start hung forever.
     func testStartCommandDoesNotChainPrepareForAnUnparseableConfig() throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let path = dir.appendingPathComponent("process-compose.yaml")
-        try """
-        processes:
-          web:
-            namespace: execute
-            command: "true"
-        """.write(to: path, atomically: true, encoding: .utf8)
-        let overridePath = dir.appendingPathComponent("process-compose.override.yaml")
-        try "version: \"0.5\"".write(to: overridePath, atomically: true, encoding: .utf8)
+        try "version: \"0.5\"".write(to: path, atomically: true, encoding: .utf8)
         let config = ProcessCompose.Config(
-            path: path.path, isRepositoryProvided: true, overridePath: nil
+            path: path.path, isRepositoryProvided: true
         )
 
         XCTAssertEqual(config.namespacePresence("prepare"), .unknown, "precondition")
@@ -362,7 +346,7 @@ final class PhaseRunnerTests: XCTestCase {
     /// and a grace period bound the cost of being wrong.
     func testStartCommandStillRunsExecuteWhenNothingCanBeParsedAtAll() {
         let config = ProcessCompose.Config(
-            path: "/nonexistent/process-compose.yaml", isRepositoryProvided: true, overridePath: nil
+            path: "/nonexistent/process-compose.yaml", isRepositoryProvided: true
         )
 
         let command = ProcessCompose.PhaseRunner.startCommand(
@@ -375,7 +359,7 @@ final class PhaseRunnerTests: XCTestCase {
 
     func testPathsWithSpacesAreQuoted() {
         let config = ProcessCompose.Config(
-            path: "/repo/my project/process-compose.yaml", isRepositoryProvided: false, overridePath: nil
+            path: "/repo/my project/process-compose.yaml", isRepositoryProvided: false
         )
 
         let command = ProcessCompose.PhaseRunner.command(
@@ -427,7 +411,7 @@ final class PhaseRunnerTests: XCTestCase {
 
     func test_command_verifyPassesSelectedProcessesAsTrailingArguments() {
         let config = ProcessCompose.Config(
-            path: "/tmp/process-compose.yaml", isRepositoryProvided: false, overridePath: nil
+            path: "/tmp/process-compose.yaml", isRepositoryProvided: false
         )
         let command = ProcessCompose.PhaseRunner.command(
             phase: .verify, config: config, binary: "/usr/bin/process-compose",
@@ -441,7 +425,7 @@ final class PhaseRunnerTests: XCTestCase {
 
     func test_command_verifyDropsNamesThatWouldParseAsFlags() {
         let config = ProcessCompose.Config(
-            path: "/tmp/process-compose.yaml", isRepositoryProvided: false, overridePath: nil
+            path: "/tmp/process-compose.yaml", isRepositoryProvided: false
         )
         let command = ProcessCompose.PhaseRunner.command(
             phase: .verify, config: config, binary: "/usr/bin/process-compose",

@@ -1,5 +1,5 @@
 // ABOUTME: Tests for locating a worktree's process-compose config.
-// ABOUTME: Worktree wins over the project directory; authorship follows location.
+// ABOUTME: Explicitly-named files outrank generic ones; authorship follows location.
 
 @testable import Atelier
 import XCTest
@@ -30,67 +30,98 @@ final class ProcessComposeConfigTests: XCTestCase {
             .write(to: dir.appendingPathComponent(name), atomically: true, encoding: .utf8)
     }
 
-    func testFindsConfigInWorktree() throws {
+    private func locate() -> ProcessCompose.Config? {
+        ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path)
+    }
+
+    // MARK: - The four tiers
+
+    /// Tier one. A worktree saying outright that this file is Atelier's outranks
+    /// everything, including a project-directory file of the same name.
+    func testAtelierNameInWorktreeOutranksEverything() throws {
+        try write("atelier.process-compose.yaml", in: worktree)
+        try write("atelier.process-compose.yaml", in: project)
+        try write("process-compose.yaml", in: worktree)
+        try write("process-compose.yaml", in: project)
+
+        let config = try XCTUnwrap(locate())
+
+        XCTAssertEqual(config.path, worktree.appendingPathComponent("atelier.process-compose.yaml").path)
+        XCTAssertTrue(config.isRepositoryProvided)
+    }
+
+    /// Tier two over tier three, and the reason the prefix exists. A repository
+    /// that runs process-compose for its own reasons checks in a generic
+    /// `process-compose.yaml`; naming the project-directory file explicitly is
+    /// what stops that file shadowing it.
+    func testAtelierNameInProjectDirectoryOutranksAGenericWorktreeConfig() throws {
+        try write("atelier.process-compose.yaml", in: project)
         try write("process-compose.yaml", in: worktree)
 
-        let config = try XCTUnwrap(
-            ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path)
-        )
+        let config = try XCTUnwrap(locate())
+
+        XCTAssertEqual(config.path, project.appendingPathComponent("atelier.process-compose.yaml").path)
+        XCTAssertFalse(config.isRepositoryProvided, "the user placed it, outside git")
+    }
+
+    /// Tier one over tier two: within one name, the worktree still wins, because
+    /// a worktree carrying its own config is being deliberate about this branch.
+    func testAtelierNameInWorktreeOutranksTheProjectDirectory() throws {
+        try write("atelier.process-compose.yaml", in: worktree)
+        try write("atelier.process-compose.yaml", in: project)
+
+        let config = try XCTUnwrap(locate())
+
+        XCTAssertEqual(config.path, worktree.appendingPathComponent("atelier.process-compose.yaml").path)
+    }
+
+    /// Tier three over tier four — unchanged from before the prefix existed, so
+    /// a project with a single unprefixed config is unaffected by any of this.
+    func testGenericWorktreeConfigOutranksTheProjectDirectory() throws {
+        try write("process-compose.yaml", in: project)
+        try write("process-compose.yaml", in: worktree)
+
+        let config = try XCTUnwrap(locate())
+
+        XCTAssertEqual(config.path, worktree.appendingPathComponent("process-compose.yaml").path)
+    }
+
+    func testFindsGenericConfigInWorktree() throws {
+        try write("process-compose.yaml", in: worktree)
+
+        let config = try XCTUnwrap(locate())
 
         XCTAssertEqual(config.path, worktree.appendingPathComponent("process-compose.yaml").path)
         XCTAssertTrue(config.isRepositoryProvided)
-        XCTAssertNil(config.overridePath)
     }
 
-    func testFindsConfigInProjectDirectory() throws {
+    func testFindsGenericConfigInProjectDirectory() throws {
         try write("process-compose.yaml", in: project)
 
-        let config = try XCTUnwrap(
-            ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path)
-        )
+        let config = try XCTUnwrap(locate())
 
         XCTAssertEqual(config.path, project.appendingPathComponent("process-compose.yaml").path)
         XCTAssertFalse(config.isRepositoryProvided)
     }
 
-    func testWorktreeWinsOverProjectDirectory() throws {
-        try write("process-compose.yaml", in: project)
-        try write("process-compose.yaml", in: worktree)
+    /// Within one tier, `.yaml` is preferred over `.yml`. Nothing external
+    /// decides this any more — every file is named with `-f`, so
+    /// process-compose's own discovery preference does not apply — but it has to
+    /// be *some* fixed order, and a project with both should not see the answer
+    /// move.
+    func testYamlIsPreferredOverYmlWithinATier() throws {
+        try write("atelier.process-compose.yaml", in: worktree)
+        try write("atelier.process-compose.yml", in: worktree)
 
-        let config = try XCTUnwrap(
-            ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path)
-        )
+        let config = try XCTUnwrap(locate())
 
-        XCTAssertEqual(config.path, worktree.appendingPathComponent("process-compose.yaml").path)
+        XCTAssertEqual(config.path, worktree.appendingPathComponent("atelier.process-compose.yaml").path)
     }
 
-    /// `overridePath` is only recorded for a project-directory base. A worktree
-    /// base finds its sibling override through `loadedFiles` instead, so the
-    /// property being nil there says nothing about whether one exists.
-    func testOverrideFoundOnlyForProjectDirectoryConfig() throws {
-        try write("process-compose.yaml", in: project)
-        try write("process-compose.override.yaml", in: worktree)
-
-        let config = try XCTUnwrap(
-            ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path)
-        )
-
-        XCTAssertEqual(config.overridePath, worktree.appendingPathComponent("process-compose.override.yaml").path)
-    }
-
-    func testWorktreeConfigReportsNoOverride() throws {
-        try write("process-compose.yaml", in: worktree)
-        try write("process-compose.override.yaml", in: worktree)
-
-        let config = try XCTUnwrap(
-            ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path)
-        )
-
-        XCTAssertNil(config.overridePath, "a worktree base resolves its sibling override through loadedFiles")
-    }
-
-    /// When worktree and project directory paths are the same (plain checkout),
-    /// the result is marked as repository-provided.
+    /// When worktree and project directory are the same path (a plain checkout
+    /// opened directly), the project-directory tiers are skipped rather than
+    /// deduplicated: the file arrived with the repository, so it keeps the
+    /// approval gate.
     func testSamePathForBothResolvesAsRepositoryProvided() throws {
         try write("process-compose.yaml", in: worktree)
 
@@ -101,8 +132,19 @@ final class ProcessComposeConfigTests: XCTestCase {
         XCTAssertTrue(config.isRepositoryProvided)
     }
 
+    func testSamePathForBothResolvesAnAtelierNamedConfigAsRepositoryProvided() throws {
+        try write("atelier.process-compose.yaml", in: worktree)
+
+        let config = try XCTUnwrap(
+            ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: worktree.path)
+        )
+
+        XCTAssertEqual(config.path, worktree.appendingPathComponent("atelier.process-compose.yaml").path)
+        XCTAssertTrue(config.isRepositoryProvided, "the prefix says who it is for, not who wrote it")
+    }
+
     func testNoConfigAnywhere() {
-        XCTAssertNil(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
+        XCTAssertNil(locate())
     }
 
     func testIgnoresBareComposeFile() throws {
@@ -110,7 +152,57 @@ final class ProcessComposeConfigTests: XCTestCase {
             to: worktree.appendingPathComponent("compose.yaml"), atomically: true, encoding: .utf8
         )
 
-        XCTAssertNil(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
+        XCTAssertNil(locate())
+    }
+
+    // MARK: - One config, one file
+
+    /// An earlier design merged a worktree `process-compose.override.yml` into a
+    /// project-directory base. That is gone: tier one is how a worktree says it
+    /// wants its own arrangement. The name must stay inert, because a file that
+    /// silently joined `loadedFiles` would be repository content executing
+    /// unattended — which is exactly the hole `loadedFiles` exists to close.
+    func testAnOverrideFileBesideTheConfigIsNeitherLoadedNorApproved() throws {
+        try write("process-compose.yaml", in: project)
+        try write("process-compose.override.yml", in: worktree)
+        try write("process-compose.override.yaml", in: worktree)
+
+        let config = try XCTUnwrap(locate())
+
+        XCTAssertEqual(config.loadedFiles, [project.appendingPathComponent("process-compose.yaml").path])
+        XCTAssertEqual(config.repositoryProvidedFiles, [])
+        XCTAssertFalse(config.requiresApproval)
+    }
+
+    func testAnOverrideFileBesideAWorktreeConfigIsNotLoadedEither() throws {
+        try write("process-compose.yaml", in: worktree)
+        try write("process-compose.override.yml", in: worktree)
+
+        let config = try XCTUnwrap(locate())
+
+        XCTAssertEqual(config.loadedFiles, [worktree.appendingPathComponent("process-compose.yaml").path])
+    }
+
+    /// A namespace declared only in a file Atelier does not load must read as
+    /// absent. The probe has to describe what will run: counting a file that is
+    /// never named with `-f` would chain `prepare` for a namespace
+    /// process-compose is never told about, which hangs Start.
+    func testANamespaceDeclaredOnlyInAnOverrideDoesNotCount() throws {
+        try writeProcesses("""
+          web:
+            namespace: execute
+            command: "true"
+        """, in: worktree)
+        try writeProcesses("""
+          setup:
+            namespace: prepare
+            command: "true"
+        """, name: "process-compose.override.yml", in: worktree)
+
+        let config = try XCTUnwrap(locate())
+
+        XCTAssertEqual(config.namespacePresence("prepare"), .empty)
+        XCTAssertEqual(config.declaredProcesses(in: "prepare"), [])
     }
 
     // MARK: - Namespace declarations
@@ -119,87 +211,13 @@ final class ProcessComposeConfigTests: XCTestCase {
         try "processes:\n\(body)".write(to: dir.appendingPathComponent(name), atomically: true, encoding: .utf8)
     }
 
-    /// A sibling override beside a worktree base is loaded, and `locate` does
-    /// not record it — `overridePath` is nil here by design, and `loadedFiles`
-    /// is what resolves it. The probe has to read the same files
-    /// process-compose will be told to load, or a namespace declared only in the
-    /// override reads as absent and the phase is silently skipped.
-    func testOverrideDiscoveredBesideAWorktreeConfigCounts() throws {
-        try writeProcesses("""
-          web:
-            namespace: execute
-            command: "true"
-        """, in: worktree)
-        try writeProcesses("""
-          seed:
-            namespace: bootstrap
-            command: "true"
-        """, name: "process-compose.override.yaml", in: worktree)
-        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
-
-        XCTAssertNil(config.overridePath, "loadedFiles resolves it; locate does not record it")
-        XCTAssertEqual(config.namespacePresence("bootstrap"), .present)
-        XCTAssertEqual(config.namespacePresence("prepare"), .empty)
-    }
-
-    /// Exactly one override is loaded, and it is the one process-compose itself
-    /// prefers: with both extensions present it takes `.yml` (verified against
-    /// v1.122.0). So a namespace declared only in the ignored `.yaml` must read
-    /// as absent — the probe's job is to describe what will run, and naming both
-    /// would make Atelier run a file process-compose would have skipped.
-    func testOnlyThePreferredOverrideExtensionCounts() throws {
-        try writeProcesses("""
-          web:
-            namespace: execute
-            command: "true"
-        """, in: worktree)
-        try writeProcesses("""
-          ignored:
-            namespace: prepare
-            command: "true"
-        """, name: "process-compose.override.yaml", in: worktree)
-        try writeProcesses("""
-          seed:
-            namespace: bootstrap
-            command: "true"
-        """, name: "process-compose.override.yml", in: worktree)
-        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
-
-        XCTAssertEqual(config.loadedFiles, [
-            worktree.appendingPathComponent("process-compose.yaml").path,
-            worktree.appendingPathComponent("process-compose.override.yml").path,
-        ])
-        XCTAssertEqual(config.namespacePresence("bootstrap"), .present, "declared in the loaded .yml")
-        XCTAssertEqual(config.namespacePresence("prepare"), .empty, "declared only in the ignored .yaml")
-    }
-
-    /// The same file beside a *project-directory* config is only loaded when
-    /// `locate` recorded it as `overridePath`. Every loaded file is named with
-    /// `-f`, so nothing outside `loadedFiles` ever counts.
-    func testOverrideBesideAProjectConfigIsNotCountedUnlessNamed() throws {
-        try writeProcesses("""
-          web:
-            namespace: execute
-            command: "true"
-        """, in: project)
-        try writeProcesses("""
-          seed:
-            namespace: bootstrap
-            command: "true"
-        """, name: "process-compose.override.yaml", in: project)
-        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
-
-        XCTAssertFalse(config.isRepositoryProvided)
-        XCTAssertEqual(config.namespacePresence("bootstrap"), .empty)
-    }
-
     func testNamespaceIsPresentWhenAProcessDeclaresIt() throws {
         try writeProcesses("""
           setup:
             namespace: prepare
             command: "true"
         """, in: worktree)
-        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
+        let config = try XCTUnwrap(locate())
 
         XCTAssertEqual(config.namespacePresence("prepare"), .present)
     }
@@ -210,9 +228,29 @@ final class ProcessComposeConfigTests: XCTestCase {
             namespace: execute
             command: "true"
         """, in: worktree)
-        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
+        let config = try XCTUnwrap(locate())
 
         XCTAssertEqual(config.namespacePresence("prepare"), .empty)
+    }
+
+    /// The namespace probe reads whichever file won the lookup, so an
+    /// `atelier.`-prefixed config is what gets described.
+    func testNamespacePresenceReadsTheAtelierNamedConfig() throws {
+        try writeProcesses("""
+          api:
+            namespace: web
+            command: "true"
+        """, in: worktree)
+        try writeProcesses("""
+          seed:
+            namespace: bootstrap
+            command: "true"
+        """, name: "atelier.process-compose.yaml", in: project)
+
+        let config = try XCTUnwrap(locate())
+
+        XCTAssertEqual(config.namespacePresence("bootstrap"), .present)
+        XCTAssertEqual(config.namespacePresence("web"), .empty, "the repository's own file is not loaded")
     }
 
     /// A process with no `namespace:` key belongs to process-compose's own
@@ -222,40 +260,21 @@ final class ProcessComposeConfigTests: XCTestCase {
           web:
             command: "true"
         """, in: worktree)
-        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
+        let config = try XCTUnwrap(locate())
 
         XCTAssertEqual(config.namespacePresence("prepare"), .empty)
         XCTAssertEqual(config.namespacePresence("execute"), .empty)
     }
 
-    /// A namespace declared only in the override file still counts — the
-    /// override can add processes the base file never mentions.
-    func testNamespaceDeclaredOnlyInTheOverrideStillCounts() throws {
-        try writeProcesses("""
-          web:
-            namespace: execute
-            command: "true"
-        """, in: project)
-        try writeProcesses("""
-          setup:
-            namespace: prepare
-            command: "true"
-        """, name: "process-compose.override.yaml", in: worktree)
-        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
-
-        XCTAssertEqual(config.namespacePresence("prepare"), .present)
-    }
-
     /// An unreadable file is `.unknown`, never mistaken for "no namespaces".
     /// The three `.unknown` cases below are asserted as `.unknown` rather than
-    /// as "not empty", which is what they used to say through
-    /// `namespaceIsConfidentlyEmpty`. That distinction is now load-bearing:
+    /// as "not empty". That distinction is load-bearing:
     /// `ProcessCompose.PhaseRunner.startCommand` chains `prepare` only on `.present`, because
     /// chaining it on an unparseable config hangs Start forever, while
     /// `ProcessCompose.PhaseExecutor` still runs an `.unknown` phase on a bounded leash.
     func testUnknownWhenTheFileCannotBeRead() {
         let config = ProcessCompose.Config(
-            path: "/nonexistent/process-compose.yaml", isRepositoryProvided: true, overridePath: nil
+            path: "/nonexistent/process-compose.yaml", isRepositoryProvided: true
         )
 
         XCTAssertEqual(config.namespacePresence("prepare"), .unknown)
@@ -268,7 +287,7 @@ final class ProcessComposeConfigTests: XCTestCase {
         try "processes: {web: {command: \"true\"".write(
             to: worktree.appendingPathComponent("process-compose.yaml"), atomically: true, encoding: .utf8
         )
-        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
+        let config = try XCTUnwrap(locate())
 
         XCTAssertEqual(config.namespacePresence("prepare"), .unknown)
     }
@@ -280,62 +299,52 @@ final class ProcessComposeConfigTests: XCTestCase {
         try "version: \"0.5\"".write(
             to: worktree.appendingPathComponent("process-compose.yaml"), atomically: true, encoding: .utf8
         )
-        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
+        let config = try XCTUnwrap(locate())
 
         XCTAssertEqual(config.namespacePresence("prepare"), .unknown)
     }
 
     // MARK: - What has to be approved
 
-    /// The base config in the worktree is repository content, so it is approved.
+    /// A config in the worktree is repository content, so it is approved —
+    /// whichever of the two names it carries. The prefix says who the file is
+    /// *for*, not who wrote it, so it changes precedence and nothing else.
     func testWorktreeConfigRequiresApproval() throws {
         try write("process-compose.yaml", in: worktree)
-        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
+        let config = try XCTUnwrap(locate())
 
         XCTAssertTrue(config.requiresApproval)
         XCTAssertEqual(config.repositoryProvidedFiles, [worktree.appendingPathComponent("process-compose.yaml").path])
     }
 
-    /// The first hole this closes. A repository ships a benign base config and
-    /// an override beside it; `locate` records only the base, but both are
-    /// loaded and run. Approving the base alone would show the user one file
-    /// while another executed unattended.
-    func testWorktreeOverrideIsPartOfWhatIsApproved() throws {
-        try write("process-compose.yaml", in: worktree)
-        try write("process-compose.override.yaml", in: worktree)
-        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
+    func testAtelierNamedWorktreeConfigStillRequiresApproval() throws {
+        try write("atelier.process-compose.yaml", in: worktree)
+        let config = try XCTUnwrap(locate())
 
-        XCTAssertNil(config.overridePath, "locate does not record the sibling override")
-        XCTAssertTrue(config.requiresApproval)
-        XCTAssertEqual(config.repositoryProvidedFiles, [
-            worktree.appendingPathComponent("process-compose.yaml").path,
-            worktree.appendingPathComponent("process-compose.override.yaml").path,
-        ])
+        XCTAssertTrue(config.requiresApproval, "an Atelier-named file is still repository content")
+        XCTAssertEqual(
+            config.repositoryProvidedFiles,
+            [worktree.appendingPathComponent("atelier.process-compose.yaml").path]
+        )
     }
 
     /// A config the user placed in the project directory, with nothing in the
     /// worktree, is theirs: nothing to approve.
-    func testProjectDirectoryConfigAloneRequiresNoApproval() throws {
+    func testProjectDirectoryConfigRequiresNoApproval() throws {
         try write("process-compose.yaml", in: project)
-        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
+        let config = try XCTUnwrap(locate())
 
         XCTAssertFalse(config.requiresApproval)
         XCTAssertEqual(config.repositoryProvidedFiles, [])
     }
 
-    /// The second and worse hole. The user's own config sits in the project
-    /// directory, so `isRepositoryProvided` is false — but `overridePath` points
-    /// into the *worktree* and is named with `-f` explicitly, so repository
-    /// content executes. Gating on `isRepositoryProvided` alone would leave this
-    /// completely ungated.
-    func testWorktreeOverrideBesideAUserConfigStillRequiresApproval() throws {
-        try write("process-compose.yaml", in: project)
-        try write("process-compose.override.yaml", in: worktree)
-        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
+    func testAtelierNamedProjectDirectoryConfigRequiresNoApproval() throws {
+        try write("atelier.process-compose.yaml", in: project)
+        try write("process-compose.yaml", in: worktree)
+        let config = try XCTUnwrap(locate())
 
-        XCTAssertFalse(config.isRepositoryProvided)
-        XCTAssertTrue(config.requiresApproval, "a worktree override is repository content whatever the base config is")
-        XCTAssertEqual(config.repositoryProvidedFiles, [worktree.appendingPathComponent("process-compose.override.yaml").path])
+        XCTAssertFalse(config.requiresApproval)
+        XCTAssertEqual(config.repositoryProvidedFiles, [])
     }
 
     // MARK: - The files that will execute
@@ -349,38 +358,31 @@ final class ProcessComposeConfigTests: XCTestCase {
     func testComposeYamlIsNeverLoaded() throws {
         try write("process-compose.yaml", in: worktree)
         try write("compose.yaml", in: worktree)
-        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
+        let config = try XCTUnwrap(locate())
 
         XCTAssertEqual(config.loadedFiles, [worktree.appendingPathComponent("process-compose.yaml").path])
         XCTAssertFalse(config.loadedFiles.contains { $0.hasSuffix("/compose.yaml") })
         XCTAssertFalse(config.repositoryProvidedFiles.contains { $0.hasSuffix("/compose.yaml") })
     }
 
-    /// Exactly one override, and the one process-compose itself would have
-    /// picked. Verified against v1.122.0: with both extensions present,
-    /// discovery loads `.yml` and ignores `.yaml`. Naming both would run a file
-    /// discovery would have skipped.
-    func testOnlyTheOverrideProcessComposePrefersIsLoaded() throws {
-        try write("process-compose.yaml", in: worktree)
-        try write("process-compose.override.yaml", in: worktree)
-        try write("process-compose.override.yml", in: worktree)
-        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
-
-        XCTAssertEqual(config.loadedFiles, [
-            worktree.appendingPathComponent("process-compose.yaml").path,
-            worktree.appendingPathComponent("process-compose.override.yml").path,
-        ])
-    }
-
-    /// Approval covers the files that execute, and only those: the base config
-    /// plus its override, with the user's own project-directory file excluded
-    /// and `compose.yaml` never in the picture at all.
+    /// Approval covers the files that execute, and only those.
     func testApprovedSetEqualsTheExecutedSetForARepositoryConfig() throws {
-        try write("process-compose.yaml", in: worktree)
-        try write("process-compose.override.yml", in: worktree)
-        let config = try XCTUnwrap(ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path))
+        try write("atelier.process-compose.yaml", in: worktree)
+        let config = try XCTUnwrap(locate())
 
         XCTAssertEqual(config.repositoryProvidedFiles, config.loadedFiles)
+    }
+
+    /// The config that lost the lookup is not loaded, so it is not approved
+    /// either — otherwise the user would be asked to approve a file that never
+    /// runs, and the approval prompt would stop meaning anything.
+    func testALosingRepositoryConfigIsNotApproved() throws {
+        try write("atelier.process-compose.yaml", in: project)
+        try write("process-compose.yaml", in: worktree)
+        let config = try XCTUnwrap(locate())
+
+        XCTAssertEqual(config.loadedFiles, [project.appendingPathComponent("atelier.process-compose.yaml").path])
+        XCTAssertEqual(config.repositoryProvidedFiles, [])
     }
 
     // MARK: - Declared processes
@@ -394,9 +396,7 @@ final class ProcessComposeConfigTests: XCTestCase {
           api:    { namespace: execute,   command: "true" }
           orphan: { command: "true" }
         """)
-        let config = try XCTUnwrap(
-            ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path)
-        )
+        let config = try XCTUnwrap(locate())
 
         XCTAssertEqual(config.declaredProcesses(in: "execute"), ["api", "bff"])
         XCTAssertEqual(config.declaredProcesses(in: "bootstrap"), ["seed"])
@@ -410,58 +410,36 @@ final class ProcessComposeConfigTests: XCTestCase {
         processes:
           orphan: { command: "true" }
         """)
-        let config = try XCTUnwrap(
-            ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path)
-        )
+        let config = try XCTUnwrap(locate())
 
         XCTAssertEqual(config.declaredProcesses(in: "execute"), [])
     }
 
-    /// An override with no `processes:` key at all is legal process-compose —
-    /// it may set only `environment:` or `version:` — and must not make the
-    /// whole config "unknown". It used to: `declaredProcesses` returned nil,
-    /// which the Verification tab renders as "this project's process-compose
-    /// files could not be parsed, so its verify checks are unknown" and
-    /// `Verification.Runner.start` throws, for a config process-compose runs
-    /// and `namespacePresence` calls `.present`. The Execution checklist
-    /// silently offered no processes for the same shape.
-    func testDeclaredProcessesSkipsAnOverrideWithNoProcessesKey() throws {
+    /// A config with no `processes:` key at all is legal process-compose — it
+    /// may set only `environment:` or `version:` — and declares no processes.
+    /// It must not read as nil, which the Verification tab renders as "this
+    /// project's process-compose files could not be parsed, so its verify checks
+    /// are unknown" and `Verification.Runner.start` throws on, for a config
+    /// process-compose runs happily.
+    func testDeclaredProcessesIsEmptyForAConfigWithNoProcessesKey() throws {
         try write("process-compose.yaml", in: worktree, contents: """
-        processes:
-          rspec:   { namespace: verify, command: "true" }
-          rubocop: { namespace: verify, command: "true" }
-          bff:     { namespace: execute, command: "true" }
-        """)
-        try write("process-compose.override.yml", in: worktree, contents: """
         version: "0.5"
         environment:
           - "RAILS_ENV=test"
         """)
-        let config = try XCTUnwrap(
-            ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path)
-        )
-        // The override really is one of the files that will be loaded, so this
-        // is the shape that was broken and not a config the override misses.
-        XCTAssertEqual(config.loadedFiles.count, 2)
+        let config = try XCTUnwrap(locate())
 
-        XCTAssertEqual(config.declaredProcesses(in: "verify"), ["rspec", "rubocop"])
-        XCTAssertEqual(config.declaredProcesses(in: "execute"), ["bff"])
+        XCTAssertEqual(config.declaredProcesses(in: "verify"), [])
     }
 
-    /// The degenerate sibling of the case above: an override that is empty, or
+    /// The degenerate sibling of the case above: a config that is empty, or
     /// holds nothing but a comment. A placeholder a project has not filled in
     /// yet declares nothing; it is not a file Atelier failed to read.
-    func testDeclaredProcessesSkipsAnEmptyOverride() throws {
-        try write("process-compose.yaml", in: worktree, contents: """
-        processes:
-          rspec: { namespace: verify, command: "true" }
-        """)
-        try write("process-compose.override.yml", in: worktree, contents: "# nothing overridden yet\n")
-        let config = try XCTUnwrap(
-            ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path)
-        )
+    func testDeclaredProcessesIsEmptyForACommentOnlyConfig() throws {
+        try write("process-compose.yaml", in: worktree, contents: "# nothing here yet\n")
+        let config = try XCTUnwrap(locate())
 
-        XCTAssertEqual(config.declaredProcesses(in: "verify"), ["rspec"])
+        XCTAssertEqual(config.declaredProcesses(in: "verify"), [])
     }
 
     /// nil, never `[]`. An empty list means "this namespace has no processes"
@@ -469,9 +447,7 @@ final class ProcessComposeConfigTests: XCTestCase {
     /// that apart from a file it could not read.
     func testDeclaredProcessesIsNilWhenTheConfigCannotBeParsed() throws {
         try write("process-compose.yaml", in: worktree, contents: "processes: [this, is, not, a, mapping]")
-        let config = try XCTUnwrap(
-            ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path)
-        )
+        let config = try XCTUnwrap(locate())
 
         XCTAssertNil(config.declaredProcesses(in: "execute"))
     }

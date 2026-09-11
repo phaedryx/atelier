@@ -163,8 +163,8 @@ extension ProcessCompose {
         /// that ends in `.skipped`. Here nothing is bounded: the chained command
         /// runs in a terminal surface with no deadline, so failing open trades "a
         /// declared prepare was skipped" for "Start never returns". The costs invert,
-        /// so the direction does. Reachable today — an override file with no
-        /// top-level `processes:` key makes `declaredNamespaces` return nil.
+        /// so the direction does. Reachable today — a config with no top-level
+        /// `processes:` key makes `declaredNamespaces` return nil.
         static func startCommand(
             config: ProcessCompose.Config,
             binary: String,

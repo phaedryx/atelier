@@ -346,7 +346,19 @@ so those notes were written and discarded.
 `prepare` is chained only when `namespacePresence` says `.present` — never on `.unknown`.
 process-compose does not exit when told to run an empty namespace, it idles forever, so
 chaining `up -n prepare` for a namespace that turns out not to exist hangs Start with no output.
-`execute` is never conditional — skipping it would make Start silently do nothing.
+`execute` is conditional on `.empty` and **only** `.empty`, and the gate lives in
+`ProcessCompose.RunCommandPlan.plan` rather than in `PhaseRunner.startCommand`. It had to exist
+because `up -n execute` against a namespace nobody declares does not fail and does not exit —
+measured against v1.122.0, it idles indefinitely with no output — so Start opened a TUI with an
+empty process list and Stop as the only way out. It had to go in `RunCommandPlan` because
+`canRun` is what enables the Start button; deciding it in `startCommand` would leave the button
+enabled over a run that does nothing, the exact disagreement that type exists to prevent.
+`unavailableReason` carries the wording and `ExecutionTabView.scriptInstructions` renders it, so
+the refusal is stated rather than silent — which is what makes this safe: the objection to
+gating `execute` was that skipping it would make Start *silently* do nothing, and it is the
+silence, not the skip, that was the problem. **Nothing but a test enforces that `plan` and
+`unavailableReason` agree** — they hand-mirror each other in the same order, as
+`verificationUnavailableReason` does; `Tests/RunCommandPlanTests.swift` pins both directions.
 
 **`.unknown` fails closed here and open in `ProcessCompose.PhaseExecutor`, and that asymmetry is deliberate.**
 A config Yams cannot decode still gets its `bootstrap` or `dispose` run, because refusing would
@@ -365,7 +377,7 @@ Three facts about this are load-bearing and easy to lose:
    That turns process-compose's own discovery *off*, which is the point: the set of files
    `ScriptTrust` fingerprints, `ConfigApprovalView` displays, and process-compose executes is
    then one set. Do not reintroduce discovery. Leaving a worktree config unnamed so discovery
-   could pick up its sibling override made the approval gate a *mirror* of discovery's rules,
+   could pick up a sibling file made the approval gate a *mirror* of discovery's rules,
    and a mirror can be stepped around — discovery also loads `compose.yaml`, a name Atelier
    deliberately does not detect, so a repository could ship a benign `process-compose.yaml` to
    be approved and a `compose.yaml` to be run. Verified against v1.122.0.
@@ -380,11 +392,33 @@ Three facts about this are load-bearing and easy to lose:
    `ConfigApprovalView`, `ExecutionTabView`, `WorkstreamInfoView`) and is corrected in all of
    them. The decision to leave `execute` ungated stands; only its stated reason was wrong.
 
-`ProcessCompose.Config.locate` looks in the **worktree first, then the project directory**, and
-records `loadedFiles` (base plus the one override process-compose prefers) and
-`repositoryProvidedFiles` (the subset needing approval). The project directory is the better
-home in the bare-repo layout: it sits outside every worktree, so git cannot see it, no ignore
-rule is needed, and one file serves every worktree.
+**`ProcessCompose.Config.locate` loads exactly one file**, the first of four tiers that exists:
+`atelier.process-compose.y*ml` in the worktree, the same name in the project directory, then
+`process-compose.y*ml` in the worktree, then in the project directory. It records `loadedFiles`
+(that one file) and `repositoryProvidedFiles` (it, when it is in the worktree). The project
+directory is the better home in the bare-repo layout: it sits outside every worktree, so git
+cannot see it, no ignore rule is needed, and one file serves every worktree.
+
+**Precedence follows explicitness, not location**, and the `atelier.` prefix is the whole point
+of the type. A repository may run process-compose for its own reasons — an instance manager, a
+docker-free dev stack — and that file declares the project's own namespaces, not Atelier's five.
+Before tiers 1 and 2 existed such a file was indistinguishable from an Atelier config and won
+outright: `bootstrap` and `prepare` silently did nothing, Verification reported no checks, and
+Start ran `up -n execute` against a namespace nobody had declared — which does not fail, it
+**idles forever with no output** (measured against v1.122.0). Tier 3 still beating tier 4 is
+deliberate, so a project with a single unprefixed config is unaffected; the consequence is that
+a repository's own generic config still shadows an unprefixed project-directory one, and the fix
+is the prefix.
+
+**There is no override file.** An earlier design merged a worktree `process-compose.override.yml`
+into a project-directory base. Tier 1 replaces it: a worktree that wants its own arrangement
+names its own `atelier.process-compose.yaml` and says so, rather than having two files merged by
+rules a reader has to hold in their head to predict what runs. `loadedFiles` stays an array
+because it, not `path`, is what `PhaseRunner.command` names with `-f` and what `ScriptTrust`
+fingerprints — the approved set, the displayed set and the executed set are the same *set*.
+`Tests/ProcessComposeConfigTests.swift` pins that a `process-compose.override.yml` beside the
+config is neither loaded nor approved; a file that silently rejoined `loadedFiles` would be
+repository content executing unattended.
 
 **Which directory that is, is load-bearing.** `Project.directory` means the repository's
 *home* — the `.bare` container, not the default checkout inside it — and every caller that
@@ -394,10 +428,10 @@ fixed: `projectLocation` resolved a container forward to its checkout, so the lo
 against `<container>/main` and a config placed where the README says was never found. Passing
 `checkout` to `Config.locate` or `PortsConfig.load` reintroduces exactly that bug.
 
-A config in the worktree still wins,
-because a worktree carrying its own is saying something deliberate. Either way process-compose
-runs with the *worktree* as cwd and resolves a relative `working_dir` against its own cwd, so
-`working_dir: apps/api` lands inside the worktree from either home.
+Within one name a config in the worktree still wins, because a worktree carrying its own is
+saying something deliberate. Wherever it lives, process-compose runs with the *worktree* as cwd
+and resolves a relative `working_dir` against its own cwd, so `working_dir: apps/api` lands
+inside the worktree from either home.
 
 `-u <path>` names the control socket explicitly. `-U` alone generates a path containing
 process-compose's PID, which Atelier cannot predict and so cannot connect to. The headless

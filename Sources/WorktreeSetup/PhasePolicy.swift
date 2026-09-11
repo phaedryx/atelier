@@ -53,7 +53,7 @@ enum PhasePolicy {
         }
         guard let config else {
             return .nothingToDo(String(format: NSLocalizedString(
-                "This project has no process-compose.yaml, so no %@ ran.", comment: ""
+                "This project has no process-compose config, so no %@ ran.", comment: ""
             ), name))
         }
         guard let binary else {

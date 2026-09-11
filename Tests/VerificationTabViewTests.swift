@@ -163,7 +163,7 @@ final class VerificationTabViewTests: XCTestCase {
         let path = dir.appendingPathComponent("process-compose.yaml").path
         try yaml.write(toFile: path, atomically: true, encoding: .utf8)
         return ProcessCompose.Config(
-            path: path, isRepositoryProvided: isRepositoryProvided, overridePath: nil
+            path: path, isRepositoryProvided: isRepositoryProvided
         )
     }
 

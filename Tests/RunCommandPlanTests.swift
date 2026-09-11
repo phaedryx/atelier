@@ -7,8 +7,7 @@ import XCTest
 final class RunCommandPlanTests: XCTestCase {
     private let config = ProcessCompose.Config(
         path: "/repo/ws/process-compose.yaml",
-        isRepositoryProvided: true,
-        overridePath: nil
+        isRepositoryProvided: true
     )
 
     /// The string a `.processCompose` source carries, for reference. It is what
@@ -21,6 +20,128 @@ final class RunCommandPlanTests: XCTestCase {
             source: .processCompose,
             sourceDescription: "process-compose.yaml"
         )
+    }
+
+    // MARK: - Temp configs
+
+    private var tmpDir: URL!
+
+    override func setUp() {
+        super.setUp()
+        tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try! FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: tmpDir)
+        super.tearDown()
+    }
+
+    private func writtenConfig(_ body: String) throws -> ProcessCompose.Config {
+        let path = tmpDir.appendingPathComponent("process-compose.yaml")
+        try body.write(to: path, atomically: true, encoding: .utf8)
+        return ProcessCompose.Config(path: path.path, isRepositoryProvided: true)
+    }
+
+    // MARK: - The execute namespace has to exist
+
+    /// `up -n execute` against a namespace no process declares does not fail and
+    /// does not exit — measured against v1.122.0, it idles indefinitely with no
+    /// output. Start would open a TUI with an empty process list and nothing to
+    /// read. A project declaring only `verify` is the realistic shape.
+    func testAConfigDeclaringNoExecuteProcessesProducesNothing() throws {
+        let config = try writtenConfig("""
+        processes:
+          rspec:
+            namespace: verify
+            command: "true"
+        """)
+
+        let plan = ProcessCompose.RunCommandPlan.plan(
+            devCommand: processComposeCommand(), config: config, binary: "/opt/homebrew/bin/process-compose"
+        )
+
+        XCTAssertEqual(plan, .nothing)
+    }
+
+    func testAConfigDeclaringExecuteRuns() throws {
+        let config = try writtenConfig("""
+        processes:
+          bff:
+            namespace: execute
+            command: "true"
+        """)
+
+        let plan = ProcessCompose.RunCommandPlan.plan(
+            devCommand: processComposeCommand(), config: config, binary: "/opt/homebrew/bin/process-compose"
+        )
+
+        XCTAssertEqual(plan, .phaseScoped(config: config, binary: "/opt/homebrew/bin/process-compose"))
+    }
+
+    /// `.empty` only, never `.unknown`. A config Atelier cannot decode but
+    /// process-compose accepts must still start: refusing on a failure to *read*
+    /// turns a parse gap into a permanently dead Start button, which is worse
+    /// than letting process-compose have its own opinion. Same asymmetry
+    /// `PhaseRunner.startCommand` applies to `prepare`.
+    func testAnUnparseableConfigStillRuns() throws {
+        let config = try writtenConfig("""
+        version: "0.5"
+        """)
+        XCTAssertEqual(config.namespacePresence("execute"), .unknown, "precondition")
+
+        let plan = ProcessCompose.RunCommandPlan.plan(
+            devCommand: processComposeCommand(), config: config, binary: "/opt/homebrew/bin/process-compose"
+        )
+
+        XCTAssertEqual(plan, .phaseScoped(config: config, binary: "/opt/homebrew/bin/process-compose"))
+    }
+
+    /// **Nothing but this test enforces the agreement.** `unavailableReason`
+    /// hand-mirrors `plan`'s preconditions in the same order; a sixth added to
+    /// one and not the other compiles fine and renders an enabled Start button
+    /// that does nothing in silence — the exact disagreement this type exists to
+    /// prevent.
+    func testCanRunAndUnavailableReasonAgreeOnAnEmptyExecuteNamespace() throws {
+        let config = try writtenConfig("""
+        processes:
+          rspec:
+            namespace: verify
+            command: "true"
+        """)
+        let binary = "/opt/homebrew/bin/process-compose"
+
+        let plan = ProcessCompose.RunCommandPlan.plan(
+            devCommand: processComposeCommand(), config: config, binary: binary
+        )
+        let reason = ProcessCompose.RunCommandPlan.unavailableReason(
+            devCommand: processComposeCommand(), config: config, binary: binary, isEnabled: true
+        )
+
+        XCTAssertFalse(plan.canRun)
+        XCTAssertEqual(reason?.contains("no execute processes"), true, String(describing: reason))
+    }
+
+    /// The other half of the same agreement: a config that can run must not be
+    /// explained away as unavailable.
+    func testARunnableConfigHasNoUnavailableReason() throws {
+        let config = try writtenConfig("""
+        processes:
+          bff:
+            namespace: execute
+            command: "true"
+        """)
+        let binary = "/opt/homebrew/bin/process-compose"
+
+        let plan = ProcessCompose.RunCommandPlan.plan(
+            devCommand: processComposeCommand(), config: config, binary: binary
+        )
+        let reason = ProcessCompose.RunCommandPlan.unavailableReason(
+            devCommand: processComposeCommand(), config: config, binary: binary, isEnabled: true
+        )
+
+        XCTAssertTrue(plan.canRun)
+        XCTAssertNil(reason)
     }
 
     // MARK: - The invariant

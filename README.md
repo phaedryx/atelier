@@ -66,8 +66,8 @@ and the Verification tab's Run button.
 
 | File | Where Atelier looks | What it holds |
 |------|---------------------|---------------|
-| `process-compose.yaml` | the worktree, then the project directory | the commands, in five namespaces |
-| `process-compose.override.yml` | the worktree | per-worktree additions to a project-directory config |
+| `atelier.process-compose.yaml` | the worktree, then the project directory | the commands, in five namespaces |
+| `process-compose.yaml` | the worktree, then the project directory | the same, under the generic name |
 | `ports.yml` (or `ports.yaml`) | the project directory only | the port variables Atelier supplies |
 
 **"The project directory" is the repository's home — in the bare-repo layout the
@@ -79,20 +79,38 @@ ordinary clone the repository's home *is* the checkout, and the file goes at its
 root like anything else.
 
 The first two are [process-compose](https://f1bonacc1.github.io/process-compose/)'s
-own format; `ports.yml` is Atelier's. A `process-compose.yaml` in the worktree
-wins when both exist, because a worktree carrying its own is saying something
-deliberate — and in that case the override is not consulted, since a worktree
-config already *is* the per-worktree file.
-Either way process-compose runs with the *worktree* as cwd, so a relative
-`working_dir` resolves inside it.
+own format; `ports.yml` is Atelier's. **Exactly one config is loaded**, and it is
+the first of these four that exists:
 
-Every file is named with `-f`, which turns process-compose's own discovery off:
-the files Atelier shows you are the files it runs. That also means `compose.yaml`
-is never loaded, whatever process-compose would do on its own. Name the file the
+1. `atelier.process-compose.yaml` in the worktree
+2. `atelier.process-compose.yaml` in the project directory
+3. `process-compose.yaml` in the worktree
+4. `process-compose.yaml` in the project directory
+
+(`.yml` works anywhere `.yaml` does, and is checked second.)
+
+**Precedence follows explicitness, not location.** Within one name the worktree
+wins, because a worktree carrying its own config is being deliberate about that
+branch — but a file named `atelier.` outranks a generic one wherever either sits.
+That prefix is how a project says which of its process-compose files is
+Atelier's, and you need it when the repository already runs process-compose for
+its own reasons: a checked-in `process-compose.yaml` is tier 3, so without the
+prefix it shadows the config in your project directory, and Atelier runs a file
+that declares none of the five namespaces. A project with only one
+process-compose file needs no prefix.
+
+Wherever the config lives, process-compose runs with the *worktree* as cwd, so a
+relative `working_dir` resolves inside it.
+
+The file is named with `-f`, which turns process-compose's own discovery off: the
+file Atelier shows you is the file it runs. That also means `compose.yaml` is
+never loaded, whatever process-compose would do on its own, and that a
+`process-compose.override.yml` sitting beside the config is not merged into it —
+a worktree that wants its own arrangement gets tier 1 instead. Name the file the
 same way when you run the stack yourself:
 
 ```console
-process-compose up -f ../process-compose.yaml    # from inside a worktree
+process-compose up -f ../atelier.process-compose.yaml    # from inside a worktree
 ```
 
 ### Namespaces
@@ -221,8 +239,8 @@ processes:
     environment:
       - "HTML_TO_JSON_PORT=${HTML_TO_JSON_PORT:-3012}"
 
-  # Off by default. Turn it on in a process-compose.override.yaml rather than
-  # editing this file, which every worktree shares.
+  # Off by default; start it by hand from the process-compose TUI when you need
+  # it, rather than editing this file, which every worktree shares.
   merge-worker:
     namespace: execute
     command: pnpm dev:merge-worker
@@ -323,12 +341,15 @@ the file is*, not what is in it. `execute` is never gated because it is
 front of you, and Stop is right there. The Execution tab shows which files are
 in play, not the command Start runs.
 
-If a project has no `process-compose.yaml`, worktrees are still created and the
+If a project has no config at any of the four locations, worktrees are still created and the
 Execution tab says there is nothing to run; a per-workstream command typed into
 Customize is the escape hatch. When Start cannot run for some other reason — the
-integration is switched off, or process-compose is not on disk where Atelier
-looks — the tab says which, and the Info tab reports what background setup did or
-did not do.
+integration is switched off, process-compose is not on disk where Atelier looks,
+or the config declares no `execute` processes — the tab says which, and the Info
+tab reports what background setup did or did not do. That last one is a refusal
+rather than a dead button on purpose: `process-compose up -n execute` against a
+namespace nothing declares neither fails nor exits, so starting it would give you
+an empty TUI and no explanation.
 
 ### Base branch
 

@@ -16,12 +16,15 @@ enum ScriptTrust {
     /// string the Execution pane renders is not the command Start runs, which
     /// is `ProcessCompose.PhaseRunner`'s phase-scoped `prepare && execute`.
     ///
-    /// Takes the whole list, never a single file. process-compose loads a base
-    /// config *and* whatever override sits beside it, so fingerprinting only the
-    /// base would let a repository ship a benign `process-compose.yaml`, have the
-    /// user approve it, and execute an unseen `process-compose.override.yaml`
-    /// unattended. `ProcessCompose.Config.repositoryProvidedFiles` is the list
-    /// that has to be passed here.
+    /// Takes a list, never a single path, because the thing being approved is
+    /// the *set* process-compose will be told to load:
+    /// `ProcessCompose.Config.repositoryProvidedFiles` is the list that has to be
+    /// passed here, whatever it happens to hold. Fingerprinting one file out of
+    /// a loaded set would let a repository ship a benign
+    /// `process-compose.yaml`, have the user approve it, and execute an unseen
+    /// sibling unattended — the hole the list API exists to close. A config
+    /// currently loads exactly one file, so the list is short; it is the
+    /// equality with `loadedFiles` that matters, not the length.
     ///
     /// A config in the project directory was placed there by hand, outside git,
     /// and contributes nothing to that list: asking about the user's own file
@@ -52,8 +55,8 @@ enum ScriptTrust {
 
     /// Identifies a set of config files by each one's name and whole contents,
     /// in order. An edit to any of them, and the appearance or disappearance of
-    /// any of them, all change the value — so an override added after approval
-    /// asks again.
+    /// any of them, all change the value — so a file added to the loaded set
+    /// after approval asks again.
     ///
     /// The full path is deliberately *not* hashed: a repository-provided config
     /// lives in every worktree at a different path, and re-approving the same

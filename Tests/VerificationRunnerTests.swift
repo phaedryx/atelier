@@ -308,7 +308,7 @@ final class VerificationRunnerTests: XCTestCase {
         Verification.Runner.SpawnRequest(
             workstreamID: workstreamID,
             config: ProcessCompose.Config(
-                path: "/tmp/process-compose.yaml", isRepositoryProvided: false, overridePath: nil
+                path: "/tmp/process-compose.yaml", isRepositoryProvided: false
             ),
             binary: "/usr/bin/true",
             projectName: "app",
