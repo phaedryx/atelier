@@ -116,6 +116,10 @@ final class HookEventReceiver: @unchecked Sendable {
     func stop() {
         queue.async { [weak self] in
             guard let self else { return }
+            // Read before the teardown clears it: the port is what decides
+            // whether this instance is the one allowed to remove the rendezvous
+            // file, and `removePortFile` runs last.
+            let ownPort = currentPort
             listener?.cancel()
             listener = nil
             currentPort = nil
@@ -123,7 +127,7 @@ final class HookEventReceiver: @unchecked Sendable {
                 conn.cancel()
             }
             connections.removeAll()
-            removePortFile()
+            removePortFile(ownPort: ownPort)
         }
     }
 
@@ -694,7 +698,8 @@ final class HookEventReceiver: @unchecked Sendable {
     ///
     /// The path is deliberately *not* `AppConstants.cacheDirectory`, which
     /// separates debug from release. One global hook script means one rendezvous,
-    /// so whichever build is running owns it.
+    /// so whichever build is running owns it. Taking ownership on launch is
+    /// unconditional; *giving it up* is not — see `removePortFile`.
     private func writePortFile(port: UInt16) {
         guard !isRunningXCTest() else { return }
         let cacheDir = FileManager.default.homeDirectoryForCurrentUser
@@ -705,10 +710,41 @@ final class HookEventReceiver: @unchecked Sendable {
         logger.info("Wrote port \(port) to \(self.portFilePath)")
     }
 
-    /// Skipped under XCTest for the same reason as `writePortFile`: a suite that
-    /// never published the port must not delete the running app's.
-    private func removePortFile() {
+    /// Removes the rendezvous file, but **only when it still names this
+    /// instance's port**.
+    ///
+    /// One file, several Atelier processes — the condition `writePortFile`
+    /// describes — and a later launch overwrites it. Quitting is therefore the
+    /// one moment an instance can hold a number the file no longer carries, and
+    /// an unconditional delete there took the *running* instance's rendezvous
+    /// with it. `atelier-hook` exits 0 without posting when the file is missing,
+    /// so the result was silence for every Claude Code session on the machine,
+    /// reported as nothing at all: the remaining app's `HookChannelProbe` said
+    /// "No Signal" and was right, with no way to say why. One release app plus
+    /// one `./scripts/dev.sh br` from a worktree was enough to reach it.
+    ///
+    /// Still skipped under XCTest, for `writePortFile`'s reason: a suite that
+    /// never published the port must not delete the running app's. The ownership
+    /// check does not make that guard redundant — a suite that *did* bind and
+    /// publish would pass it.
+    private func removePortFile(ownPort: UInt16?) {
         guard !isRunningXCTest() else { return }
+        let contents = try? String(contentsOfFile: portFilePath, encoding: .utf8)
+        guard Self.ownsPortFile(contents: contents, ownPort: ownPort) else {
+            logger.info("Leaving the hook port file: it no longer names this instance")
+            return
+        }
         try? FileManager.default.removeItem(atPath: portFilePath)
+    }
+
+    /// Whether the rendezvous file as read belongs to an instance on `ownPort`.
+    ///
+    /// Split out and `static` so the rule is testable: the file itself is the
+    /// one thing the suite must not touch, so the decision has to be checkable
+    /// without one. Exact match on the trimmed contents — a prefix comparison
+    /// would read `607980` as `60798` and delete a sibling's file.
+    static func ownsPortFile(contents: String?, ownPort: UInt16?) -> Bool {
+        guard let ownPort, let contents else { return false }
+        return contents.trimmingCharacters(in: .whitespacesAndNewlines) == String(ownPort)
     }
 }
