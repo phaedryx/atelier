@@ -14,12 +14,30 @@ import WebKit
 final class MonacoDiffBridge: ObservableObject {
     private(set) var webView: EditorWebView?
     private(set) var isReady = false
+    /// Operations queued until diff.js posts "ready". Every one of them is
+    /// created with `[weak self]`, because this array is a stored property of
+    /// the bridge: a queued closure capturing `self` strongly is a cycle that
+    /// only `markReady`'s flush can break, and `ready` never arrives if the
+    /// Monaco bundle fails to load. Dropping an op whose bridge is gone is
+    /// correct — there is nothing left to run it against.
     private var pendingOps: [() -> Void] = []
     private var coordinator: Coordinator?
     private var appearanceObserver: NSKeyValueObservation?
 
     /// Fired when diff.js reports all editors have finished rendering ("contentReady").
     /// ChangesView uses this to drop its loading / refreshing indicator.
+    ///
+    /// This and the two callbacks below are stored properties of the bridge, so
+    /// the same rule governs them as governs `pendingOps`: **a closure put here
+    /// must not capture anything that holds the bridge.** The installer is
+    /// `ChangesView`, a *struct* carrying `let bridge` — so a closure that
+    /// touches `self` (any `@State` write, any `@ObservedObject` read, any
+    /// instance method call) captures a copy of that reference and the graph
+    /// closes on itself. Nothing clears these slots; a load only replaces one
+    /// closure with another, which makes such a cycle permanent rather than a
+    /// window, and it needs no failure to reach — the ordinary happy path
+    /// installs it. Capture the `Binding`, the store, or a `[weak bridge]`
+    /// instead. `ChangesViewBridgeHandlerTests` pins the installers.
     var onContentReady: (() -> Void)?
 
     /// Resolves the (original, modified, languageId) content for a single deferred
@@ -96,8 +114,8 @@ final class MonacoDiffBridge: ObservableObject {
     /// and optionally binary/deferred/changedLines for the placeholder cases.
     func setFiles(_ files: [[String: Any]]) {
         hasContent = true
-        enqueue {
-            guard let webView = self.webView else { return }
+        enqueue { [weak self] in
+            guard let self, let webView else { return }
             guard let json = Self.jsonString(from: files) else { return }
             webView.evaluateJavaScript("window.diffAPI.setFiles(\(json))")
         }
@@ -106,8 +124,8 @@ final class MonacoDiffBridge: ObservableObject {
     /// Render the given review comments (current mode only). Each dict carries:
     /// id, filePath, side, line, endLine (optional), lineText, text, isOrphaned.
     func setComments(_ comments: [[String: Any]]) {
-        enqueue {
-            guard let webView = self.webView else { return }
+        enqueue { [weak self] in
+            guard let self, let webView else { return }
             guard let json = Self.jsonString(from: comments) else { return }
             webView.evaluateJavaScript("window.diffAPI.setComments(\(json))")
         }
@@ -116,8 +134,8 @@ final class MonacoDiffBridge: ObservableObject {
     /// Inject the loaded content for a previously-deferred file, replacing its
     /// placeholder with a real diff editor in place (no full re-render).
     func loadFileContent(filePath: String, originalText: String, modifiedText: String, languageId: String) {
-        enqueue {
-            guard let webView = self.webView else { return }
+        enqueue { [weak self] in
+            guard let self, let webView else { return }
             let payload: [String: Any] = [
                 "filePath": filePath,
                 "originalText": originalText,
@@ -131,24 +149,24 @@ final class MonacoDiffBridge: ObservableObject {
 
     /// Clear all diffs.
     func clear() {
-        enqueue {
-            guard let webView = self.webView else { return }
+        enqueue { [weak self] in
+            guard let self, let webView else { return }
             webView.evaluateJavaScript("window.diffAPI.clear()")
         }
     }
 
     /// Switch the Monaco color theme to match the host appearance.
     func setTheme(isDark: Bool) {
-        enqueue {
-            guard let webView = self.webView else { return }
+        enqueue { [weak self] in
+            guard let self, let webView else { return }
             webView.evaluateJavaScript("window.diffAPI.setTheme(\(isDark))")
         }
     }
 
     /// Force Monaco to recalculate its layout after reparenting the WKWebView.
     func relayout() {
-        enqueue {
-            guard let webView = self.webView else { return }
+        enqueue { [weak self] in
+            guard let self, let webView else { return }
             webView.evaluateJavaScript("window.diffAPI.layout()")
         }
     }
@@ -157,8 +175,8 @@ final class MonacoDiffBridge: ObservableObject {
     /// until the webview is ready, mirroring the other bridge calls. Works for
     /// normal, binary, and deferred files (each registers a section element).
     func scrollToFile(_ path: String) {
-        enqueue {
-            guard let webView = self.webView else { return }
+        enqueue { [weak self] in
+            guard let self, let webView else { return }
             guard let json = Self.jsonString(fromString: path) else { return }
             webView.evaluateJavaScript("window.diffAPI.scrollToFile(\(json))")
         }

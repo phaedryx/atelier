@@ -142,8 +142,7 @@ struct ChangesView: View {
         .onAppear {
             // Make sure the bridge can resolve content for click-to-load before
             // any deferred-file click can happen.
-            configureLoadHandler()
-            configureCommentHandler()
+            installBridgeHandlers()
 
             if bridge.hasContent, bridge.lastMode == mode.rawValue {
                 // Cached content exists for this mode — show it, refresh in background.
@@ -159,8 +158,7 @@ struct ChangesView: View {
         .onChange(of: mode) {
             // Mode changed — always do a full load.
             bridge.lastFingerprint = nil
-            configureLoadHandler()
-            configureCommentHandler()
+            installBridgeHandlers()
             fullLoad()
         }
         .onReceive(NotificationCenter.default.publisher(for: .submitChangeReview)) { _ in
@@ -266,8 +264,7 @@ struct ChangesView: View {
     /// Manual refresh: invalidate the cached fingerprint and force a full reload.
     private func refresh() {
         bridge.lastFingerprint = nil
-        configureLoadHandler()
-        configureCommentHandler()
+        installBridgeHandlers()
         fullLoad()
     }
 
@@ -307,9 +304,7 @@ struct ChangesView: View {
                 bridge.lastDiffFiles = contents.files
                 bridge.lastFingerprint = fingerprint
                 bridge.lastMode = currentMode.rawValue
-                bridge.onContentReady = {
-                    isLoading = false
-                }
+                clearWhenContentReady($isLoading)
                 annotations.reanchor(
                     mode: currentMode,
                     texts: Self.reanchorTexts(from: contents.payload),
@@ -362,9 +357,7 @@ struct ChangesView: View {
                 bridge.lastFingerprint = fingerprint
                 bridge.lastMode = currentMode.rawValue
                 isRefreshing = true
-                bridge.onContentReady = {
-                    isRefreshing = false
-                }
+                clearWhenContentReady($isRefreshing)
                 annotations.reanchor(
                     mode: currentMode,
                     texts: Self.reanchorTexts(from: contents.payload),
@@ -374,6 +367,31 @@ struct ChangesView: View {
                 pushComments()
             }
         }
+    }
+
+    // MARK: - Bridge callbacks
+
+    /// Install the callbacks this view leaves on the bridge for the rest of the
+    /// workstream's life. Both are reinstalled on a mode change, because each
+    /// one closes over the mode it was built for.
+    ///
+    /// Every closure stored on the bridge is built without capturing `self` —
+    /// see `MonacoDiffBridge.onContentReady`'s declaration for why, and
+    /// `ChangesViewBridgeHandlerTests` for the pin.
+    func installBridgeHandlers() {
+        configureLoadHandler()
+        configureCommentHandler()
+    }
+
+    /// Clear `flag` once diff.js reports its editors have finished rendering.
+    ///
+    /// Takes a `Binding` rather than writing the `@State` through `self`: this
+    /// closure is stored on the bridge, and `ChangesView` is a struct holding
+    /// `let bridge`, so a captured `self` carries that reference back into the
+    /// bridge's own stored property. A `Binding` carries only the `@State`
+    /// storage, which the bridge does not reach.
+    func clearWhenContentReady(_ flag: Binding<Bool>) {
+        bridge.onContentReady = { flag.wrappedValue = false }
     }
 
     // MARK: - Click-to-load wiring
@@ -407,7 +425,8 @@ struct ChangesView: View {
     /// authoritative set back down. The webview never owns comment state.
     private func configureCommentHandler() {
         let currentMode = mode
-        bridge.onCommentEvent = { event in
+        let liveMode = $mode
+        bridge.onCommentEvent = { [weak bridge, annotations] event in
             switch event {
             case let .added(filePath, side, line, endLine, lineText, text):
                 annotations.add(
@@ -419,12 +438,24 @@ struct ChangesView: View {
             case let .deleted(id):
                 annotations.delete(id: id)
             }
-            pushComments()
+            guard let bridge else { return }
+            Self.pushComments(annotations, mode: liveMode.wrappedValue, to: bridge)
         }
     }
 
     /// Push the active mode's comments to diff.js for rendering.
     private func pushComments() {
+        Self.pushComments(annotations, mode: mode, to: bridge)
+    }
+
+    /// The same push, reachable without a view. `onCommentEvent` is stored on
+    /// the bridge, so its closure cannot call the instance method above without
+    /// capturing `self` — and with it this view's `let bridge`.
+    private static func pushComments(
+        _ annotations: ChangeAnnotationStore,
+        mode: ChangesMode,
+        to bridge: MonacoDiffBridge
+    ) {
         let payload = annotations.comments(mode: mode).map { c -> [String: Any] in
             var entry: [String: Any] = [
                 "id": c.id.uuidString,
