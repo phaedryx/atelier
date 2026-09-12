@@ -435,6 +435,81 @@ final class PhaseRunnerTests: XCTestCase {
         XCTAssertTrue(command.hasSuffix("rspec"), command)
     }
 
+    // MARK: - The shared flag-shaped filter
+
+    func test_runnableProcesses_dropsFlagShapedNamesAndKeepsTheRest() {
+        XCTAssertEqual(
+            ProcessCompose.PhaseRunner.runnableProcesses(["api", "-n", "bff", "--keep-project"]),
+            ["api", "bff"]
+        )
+        XCTAssertEqual(ProcessCompose.PhaseRunner.runnableProcesses([]), [])
+        XCTAssertEqual(ProcessCompose.PhaseRunner.runnableProcesses(["-web"]), [])
+    }
+
+    /// The filter `command` applies and the one the checklist applies are the
+    /// same function, so a name the checklist offers is never one the command
+    /// would drop. Two spellings of it is what let the inversion in.
+    func test_runnableProcesses_agreesWithWhatTheCommandActuallyPasses() {
+        let declared = ["api", "-web", "bff", "--all"]
+        let command = ProcessCompose.PhaseRunner.command(
+            phase: .execute, config: projectConfig, binary: binary,
+            workstreamID: workstreamID, selectedProcesses: declared
+        )
+
+        XCTAssertTrue(
+            command.hasSuffix(
+                ProcessCompose.PhaseRunner.runnableProcesses(declared).joined(separator: " ")
+            ),
+            command
+        )
+        XCTAssertFalse(command.contains("-web"), command)
+        XCTAssertFalse(command.contains("--all"), command)
+    }
+
+    /// The inversion, end to end and over every selection the checklist can
+    /// produce: `-web` is legal YAML, and selecting only it emptied the list
+    /// *after* the `isEmpty` guard, so `up -n execute` ran with no names — which
+    /// starts the whole namespace. `processesToStart` is what stops a selection
+    /// like that reaching here; this asserts the two compose, in the shape
+    /// `RunCommandPlanTests` uses for "the bypass cannot reopen".
+    func test_processesToStart_noSelectionEverInvertsIntoTheWholeNamespace() {
+        let declared = ["api", "-web", "bff"]
+        let runnable = Set(ProcessCompose.PhaseRunner.runnableProcesses(declared))
+
+        for mask in 0 ..< (1 << declared.count) {
+            let stored = declared.enumerated()
+                .filter { mask & (1 << $0.offset) != 0 }
+                .map(\.element)
+            let resolved = processesToStart(stored: stored, declared: declared)
+
+            XCTAssertTrue(
+                resolved.allSatisfy(runnable.contains),
+                "a name the command would drop survived resolution: \(resolved)"
+            )
+            // The inversion itself: a selection that names something runnable
+            // must never resolve to the empty set, which the command reads as
+            // "start everything".
+            if !stored.filter(runnable.contains).isEmpty,
+               Set(stored).intersection(runnable) != runnable
+            {
+                XCTAssertFalse(
+                    resolved.isEmpty,
+                    "selection \(stored) inverted into the whole namespace"
+                )
+            }
+
+            let command = ProcessCompose.PhaseRunner.command(
+                phase: .execute, config: projectConfig, binary: binary,
+                workstreamID: workstreamID, selectedProcesses: resolved
+            )
+            XCTAssertFalse(command.contains("-web"), command)
+            XCTAssertEqual(
+                command.components(separatedBy: "-n ").count - 1, 1,
+                "exactly one -n: \(command)"
+            )
+        }
+    }
+
     func test_timeout_suiteIsLongerThanUserCommand() {
         XCTAssertGreaterThan(ProcessRunner.Timeout.suite, ProcessRunner.Timeout.userCommand)
     }
