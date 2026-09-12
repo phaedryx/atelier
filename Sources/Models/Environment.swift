@@ -113,6 +113,48 @@ final class AppEnvironment: ObservableObject {
         }
     }
 
+    // MARK: - Default Branch
+
+    /// Lookups still in flight, so the workstreams of one project share a single
+    /// probe rather than each starting their own.
+    ///
+    /// This is the half `Git.Operations`' own cache cannot provide: a lock
+    /// serialises concurrent misses but does not merge them, so without this the
+    /// launch fan-out — every workstream mounting at once — would resolve one
+    /// directory N times before the first answer landed. The cached-value half
+    /// lives in `Git.Operations.defaultBranch(at:)`, where callers that cannot
+    /// reach a `@MainActor` type can also see it.
+    ///
+    /// Untested, and knowingly: pinning it needs a seam to count probes through,
+    /// and the only honest one is injecting the git call, which would put a
+    /// parameter on `defaultBranch(for:)` that exists for the test alone. The
+    /// cache either side of it is pinned — see
+    /// `Tests/AppEnvironmentDefaultBranchTests.swift` and
+    /// `Tests/GitOperationsTests.swift`.
+    private var defaultBranchTasks: [String: Task<String, Never>] = [:]
+
+    /// This repository's default branch, off the main actor and de-duplicated.
+    ///
+    /// The caching and the never-cache-`"HEAD"` rule belong to
+    /// `Git.Operations.defaultBranch(at:)`; this adds the two things a
+    /// `@MainActor` caller needs on top — somewhere to run a blocking git probe
+    /// that is not the main thread, and a way for concurrent callers to share one.
+    func defaultBranch(for directory: String) async -> String {
+        if let inFlight = defaultBranchTasks[directory] {
+            return await inFlight.value
+        }
+
+        // Detached because `defaultBranch` is synchronous and blocks its thread
+        // for the length of several child processes.
+        let task = Task.detached(priority: .userInitiated) {
+            Git.Operations.defaultBranch(at: directory)
+        }
+        defaultBranchTasks[directory] = task
+        let branch = await task.value
+        defaultBranchTasks.removeValue(forKey: directory)
+        return branch
+    }
+
     // MARK: - Repo Info
 
     func repoInfo(for directory: String) -> Git.RepoInfo? {
@@ -396,7 +438,61 @@ final class AppEnvironment: ObservableObject {
     /// Returns IDs of projects whose directories no longer exist.
     var missingProjectIDs: Set<UUID> = []
 
+    /// When the sweep currently in flight started, or nil when none is.
+    private var pathValiditySweepStartedAt: Date?
+
+    /// The projects a request that arrived mid-sweep wanted swept, so it is
+    /// coalesced into one follow-up rather than dropped. Only the newest is kept:
+    /// each is a full snapshot, so an older one has nothing the newer lacks.
+    private var pendingPathValidityProjects: [Project]?
+
+    /// How long a sweep may be believed to be in flight before another is admitted
+    /// regardless. Comfortably above `ProcessRunner.Timeout.local` (60s), which
+    /// bounds every probe a sweep makes, so this cannot fire for a sweep that is
+    /// merely slow — only for one whose completion never arrived.
+    ///
+    /// The ceiling is the point of using a timestamp rather than a bool. A flag
+    /// cleared in the completion block fails in the worst available direction: a
+    /// detached task that dies before reaching it would disable the 15-second
+    /// sweep for the rest of the session, which is a worse bug than the stacking
+    /// this prevents.
+    static let pathValiditySweepCeiling: TimeInterval = 90
+
+    /// Whether a new sweep may start, given when the one believed to be in flight
+    /// began. Pure and `static` so the ceiling's behaviour can be pinned without
+    /// hanging a real sweep to produce the state it guards.
+    static func admitsPathValiditySweep(inFlightSince startedAt: Date?, now: Date = Date()) -> Bool {
+        guard let startedAt else { return true }
+        return now.timeIntervalSince(startedAt) >= pathValiditySweepCeiling
+    }
+
+    /// Re-reads every project's and worktree's on-disk state. One sweep at a time.
+    ///
+    /// The re-entrancy guard exists because the 15-second timer in `ContentView`
+    /// spawned a fresh `Task.detached` unconditionally, so a sweep that outlived
+    /// its own period stacked — and each sweep fans a blocking `ProcessRunner`
+    /// capture out per worktree, every one of which parks the thread it runs on
+    /// for the life of its child. Stacked sweeps multiply that occupancy by
+    /// however many ticks the slow one spans.
     func refreshPathValidity(projects: [Project]) {
+        guard Self.admitsPathValiditySweep(inFlightSince: pathValiditySweepStartedAt) else {
+            // Deferred rather than dropped: `attachWorktreePath` and
+            // `.projectCreated` call this for a path that just appeared, and making
+            // them wait out a tick of the timer would show a stale row for a
+            // workstream the user is looking at.
+            pendingPathValidityProjects = projects
+            return
+        }
+        let startedAt = Date()
+        pathValiditySweepStartedAt = startedAt
+        // Superseded: this sweep carries a newer snapshot than anything deferred,
+        // so a pending request left behind by a sweep that died before its
+        // completion block has nothing to add. Clearing it here rather than only
+        // on completion is what keeps a stranded pending snapshot unreachable
+        // instead of merely unlikely — the same reason the guard is a timestamp
+        // and not a flag.
+        pendingPathValidityProjects = nil
+
         Task.detached {
             var results: [String: Bool] = [:]
             var missing: Set<UUID> = []
@@ -532,6 +628,16 @@ final class AppEnvironment: ObservableObject {
                     self.worktreeStateCache.merge(worktreeStates) { _, new in new }
                     self.activePortCache = portResults
                     self.taskDescriptionCache = descriptionResults
+                }
+                // Compared rather than assigned nil: a sweep admitted past the
+                // ceiling has already claimed the slot, and a late completion from
+                // the sweep it replaced must not release it.
+                if self.pathValiditySweepStartedAt == startedAt {
+                    self.pathValiditySweepStartedAt = nil
+                }
+                if let pending = self.pendingPathValidityProjects {
+                    self.pendingPathValidityProjects = nil
+                    self.refreshPathValidity(projects: pending)
                 }
             }
         }

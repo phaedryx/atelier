@@ -35,6 +35,16 @@ extension Git {
 }
 
 extension Worktree {
+    /// One row of `git worktree list --porcelain`: where it is, and the branch it
+    /// holds. Deliberately **not** `Worktree.Info` — that carries cleanliness and
+    /// ahead-of-base, which cost three git probes per row, and a caller that only
+    /// needs to know what exists should not pay a fan-out for it.
+    struct Registration: Equatable {
+        let path: String
+        /// Nil for a detached HEAD. The bare entry is never surfaced at all.
+        let branch: String?
+    }
+
     struct Info: Identifiable {
         let path: String
         let branch: String?
@@ -273,8 +283,85 @@ extension Git {
             )
         }
 
-        /// Detect the default branch. Prefers `development`, then falls back to auto-detection.
+        /// This repository's default branch, resolved once per directory.
+        ///
+        /// Prefers `development`, then falls back to auto-detection — see
+        /// `resolveDefaultBranch`, which is where that order lives.
+        ///
+        /// **Cached, because the cost is a fan-out and the answer is a property of
+        /// the repository.** Resolving costs up to six sequential git probes, and
+        /// the three comparison sites — `mergeBase`, `hasBranchCommits`,
+        /// `worktreeDetail` — are each called *per worktree*: `refreshPathValidity`
+        /// runs `hasBranchCommits` for every worktree on a 15-second timer, and
+        /// `listWorktreesWithInfo` does the same on every project-overview refresh.
+        /// Twelve workstreams in two projects meant ~72 subprocesses every tick
+        /// resolving two strings.
+        ///
+        /// The cache lives **here** rather than in `AppEnvironment` — which is
+        /// where it started — because half the callers structurally cannot reach a
+        /// `@MainActor` cache: `diffFingerprint` is called from
+        /// `Verification.Runner`, `IPC.VerificationRunnerBridge` and
+        /// `VerificationTabView`, and `ChangesView.baseRef` is `nonisolated`.
+        /// Threading a resolved branch down as a parameter instead would have had
+        /// to stop at those call sites or point `Verification.Runner` at
+        /// `AppEnvironment`, which is the wrong direction for that dependency.
+        /// `AppEnvironment.defaultBranch(for:)` now delegates here, so there is one
+        /// cache and one policy rather than two that can disagree.
+        ///
+        /// **The literal `"HEAD"` is never cached.** That is the sentinel for
+        /// "resolved nothing", which for a freshly added project usually means
+        /// `origin/HEAD` has not been fetched yet rather than that the repository
+        /// has no default branch — and `AppEnvironment.fetchOrigin` is running
+        /// concurrently to fix exactly that. Pinning the sentinel would make the
+        /// repair unobservable for the rest of the session.
+        ///
+        /// Not invalidated otherwise, deliberately. A repository whose default
+        /// branch genuinely renames mid-session serves the old answer until
+        /// relaunch; a TTL would not help the case that actually happens (the
+        /// unfetched repo above, which the sentinel rule already covers) and would
+        /// put the fan-out back on a timer.
         static func defaultBranch(at path: String) -> String {
+            if let cached = defaultBranchCache.value(for: path) {
+                return cached
+            }
+            let resolved = resolveDefaultBranch(at: path)
+            if resolved != "HEAD" {
+                defaultBranchCache.store(resolved, for: path)
+            }
+            return resolved
+        }
+
+        private static let defaultBranchCache = BranchCache()
+
+        /// Locked rather than actor-isolated: `defaultBranch` is synchronous and has
+        /// ~50 transitive callers in synchronous contexts, so an actor would force
+        /// the whole chain async for a dictionary read. Mirrors the locked-box
+        /// pattern in `CommandLineTools`.
+        ///
+        /// No in-flight de-duplication, which `AppEnvironment.defaultBranchTasks`
+        /// still provides for the callers that can await: a lock serialises
+        /// concurrent misses but does not merge them, so N simultaneous first-time
+        /// callers for one directory each resolve it. Bounded and once — every
+        /// later call is a hit.
+        private final class BranchCache: @unchecked Sendable {
+            private let lock = NSLock()
+            private var branches: [String: String] = [:]
+
+            func value(for path: String) -> String? {
+                lock.lock()
+                defer { lock.unlock() }
+                return branches[path]
+            }
+
+            func store(_ branch: String, for path: String) {
+                lock.lock()
+                defer { lock.unlock() }
+                branches[path] = branch
+            }
+        }
+
+        /// Detect the default branch. Prefers `development`, then falls back to auto-detection.
+        private static func resolveDefaultBranch(at path: String) -> String {
             // Prefer development branch if it exists (remote then local)
             for branch in ["origin/development", "development"] {
                 if run(args: ["rev-parse", "--verify", branch], in: path) != nil {
@@ -1320,28 +1407,61 @@ extension Git {
             return names
         }
 
-        /// Worktree paths only, skipping the bare repository entry. Unlike
-        /// `listWorktreesWithInfo` this runs a single git command — no per-worktree
-        /// status probes — so it is cheap enough to call while resolving a project.
-        private static func worktreePaths(at path: String) -> [String] {
-            guard let output = run(args: ["worktree", "list", "--porcelain"], in: path) else { return [] }
+        /// Every worktree git knows about, with the branch each holds. One
+        /// `worktree list --porcelain` and nothing else — unlike
+        /// `listWorktreesWithInfo`, which spawns three status probes *per row*.
+        ///
+        /// **Nil means the question could not be asked**, which is not the same
+        /// answer as an empty array. A caller deciding whether a stored record is
+        /// repairable has to tell "git says this worktree is gone" from "git did
+        /// not answer"; collapsing the two would let a transient git failure look
+        /// like proof that a worktree no longer exists.
+        static func registeredWorktrees(at path: String) -> [Worktree.Registration]? {
+            guard let output = run(args: ["worktree", "list", "--porcelain"], in: path) else { return nil }
 
-            var paths: [String] = []
-            var current: String?
+            var results: [Worktree.Registration] = []
+            var currentPath: String?
+            var currentBranch: String?
+            var currentIsBare = false
+
+            /// The bare repository is itself an entry in the `.bare` container
+            /// layout. It has no work tree, so it is not a worktree anyone can be
+            /// pointed at.
+            func flush() {
+                guard let currentPath, !currentIsBare else { return }
+                results.append(Worktree.Registration(path: currentPath, branch: currentBranch))
+            }
+
             for line in output.components(separatedBy: "\n") {
                 if line.hasPrefix("worktree ") {
-                    current = String(line.dropFirst("worktree ".count))
+                    flush()
+                    currentPath = String(line.dropFirst("worktree ".count))
+                    currentBranch = nil
+                    currentIsBare = false
+                } else if line.hasPrefix("branch refs/heads/") {
+                    currentBranch = String(line.dropFirst("branch refs/heads/".count))
                 } else if line == "bare" {
-                    current = nil
-                } else if line.isEmpty, let found = current {
-                    paths.append(found)
-                    current = nil
+                    currentIsBare = true
                 }
             }
-            if let current {
-                paths.append(current)
-            }
-            return paths
+            flush()
+
+            return results
+        }
+
+        /// Worktree paths only, skipping the bare repository entry. Cheap enough
+        /// to call while resolving a project — see `registeredWorktrees`, which
+        /// this is a projection of.
+        ///
+        /// **Deliberately flattens "could not ask" to "nothing there"**, which
+        /// `registeredWorktrees` refuses to do for its own callers. Safe only
+        /// because of what the single caller does with it: `projectLocation` is
+        /// looking for a checkout to prefer among candidates, and having no
+        /// candidate is already an outcome it handles — it falls back to the
+        /// directory it was given. A repair that *discards* a user's record on an
+        /// empty answer is the case that needs the distinction, and it has it.
+        private static func worktreePaths(at path: String) -> [String] {
+            registeredWorktrees(at: path)?.map(\.path) ?? []
         }
 
         /// Return the current branch name, or nil if detached or not a repo.

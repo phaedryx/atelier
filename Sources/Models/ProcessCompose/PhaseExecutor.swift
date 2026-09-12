@@ -510,7 +510,8 @@ extension ProcessCompose {
             /// Reads; it does not take. Named `take()` until the name promised a
             /// hand-off it never performed — a second call returns the same output
             /// rather than nil, which would have been a silent bug the day anyone
-            /// relied on it. `ProcessRunner.DataBox` carried the same misnomer.
+            /// relied on it. `ProcessRunner.DataBox` carried the same misnomer
+            /// until it was deleted with the threaded drains it existed for.
             func read() -> ProcessRunner.Output? {
                 lock.lock()
                 defer { lock.unlock() }

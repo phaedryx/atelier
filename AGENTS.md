@@ -301,6 +301,34 @@ and `ProcessCompose.PhaseEnvironment`'s four callers — `AsyncSetupService` for
 "what git thinks this repository's default branch is", and all five deliberately agree with each
 other rather than with the setting.
 
+**`defaultBranch(at:)` is cached, per directory, inside `Git.Operations` itself.** Resolving costs up
+to six sequential probes and the answer is a property of the repository, but the three comparison
+sites are each called *per worktree*: `refreshPathValidity` runs `hasBranchCommits` for every
+worktree on a 15-second timer, and `listWorktreesWithInfo` does the same on every project-overview
+refresh. Twelve workstreams in two projects meant ~72 subprocesses a tick resolving two strings.
+
+The cache lives there rather than in `AppEnvironment`, which is where it started, because half the
+callers structurally cannot reach a `@MainActor` type: `diffFingerprint` is called from
+`Verification.Runner`, `IPC.VerificationRunnerBridge` and `VerificationTabView`, and
+`ChangesView.baseRef` is `nonisolated`. The alternative — threading a resolved branch down as a
+parameter — would have had to stop at those call sites or point `Verification.Runner` at
+`AppEnvironment`, which is the wrong direction for that dependency.
+`AppEnvironment.defaultBranch(for:)` now **delegates** here and keeps only the two things a
+`@MainActor` caller needs on top: somewhere off the main thread to run a blocking probe, and
+in-flight de-duplication, which a lock gives no help with. One cache, one policy.
+
+It deliberately does **not** cache the literal `"HEAD"`: that is the sentinel for "resolved
+nothing", which for a freshly added project usually means `origin/HEAD` has not been fetched yet —
+and `fetchOrigin` is running concurrently to fix exactly that. There is no other invalidation and no
+TTL; a repository whose default branch genuinely renames mid-session serves the old answer until
+relaunch. Both halves are pinned in `Tests/GitOperationsTests.swift` and
+`Tests/AppEnvironmentDefaultBranchTests.swift`.
+
+None of this touches the all-or-none rule above. That rule governs *which* branch is compared — git's
+default versus `BaseBranchSetting` — not who pays to resolve it, and a cache that returns exactly
+what `defaultBranch(at:)` would have returned leaves the question byte-identical. Say so in any
+commit that touches it, because a reviewer will pattern-match it to the forbidden migration.
+
 ### The process-compose integration
 Everything a project asks Atelier to run lives in one **`process-compose.yaml`**, read by
 [process-compose](https://f1bonacc1.github.io/process-compose/). `atelier.processCompose.enabled`
@@ -636,23 +664,54 @@ hangs, and draining one stream while the other fills deadlocks any child whose
 output passes the ~64 KB pipe buffer — reachable for `git fetch` on a
 many-branch repository, or any package-manager install.
 
-**Concurrently, but not on two threads** — `ProcessRunner.PipeDrain` reads each
-pipe through a `DispatchSource`, and the reason is not style. EOF is not the
-child's to give: it arrives when the *last* holder of the write end closes it,
-and a grandchild the child left behind holds the same one, which `sh -c
-'server &'` in a project's own command produces routinely. A thread blocked on
-that read never comes back. At two per call against a libdispatch global pool
-that tops out around 64, a few dozen such calls starved the pool and then
-*every* later capture timed out waiting for a thread rather than for its child —
-`/usr/bin/true` included, which is what made the symptom look unrelated to the
-cause. A source occupies no thread while it waits, so exhaustion is no longer
-reachable. The drain owns a `dup` of the pipe's descriptor and closes it in its
-cancel handler, leaving `Pipe`'s own `FileHandle` owning the original; one
-descriptor with two owners is a double close on a number the kernel has since
-reissued. Note the failure mode this does *not* compound: a capture that times
-out because no thread was free parks nothing — its blocks sit queued and run
-later. Only a drain that got a thread and then blocked on a live grandchild's
-pipe leaked permanently.
+**Concurrently, and without a single auxiliary thread** — `ProcessRunner.PipePump`
+moves stdin, stdout and stderr together in one `poll(2)` loop on the **calling**
+thread. The concurrency is not optional: reading stdout to EOF while stderr fills
+deadlocks any child whose output passes the buffer, and a stdin payload past that
+same buffer blocks the writer until the child reads. What is deliberate is that
+none of it costs a thread, and two earlier shapes that bought it with threads
+each starved a pool:
+
+- `readDataToEndOfFile()` on two dispatch threads parked both for good whenever a
+  grandchild held the write end open — EOF is not the child's to give, and `sh -c
+  'server &'` is ordinary in a project's own command. Two per call against
+  libdispatch's ~64-thread global pool, and a few dozen calls starved it.
+- Replacing those with `DispatchSource` read sources fixed the *leak* and kept the
+  *dependency*: the waiter still blocked a thread while the source's event handler
+  needed one of its own to deliver EOF. When the callers are Swift `Task`s that
+  pool is the cooperative one, `hw.ncpu` wide rather than 64, so the waiters
+  consumed the very threads that would have completed them. Measured in 0.2.1: 14
+  of 14 cooperative threads parked in `capture`, every child killed at its
+  deadline — `tmux -V` blowing a 120s bound, which is the tell, since nothing
+  about that child is slow. The user-visible symptom was a workstream stuck on
+  "Preparing Coding Agent..." and git operations that had already succeeded on
+  disk being reported as failures.
+
+So the invariant is now **a capture pumps its pipes on exactly one thread, the
+caller's, consulting no pool** — immunity by construction rather than by having
+enough threads, and what `Tests/ProcessRunnerTests.swift`'s two
+`ConcurrentCaptures…` tests pin. Do not reintroduce a queue, a source or a
+detached drain here, however tidy it looks; the corollary for callers is that the
+thread is blocked for the child's whole life, so `capture` belongs off the main
+actor and off any pool narrow enough to matter.
+
+State that invariant about the *pump* and not about the whole call, because one
+off-thread dependency is left: `exited.wait` is signalled from
+`process.terminationHandler`, which Foundation delivers on machinery
+`ProcessRunner` does not own. The concurrency test is evidence it is not the
+cooperative pool — fourteen captures parked at the exit wait with none to spare
+would wedge identically — but that is one width measured, not a proof. The
+practical consequence is diagnostic: a capture starved there parks at the *exit
+wait*, which is a different stack from the pump and a different bug.
+
+One behaviour change came with it: **writing stdin is part of finishing.** A
+payload still unwritten at the deadline now fails the capture, where the abandoned
+writer thread it replaced reported success and parked forever. That needs a
+payload past the ~64 KB pipe buffer handed to a child that will not drain it, and
+`HookChannelProbe` is the only `standardInput:` caller in the app, at a few
+hundred bytes — so no caller today can reach it. `PipePump` never closes a
+descriptor it did not open — the `Pipe`s own them — with one exception, the stdin
+write end, whose close is what gives the child EOF.
 
 **The deadline kills the process group, not just the child.** When the child
 exits immediately and leaves a grandchild behind, Foundation has already reaped
