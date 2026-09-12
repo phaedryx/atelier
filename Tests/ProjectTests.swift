@@ -156,13 +156,51 @@ final class ProjectTests: XCTestCase {
     func testProjectStoreWithWorkstreams() {
         let projects = [
             Project(name: "one", directory: "/one", workstreams: [
-                Workstream(name: "dev"),
+                Workstream(name: "dev", worktreePath: "/one/dev"),
             ]),
         ]
         ProjectStore.save(projects, defaults: testDefaults)
         let loaded = ProjectStore.load(defaults: testDefaults)
         XCTAssertEqual(loaded.first?.workstreams.count, 1)
         XCTAssertEqual(loaded.first?.workstreams.first?.name, "dev")
+    }
+
+    /// `save` deliberately does not round-trip: a workstream with no
+    /// `worktreePath` is a workstream whose `git worktree add` has not finished,
+    /// and persisting that transient state is what stranded records that could
+    /// never render. See `ProjectStore.save`.
+    ///
+    /// Worth a test rather than a comment because a store that quietly drops part
+    /// of what it was handed is surprising, and the next reader will assume the
+    /// asymmetry is a bug unless something names it.
+    func testProjectStoreDropsWorkstreamsWithNoWorktreePath() {
+        let projects = [
+            Project(name: "one", directory: "/one", workstreams: [
+                Workstream(name: "half-made", worktreePath: nil),
+                Workstream(name: "finished", worktreePath: "/one/finished"),
+            ]),
+        ]
+        ProjectStore.save(projects, defaults: testDefaults)
+        let loaded = ProjectStore.load(defaults: testDefaults)
+
+        XCTAssertEqual(loaded.first?.workstreams.map(\.name), ["finished"], "the half-made row was persisted, or took its sibling with it")
+    }
+
+    /// The project itself must survive losing every workstream it had, so a save
+    /// during the creation window does not look like a project with no rows at
+    /// all next launch.
+    func testProjectStoreKeepsAProjectWhoseOnlyWorkstreamIsUnfinished() {
+        let projects = [
+            Project(name: "one", directory: "/one", workstreams: [
+                Workstream(name: "half-made", worktreePath: nil),
+            ]),
+        ]
+        ProjectStore.save(projects, defaults: testDefaults)
+        let loaded = ProjectStore.load(defaults: testDefaults)
+
+        XCTAssertEqual(loaded.count, 1)
+        XCTAssertEqual(loaded.first?.name, "one")
+        XCTAssertTrue(loaded.first?.workstreams.isEmpty ?? false)
     }
 
     // MARK: - Persisted blobs from earlier shapes

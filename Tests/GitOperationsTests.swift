@@ -376,6 +376,85 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertEqual(statuses["new.txt"], .modified)
     }
 
+    // MARK: - registeredWorktrees
+
+    /// The cheap listing behind stranded-workstream repair: one
+    /// `worktree list --porcelain` and no per-row status probes, unlike
+    /// `listWorktreesWithInfo`. Branch matters as much as path here — repair
+    /// matches on it, because a name freed by a purge and reused would otherwise
+    /// reattach a record to the wrong worktree.
+    func testRegisteredWorktreesReportsEachWorktreeWithItsBranch() throws {
+        let repoDir = tempDir.appendingPathComponent("repo")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: repoDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "--allow-empty", "-m", "init"], in: repoDir)
+        let worktree = tempDir.appendingPathComponent("feature")
+        git(["worktree", "add", "-b", "feature", worktree.path], in: repoDir)
+
+        let registered = try XCTUnwrap(Git.Operations.registeredWorktrees(at: repoDir.path))
+        let byBranch = Dictionary(uniqueKeysWithValues: registered.compactMap { entry in
+            entry.branch.map { ($0, entry.path) }
+        })
+
+        XCTAssertEqual(registered.count, 2, "expected the main checkout and one linked worktree")
+        XCTAssertEqual(byBranch["feature"].map { URL(fileURLWithPath: $0).standardizedFileURL.path },
+                       worktree.standardizedFileURL.path)
+        XCTAssertNotNil(byBranch["main"])
+    }
+
+    /// The `.bare` container is itself a row in `worktree list`. It has no work
+    /// tree, so it is not something a workstream can be pointed at.
+    func testRegisteredWorktreesSkipsTheBareEntry() throws {
+        let origin = tempDir.appendingPathComponent("origin")
+        try FileManager.default.createDirectory(at: origin, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: origin)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "--allow-empty", "-m", "init"], in: origin)
+        let container = tempDir.appendingPathComponent("container")
+        try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
+        git(["clone", "--bare", "-q", origin.path, ".bare"], in: container)
+        let bare = container.appendingPathComponent(".bare")
+
+        let registered = try XCTUnwrap(Git.Operations.registeredWorktrees(at: bare.path))
+
+        XCTAssertTrue(
+            registered.allSatisfy { !$0.path.hasSuffix(".bare") },
+            "the bare repository was surfaced as a worktree"
+        )
+    }
+
+    /// Nil is "could not ask", which is a different answer from "nothing is
+    /// registered". Repair discards a record only on the second, so collapsing
+    /// the two would let a transient git failure look like proof that a
+    /// worktree is gone.
+    func testRegisteredWorktreesReturnsNilWhenGitCannotAnswer() throws {
+        let plainDir = tempDir.appendingPathComponent("not-a-repo")
+        try FileManager.default.createDirectory(at: plainDir, withIntermediateDirectories: true)
+
+        XCTAssertNil(Git.Operations.registeredWorktrees(at: plainDir.path))
+    }
+
+    /// A detached worktree has no branch to match on, so repair leaves it alone
+    /// rather than guessing. It must still be listed.
+    func testRegisteredWorktreesReportsNoBranchForADetachedWorktree() throws {
+        let repoDir = tempDir.appendingPathComponent("repo")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: repoDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "--allow-empty", "-m", "init"], in: repoDir)
+        let detached = tempDir.appendingPathComponent("detached")
+        git(["worktree", "add", "--detach", detached.path, "HEAD"], in: repoDir)
+
+        let registered = try XCTUnwrap(Git.Operations.registeredWorktrees(at: repoDir.path))
+        let entry = registered.first {
+            URL(fileURLWithPath: $0.path).standardizedFileURL.path == detached.standardizedFileURL.path
+        }
+
+        XCTAssertNotNil(entry, "the detached worktree was dropped from the listing")
+        XCTAssertNil(entry?.branch)
+    }
+
     // MARK: - pruneCleanWorktrees
 
     func testPruneCleanWorktreesPrunesOnlyRequestedPaths() throws {

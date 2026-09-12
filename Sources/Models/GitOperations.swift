@@ -35,6 +35,16 @@ extension Git {
 }
 
 extension Worktree {
+    /// One row of `git worktree list --porcelain`: where it is, and the branch it
+    /// holds. Deliberately **not** `Worktree.Info` — that carries cleanliness and
+    /// ahead-of-base, which cost three git probes per row, and a caller that only
+    /// needs to know what exists should not pay a fan-out for it.
+    struct Registration: Equatable {
+        let path: String
+        /// Nil for a detached HEAD. The bare entry is never surfaced at all.
+        let branch: String?
+    }
+
     struct Info: Identifiable {
         let path: String
         let branch: String?
@@ -1320,28 +1330,53 @@ extension Git {
             return names
         }
 
-        /// Worktree paths only, skipping the bare repository entry. Unlike
-        /// `listWorktreesWithInfo` this runs a single git command — no per-worktree
-        /// status probes — so it is cheap enough to call while resolving a project.
-        private static func worktreePaths(at path: String) -> [String] {
-            guard let output = run(args: ["worktree", "list", "--porcelain"], in: path) else { return [] }
+        /// Every worktree git knows about, with the branch each holds. One
+        /// `worktree list --porcelain` and nothing else — unlike
+        /// `listWorktreesWithInfo`, which spawns three status probes *per row*.
+        ///
+        /// **Nil means the question could not be asked**, which is not the same
+        /// answer as an empty array. A caller deciding whether a stored record is
+        /// repairable has to tell "git says this worktree is gone" from "git did
+        /// not answer"; collapsing the two would let a transient git failure look
+        /// like proof that a worktree no longer exists.
+        static func registeredWorktrees(at path: String) -> [Worktree.Registration]? {
+            guard let output = run(args: ["worktree", "list", "--porcelain"], in: path) else { return nil }
 
-            var paths: [String] = []
-            var current: String?
+            var results: [Worktree.Registration] = []
+            var currentPath: String?
+            var currentBranch: String?
+            var currentIsBare = false
+
+            /// The bare repository is itself an entry in the `.bare` container
+            /// layout. It has no work tree, so it is not a worktree anyone can be
+            /// pointed at.
+            func flush() {
+                guard let currentPath, !currentIsBare else { return }
+                results.append(Worktree.Registration(path: currentPath, branch: currentBranch))
+            }
+
             for line in output.components(separatedBy: "\n") {
                 if line.hasPrefix("worktree ") {
-                    current = String(line.dropFirst("worktree ".count))
+                    flush()
+                    currentPath = String(line.dropFirst("worktree ".count))
+                    currentBranch = nil
+                    currentIsBare = false
+                } else if line.hasPrefix("branch refs/heads/") {
+                    currentBranch = String(line.dropFirst("branch refs/heads/".count))
                 } else if line == "bare" {
-                    current = nil
-                } else if line.isEmpty, let found = current {
-                    paths.append(found)
-                    current = nil
+                    currentIsBare = true
                 }
             }
-            if let current {
-                paths.append(current)
-            }
-            return paths
+            flush()
+
+            return results
+        }
+
+        /// Worktree paths only, skipping the bare repository entry. Cheap enough
+        /// to call while resolving a project — see `registeredWorktrees`, which
+        /// this is a projection of.
+        private static func worktreePaths(at path: String) -> [String] {
+            registeredWorktrees(at: path)?.map(\.path) ?? []
         }
 
         /// Return the current branch name, or nil if detached or not a repo.

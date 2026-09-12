@@ -510,6 +510,9 @@ struct ContentView: View {
             appEnvironment.refresh()
             appEnvironment.refreshAllRepoInfo(projects: projects)
             appEnvironment.refreshPathValidity(projects: projects)
+            // Costs nothing for a store with no stranded record, which is the
+            // normal case; see the doc for the four ways it stays cheap.
+            reconcileStrandedWorkstreams()
             appEnvironment.fetchOrigin(projects: projects)
             Task { await usageStore.refresh() }
             refreshAgentStateLookup(projects: projects)
@@ -590,44 +593,26 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .workstreamWorktreeReady)) { notification in
                 guard let info = notification.userInfo,
                       let workstreamID = info["workstreamID"] as? UUID,
-                      let worktreePath = info["worktreePath"] as? String else { return }
-                for pi in projects.indices {
-                    if let wi = projects[pi].workstreams.firstIndex(where: { $0.id == workstreamID }) {
-                        projects[pi].workstreams[wi].worktreePath = worktreePath
-                        ProjectStore.save(projects)
-                        appEnvironment.refreshPathValidity(projects: projects)
-                        // Project/Workstream equate by id only, so onChange(of: projectList.items)
-                        // doesn't fire when worktreePath flips from nil to a real value. Refresh
-                        // the agent-state lookup explicitly so hook events for this new workstream
-                        // can resolve to its UUID.
-                        refreshAgentStateLookup(projects: projects)
-                        // Same reason: a brand-new worktree is exactly the one whose
-                        // branch the agent is about to rename, so it has to start
-                        // being watched now rather than on some later mutation.
-                        syncHeadWatcher(projects: projects)
-                        // And again: this is the moment a Shortcut workstream first has a path
-                        // to key its story by. Without this the story staged at creation is
-                        // never promoted and the info tab shows nothing for the whole session.
-                        syncShortcutStoryIDs(projects: projects)
-                        logger.warning("[Atelier] workstreamWorktreeReady: updated \(workstreamID, privacy: .public) with path \(worktreePath, privacy: .public)")
-                        // Run the project's `bootstrap` namespace in the background.
-                        let projectPath = projects[pi].directory
-                        // Names, not just paths: bootstrap runs with the same
-                        // `ATELIER_PROJECT` / `ATELIER_WORKSTREAM` the workstream's
-                        // terminals get, and only the project model knows them.
-                        let projectName = projects[pi].name
-                        let workstreamName = projects[pi].workstreams[wi].name
-                        Task {
-                            await AsyncSetupService.shared.setupExistingWorktree(
-                                workstreamID: workstreamID,
-                                projectName: projectName,
-                                workstreamName: workstreamName,
-                                projectPath: projectPath,
-                                worktreePath: worktreePath
-                            )
-                        }
-                        return
-                    }
+                      let worktreePath = info["worktreePath"] as? String,
+                      let found = attachWorktreePath(worktreePath, to: workstreamID) else { return }
+                logger.warning("[Atelier] workstreamWorktreeReady: updated \(workstreamID, privacy: .public) with path \(worktreePath, privacy: .public)")
+                // Run the project's `bootstrap` namespace in the background. This is
+                // the half `attachWorktreePath` deliberately leaves to its callers —
+                // see its doc for why a repair must not do it.
+                let projectPath = projects[found.project].directory
+                // Names, not just paths: bootstrap runs with the same
+                // `ATELIER_PROJECT` / `ATELIER_WORKSTREAM` the workstream's
+                // terminals get, and only the project model knows them.
+                let projectName = projects[found.project].name
+                let workstreamName = projects[found.project].workstreams[found.workstream].name
+                Task {
+                    await AsyncSetupService.shared.setupExistingWorktree(
+                        workstreamID: workstreamID,
+                        projectName: projectName,
+                        workstreamName: workstreamName,
+                        projectPath: projectPath,
+                        worktreePath: worktreePath
+                    )
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .workstreamCreationFailed)) { notification in
@@ -691,6 +676,133 @@ struct ContentView: View {
     /// state tracker. Paths are normalized via `Workstream.AgentStateTracker.normalize`
     /// (resolves symlinks) so hook payloads match regardless of how Claude
     /// reports the path on macOS.
+    /// Writes a resolved worktree path onto a workstream, and runs everything that
+    /// has to happen the moment a workstream first has one — **except**
+    /// `bootstrap`.
+    ///
+    /// Two callers, and the exclusion is the reason this is a helper rather than a
+    /// copy. `.workstreamWorktreeReady` runs `bootstrap` itself afterwards, because
+    /// the worktree it is announcing was created seconds ago and has never been set
+    /// up. `reconcileStrandedWorkstreams` must not: the worktree it repairs predates
+    /// this launch, so its `bootstrap` either ran or was declined, and re-running a
+    /// repository's own commands unprompted at startup is not a repair's business.
+    /// The Info tab's Re-run is how a user asks for that.
+    ///
+    /// The five side effects below are all here for the same underlying reason:
+    /// `Project` and `Workstream` equate by id alone, so flipping `worktreePath`
+    /// from nil to a path fires no `onChange(of:)` and nothing downstream notices
+    /// on its own.
+    ///
+    /// Returns where the workstream was found so a caller needing the project's own
+    /// fields does not search for it twice.
+    @discardableResult
+    private func attachWorktreePath(
+        _ worktreePath: String,
+        to workstreamID: UUID
+    ) -> (project: Int, workstream: Int)? {
+        guard let pi = projects.firstIndex(where: { project in
+            project.workstreams.contains { $0.id == workstreamID }
+        }),
+            let wi = projects[pi].workstreams.firstIndex(where: { $0.id == workstreamID })
+        else { return nil }
+
+        projects[pi].workstreams[wi].worktreePath = worktreePath
+        ProjectStore.save(projects)
+        appEnvironment.refreshPathValidity(projects: projects)
+        // So hook events for this workstream can resolve to its UUID.
+        refreshAgentStateLookup(projects: projects)
+        // A newly-pathed worktree is exactly the one whose branch an agent is about
+        // to rename, so it has to start being watched now.
+        syncHeadWatcher(projects: projects)
+        // And this is the moment a Shortcut workstream first has a path to key its
+        // story by; without it the story staged at creation is never promoted.
+        syncShortcutStoryIDs(projects: projects)
+        return (pi, wi)
+    }
+
+    /// Reattaches workstreams that were persisted with no worktree path to the
+    /// worktrees git actually has, and forgets the ones with nothing to attach to.
+    ///
+    /// This is **not** what keeps such records out of the store — `ProjectStore.save`
+    /// does that, and does it for every save site at once. What this buys is *repair
+    /// instead of orphan*: a record stranded before that filter existed has a real
+    /// worktree sitting on disk, and without this the user's only route back to it
+    /// is noticing it in the project overview and adopting it by hand, which creates
+    /// a different workstream and loses the original's name, label and story id.
+    ///
+    /// Narrow in four ways, each of which is load-bearing:
+    ///
+    /// - **Only a nil path.** A path that is *set* but missing is a different
+    ///   failure with the same symptom: an unmounted volume and a deleted worktree
+    ///   are indistinguishable from here, and forgetting a record because a disk is
+    ///   asleep destroys the row for nothing.
+    /// - **One `worktree list --porcelain` per project, and only for a project that
+    ///   has a stranded record** — normally none, so normally no subprocess at all.
+    ///   Not `listWorktreesWithInfo`, whose per-row status probes are exactly the
+    ///   launch fan-out that produced these records in the first place.
+    /// - **Matched on branch, not on name.** A name freed by a purge and reused
+    ///   would otherwise repair the new record onto the old worktree.
+    /// - **A git failure forgets nothing.** `registeredWorktrees` returns nil rather
+    ///   than an empty array when it could not ask, because "git says no such
+    ///   worktree" and "git did not answer" must not both mean discard.
+    private func reconcileStrandedWorkstreams() {
+        let stranded: [(checkout: String, workstreams: [(id: UUID, name: String)])] = projects.compactMap { project in
+            let unresolved = project.workstreams.filter { $0.worktreePath == nil }
+            guard !unresolved.isEmpty else { return nil }
+            return (project.checkout, unresolved.map { ($0.id, $0.name) })
+        }
+        guard !stranded.isEmpty else { return }
+
+        Task {
+            for project in stranded {
+                let checkout = project.checkout
+                // Detached: `registeredWorktrees` spawns a child and blocks the
+                // thread it runs on for its lifetime.
+                let registered = await Task.detached {
+                    Git.Operations.registeredWorktrees(at: checkout)
+                }.value
+                guard let registered else {
+                    logger.warning("[Atelier] reconcile: could not list worktrees at \(checkout, privacy: .public); leaving records alone")
+                    continue
+                }
+                var pathsByBranch: [String: String] = [:]
+                for entry in registered {
+                    guard let branch = entry.branch else { continue }
+                    pathsByBranch[branch] = entry.path
+                }
+
+                for workstream in project.workstreams {
+                    if let path = pathsByBranch[workstream.name],
+                       FileManager.default.fileExists(atPath: path)
+                    {
+                        attachWorktreePath(path, to: workstream.id)
+                        logger.warning("[Atelier] reconcile: repaired \(workstream.name, privacy: .public) -> \(path, privacy: .public)")
+                    } else {
+                        forgetStrandedWorkstream(workstream.id, name: workstream.name)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Drops an in-memory workstream that has no path and no worktree to attach to.
+    ///
+    /// It is already absent from the store — `ProjectStore.save` never wrote it —
+    /// so this only stops the detail pane spinning on "Preparing workstream..." for
+    /// the rest of the session for a row that can never render. Same shape as the
+    /// `.workstreamCreationFailed` handler, including moving the selection off it,
+    /// because it is the same situation observed one launch later.
+    private func forgetStrandedWorkstream(_ workstreamID: UUID, name: String) {
+        guard let pi = projects.firstIndex(where: { project in
+            project.workstreams.contains { $0.id == workstreamID }
+        }) else { return }
+        projects[pi].workstreams.removeAll { $0.id == workstreamID }
+        if case let .workstream(selectedID) = selection, selectedID == workstreamID {
+            selection = .project(projects[pi].id)
+        }
+        logger.warning("[Atelier] reconcile: no worktree for \(name, privacy: .public); forgetting the record")
+    }
+
     private func refreshAgentStateLookup(projects: [Project]) {
         var index: [String: UUID] = [:]
         for project in projects {
@@ -945,8 +1057,35 @@ enum ProjectStore {
         LossyStore.loadArray(Project.self, forKey: userDefaultsKey, from: defaults) ?? []
     }
 
+    /// **Does not round-trip.** A workstream with no `worktreePath` is dropped on
+    /// the way out, so a stored workstream always has one.
+    ///
+    /// The nil is a real and wanted *in-memory* state: `Workstream.Launcher`
+    /// posts `.workstreamCreated` with no path so the sidebar row appears while
+    /// `git worktree add` is still running, and `.workstreamWorktreeReady` fills
+    /// it in (`ContentView`'s handlers for both). What must not happen is that
+    /// transient state reaching a durable store — and it did, because the whole
+    /// list is re-encoded here on *every* save, so any unrelated edit during the
+    /// creation window cemented the half-made record. A quit in that window, or a
+    /// `createWorktree` that succeeded on disk while `ProcessRunner` reported a
+    /// deadline failure, then left a workstream that could never render:
+    /// `workstreamHasUsablePath` refuses a nil path and the detail pane spins on
+    /// "Preparing workstream..." forever, with nothing in the UI to repair it.
+    ///
+    /// Filtering here rather than in the `.workstreamCreated` handler is the
+    /// point. The handler is one of many callers; the invariant belongs to the
+    /// store, where no future save site can forget it. The cost of a quit
+    /// mid-creation is now an in-memory row that is simply gone next launch,
+    /// while the worktree — if `git` did make one — is listed in the project
+    /// overview with Adopt beside it.
     static func save(_ projects: [Project], defaults: UserDefaults = .standard) {
-        guard let data = try? JSONEncoder().encode(projects) else { return }
+        let persistable = projects.map { project -> Project in
+            guard project.workstreams.contains(where: { $0.worktreePath == nil }) else { return project }
+            var pruned = project
+            pruned.workstreams.removeAll { $0.worktreePath == nil }
+            return pruned
+        }
+        guard let data = try? JSONEncoder().encode(persistable) else { return }
         defaults.set(data, forKey: userDefaultsKey)
     }
 }
