@@ -1074,16 +1074,22 @@ struct TerminalContainerView: View {
             // version of it.
             setupState = await AsyncSetupService.shared.state(for: workstreamID)
         }
+        // Through `AppEnvironment` rather than straight to git, and that is the
+        // point rather than a tidying. `Task.detached` here started a *new*
+        // blocking git probe on every visit to every workstream, and a detached
+        // task does not inherit this `.task`'s cancellation — nor would it help
+        // if it did, since `defaultBranch` is synchronous and has no
+        // cancellation point. So cycling the sidebar parked one thread per visit
+        // in `ProcessRunner.capture`, each for the length of six child
+        // processes, and they accumulated. The answer is per *project*, so a
+        // cached, de-duplicated lookup spawns at most one probe per repository
+        // for the life of the app however many workstreams ask.
         .task(id: workstreamID) {
             try? await Task.sleep(nanoseconds: 50_000_000)
             guard !Task.isCancelled else { return }
-            let branch = await Task.detached {
-                Git.Operations.defaultBranch(at: projectDirectory)
-            }.value
+            let branch = await appEnv.defaultBranch(for: projectDirectory)
             guard !Task.isCancelled else { return }
-            await MainActor.run {
-                startWorkspace(defaultBranch: branch)
-            }
+            startWorkspace(defaultBranch: branch)
         }
         .onAppear {
             // Safety net for terminal tabs whose surface disappeared without

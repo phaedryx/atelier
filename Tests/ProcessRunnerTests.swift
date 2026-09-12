@@ -220,6 +220,76 @@ final class ProcessRunnerTests: XCTestCase {
         XCTAssertLessThan(elapsed, 5, "a trivial capture should return immediately, not burn its deadline")
     }
 
+    // MARK: - Concurrent callers
+
+    /// Enough concurrent captures to cover the cooperative pool twice over.
+    /// Swift concurrency's pool is `hw.ncpu` wide — far narrower than
+    /// libdispatch's ~64 — so the margin that `leakyCaptureCount` needs is not
+    /// the margin this needs.
+    private static var concurrentCaptureCount: Int {
+        ProcessInfo.processInfo.activeProcessorCount * 2
+    }
+
+    /// The self-deadlock, in the form the drains above do not cover: `capture`
+    /// blocks the thread it was called on while the drain's event handler needs
+    /// a thread of its own to deliver EOF. When the callers are Swift `Task`s,
+    /// the pool they occupy is the cooperative one, and enough of them consume
+    /// every thread that could have completed them.
+    ///
+    /// Measured in the shipped app before the fix: 14 of 14 cooperative threads
+    /// parked in `capture`, every child killed at its deadline — `tmux -V`
+    /// blowing a 120s bound, which is the tell that no child was ever slow.
+    ///
+    /// `/usr/bin/true` deliberately: the assertion is that a capture whose child
+    /// exits instantly returns instantly, however many siblings it has.
+    func testConcurrentCapturesFromTasksDoNotStarveEachOther() async {
+        let width = Self.concurrentCaptureCount
+        let started = Date()
+        var succeeded = 0
+        await withTaskGroup(of: Bool.self) { group in
+            for _ in 0 ..< width {
+                group.addTask {
+                    ProcessRunner.capture(executable: "/usr/bin/true", arguments: [], timeout: 20) != nil
+                }
+            }
+            for await ok in group where ok {
+                succeeded += 1
+            }
+        }
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertEqual(succeeded, width, "a capture was killed at its deadline: the waiters starved the drains")
+        XCTAssertLessThan(elapsed, 20, "captures of /usr/bin/true should finish at once, not ride out their deadline")
+    }
+
+    /// The same starvation, with output to drain. A child that writes past what
+    /// one read can take makes the event handler fire more than once, so this
+    /// fails on a pool that can deliver the first event and not the rest.
+    func testConcurrentCapturesWithOutputDoNotStarveEachOther() async {
+        let width = Self.concurrentCaptureCount
+        let bytes = 200_000
+        let started = Date()
+        var sizes: [Int] = []
+        await withTaskGroup(of: Int.self) { group in
+            for _ in 0 ..< width {
+                group.addTask {
+                    ProcessRunner.capture(
+                        executable: "/bin/sh",
+                        arguments: ["-c", "yes out | head -c \(bytes)"],
+                        timeout: 20
+                    )?.stdout.count ?? -1
+                }
+            }
+            for await size in group {
+                sizes.append(size)
+            }
+        }
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertEqual(sizes.filter { $0 == bytes }.count, width, "a capture lost output or was killed at its deadline")
+        XCTAssertLessThan(elapsed, 20, "concurrent captures should overlap, not serialise behind a starved drain")
+    }
+
     /// A child that backgrounds something and exits leaves that grandchild
     /// running — and holding the pipe — past the deadline. By the time the
     /// deadline fires Foundation has reaped the child, so `terminate()` has

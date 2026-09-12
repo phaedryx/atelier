@@ -301,6 +301,17 @@ and `ProcessCompose.PhaseEnvironment`'s four callers — `AsyncSetupService` for
 "what git thinks this repository's default branch is", and all five deliberately agree with each
 other rather than with the setting.
 
+`TerminalContainerView` reaches it through `AppEnvironment.defaultBranch(for:)` rather than calling
+`Git.Operations` directly, and that indirection is load-bearing rather than cosmetic. The answer
+belongs to the *project*, the call costs up to six sequential git probes, and the view asks once per
+visit to *every* workstream — so a project with a dozen workstreams paid for the same string a dozen
+times, on a `Task.detached` that ignored the view's cancellation and blocked a thread in
+`ProcessRunner.capture` until it finished. `AppEnvironment` caches per directory and de-duplicates
+lookups still in flight, so the launch fan-out spawns one probe per repository. It deliberately does
+**not** cache the literal `"HEAD"`: that is the sentinel `defaultBranch` returns when it resolves
+nothing, which for a freshly added project usually means `origin/HEAD` has not been fetched yet — and
+`fetchOrigin` is running concurrently to fix exactly that.
+
 ### The process-compose integration
 Everything a project asks Atelier to run lives in one **`process-compose.yaml`**, read by
 [process-compose](https://f1bonacc1.github.io/process-compose/). `atelier.processCompose.enabled`
@@ -636,23 +647,38 @@ hangs, and draining one stream while the other fills deadlocks any child whose
 output passes the ~64 KB pipe buffer — reachable for `git fetch` on a
 many-branch repository, or any package-manager install.
 
-**Concurrently, but not on two threads** — `ProcessRunner.PipeDrain` reads each
-pipe through a `DispatchSource`, and the reason is not style. EOF is not the
-child's to give: it arrives when the *last* holder of the write end closes it,
-and a grandchild the child left behind holds the same one, which `sh -c
-'server &'` in a project's own command produces routinely. A thread blocked on
-that read never comes back. At two per call against a libdispatch global pool
-that tops out around 64, a few dozen such calls starved the pool and then
-*every* later capture timed out waiting for a thread rather than for its child —
-`/usr/bin/true` included, which is what made the symptom look unrelated to the
-cause. A source occupies no thread while it waits, so exhaustion is no longer
-reachable. The drain owns a `dup` of the pipe's descriptor and closes it in its
-cancel handler, leaving `Pipe`'s own `FileHandle` owning the original; one
-descriptor with two owners is a double close on a number the kernel has since
-reissued. Note the failure mode this does *not* compound: a capture that times
-out because no thread was free parks nothing — its blocks sit queued and run
-later. Only a drain that got a thread and then blocked on a live grandchild's
-pipe leaked permanently.
+**Concurrently, and without a single auxiliary thread** — `ProcessRunner.PipePump`
+moves stdin, stdout and stderr together in one `poll(2)` loop on the **calling**
+thread. The concurrency is not optional: reading stdout to EOF while stderr fills
+deadlocks any child whose output passes the buffer, and a stdin payload past that
+same buffer blocks the writer until the child reads. What is deliberate is that
+none of it costs a thread, and two earlier shapes that bought it with threads
+each starved a pool:
+
+- `readDataToEndOfFile()` on two dispatch threads parked both for good whenever a
+  grandchild held the write end open — EOF is not the child's to give, and `sh -c
+  'server &'` is ordinary in a project's own command. Two per call against
+  libdispatch's ~64-thread global pool, and a few dozen calls starved it.
+- Replacing those with `DispatchSource` read sources fixed the *leak* and kept the
+  *dependency*: the waiter still blocked a thread while the source's event handler
+  needed one of its own to deliver EOF. When the callers are Swift `Task`s that
+  pool is the cooperative one, `hw.ncpu` wide rather than 64, so the waiters
+  consumed the very threads that would have completed them. Measured in 0.2.1: 14
+  of 14 cooperative threads parked in `capture`, every child killed at its
+  deadline — `tmux -V` blowing a 120s bound, which is the tell, since nothing
+  about that child is slow. The user-visible symptom was a workstream stuck on
+  "Preparing Coding Agent..." and git operations that had already succeeded on
+  disk being reported as failures.
+
+So the invariant is now **a capture occupies exactly one thread, the caller's, and
+consults no pool at any point**. That is immunity by construction rather than by
+having enough threads, and it is what `Tests/ProcessRunnerTests.swift`'s two
+`ConcurrentCaptures…` tests pin. Do not reintroduce a queue, a source or a
+detached drain here, however tidy it looks; the corollary for callers is that the
+thread is blocked for the child's whole life, so `capture` belongs off the main
+actor and off any pool narrow enough to matter. `PipePump` never closes a
+descriptor it did not open — the `Pipe`s own them — with one exception, the stdin
+write end, whose close is what gives the child EOF.
 
 **The deadline kills the process group, not just the child.** When the child
 exits immediately and leaves a grandchild behind, Foundation has already reaped

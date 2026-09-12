@@ -13,6 +13,13 @@ private let logger = Logger(subsystem: "atelier", category: "process")
 /// still holds the write end of the pipe. Anything polling on a timer needs
 /// a deadline instead, or one wedged child stalls every later call.
 ///
+/// **A call occupies exactly one thread: the caller's.** Nothing here hands work
+/// to a queue or a pool, so no number of concurrent captures can starve each
+/// other — see `PipePump` for what that replaced and why it had to. The
+/// consequence for callers is the one the ABOUTME states: the thread is blocked
+/// for the child's whole life, so this belongs off the main actor and off any
+/// pool whose width is small enough to matter.
+///
 /// Two spawn sites deliberately stay outside this type, and say so where they
 /// spawn: `BareRepoClone.run` and `QuickAction.Runner.runShellCommand`. Both run
 /// work with no honest deadline — a clone, or the user's own command — and both
@@ -111,78 +118,34 @@ enum ProcessRunner {
             return nil
         }
 
-        // Written on its own thread for the same reason the two output streams
-        // drain concurrently below: a payload past the pipe buffer blocks the
-        // writer until the child reads it, so writing here — on the thread that
-        // goes on to wait for exit — deadlocks against a child that has not
-        // started reading yet. Closing the handle is what gives the child EOF;
-        // without it a child like `cat` never exits and only the deadline ends
-        // the call.
-        //
-        // Still abandoned rather than waited on, and deliberately not rewritten
-        // the way the read side below was. A child that never reads a payload
-        // larger than the pipe buffer parks this thread for good — the same
-        // shape of leak — but it takes a call site passing more than 64 KB to a
-        // child that ignores it, and every `standardInput` today is a hook
-        // payload of a few kilobytes. The read side had no such precondition:
-        // it parked two threads per call for a reason entirely outside the call
-        // site's control, which is what made it worth the machinery.
-        if let inPipe, let standardInput {
-            DispatchQueue.global(qos: .utility).async {
-                let handle = inPipe.fileHandleForWriting
-                // A child that exits without reading its input leaves this
-                // write with nowhere to go; EPIPE arrives as an ObjC exception
-                // through `write(contentsOf:)`, which would tear down the app.
-                try? handle.write(contentsOf: standardInput)
-                try? handle.close()
-            }
-        }
+        // stdin, stdout and stderr are pumped together, on **this** thread, by
+        // one `poll(2)` loop. `PipePump`'s own doc carries the reasoning; the
+        // short version is that all three streams have to move concurrently —
+        // the child blocks writing to a full pipe while we sit on an empty one,
+        // and a payload past the pipe buffer blocks the writer until the child
+        // reads — and that a thread this call already owns is the only place
+        // that concurrency can live without depending on a thread pool.
+        let input: (handle: FileHandle, payload: Data)? = {
+            guard let inPipe, let standardInput else { return nil }
+            return (inPipe.fileHandleForWriting, standardInput)
+        }()
 
-        // Both pipes drain CONCURRENTLY. Reading one to EOF while the other
-        // fills is a deadlock: the child blocks writing to a full pipe while we
-        // block reading the empty one. This is not hypothetical; `git fetch
-        // --all --prune` on a fresh bare clone prints a " * [new branch]" line
-        // per branch to *stderr*, hundreds of KB against a 16-64 KB pipe
-        // buffer. Draining concurrently is also what makes the deadline below
-        // enforceable: the read is what blocks, not the wait.
-        //
-        // They drain on dispatch *sources* rather than on two threads each
-        // calling `readDataToEndOfFile()`, because EOF is not the child's to
-        // give. EOF arrives when the last holder of the write end closes it,
-        // and a grandchild the child left behind holds the same one — `sh -c
-        // 'server &'` is an ordinary thing for a project's own command to be.
-        // A thread blocked on that read never comes back: two per call, against
-        // a libdispatch global pool that tops out around 64. A few dozen such
-        // calls and every later capture times out waiting for a thread rather
-        // than for its child, `/usr/bin/true` included. That was the bug, and
-        // it is why the read side is worth this much machinery: a source
-        // occupies no thread while it waits.
-        let drainQueue = DispatchQueue.global(qos: .utility)
-        let outDrain = PipeDrain(reading: outPipe.fileHandleForReading, on: drainQueue)
-        let errDrain = PipeDrain(reading: errPipe.fileHandleForReading, on: drainQueue)
-        guard let outDrain, let errDrain else {
-            outDrain?.cancel()
-            errDrain?.cancel()
-            logger.warning("\(executable, privacy: .public) could not be drained: no descriptor to spare")
+        // One absolute deadline covers the pump and the exit wait below.
+        let deadline = DispatchTime.now() + timeout
+        guard let pumped = PipePump.run(
+            stdout: outPipe.fileHandleForReading,
+            stderr: errPipe.fileHandleForReading,
+            stdin: input,
+            until: deadline
+        ) else {
+            logger.warning("\(executable, privacy: .public) could not be drained: its pipes could not be opened")
             kill(process)
             return nil
         }
 
-        // One absolute deadline covers all three waits. A drain may still be
-        // registered on a pipe a grandchild holds open; cancelling it below is
-        // what releases that descriptor. Neither drain is read on a failure
-        // path.
-        let deadline = DispatchTime.now() + timeout
-        let finished = outDrain.wait(until: deadline)
-            && errDrain.wait(until: deadline)
-            // EOF on the pipes is not exit: a child can write its output, close
-            // both descriptors, and then hang in cleanup. Bound this wait too.
-            && exited.wait(timeout: deadline) == .success
-        // On both paths, not just the one that gave up: cancelling is what
-        // closes the duplicated descriptors, and a success path that skipped it
-        // would trade a thread leak for an fd leak.
-        outDrain.cancel()
-        errDrain.cancel()
+        // EOF on the pipes is not exit: a child can write its output, close both
+        // descriptors, and then hang in cleanup. Bound this wait too.
+        let finished = pumped.reachedEOF && exited.wait(timeout: deadline) == .success
         guard finished else {
             // Logged, and distinguishable from a plain non-zero exit: a bare nil
             // at the call site is otherwise indistinguishable from "it failed".
@@ -193,7 +156,7 @@ enum ProcessRunner {
             return nil
         }
 
-        return Output(status: process.terminationStatus, stdout: outDrain.data, stderr: errDrain.data)
+        return Output(status: process.terminationStatus, stdout: pumped.stdout, stderr: pumped.stderr)
     }
 
     /// Runs `executable` and returns its stdout, or nil if it could not be
@@ -292,136 +255,209 @@ enum ProcessRunner {
         Foundation.kill(-pid, 0) == 0
     }
 
-    /// Reads one pipe to EOF without occupying a thread while it waits.
+    /// Moves a child's three pipes at once, on the **calling** thread, until both
+    /// output streams reach EOF and any payload has been written — or until the
+    /// deadline passes.
     ///
-    /// The obvious shape — `readDataToEndOfFile()` on a dispatch thread — is
-    /// what this replaced, and it blocks until every holder of the write end
-    /// closes it. The child is not the only holder, so that wait has no bound
-    /// the caller controls; see the comment in `capture`.
+    /// All three have to move concurrently, and each for its own reason. Reading
+    /// stdout to EOF while stderr fills is a deadlock: the child blocks writing
+    /// to a full pipe while the reader blocks on an empty one. `git fetch --all
+    /// --prune` on a fresh bare clone prints a " * [new branch]" line per branch
+    /// to *stderr*, hundreds of KB against a 16-64 KB pipe buffer, so this is
+    /// routine rather than exotic. And a payload past that same buffer blocks
+    /// the writer until the child reads it, so stdin cannot be written by a
+    /// thread that afterwards waits for the child.
     ///
-    /// `DispatchSource.makeReadSource` rather than
-    /// `FileHandle.readabilityHandler`, deliberately. The handler form leaves
-    /// EOF detection here anyway — a zero-length read is EOF, and a handler
-    /// that does not clear itself there respins forever on a spent descriptor —
-    /// and it reads through `availableData`, which raises an ObjC exception on
-    /// a read error rather than returning one, the same hazard the stdin writer
-    /// in `capture` documents. The source form is explicit about both, and it
-    /// gives the descriptor question a clean answer: it reads a `dup` and
-    /// closes that `dup` in its cancel handler, so the source owns exactly one
-    /// descriptor and `Pipe`'s own `FileHandle` goes on owning the original.
-    /// Handing both owners the same fd is a double close, and the second one
-    /// lands on whatever number the kernel has since handed to someone else.
-    private final class PipeDrain: @unchecked Sendable {
-        private let fileDescriptor: Int32
-        private let source: DispatchSourceRead
-        private let completed = DispatchSemaphore(value: 0)
-        private let box = DataBox()
-        /// Reused across reads. The source delivers its handler serially, so
-        /// nothing else is in here at the same time.
-        private var scratch = [UInt8](repeating: 0, count: 64 * 1024)
+    /// **What is deliberate here is that none of that concurrency costs a
+    /// thread.** Two earlier shapes both bought it with threads, and both
+    /// starved a pool:
+    ///
+    /// - `readDataToEndOfFile()` on two dispatch threads parked both of them for
+    ///   good whenever a grandchild held the write end open — EOF is not the
+    ///   child's to give, and `sh -c 'server &'` is an ordinary thing for a
+    ///   project's own command to be. At two per call against libdispatch's
+    ///   ~64-thread global pool, a few dozen such calls starved it.
+    /// - Replacing those with `DispatchSource` read sources fixed the *leak* but
+    ///   not the dependency: the waiter still blocked a thread while the source's
+    ///   event handler needed one of its own to deliver EOF. When the callers are
+    ///   Swift `Task`s the pool in question is the cooperative one, `hw.ncpu`
+    ///   wide rather than 64, and the waiters consumed the very threads that
+    ///   would have completed them. Measured in the shipped app: 14 of 14
+    ///   cooperative threads parked in `capture`, every child killed at its
+    ///   deadline — `tmux -V` among them, which is the tell, since nothing about
+    ///   that child is slow.
+    ///
+    /// `poll(2)` on the calling thread has no such failure mode to have. The
+    /// thread doing the waiting is the thread doing the reading, it is one the
+    /// caller already owns, and no pool is consulted at any point — so this is
+    /// immune by construction rather than by having enough threads.
+    ///
+    /// The descriptors belong to the `Pipe`s that own them and are never closed
+    /// here, with one exception: the stdin write end, whose close is what gives
+    /// the child EOF. Without it a child like `cat` never exits and only the
+    /// deadline ends the call.
+    private enum PipePump {
+        struct Result {
+            var stdout = Data()
+            var stderr = Data()
+            /// Both output streams reached EOF, and any payload was written,
+            /// inside the deadline.
+            var reachedEOF = false
+        }
 
-        /// Begins draining immediately, or fails if the descriptor cannot be
-        /// duplicated — which means the process is out of file descriptors, and
-        /// silently capturing nothing would read at the call site as a child
-        /// that printed nothing.
-        init?(reading handle: FileHandle, on queue: DispatchQueue) {
-            let duplicate = dup(handle.fileDescriptor)
-            guard duplicate >= 0 else { return nil }
-            // The source promises only that *some* bytes are readable, so the
-            // read must not block asking for more than arrived — that would
-            // park the very thread this type exists to keep free.
-            let flags = fcntl(duplicate, F_GETFL)
-            guard flags >= 0, fcntl(duplicate, F_SETFL, flags | O_NONBLOCK) >= 0 else {
-                close(duplicate)
-                return nil
+        /// One pipe buffer's worth, so a readable descriptor is usually emptied
+        /// in a single `read`.
+        private static let bufferSize = 64 * 1024
+
+        /// Pumps until EOF on both output streams or `deadline`, whichever comes
+        /// first. Nil only when a descriptor could not be prepared, which is a
+        /// different failure from a deadline and is reported as one.
+        static func run(
+            stdout outHandle: FileHandle,
+            stderr errHandle: FileHandle,
+            stdin input: (handle: FileHandle, payload: Data)?,
+            until deadline: DispatchTime
+        ) -> Result? {
+            let outFD = outHandle.fileDescriptor
+            let errFD = errHandle.fileDescriptor
+            let inFD = input?.handle.fileDescriptor
+            guard makeNonBlocking(outFD), makeNonBlocking(errFD),
+                  inFD.map(makeNonBlocking) ?? true
+            else { return nil }
+            if let inFD {
+                // A child that exits without reading leaves the write below with
+                // nowhere to go. Ask for EPIPE rather than SIGPIPE, whose default
+                // disposition would take the app down with it.
+                _ = fcntl(inFD, F_SETNOSIGPIPE, 1)
             }
-            fileDescriptor = duplicate
-            source = DispatchSource.makeReadSource(fileDescriptor: duplicate, queue: queue)
-            source.setEventHandler { [weak self] in
-                // Promoted to a strong reference for the duration of the read,
-                // so `scratch` cannot be deallocated underneath it.
-                self?.readWhateverIsThere()
+
+            var result = Result()
+            var outOpen = true
+            var errOpen = true
+            var inOpen = inFD != nil
+            var writeOffset = 0
+            let payload = input.map { [UInt8]($0.payload) } ?? []
+            var scratch = [UInt8](repeating: 0, count: bufferSize)
+
+            func closeInput() {
+                inOpen = false
+                if let handle = input?.handle {
+                    try? handle.close()
+                }
             }
-            source.setCancelHandler { [completed] in
-                // `duplicate` by value rather than `self.fileDescriptor`: the
-                // close has to happen whether or not the drain is still around,
-                // and this is the only place it happens.
-                close(duplicate)
-                completed.signal()
+            // Nothing to send: the child still needs the EOF.
+            if inOpen, payload.isEmpty {
+                closeInput()
             }
-            source.resume()
+
+            while outOpen || errOpen || inOpen {
+                guard let remaining = millisecondsRemaining(until: deadline) else { return result }
+
+                var fds: [pollfd] = []
+                if outOpen {
+                    fds.append(pollfd(fd: outFD, events: Int16(POLLIN), revents: 0))
+                }
+                if errOpen {
+                    fds.append(pollfd(fd: errFD, events: Int16(POLLIN), revents: 0))
+                }
+                if inOpen, let inFD {
+                    fds.append(pollfd(fd: inFD, events: Int16(POLLOUT), revents: 0))
+                }
+
+                let ready = poll(&fds, nfds_t(fds.count), remaining)
+                if ready < 0 {
+                    if errno == EINTR {
+                        continue
+                    }
+                    return result
+                }
+                // Zero is the deadline; `result` carries whatever arrived first.
+                if ready == 0 {
+                    return result
+                }
+
+                // `revents` is checked rather than `POLLIN`/`POLLOUT` alone: a
+                // hangup arrives as `POLLHUP`, often alongside data still sitting
+                // in the pipe, so the only honest test is to attempt the transfer
+                // and let `read`/`write` say what is left.
+                for entry in fds where entry.revents != 0 {
+                    switch entry.fd {
+                    case outFD:
+                        outOpen = drain(entry.fd, into: &result.stdout, scratch: &scratch)
+                    case errFD:
+                        errOpen = drain(entry.fd, into: &result.stderr, scratch: &scratch)
+                    default:
+                        let written = payload.withUnsafeBytes { buffer in
+                            write(
+                                entry.fd,
+                                buffer.baseAddress!.advanced(by: writeOffset),
+                                payload.count - writeOffset
+                            )
+                        }
+                        if written > 0 {
+                            writeOffset += written
+                            if writeOffset == payload.count {
+                                closeInput()
+                            }
+                        } else if written < 0, errno != EINTR, errno != EAGAIN {
+                            // EPIPE and friends: there is nowhere left to put the
+                            // payload, which is the child's business and not a
+                            // failure of this call.
+                            closeInput()
+                        }
+                    }
+                }
+            }
+
+            result.reachedEOF = true
+            return result
         }
 
-        deinit {
-            // Releasing a live source would strand the descriptor its cancel
-            // handler closes. Cancelling twice is a no-op.
-            source.cancel()
-        }
-
-        /// Everything read so far. Complete once `wait(until:)` has returned true.
-        var data: Data {
-            box.read()
-        }
-
-        /// Waits for EOF, or for a cancel, until `deadline`.
-        func wait(until deadline: DispatchTime) -> Bool {
-            completed.wait(timeout: deadline) == .success
-        }
-
-        /// Stops reading and releases the descriptor. Idempotent, and the only
-        /// thing a caller that gave up has to do.
-        func cancel() {
-            source.cancel()
-        }
-
-        private func readWhateverIsThere() {
+        /// Reads everything currently available. Returns whether the stream is
+        /// still open — false on EOF or on an error there is no recovering from.
+        private static func drain(_ fd: Int32, into data: inout Data, scratch: inout [UInt8]) -> Bool {
             while true {
                 let count = scratch.withUnsafeMutableBytes { buffer in
-                    read(fileDescriptor, buffer.baseAddress, buffer.count)
+                    read(fd, buffer.baseAddress, buffer.count)
                 }
                 if count > 0 {
-                    box.append(scratch.prefix(count))
+                    data.append(contentsOf: scratch.prefix(count))
                     continue
                 }
                 if count == 0 {
                     // EOF: the last holder of the write end let go.
-                    source.cancel()
-                    return
+                    return false
                 }
                 switch errno {
                 case EINTR:
                     continue
                 case EAGAIN:
-                    // Drained for now. The source fires again when more lands.
-                    // EWOULDBLOCK is the same value on Darwin.
-                    return
+                    // Drained for now; `poll` says when more lands. EWOULDBLOCK
+                    // is the same value on Darwin.
+                    return true
                 default:
-                    source.cancel()
-                    return
+                    return false
                 }
             }
         }
-    }
 
-    /// Handoff for a stream a `PipeDrain` is reading. Mirrors the locked-box
-    /// pattern in `CommandLineTools`.
-    private final class DataBox: @unchecked Sendable {
-        private let lock = NSLock()
-        private var data = Data()
-
-        func append(_ bytes: ArraySlice<UInt8>) {
-            lock.lock()
-            defer { lock.unlock() }
-            data.append(contentsOf: bytes)
+        /// The descriptor must not block: `poll` promises only that *some* bytes
+        /// are readable, and a blocking read asking for a whole buffer would park
+        /// the one thread this type exists to keep moving.
+        private static func makeNonBlocking(_ fd: Int32) -> Bool {
+            let flags = fcntl(fd, F_GETFL)
+            guard flags >= 0 else { return false }
+            return fcntl(fd, F_SETFL, flags | O_NONBLOCK) >= 0
         }
 
-        /// Reads; it does not take. See `ProcessCompose.PhaseExecutor.OutputBox.read()`
-        /// — these two boxes cross-reference each other, so renaming one and not
-        /// the other would put the misnomer straight back.
-        func read() -> Data {
-            lock.lock()
-            defer { lock.unlock() }
-            return data
+        /// Whole milliseconds left, rounded up so a sub-millisecond remainder
+        /// still polls once rather than degenerating into a spin. Nil once the
+        /// deadline has passed.
+        private static func millisecondsRemaining(until deadline: DispatchTime) -> Int32? {
+            let now = DispatchTime.now().uptimeNanoseconds
+            let end = deadline.uptimeNanoseconds
+            guard end > now else { return nil }
+            return Int32(clamping: (end - now + 999_999) / 1_000_000)
         }
     }
 }
