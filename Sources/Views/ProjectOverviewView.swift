@@ -85,11 +85,6 @@ struct ProjectOverviewView: View {
                                     }
                                 }
                             }
-                            .alert("Pull failed", isPresented: $showPullError, presenting: pullErrorMessage) { _ in
-                                Button("OK", role: .cancel) {}
-                            } message: { msg in
-                                Text(msg)
-                            }
 
                             if let count = info.commitCount {
                                 LabeledContent("Commits") {
@@ -349,12 +344,24 @@ struct ProjectOverviewView: View {
         } message: {
             Text(String(format: NSLocalizedString(prunableCount == 1 ? "Remove %d clean worktree with no uncommitted changes?" : "Remove %d clean worktrees with no uncommitted changes?", comment: ""), prunableCount))
         }
-        // On the outer view rather than the Prune button: that button is replaced by the
-        // spinner while a prune runs, and an alert hung off it goes away with it.
+        // Both on the outer view rather than on the buttons that raise them: each of
+        // those buttons is replaced by a spinner while its work runs, and an alert
+        // hung off one goes away with it. Pull's sat inside the Repository section
+        // as well, which draws only while `appEnv.repoInfo` is non-nil — and that is
+        // refreshed async every 15s, so a refresh returning nil takes the row and
+        // the alert with it.
         .alert("Prune failed", isPresented: $showPruneError, presenting: pruneErrorMessage) { _ in
             Button("OK", role: .cancel) {}
         } message: { msg in
             Text(msg)
+        }
+        // Truncated, not shown whole: git names every conflicting file, and an
+        // alert panel grows to fit its message until the OK button is off-screen.
+        // See `Git.Operations.truncatedForAlert`.
+        .alert("Pull failed", isPresented: $showPullError, presenting: pullErrorMessage) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { msg in
+            Text(Git.Operations.truncatedForAlert(msg))
         }
         .alert(
             "Purge Worktree",

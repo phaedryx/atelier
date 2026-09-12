@@ -1557,6 +1557,54 @@ extension Git {
             case failure(String)
         }
 
+        /// Cuts a git command's output down to something an alert can show.
+        ///
+        /// An alert's message is one unscrollable `Text` and the `_NSAlertPanel`
+        /// behind it grows to fit whatever it is handed. `git pull` refusing over
+        /// 150 locally-modified files names every one of them, and the panel then
+        /// measures 2574pt on a 1084pt screen with its origin 1522pt below the
+        /// bottom edge — the OK button is off-screen and the dialog cannot be
+        /// dismissed at all. That is the bug this exists for; it is not tidying.
+        ///
+        /// Head *and* tail are kept because git puts the diagnosis first
+        /// ("error: Your local changes to the following files would be overwritten
+        /// by merge:") and the instruction last ("Please commit your changes or
+        /// stash them before you merge. / Aborting"). Keeping either end alone
+        /// drops half of what the user needs to act on. The elided middle is the
+        /// file list, which is not what an alert is for — `git status` is.
+        ///
+        /// `characterLimit` is the backstop for output with no newlines to cut on:
+        /// a single 8000-character line measured 2310pt on its own, so a line
+        /// budget alone does not bound the panel.
+        static func truncatedForAlert(
+            _ text: String,
+            headLines: Int = 6,
+            tailLines: Int = 3,
+            characterLimit: Int = 900
+        ) -> String {
+            let lines = text
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .components(separatedBy: .newlines)
+
+            var kept = lines
+            // `+ 1`: eliding a single line to insert an elision line saves nothing.
+            if lines.count > headLines + tailLines + 1 {
+                let omitted = lines.count - headLines - tailLines
+                let elision = String(
+                    format: NSLocalizedString(
+                        "… %d more lines …",
+                        comment: "Marks the middle of a git error trimmed to fit an alert"
+                    ),
+                    omitted
+                )
+                kept = Array(lines.prefix(headLines)) + [elision] + Array(lines.suffix(tailLines))
+            }
+
+            let joined = kept.joined(separator: "\n")
+            guard joined.count > characterLimit else { return joined }
+            return String(joined.prefix(characterLimit - 1)) + "…"
+        }
+
         /// Run `git pull --ff-only` on whatever branch is currently checked out at `path`.
         /// Returns stdout on success and stderr (or an explanatory message) on failure.
         static func pullCurrentBranch(at path: String) -> PullResult {
