@@ -665,3 +665,5 @@
 "No base branch to compare against" = "No base branch to compare against";
 "Changes could not be read" = "Changes could not be read";
 "State unknown" = "State unknown";
+"Workstream order" = "Workstream order";
+"How workstreams are ordered in the sidebar, on the project overview, and when cycling with Command-bracket." = "How workstreams are ordered in the sidebar, on the project overview, and when cycling with Command-bracket.";

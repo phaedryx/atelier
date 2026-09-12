@@ -196,6 +196,7 @@ private struct GeneralSettingsPane: View {
     @AppStorage("atelier.confirmQuit") private var confirmQuit: Bool = true
     @AppStorage("atelier.baseDirectory") private var baseDirectory: String = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first ?? ""
     @AppStorage(BaseBranchSetting.storageKey) private var baseBranch = BaseBranchSetting.main.rawValue
+    @AppStorage(Project.SortOrder.storageKey) private var workstreamSortOrder: Project.SortOrder = .recent
 
     /// Read in `.task` rather than as the `@State` initial value: that
     /// expression runs on every construction of this pane, and
@@ -246,6 +247,17 @@ private struct GeneralSettingsPane: View {
                     ForEach(BaseBranchSetting.allCases) { option in
                         Text(option.label).tag(option.rawValue)
                     }
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Picker("Workstream order", selection: $workstreamSortOrder) {
+                        ForEach(Project.SortOrder.allCases, id: \.self) { order in
+                            Text(order.rawValue).tag(order)
+                        }
+                    }
+                    Text("How workstreams are ordered in the sidebar, on the project overview, and when cycling with Command-bracket.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 SettingToggle(

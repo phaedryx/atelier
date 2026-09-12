@@ -11,7 +11,7 @@ struct ProjectOverviewView: View {
     let onProjectChanged: () -> Void
 
     @EnvironmentObject var appEnv: AppEnvironment
-    @AppStorage("atelier.workstreamSortOrder") private var workstreamSortOrder: Project.SortOrder = .recent
+    @AppStorage(Project.SortOrder.storageKey) private var workstreamSortOrder: Project.SortOrder = .recent
     @State private var worktrees: [Worktree.Info] = []
     @State private var showingPruneConfirm = false
     @State private var isPruning = false
@@ -225,15 +225,6 @@ struct ProjectOverviewView: View {
                                 .clipShape(Capsule())
                         }
                         Spacer()
-                        if project.workstreams.count > 1 {
-                            Picker("", selection: $workstreamSortOrder) {
-                                ForEach(Project.SortOrder.allCases, id: \.self) { order in
-                                    Text(order.rawValue).tag(order)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                            .frame(width: 120)
-                        }
                     }
                 }
 
@@ -469,12 +460,7 @@ struct ProjectOverviewView: View {
     }
 
     private func sortedWorkstreams(_ workstreams: [Workstream]) -> [Workstream] {
-        switch workstreamSortOrder {
-        case .recent:
-            workstreams.sorted { $0.lastAccessedAt > $1.lastAccessedAt }
-        case .alphabetical:
-            workstreams.sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
-        }
+        workstreamSortOrder.sorted(workstreams)
     }
 
     private func loadDocFiles() {

@@ -304,8 +304,29 @@ extension Project {
 }
 
 extension Project {
+    /// How a project's workstreams are ordered, wherever they are listed.
+    ///
+    /// Four surfaces order the same list — the sidebar's rows, the sidebar's
+    /// re-sort when a terminal produces output, the project overview's list, and
+    /// the workstream the ⌘[ / ⌘] cycle lands on. They all read this one setting
+    /// and go through `sorted(_:)`, because a keyboard walk that visits rows in a
+    /// different order than the sidebar draws them is indistinguishable from a bug.
+    /// If you add a fifth, route it here rather than inlining a fourth comparison.
     enum SortOrder: String, CaseIterable {
         case recent = "Recent"
         case alphabetical = "A-Z"
+
+        static let storageKey = "atelier.workstreamSortOrder"
+
+        /// Sorts by `label`, not `name`, so a renamed workstream sits where the
+        /// sidebar says it does rather than under the branch name behind it.
+        func sorted(_ workstreams: [Workstream]) -> [Workstream] {
+            switch self {
+            case .recent:
+                workstreams.sorted { $0.lastAccessedAt > $1.lastAccessedAt }
+            case .alphabetical:
+                workstreams.sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
+            }
+        }
     }
 }

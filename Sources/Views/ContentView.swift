@@ -60,15 +60,21 @@ func renderableWorkstreamID(
     } ? selectedWorkstreamID : nil
 }
 
+/// The workstream ⌘[ / ⌘] lands on next.
+///
+/// `order` has no default on purpose: it must be the same `Project.SortOrder` the
+/// sidebar drew with, and a default here would let a caller silently walk the rows
+/// in an order nobody is looking at.
 func cycledWorkstreamID(
     in project: Project,
     selectedWorkstreamID: UUID?,
     direction: Int,
+    order: Project.SortOrder,
     pathExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
 ) -> UUID? {
-    let sorted = project.workstreams
-        .filter { workstreamHasUsablePath($0, pathExists: pathExists) }
-        .sorted { $0.lastAccessedAt > $1.lastAccessedAt }
+    let sorted = order.sorted(
+        project.workstreams.filter { workstreamHasUsablePath($0, pathExists: pathExists) }
+    )
     guard !sorted.isEmpty else { return nil }
     guard let selectedWorkstreamID,
           let currentIndex = sorted.firstIndex(where: { $0.id == selectedWorkstreamID })
@@ -144,6 +150,8 @@ struct ContentView: View {
     @State private var headWatcher: Worktree.HeadWatcher?
     @AppStorage("atelier.editorTabActive") private var editorTabActive: Bool = false
     @AppStorage(Workstream.PermissionNotifier.enabledKey) private var notifyOnPermission: Bool = true
+    /// Must agree with the sidebar's own copy — ⌘[ / ⌘] walks the rows the sidebar drew.
+    @AppStorage(Project.SortOrder.storageKey) private var workstreamSortOrder: Project.SortOrder = .recent
 
     private var paletteContext: PaletteContext {
         PaletteContext(
@@ -997,7 +1005,12 @@ struct ContentView: View {
         guard let project = activeProject else { return }
 
         if selection?.workstreamID != nil || selection?.projectID != nil {
-            guard let id = cycledWorkstreamID(in: project, selectedWorkstreamID: selection?.workstreamID, direction: direction) else { return }
+            guard let id = cycledWorkstreamID(
+                in: project,
+                selectedWorkstreamID: selection?.workstreamID,
+                direction: direction,
+                order: workstreamSortOrder
+            ) else { return }
             deferSelection(.workstream(id))
         }
     }
