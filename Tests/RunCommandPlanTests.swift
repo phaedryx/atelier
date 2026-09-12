@@ -115,7 +115,7 @@ final class RunCommandPlanTests: XCTestCase {
             devCommand: processComposeCommand(), config: config, binary: binary
         )
         let reason = ProcessCompose.RunCommandPlan.unavailableReason(
-            devCommand: processComposeCommand(), config: config, binary: binary, isEnabled: true
+            devCommand: processComposeCommand(), config: config, binary: binary
         )
 
         XCTAssertFalse(plan.canRun)
@@ -137,7 +137,7 @@ final class RunCommandPlanTests: XCTestCase {
             devCommand: processComposeCommand(), config: config, binary: binary
         )
         let reason = ProcessCompose.RunCommandPlan.unavailableReason(
-            devCommand: processComposeCommand(), config: config, binary: binary, isEnabled: true
+            devCommand: processComposeCommand(), config: config, binary: binary
         )
 
         XCTAssertTrue(plan.canRun)
@@ -259,26 +259,27 @@ final class RunCommandPlanTests: XCTestCase {
             ProcessCompose.RunCommandPlan.plan(devCommand: devCommand, config: config, binary: nil).canRun
         )
         XCTAssertNotNil(ProcessCompose.RunCommandPlan.unavailableReason(
-            devCommand: devCommand, config: config, binary: nil, isEnabled: true
+            devCommand: devCommand, config: config, binary: nil
         ))
     }
 
     func testAMissingConfigIsAlsoExplained() {
         XCTAssertNotNil(ProcessCompose.RunCommandPlan.unavailableReason(
-            devCommand: processComposeCommand(), config: nil, binary: "/bin/pc", isEnabled: true
+            devCommand: processComposeCommand(), config: nil, binary: "/bin/pc"
         ))
     }
 
-    /// A switched-off integration and a project with no config both arrive as
-    /// `devCommand == nil`, and they want opposite advice — turn the setting on,
-    /// versus write a config. Only the first gets a reason; the second is what
-    /// the pane's own "add a process-compose.yaml" copy already says.
-    func testTheSwitchedOffIntegrationSaysSoRatherThanLookingLikeAMissingConfig() {
-        XCTAssertNotNil(ProcessCompose.RunCommandPlan.unavailableReason(
-            devCommand: nil, config: nil, binary: nil, isEnabled: false
-        ))
+    /// `devCommand == nil` has one meaning again and gets no phrase.
+    ///
+    /// It used to have two — no config, or the process-compose switch off,
+    /// which made the resolver detect nothing — and they wanted opposite advice,
+    /// so the switched-off case was the one this function explained. The switch
+    /// is gone with the integration, so the only way here is a project with no
+    /// config and no override typed, which is what the pane's own "add an
+    /// atelier.process-compose.yaml" copy already says.
+    func testANilDevCommandIsLeftToThePanesOwnCopy() {
         XCTAssertNil(ProcessCompose.RunCommandPlan.unavailableReason(
-            devCommand: nil, config: nil, binary: nil, isEnabled: true
+            devCommand: nil, config: nil, binary: nil
         ))
     }
 
@@ -286,11 +287,11 @@ final class RunCommandPlanTests: XCTestCase {
     /// override — no precondition of theirs can fail.
     func testAUsableRunAndAnOverrideNeedNoExplanation() {
         XCTAssertNil(ProcessCompose.RunCommandPlan.unavailableReason(
-            devCommand: processComposeCommand(), config: config, binary: "/bin/pc", isEnabled: true
+            devCommand: processComposeCommand(), config: config, binary: "/bin/pc"
         ))
         XCTAssertNil(ProcessCompose.RunCommandPlan.unavailableReason(
             devCommand: DevCommand(command: "npm run dev", source: .override, sourceDescription: nil),
-            config: nil, binary: nil, isEnabled: true
+            config: nil, binary: nil
         ))
     }
 }

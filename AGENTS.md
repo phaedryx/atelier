@@ -148,7 +148,7 @@ it receives only the `X.Y.Z` core; the suffix naming the commit rides on
   Types that do not cluster stay top-level — do not invent a `Core` bucket for
   them. `ProcessRunner` and `AppEnvironment` stay top-level permanently:
   `Process` and `Environment` would collide with Foundation and SwiftUI.
-- `Sources/Models/ProcessCompose/` - The process-compose integration (config location, phases, ports, the process table)
+- `Sources/Models/ProcessCompose/` - The process-compose layer (config location, phases, ports, the process table)
 - `Sources/Terminal/` - Ghostty integration (TerminalApp singleton, TerminalView NSView)
 - `Sources/Views/` - SwiftUI views (sidebar, settings, project overview, workspace, browser, editor)
 - `Sources/Palette/` - Command palette (registry, default commands, fuzzy matcher)
@@ -363,19 +363,59 @@ default versus `BaseBranchSetting` — not who pays to resolve it, and a cache t
 what `defaultBranch(at:)` would have returned leaves the question byte-identical. Say so in any
 commit that touches it, because a reviewer will pattern-match it to the forbidden migration.
 
-### The process-compose integration
+### process-compose is a requirement, not an integration
 Everything a project asks Atelier to run lives in one **`process-compose.yaml`**, read by
-[process-compose](https://f1bonacc1.github.io/process-compose/). `atelier.processCompose.enabled`
-gates the whole integration and **defaults off**; with it off, a worktree gets no setup at all,
-because there is no other setup path left. `ProcessCompose.Settings.resolveBinary()` finds the
-binary: a configured path is used or fails, and never falls back to a search — silently running
-a different binary than the one named is worse than reporting the named one is gone.
+[process-compose](https://f1bonacc1.github.io/process-compose/).
+`ProcessCompose.Settings.resolveBinary()` finds the binary, and **there is no process-compose
+setting of any kind** — no switch, no path. Two UserDefaults keys were removed, and neither
+should come back or be read as meaning anything if a stale copy is found:
 
-The switch is checked in three places: `PhasePolicy.plan` (so no unattended phase runs),
-`refreshConfigApproval` (so nothing asks for approval it will not use), and
-`DevCommand.Resolver.detectProcessCompose` (so Start has nothing to detect). The first two are
-about correctness. The third is one half of a security boundary whose other half is
-`ProcessCompose.RunCommandPlan` — see below.
+- `atelier.processCompose.enabled` defaulted off, which made "off" a supported state in which a
+  worktree got no setup at all, nothing ran, and five surfaces each explained the silence a
+  different way.
+- `atelier.processCompose.binaryPath` named a binary explicitly, took precedence over the search,
+  and deliberately *failed* rather than falling back to it — on the argument that silently running
+  a different binary than the one named is worse than reporting the named one is gone. That
+  argument was sound and the setting still went: the binary is auto-detected, first match on
+  `searchPaths` wins.
+
+process-compose now sits in Settings → Environment under **Detected Tools**, between `git` and
+`tmux`, and on the onboarding screen as a required prerequisite with an install link. The only
+interaction left is that pane's refresh button.
+
+**The Detected Tools row is fed by `resolveBinary()`, never by `ToolStatus.findBinary`.** Those
+two search different places — `resolveBinary` walks three fixed directories,
+`CommandLineTools.path(for:)` walks the login PATH and six known locations — so a row fed by the
+generic search reads green above a Start button reporting "process-compose was not found", the
+button-versus-run disagreement `ProcessCompose.RunCommandPlan` exists to prevent, only spread
+across two windows. Whatever `resolveBinary` searches, every surface must keep asking *it*. The
+version probe is `version -s`: there is no `--version` flag, and bare `version` prints six lines
+whose first is the product name.
+
+**Detection is now an input to `runPlan`, and `TerminalContainerView` observes it.** The binary
+path key was an `@AppStorage` there precisely so that Start became enabled when the user followed
+the plan's own "go and fix this in Settings" advice; with the key gone,
+`.onChange(of: appEnv.toolStatus.processCompose.path)` is what carries an install through to
+Start, and the refresh button is what triggers detection. Removing that observer without putting
+another trigger in its place leaves Start disabled after the user has done exactly what it asked.
+
+`resolveBinary(searchPaths:)` takes the list as a defaulted parameter, injected only by tests.
+`ProcessComposeSettingsTests` declined that seam while the search was merely the fallback behind
+a configured path — "adding a search-paths injection point to production for one test" — and the
+ruling flipped when the search became the only resolution path there is, because declining it
+left the whole of resolution unassertable on any host. `WorkstreamArchiverDisposeTests` cannot
+use the seam (it goes through `disposePlan`, which calls `resolveBinary()` with no arguments on
+purpose) and `XCTSkipIf`s instead; that is safe only because `ci.yml` installs process-compose
+and hard-fails if it is not on `searchPaths`, in the same job and immediately before the tests.
+
+Removing the flag took out a guard in each of three places — `PhasePolicy.plan` (so no
+unattended phase runs), `refreshConfigApproval` (so nothing asks for approval it will not use),
+and `DevCommand.Resolver.detectProcessCompose` (so Start has nothing to detect). Only the third
+was ever near a security boundary, and it stopped being the boundary when
+`ProcessCompose.RunCommandPlan` took the invariant to the consumer — see below. A consequence
+worth knowing rather than fixing: `refreshConfigApproval` now runs for a project that ships its
+own `process-compose.yaml` for its own reasons, so such a project gets an approval prompt where
+it previously got silence.
 
 **The un-`-n`'d command must never be executed, and is no longer displayed either.**
 `DevCommand.Resolver.detectProcessCompose` builds `process-compose up -U -f <files>` as the
@@ -390,8 +430,8 @@ which `ProcessCompose.RunCommandPlan` runs literally. Do not put a runnable proc
 
 That invariant was defended four times by guarding *preconditions*, and reopened four times by
 a different route each time: a worktree override process-compose discovered but Atelier never
-showed; `compose.yaml` winning discovery outright; the integration switch being off; and — with
-the switch **on** — `resolveBinary()` returning nil, which is ordinary rather than exotic,
+showed; `compose.yaml` winning discovery outright; the process-compose switch — since removed —
+being off; and — with that switch **on** — `resolveBinary()` returning nil, which is ordinary rather than exotic,
 since process-compose is not in homebrew-core and `go install`, nix, mise and asdf shims all
 sit on PATH but outside the three searched directories. That last one was additionally nasty
 because `scriptCommand` wraps the fallback in `$SHELL -lic`, so PATH would resolve the very
@@ -415,8 +455,8 @@ did nothing in silence. `TerminalContainerView.refreshDevCommand` resolves the d
 plan and the reason together, in one function, because *agreement* is the invariant here rather
 than freshness. `ProcessCompose.RunCommandPlan.unavailableReason` explains a `.nothing`, and
 `ExecutionTabView.scriptInstructions` — the surface that already drew for "nothing to run" —
-renders it: the integration switched off, a config that cannot be located, a binary that is not
-where the search looks. Background setup's own outcome, including `.completedWithNote`, is
+renders it: a config that cannot be located, a binary that is not where the search looks, an
+`execute` namespace nothing declares. Background setup's own outcome, including `.completedWithNote`, is
 rendered on the Info tab, which is permanent; nothing observed `.asyncSetupStateChanged` before,
 so those notes were written and discarded.
 
@@ -525,9 +565,12 @@ process-compose's PID, which Atelier cannot predict and so cannot connect to. Th
 phases get namespace-suffixed paths, because a `bootstrap` still running when the user presses
 Start would otherwise rebind `execute`'s socket and strand the first server.
 
-**The one gate.** `PhasePolicy.plan` answers the four preconditions — integration on, a config
-located, a binary to run it with, and approval of every repository-provided file — for both
-unattended phases. It is deliberately the *only* copy: a second, inlined set in
+**The one gate.** `PhasePolicy.plan` answers the three preconditions — a config located, a
+binary to run it with, and approval of every repository-provided file — for both unattended
+phases. There were four until the process-compose switch went; nothing else changed, but the
+two hand-written mirrors below (`RunCommandPlan.unavailableReason` and
+`verificationUnavailableReason`) had to lose the same guard by hand, because neither of them
+fails to compile when they disagree with this. It is deliberately the *only* copy: a second, inlined set in
 `Workstream.Archiver` could not be tested and would not follow a change made here. Any new
 unattended execution path for repository-provided commands must go through it.
 `Verification.Runner.start` calls it too (`VerificationRunner.swift:347-363`), not because `verify`
@@ -576,12 +619,14 @@ later reader would plausibly "simplify" away without knowing why:
    `verificationUnavailableReason` only to phrase it in the present tense
    (`VerificationTabView.swift:113-245`), because `Plan.nothingToDo` carries a past-tense string and
    no discriminated case. **Nothing enforces the agreement** —
-   `verificationUnavailableReason` hand-mirrors `plan`'s four preconditions in the same order; a
-   fifth precondition added to `plan` has to be added here too, by hand, and nothing will fail to
-   compile if that step is missed. `.run` is not by itself availability, either: `plan` knows nothing
-   about namespace *contents*, so an empty or unparseable `verify` namespace still returns `.run` —
-   `verificationAvailability` reads the declared list off `plan`'s own returned config as a fifth
-   fact, so Run cannot be enabled for a project `start` would refuse.
+   `verificationUnavailableReason` hand-mirrors `plan`'s three preconditions in the same order; a
+   fourth precondition added to `plan` has to be added here too, by hand, and nothing will fail to
+   compile if that step is missed — which is exactly what happened in the other direction when the
+   process-compose switch was removed and this mirror had to lose its first guard by hand. `.run`
+   is not by itself availability, either: `plan` knows nothing about namespace *contents*, so an
+   empty or unparseable `verify` namespace still returns `.run` — `verificationAvailability` reads
+   the declared list off `plan`'s own returned config as a fourth fact, so Run cannot be enabled
+   for a project `start` would refuse.
 6. **A parse failure is not "declares nothing".** `declaredProcesses(in:)` returns nil, not `[]`,
    when a file cannot be parsed (`ProcessComposeConfig.swift:107-134`). `Verification.Runner.start`
    throws `Failure.unavailable` on that nil rather than letting `resolveChecks` see an empty list

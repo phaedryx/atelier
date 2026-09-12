@@ -11,46 +11,52 @@ import XCTest
 final class WorkstreamArchiverDisposeTests: XCTestCase {
     private var project: URL!
     private var worktree: URL!
-    private var savedSettings: [String: Any?] = [:]
 
-    override func setUp() {
-        super.setUp()
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        // `plan` checks the binary *before* it checks approval, so on a host
+        // without process-compose the refusal tests below would report "was not
+        // found" and fail — and those are precisely the two that assert the
+        // security refusal.
+        //
+        // This used to be made host-independent by pointing
+        // `ProcessCompose.Settings.binaryPath` at `/bin/ls`. That setting is
+        // gone — the binary is auto-detected — and the injected
+        // `resolveBinary(searchPaths:)` seam does not reach here, because these
+        // tests go through `disposePlan`, which calls `resolveBinary()` with no
+        // arguments on purpose. So the honest thing is to skip, the way
+        // `AsyncSetupRerunTests` already does.
+        //
+        // Skipping cannot hide these in CI: `.github/workflows/ci.yml` installs
+        // process-compose and then hard-fails the job if it is not on
+        // `searchPaths`, in the same job that runs this suite and immediately
+        // before it.
+        try XCTSkipIf(
+            ProcessCompose.Settings.resolveBinary() == nil,
+            "process-compose is not installed, so the binary precondition would mask the approval one"
+        )
+
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         project = root.appendingPathComponent("project")
         worktree = project.appendingPathComponent("wt")
-        try! FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
-
-        for key in [ProcessCompose.Settings.enabledKey, ProcessCompose.Settings.binaryPathKey] {
-            savedSettings[key] = UserDefaults.standard.object(forKey: key)
-        }
-        ProcessCompose.Settings.isEnabled = true
-        // A real, always-present executable rather than whatever this machine
-        // happens to have installed. `plan` checks the binary *before* it checks
-        // approval, so on a runner without process-compose the refusal tests
-        // would report "was not found" and fail — and those are precisely the
-        // two that assert the security refusal. This makes every branch here
-        // deterministic and independent of the host.
-        ProcessCompose.Settings.binaryPath = "/bin/ls"
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
     }
 
     override func tearDown() {
-        ScriptTrust.revokeConfigFiles(for: project.path)
-        for (key, value) in savedSettings {
-            if let value {
-                UserDefaults.standard.set(value, forKey: key)
-            } else {
-                UserDefaults.standard.removeObject(forKey: key)
-            }
+        // `project` is nil when setUp skipped before assigning it.
+        if let project {
+            ScriptTrust.revokeConfigFiles(for: project.path)
+            try? FileManager.default.removeItem(at: project.deletingLastPathComponent())
         }
-        try? FileManager.default.removeItem(at: project.deletingLastPathComponent())
         super.tearDown()
     }
 
     /// Guards the guard: if this ever stops resolving, the refusal tests below
     /// would start passing for the wrong reason (a missing binary, not a missing
-    /// approval).
+    /// approval). The skip above means this can only fail by the resolver
+    /// disagreeing with itself between setUp and here.
     func testTheBinaryPreconditionIsSatisfiedForEveryTestHere() {
-        XCTAssertEqual(ProcessCompose.Settings.resolveBinary(), "/bin/ls")
+        XCTAssertNotNil(ProcessCompose.Settings.resolveBinary())
     }
 
     private func note(_ plan: PhasePolicy.Plan) -> String? {
@@ -65,17 +71,17 @@ final class WorkstreamArchiverDisposeTests: XCTestCase {
         return path.path
     }
 
-    /// The disabled-integration branch proves the plan was consulted at all: a
-    /// `runDispose` that had kept its own inline preconditions would report
-    /// something else, or nothing.
+    /// Proves the plan was consulted at all: a `runDispose` that had kept its
+    /// own inline preconditions would report something else, or nothing. The
+    /// missing-config branch is what stands in for it now that the
+    /// integration switch — the branch this used to reach — is gone; no config
+    /// is written in this worktree or this project directory.
     func testDisposeAsksThePolicy() {
-        ProcessCompose.Settings.isEnabled = false
-
         let plan = Workstream.Archiver.disposePlan(
             worktreePath: worktree.path, projectDirectory: project.path
         )
 
-        XCTAssertEqual(note(plan)?.contains("turned off"), true, String(describing: plan))
+        XCTAssertEqual(note(plan)?.contains("no process-compose config"), true, String(describing: plan))
         XCTAssertEqual(note(plan)?.contains("dispose"), true, "the note must name the phase")
     }
 

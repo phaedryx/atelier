@@ -131,8 +131,8 @@ final class VerificationRunnerTests: XCTestCase {
         XCTAssertEqual(runner.runs, before)
     }
 
-    /// Reachable without a binary or config: the process-compose integration
-    /// defaults off, so a plain start reaches `PhasePolicy.plan`'s
+    /// Reachable without a binary or config: the temp paths below hold no
+    /// process-compose config, so a plain start reaches `PhasePolicy.plan`'s
     /// `.nothingToDo` and must throw before touching `runs`.
     func test_start_leavesRunsUntouchedWhenNothingCanRun() {
         let runner = Verification.Runner()
@@ -301,9 +301,9 @@ final class VerificationRunnerTests: XCTestCase {
     // MARK: - The run loop
 
     /// A run request the stub spawner never dereferences. `execute` is driven
-    /// directly, because `start`'s gate needs the integration switched on, a
-    /// located config and a real binary — none of which says anything about the
-    /// ordering these tests exist for.
+    /// directly, because `start`'s gate needs a located config and a real
+    /// binary — neither of which says anything about the ordering these tests
+    /// exist for.
     private func request(workstreamID: UUID, checks: [String]) -> Verification.Runner.SpawnRequest {
         Verification.Runner.SpawnRequest(
             workstreamID: workstreamID,

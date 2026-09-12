@@ -276,17 +276,6 @@ struct TerminalContainerView: View {
     @AppStorage("atelier.autoRenameBranch") private var autoRenameBranch: Bool = false
     @AppStorage("atelier.allowOutsideWorktree") private var allowOutsideWorktree: Bool = false
     @AppStorage(IPC.AgentSettings.enabledKey) private var agentIPC: Bool = false
-    /// Both process-compose settings, observed rather than read.
-    ///
-    /// They are inputs to `runPlan`, and they are changed in the Settings
-    /// window, which never touches this view — so without an observer the pane
-    /// would keep a plan built before the change. That matters most in the state
-    /// the plan's own message describes: "process-compose was not found, set its
-    /// path in Settings" is advice the user follows, and Start has to become
-    /// enabled when they do. `@AppStorage` watches UserDefaults process-wide, so
-    /// a write from the other window lands here.
-    @AppStorage(ProcessCompose.Settings.enabledKey) private var processComposeEnabled: Bool = false
-    @AppStorage(ProcessCompose.Settings.binaryPathKey) private var processComposeBinaryPath: String = ""
     @AppStorage("atelier.editorTabActive") private var editorTabActive: Bool = false
     @AppStorage("atelier.editorFileDirty") private var editorFileDirty: Bool = false
     @State private var fileTree: [FileNode] = []
@@ -303,9 +292,9 @@ struct TerminalContainerView: View {
     @State private var resolvedDevCommand: DevCommand?
     @State private var defaultBranch = "main"
     /// Every repository-provided file process-compose would load here, or empty
-    /// when there is nothing to approve — the integration is off, no config was
-    /// found, or the only config sits in the project directory and is the user's
-    /// own with no worktree override beside it.
+    /// when there is nothing to approve — no config was found, or the only
+    /// config sits in the project directory and is the user's own with no
+    /// worktree override beside it.
     ///
     /// A list, not a path: a repository can ship a benign base config plus an
     /// override that discovery loads, and showing only the base would ask the
@@ -335,13 +324,19 @@ struct TerminalContainerView: View {
     /// stats the binary, so reading it from the view body would also put
     /// filesystem work in every render pass.
     ///
-    /// What invalidates it: the per-workstream override, and **both
-    /// process-compose settings** — the integration switch and the binary path,
-    /// observed via `@AppStorage` because they are changed in a different window
-    /// that never touches this view. Those two are not optional. The plan's own
-    /// message tells the user to go and change them, so a plan that did not
-    /// notice would leave Start disabled after they had done exactly what it
-    /// asked. Do not drop them when adding another input here.
+    /// What invalidates it: the per-workstream override, and **whether
+    /// process-compose was detected**, observed off `appEnv.toolStatus` because
+    /// it changes in a different window that never touches this view. Neither is
+    /// optional. The plan's own message tells the user to go and install
+    /// process-compose, so a plan that did not notice would leave Start disabled
+    /// after they had done exactly what it asked. Do not drop them when adding
+    /// another input here.
+    ///
+    /// There were three inputs once: the integration switch and the binary path
+    /// were both `@AppStorage` keys, and both are gone — process-compose is a
+    /// requirement and is auto-detected. No process-compose *setting* reaches
+    /// this view any more; the detection observer is the whole of what Settings
+    /// can change here.
     @State private var runPlan: ProcessCompose.RunCommandPlan = .nothing
     /// Every file the run's config will load, for the pane to show in place of a
     /// command string. Set in the same refresh as `runPlan`.
@@ -477,17 +472,17 @@ struct TerminalContainerView: View {
     /// The located process-compose config, when this workstream's run is a
     /// process-compose run.
     ///
-    /// Asks the same two questions as `usesProcessCompose` — the integration is
-    /// on, and the resolved dev command came from a config rather than from the
-    /// user's own override, which `DevCommand.Resolver.resolve` prefers. It takes
-    /// the dev command as a parameter rather than reading `resolvedDevCommand`
-    /// because `refreshDevCommand` needs the config for the resolution it is in
-    /// the middle of storing, not for the previous one.
+    /// Asks the same question as `usesProcessCompose` — whether the resolved dev
+    /// command came from a config rather than from the user's own override, which
+    /// `DevCommand.Resolver.resolve` prefers. It takes the dev command as a
+    /// parameter rather than reading `resolvedDevCommand` because
+    /// `refreshDevCommand` needs the config for the resolution it is in the
+    /// middle of storing, not for the previous one.
     ///
     /// A function, and called only from `refreshDevCommand`, so locating the
     /// config never happens in a render pass.
     private func processComposeConfig(for devCommand: DevCommand?) -> ProcessCompose.Config? {
-        guard ProcessCompose.Settings.isEnabled, devCommand?.source == .processCompose else { return nil }
+        guard devCommand?.source == .processCompose else { return nil }
         return ProcessCompose.Config.locate(worktree: workingDirectory, projectDirectory: projectDirectory)
     }
 
@@ -1209,15 +1204,24 @@ struct TerminalContainerView: View {
                 DevCommand.Resolver.saveOverride(newValue, for: workstreamID)
                 refreshDevCommand()
             }
-            // The two Settings-window inputs to `runPlan`. `refreshConfigApproval`
-            // comes along because it is guarded on the same switch: with the
-            // integration turned on mid-session, a repository-provided config
-            // has to start asking for approval too.
-            .onChange(of: processComposeEnabled) { _, _ in
-                refreshConfigApproval()
-                refreshDevCommand()
-            }
-            .onChange(of: processComposeBinaryPath) { _, _ in
+            // Whether process-compose exists is an input to `runPlan`, and it
+            // can change while this pane is open — the plan's own message tells
+            // the user to go and install it, so a plan that did not notice would
+            // leave Start disabled after they had done exactly what it asked.
+            //
+            // This replaces an `@AppStorage` observer on the binary-path
+            // setting, which was that trigger until the path stopped being
+            // configurable. `appEnv.toolStatus` is the successor because it is
+            // where detection now lands: `ToolStatus.detect` resolves this entry
+            // through `ProcessCompose.Settings.resolveBinary()`, so Settings →
+            // Environment's refresh button is the "I installed it, re-check"
+            // action and this is how it reaches Start. Do not delete it without
+            // putting another trigger in its place.
+            //
+            // Approval is deliberately not refreshed alongside: what needs
+            // approving is decided by a config's *location*, which installing a
+            // binary cannot change.
+            .onChange(of: appEnv.toolStatus.processCompose.path) { _, _ in
                 refreshDevCommand()
             }
             .onChange(of: model.runStarted) { _, started in
@@ -1541,15 +1545,12 @@ struct TerminalContainerView: View {
     /// `ProcessCompose.RunCommandPlan` now holds the invariant structurally; this property is
     /// only about whether there is a socket worth polling.
     ///
-    /// The `isEnabled` half is belt-and-braces rather than the load-bearing
-    /// check: `DevCommand.Resolver.detectProcessCompose` refuses to detect
-    /// anything while the setting is off, so a `.processCompose` source already
-    /// implies it. Kept anyway, because the two are read from different places
-    /// and a reader here should not have to go and confirm that the resolver
-    /// still guards. It cannot *disagree* with the resolver — only be redundant
-    /// with it.
+    /// It used to `&&` a `ProcessCompose.Settings.isEnabled` read onto this,
+    /// belt-and-braces over the source check rather than load-bearing. There is
+    /// no switch to read any more: process-compose is a requirement, so the
+    /// source is the whole question.
     private var usesProcessCompose: Bool {
-        ProcessCompose.Settings.isEnabled && resolvedDevCommand?.source == .processCompose
+        resolvedDevCommand?.source == .processCompose
     }
 
     /// Polls the control socket exactly while a process-compose run is up.
@@ -1687,13 +1688,12 @@ struct TerminalContainerView: View {
         runUnavailableReason = ProcessCompose.RunCommandPlan.unavailableReason(
             devCommand: devCommand,
             config: config,
-            binary: binary,
-            isEnabled: ProcessCompose.Settings.isEnabled
+            binary: binary
         )
-        // Same triggers, deliberately: the Verification tab answers to the
-        // integration switch and the binary path too, and Task 11's first
-        // version resolved them on `.onAppear` alone — so flipping the switch
-        // in Settings never reached the tab.
+        // Same triggers, deliberately: the Verification tab answers to whether
+        // process-compose was detected too, and Task 11's first version resolved
+        // it on `.onAppear` alone — so a change made in Settings never reached
+        // the tab.
         refreshVerificationAvailability()
     }
 
@@ -1716,7 +1716,6 @@ struct TerminalContainerView: View {
         // narrowed to the *run*, so it disappears behind a per-workstream
         // override — and verify is not the run.
         let availability = verificationAvailability(
-            isEnabled: ProcessCompose.Settings.isEnabled,
             config: ProcessCompose.Config.locate(
                 worktree: workingDirectory, projectDirectory: projectDirectory
             ),
@@ -2067,11 +2066,10 @@ struct TerminalContainerView: View {
     /// whether it is approved. Called on appear and after an approval, not from
     /// the view body: it stats the worktree and hashes a file.
     private func refreshConfigApproval() {
-        guard ProcessCompose.Settings.isEnabled,
-              let config = ProcessCompose.Config.locate(
-                  worktree: workingDirectory, projectDirectory: projectDirectory
-              ),
-              config.requiresApproval
+        guard let config = ProcessCompose.Config.locate(
+            worktree: workingDirectory, projectDirectory: projectDirectory
+        ),
+            config.requiresApproval
         else {
             repositoryConfigFiles = []
             configApproved = false

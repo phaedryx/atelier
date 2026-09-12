@@ -110,6 +110,21 @@ private struct EnvironmentSettingsPane: View {
                     status: appEnv.toolStatus.git,
                     version: appEnv.toolStatus.gitVersion
                 )
+                // A row like the other four, and nothing else. It was a switch
+                // under Integrations with a path field beside it: the switch
+                // made "off" a supported state in which every phase silently
+                // skipped, and the field is gone because the binary is
+                // auto-detected. Both left a caption behind explaining what
+                // process-compose is for, which this row does not need either —
+                // the tick and the version say what the other four rows say, and
+                // the onboarding screen is where a first-run user learns it is
+                // required. The refresh button in this header is the whole of
+                // the interaction.
+                ToolRow(
+                    name: "process-compose",
+                    status: appEnv.toolStatus.processCompose,
+                    version: appEnv.toolStatus.processComposeVersion
+                )
                 ToolRow(
                     name: "tmux",
                     status: appEnv.toolStatus.tmux,
@@ -560,11 +575,14 @@ private struct PromptEditorSheet: View {
 
 /// Named for the category, not the vendor: a second integration becomes another
 /// `Section` here rather than a seventh pane.
+///
+/// process-compose used to be the second section, behind a switch that defaulted
+/// off. It is a requirement rather than an integration — nothing Atelier runs for
+/// a project happens without it — so it lives in Environment's Detected Tools
+/// beside git and claude, and there is no switch.
 private struct IntegrationsSettingsPane: View {
     @AppStorage(Shortcut.Settings.buttonEnabledKey) private var shortcutButtonEnabled: Bool = true
     @AppStorage(Shortcut.Settings.branchTemplateKey) private var branchTemplate: String = ""
-    @AppStorage(ProcessCompose.Settings.enabledKey) private var processComposeEnabled = false
-    @AppStorage(ProcessCompose.Settings.binaryPathKey) private var processComposeBinary = ""
 
     private var branchPreviewIsValid: Bool {
         Git.Operations.isValidBranchName(Shortcut.BranchName.preview(branchTemplate))
@@ -674,30 +692,6 @@ private struct IntegrationsSettingsPane: View {
                         comment: "Shortcut button setting description"
                     )
                 )
-            }
-
-            Section("Process-Compose") {
-                SettingToggle(
-                    "Enable process-compose",
-                    isOn: $processComposeEnabled,
-                    description: NSLocalizedString(
-                        "Run a project's dev stack from its process-compose.yaml, with per-worktree ports from ports.yaml.",
-                        comment: "Process-compose enable setting description"
-                    )
-                )
-
-                if processComposeEnabled {
-                    LabeledContent("Binary") {
-                        HStack(spacing: 6) {
-                            TextField("auto-detect", text: $processComposeBinary)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(size: 11, design: .monospaced))
-                            Text(ProcessCompose.Settings.resolveBinary() ?? NSLocalizedString("not found", comment: ""))
-                                .font(.system(size: 10))
-                                .foregroundStyle(ProcessCompose.Settings.resolveBinary() == nil ? .orange : .secondary)
-                        }
-                    }
-                }
             }
         }
         .formStyle(.grouped)
@@ -957,6 +951,16 @@ struct ToolStatus {
     var ghAuthenticated: Bool = false
     var git: BinaryStatus = .notFound
     var gitVersion: String?
+    /// Resolved by `ProcessCompose.Settings.resolveBinary()`, **not** by
+    /// `findBinary`. The two disagree by construction: `resolveBinary` honours a
+    /// configured path and *fails* rather than searching, while
+    /// `CommandLineTools.path` walks the login PATH and six known locations. A
+    /// row fed by the generic search would read green above a Start button
+    /// reporting "process-compose was not found" — the button-versus-run
+    /// disagreement `ProcessCompose.RunCommandPlan` exists to prevent, only
+    /// spread across two windows.
+    var processCompose: BinaryStatus = .notFound
+    var processComposeVersion: String?
 
     static func detect() -> ToolStatus {
         var status = ToolStatus()
@@ -983,6 +987,14 @@ struct ToolStatus {
         status.git = findBinary("git")
         if let path = status.git.path {
             status.gitVersion = runForVersion(path, args: ["--version"])
+        }
+
+        // `version -s`, not `--version`: process-compose has no such flag, and
+        // bare `version` prints six lines of which the first is the product
+        // name rather than a number. `-s` prints `v1.122.0` and nothing else.
+        status.processCompose = ProcessCompose.Settings.resolveBinary().map(BinaryStatus.found) ?? .notFound
+        if let path = status.processCompose.path {
+            status.processComposeVersion = runForVersion(path, args: ["version", "-s"])
         }
 
         return status

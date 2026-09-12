@@ -519,9 +519,8 @@
 "No dev command found. Add an atelier.process-compose.yaml, or set a command below." = "No dev command found. Add an atelier.process-compose.yaml, or set a command below.";
 "Nothing to start" = "Nothing to start";
 "Add an atelier.process-compose.yaml to this worktree or the project directory, or set a command with Customize above." = "Add an atelier.process-compose.yaml to this worktree or the project directory, or set a command with Customize above.";
-"The process-compose integration is turned off, so nothing was detected. Turn it on in Settings, or set a command with Customize." = "The process-compose integration is turned off, so nothing was detected. Turn it on in Settings, or set a command with Customize.";
 "This project's process-compose config could not be located, so there is nothing to start." = "This project's process-compose config could not be located, so there is nothing to start.";
-"process-compose was not found. Install it, or set its path in Settings, then try again." = "process-compose was not found. Install it, or set its path in Settings, then try again.";
+"process-compose was not found. Install it, then refresh Detected Tools in Settings." = "process-compose was not found. Install it, then refresh Detected Tools in Settings.";
 "This project's process-compose config declares no execute processes, so there is nothing to start." = "This project's process-compose config declares no execute processes, so there is nothing to start.";
 
 /* ports.yaml */
@@ -537,14 +536,6 @@
 "Could not reach the process manager: %@" = "Could not reach the process manager: %@";
 "The process manager returned %d." = "The process manager returned %d.";
 "The process manager sent an unreadable response." = "The process manager sent an unreadable response.";
-
-/* Process-compose integration settings */
-"Process-Compose" = "Process-Compose";
-"Enable process-compose" = "Enable process-compose";
-"Run a project's dev stack from its process-compose.yaml, with per-worktree ports from ports.yaml." = "Run a project's dev stack from its process-compose.yaml, with per-worktree ports from ports.yaml.";
-"Binary" = "Binary";
-"auto-detect" = "auto-detect";
-"not found" = "not found";
 
 /* Worktree bootstrap phase */
 "Running bootstrap" = "Running bootstrap";
@@ -574,7 +565,6 @@
 "Review" = "Review";
 
 /* Unattended phase policy — shared by bootstrap and dispose */
-"The process-compose integration is turned off, so no %@ ran." = "The process-compose integration is turned off, so no %@ ran.";
 "This project has no process-compose config, so no %@ ran." = "This project has no process-compose config, so no %@ ran.";
 "process-compose was not found, so no %@ ran." = "process-compose was not found, so no %@ ran.";
 "This project's process-compose files came with the repository and have not been approved, so no %@ ran." = "This project's process-compose files came with the repository and have not been approved, so no %@ ran.";
@@ -595,7 +585,6 @@
 "This result no longer reflects the worktree's current content." = "This result no longer reflects the worktree's current content.";
 "The run itself failed to start its checks" = "The run itself failed to start its checks";
 "Showing the last lines captured. There is nothing more to fetch: the run's own output no longer exists anywhere." = "Showing the last lines captured. There is nothing more to fetch: the run's own output no longer exists anywhere.";
-"The process-compose integration is off. Turn it on in Settings to run checks." = "The process-compose integration is off. Turn it on in Settings to run checks.";
 "Add an atelier.process-compose.yaml to this worktree or the project directory to declare checks." = "Add an atelier.process-compose.yaml to this worktree or the project directory to declare checks.";
 "This project's process-compose files came with the repository and need your approval before checks can run." = "This project's process-compose files came with the repository and need your approval before checks can run.";
 "This project declares no verify checks." = "This project declares no verify checks.";

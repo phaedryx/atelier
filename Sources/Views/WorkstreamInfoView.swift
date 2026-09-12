@@ -49,9 +49,9 @@ func bootstrapRow(for state: AsyncSetupState) -> (detail: String, icon: String, 
 /// server. Disabling the button is how that refusal reads as unavailable
 /// instead of as a press that did nothing.
 ///
-/// Nothing else is checked. A missing binary, a config that came with the
-/// repository and has not been approved, the integration switched off — those
-/// are `PhasePolicy.plan`'s to decide, and it reports each one as a
+/// Nothing else is checked. A missing binary, a missing config, a config that
+/// came with the repository and has not been approved — those are
+/// `PhasePolicy.plan`'s to decide, and it reports each one as a
 /// `.completedWithNote` that lands in the row above. Refusing the press for
 /// them would trade an explanation for silence.
 func canRerunBootstrap(_ state: AsyncSetupState) -> Bool {
@@ -71,10 +71,11 @@ struct WorkstreamInfoView: View {
     var repositoryConfigFiles: [String] = []
     var configApproved: Bool = false
     /// What background setup last reported for this workstream. Info is where
-    /// it belongs: it is the permanent tab, and a `.completedWithNote` — "the
-    /// integration is off, so no bootstrap ran", "process-compose was not
-    /// found" — is a fact about the workstream, not about the run pane. Nothing
-    /// rendered it before, so those notes were written and thrown away.
+    /// it belongs: it is the permanent tab, and a `.completedWithNote` — "this
+    /// project has no process-compose config, so no bootstrap ran",
+    /// "process-compose was not found" — is a fact about the workstream, not
+    /// about the run pane. Nothing rendered it before, so those notes were
+    /// written and thrown away.
     var setupState: AsyncSetupState = .idle
     /// No defaults: a call site that passes `repositoryConfigFiles` but forgets
     /// these would render a Review button that silently does nothing, which is

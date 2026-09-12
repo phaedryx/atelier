@@ -27,22 +27,11 @@ final class PhasePolicyTests: XCTestCase {
 
     // MARK: - Plan
 
-    func testDisabledIntegrationRunsNothing() {
-        let plan = PhasePolicy.plan(phase: .bootstrap, isEnabled: false, config: userConfig, binary: "/bin/pc", isApproved: approved)
-
-        XCTAssertEqual(note(plan)?.contains("turned off"), true, String(describing: plan))
-    }
-
-    /// Checked before the config, so a user who has not turned the integration
-    /// on is told that rather than being told their project is missing a file.
-    func testDisabledIsReportedEvenWithNoConfig() {
-        let plan = PhasePolicy.plan(phase: .bootstrap, isEnabled: false, config: nil, binary: nil, isApproved: approved)
-
-        XCTAssertEqual(note(plan)?.contains("turned off"), true, String(describing: plan))
-    }
-
+    /// The first guard, since process-compose became a requirement and the
+    /// switch that used to precede it was removed. A project that declares no
+    /// config is told that, rather than told an integration is off.
     func testMissingConfigRunsNothing() {
-        let plan = PhasePolicy.plan(phase: .bootstrap, isEnabled: true, config: nil, binary: "/bin/pc", isApproved: approved)
+        let plan = PhasePolicy.plan(phase: .bootstrap, config: nil, binary: "/bin/pc", isApproved: approved)
 
         XCTAssertEqual(note(plan)?.contains("no process-compose config"), true, String(describing: plan))
     }
@@ -50,7 +39,7 @@ final class PhasePolicyTests: XCTestCase {
     /// A missing binary must never look like a broken worktree — the worktree
     /// exists and works, there was just nothing to run bootstrap with.
     func testMissingBinaryRunsNothing() {
-        let plan = PhasePolicy.plan(phase: .bootstrap, isEnabled: true, config: userConfig, binary: nil, isApproved: approved)
+        let plan = PhasePolicy.plan(phase: .bootstrap, config: userConfig, binary: nil, isApproved: approved)
 
         XCTAssertEqual(note(plan)?.contains("was not found"), true, String(describing: plan))
     }
@@ -61,7 +50,7 @@ final class PhasePolicyTests: XCTestCase {
     /// until the user has read it.
     func testUnapprovedRepositoryProvidedConfigIsRefused() {
         let plan = PhasePolicy.plan(
-            phase: .bootstrap, isEnabled: true, config: repositoryConfig, binary: "/bin/pc", isApproved: unapproved
+            phase: .bootstrap, config: repositoryConfig, binary: "/bin/pc", isApproved: unapproved
         )
 
         XCTAssertEqual(note(plan)?.contains("have not been approved"), true, String(describing: plan))
@@ -71,7 +60,7 @@ final class PhasePolicyTests: XCTestCase {
     /// pass the test above and make the approval pane do nothing.
     func testApprovedRepositoryProvidedConfigRuns() {
         let plan = PhasePolicy.plan(
-            phase: .bootstrap, isEnabled: true, config: repositoryConfig, binary: "/bin/pc", isApproved: approved
+            phase: .bootstrap, config: repositoryConfig, binary: "/bin/pc", isApproved: approved
         )
 
         XCTAssertEqual(plan, .run(config: repositoryConfig, binary: "/bin/pc"))
@@ -82,7 +71,7 @@ final class PhasePolicyTests: XCTestCase {
     /// answered "false" for everything would otherwise disable it.
     func testUserPlacedConfigIsNotSubjectToApproval() {
         var asked = false
-        let plan = PhasePolicy.plan(phase: .bootstrap, isEnabled: true, config: userConfig, binary: "/bin/pc") { _ in
+        let plan = PhasePolicy.plan(phase: .bootstrap, config: userConfig, binary: "/bin/pc") { _ in
             asked = true
             return false
         }
@@ -97,7 +86,7 @@ final class PhasePolicyTests: XCTestCase {
     /// `Workstream.Archiver`. Only the note's wording differs.
     func testDisposeIsGatedByTheSamePolicy() {
         let plan = PhasePolicy.plan(
-            phase: .dispose, isEnabled: true, config: repositoryConfig,
+            phase: .dispose, config: repositoryConfig,
             binary: "/bin/pc", isApproved: unapproved
         )
 
@@ -107,7 +96,7 @@ final class PhasePolicyTests: XCTestCase {
 
     func testApprovedDisposeRuns() {
         let plan = PhasePolicy.plan(
-            phase: .dispose, isEnabled: true, config: repositoryConfig,
+            phase: .dispose, config: repositoryConfig,
             binary: "/bin/pc", isApproved: approved
         )
 
@@ -118,10 +107,10 @@ final class PhasePolicyTests: XCTestCase {
     /// archive is not reported as a bootstrap that did not happen.
     func testNotesNameThePhase() {
         let bootstrap = PhasePolicy.plan(
-            phase: .bootstrap, isEnabled: false, config: nil, binary: nil, isApproved: approved
+            phase: .bootstrap, config: nil, binary: nil, isApproved: approved
         )
         let dispose = PhasePolicy.plan(
-            phase: .dispose, isEnabled: false, config: nil, binary: nil, isApproved: approved
+            phase: .dispose, config: nil, binary: nil, isApproved: approved
         )
 
         XCTAssertEqual(note(bootstrap)?.contains("bootstrap"), true, String(describing: bootstrap))
@@ -133,7 +122,7 @@ final class PhasePolicyTests: XCTestCase {
     /// actionable than asking for an approval that would change nothing.
     func testMissingBinaryOutranksMissingApproval() {
         let plan = PhasePolicy.plan(
-            phase: .bootstrap, isEnabled: true, config: repositoryConfig, binary: nil, isApproved: unapproved
+            phase: .bootstrap, config: repositoryConfig, binary: nil, isApproved: unapproved
         )
 
         XCTAssertEqual(note(plan)?.contains("was not found"), true, String(describing: plan))
@@ -142,7 +131,7 @@ final class PhasePolicyTests: XCTestCase {
     /// A config in the project directory sits outside every worktree and outside
     /// git: the user put it there by hand, so there is nothing to approve.
     func testUserPlacedConfigRuns() {
-        let plan = PhasePolicy.plan(phase: .bootstrap, isEnabled: true, config: userConfig, binary: "/bin/pc", isApproved: approved)
+        let plan = PhasePolicy.plan(phase: .bootstrap, config: userConfig, binary: "/bin/pc", isApproved: approved)
 
         XCTAssertEqual(plan, .run(config: userConfig, binary: "/bin/pc"))
     }

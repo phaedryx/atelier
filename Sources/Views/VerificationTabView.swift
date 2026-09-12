@@ -85,7 +85,7 @@ func verificationIsStale(run: Verification.Run, currentStamp: String?) -> Bool {
 /// Present-tense wording for the tab's own empty state, when nothing can run
 /// yet.
 ///
-/// A present-tense rendering of the same four preconditions `PhasePolicy.plan`
+/// A present-tense rendering of the same three preconditions `PhasePolicy.plan`
 /// evaluates — the unattended-phase gate `Verification.Runner.start` calls
 /// before spawning anything — in the same order. `PhasePolicy`'s own strings
 /// are past tense ("so no `verify` ran"), because they report on bootstrap
@@ -104,35 +104,30 @@ func verificationIsStale(run: Verification.Run, currentStamp: String?) -> Bool {
 /// here... the button's enablement and the run's guard are one decision."
 /// An unresolvable binary rendering an enabled button that explains nothing
 /// is the failure that ruling exists to prevent, and it is reachable again
-/// here if a caller lets this function's four booleans stand in for `plan`'s
+/// here if a caller lets this function's three booleans stand in for `plan`'s
 /// own verdict instead of following it.
 ///
-/// **Nothing enforces that split.** This function hand-mirrors `plan`'s four
+/// **Nothing enforces that split.** This function hand-mirrors `plan`'s three
 /// preconditions in the same order; it does not call `plan` and cannot check
 /// that it agrees with it. The agreement is a convention the call site must
 /// honour, not a compiler-checked property — if `PhasePolicy` ever gains a
-/// fifth precondition, it has to be added here too, by hand, and nothing
-/// will fail to compile if that step is missed.
+/// fourth precondition, it has to be added here too, by hand, and nothing
+/// will fail to compile if that step is missed. It lost one the other way when
+/// the process-compose switch was removed, and that removal had to be made
+/// here by hand too.
 ///
 /// - Parameter declared: the checks the located config declares in the
 ///   `verify` namespace, or `nil` when the config exists but could not be
 ///   parsed — distinct from an empty array, which means it parsed and named
-///   nothing. Only consulted once the first four preconditions all hold; a
+///   nothing. Only consulted once the first three preconditions all hold; a
 ///   caller must not pass a meaningful value here while any earlier
 ///   precondition is false; the guards below never reach it in that case.
 func verificationUnavailableReason(
-    isEnabled: Bool,
     hasConfig: Bool,
     hasBinary: Bool,
     isApproved: Bool,
     declared: [String]?
 ) -> String? {
-    guard isEnabled else {
-        return NSLocalizedString(
-            "The process-compose integration is off. Turn it on in Settings to run checks.",
-            comment: "Verification tab: unavailable because the integration is switched off"
-        )
-    }
     guard hasConfig else {
         return NSLocalizedString(
             "Add an atelier.process-compose.yaml to this worktree or the project directory to declare checks.",
@@ -143,7 +138,7 @@ func verificationUnavailableReason(
         // Same string `ProcessCompose.RunCommandPlan.unavailableReason` uses
         // for the same fact, and already present tense.
         return NSLocalizedString(
-            "process-compose was not found. Install it, or set its path in Settings, then try again.",
+            "process-compose was not found. Install it, then refresh Detected Tools in Settings.",
             comment: ""
         )
     }
@@ -189,8 +184,8 @@ func verificationUnavailableReason(
 /// `plan`'s own closure — asked only where a config exists — and the one
 /// expression below folds in `requiresApproval` exactly as `plan`'s guard
 /// does, then feeds *that* to both `plan` and the wording. So `plan` returns
-/// `.run` **iff** all four preconditions hold, which is **iff**
-/// `verificationUnavailableReason`'s first four guards all fall through, and
+/// `.run` **iff** all three preconditions hold, which is **iff**
+/// `verificationUnavailableReason`'s first three guards all fall through, and
 /// `VerificationTabViewTests` pins that biconditional against `plan` itself.
 /// A `Bool` parameter here could not promise it: passing `false` for a config
 /// in the project directory, which needs no approval, made this function
@@ -198,7 +193,7 @@ func verificationUnavailableReason(
 /// reason this parameter is a closure.
 ///
 /// **`.run` is not the whole of availability**, and that is why the declared
-/// list is consulted here rather than left to the caller. `plan` answers four
+/// list is consulted here rather than left to the caller. `plan` answers three
 /// preconditions and stops, so a config whose `verify` namespace is empty — or
 /// that could not be parsed at all — still comes back `.run`, while `start`
 /// refuses both: `Failure.unavailable` for the parse failure, and
@@ -219,7 +214,6 @@ func verificationUnavailableReason(
 /// - Returns: `declared` is empty whenever nothing can run, and `reason` is nil
 ///   exactly when something can.
 func verificationAvailability(
-    isEnabled: Bool,
     config: ProcessCompose.Config?,
     binary: String?,
     isApproved: (ProcessCompose.Config) -> Bool
@@ -231,7 +225,6 @@ func verificationAvailability(
     let approvalHolds = config.map { !$0.requiresApproval || isApproved($0) } ?? false
     let plan = PhasePolicy.plan(
         phase: .verify,
-        isEnabled: isEnabled,
         config: config,
         binary: binary,
         isApproved: { _ in approvalHolds }
@@ -253,7 +246,6 @@ func verificationAvailability(
     return (
         declared: declared ?? [],
         reason: verificationUnavailableReason(
-            isEnabled: isEnabled,
             hasConfig: config != nil,
             hasBinary: binary != nil,
             isApproved: approvalHolds,
@@ -274,9 +266,9 @@ func verificationAvailability(
 /// `ProcessCompose.Config.locate`, `ProcessCompose.Settings.resolveBinary()`
 /// and `ScriptTrust.isApproved` directly — a config lookup, a file stat and a
 /// SHA-256 over the approval-relevant files, all on the main actor, and stale
-/// the moment any of Settings' process-compose switch, its binary path, or
-/// the config's approval state changed without the tab happening to
-/// re-appear. `TerminalContainerView` already holds all four facts as
+/// the moment either Settings' process-compose binary path or the config's
+/// approval state changed without the tab happening to
+/// re-appear. `TerminalContainerView` already holds all three facts as
 /// trigger-refreshed state for `ExecutionTabView`'s sake
 /// (`refreshDevCommand`); Task 10 is expected to resolve this tab's
 /// `declaredProcesses`/`unavailableReason` the same way, from the same
@@ -294,7 +286,7 @@ struct VerificationTabView: View {
     let declaredProcesses: [String]
     /// Present-tense wording for why nothing can run yet, or nil when it can.
     /// Produced by the caller from `verificationUnavailableReason`, fed the
-    /// same four facts `PhasePolicy.plan` — the gate `Verification.Runner.start`
+    /// same three facts `PhasePolicy.plan` — the gate `Verification.Runner.start`
     /// itself calls — evaluates, so this tab's idea of "nothing to run" can
     /// never disagree with what `start` will actually refuse.
     let unavailableReason: String?

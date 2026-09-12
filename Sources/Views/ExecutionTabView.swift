@@ -135,8 +135,9 @@ struct ExecutionTabView: View {
     /// see `devCommandDisplay`.
     let devCommandFiles: [String]
     /// Why Start can do nothing, when the copy below does not already say. The
-    /// states that reach this were all silent: an integration switched off, a
-    /// config that vanished, and a binary the search paths do not cover.
+    /// states that reach this were all silent: a config that vanished, a
+    /// binary the search paths do not cover, and an `execute` namespace nothing
+    /// declares.
     let startUnavailableReason: String?
     /// The repository-provided process-compose files whose unattended phases the
     /// user has not approved, or empty when there is nothing to ask about.
@@ -254,10 +255,9 @@ struct ExecutionTabView: View {
             HStack(spacing: 8) {
                 // Stop's precondition is that something is running, and that is
                 // all. It used to be gated on `canStart` alongside Rerun, so
-                // toggling the integration off — or breaking the binary path —
-                // mid-run took the Stop button away from a live stack, leaving
-                // Ctrl+C in the surface as the only way out. Only Rerun needs to
-                // know a run can be started.
+                // breaking the binary path mid-run took the Stop button away
+                // from a live stack, leaving Ctrl+C in the surface as the only
+                // way out. Only Rerun needs to know a run can be started.
                 EnvActionButton(label: NSLocalizedString("Stop", comment: ""), icon: "stop.fill", shortcut: "", action: onStop)
                 if runControlsEnabled {
                     EnvActionButton(label: NSLocalizedString("Rerun", comment: ""), icon: "arrow.counterclockwise", shortcut: shortcut, action: onRestart)
