@@ -359,6 +359,16 @@ struct TerminalContainerView: View {
     /// on the same `PhasePolicy.plan` the reason below was produced from.
     @State private var declaredVerifyChecks: [String] = []
     @State private var verifyUnavailableReason: String?
+    /// Bumped whenever the Execution checklist writes a selection.
+    ///
+    /// A trigger, not a value. `runnableExecuteSelection` re-reads the store,
+    /// which is the one authoritative copy — `ProcessSelectionView.onAppear`
+    /// writes a reconciled selection back there, so a second copy kept here
+    /// could disagree with what Start would actually run. Assigning any `@State`
+    /// re-runs the body, which is the whole of what this has to do; it is never
+    /// read, and deleting it as unused would leave the Start button stuck on the
+    /// selection the pane was built with.
+    @State private var executeSelectionChanges = 0
     /// True while `doStartRun` is awaiting `down` on a socket it has to reclaim.
     ///
     /// Start is otherwise synchronous, and that is what kept it safe to press
@@ -524,6 +534,44 @@ struct TerminalContainerView: View {
         )
     }
 
+    /// The processes Start will launch, reconciled against what the config
+    /// declares now — or **nil when the checklist has nothing selected**, which
+    /// is not the same as an empty list: `PhaseRunner` reads no names as *start
+    /// everything*.
+    ///
+    /// One expression with two consumers, the Start button's enabled state and
+    /// `resolvedRunCommand`'s guard, which is the `canRun`/`doStartRun` rule
+    /// applied to the other half of the decision: the plan says whether a
+    /// command can be built, this says whether there is anything to build one
+    /// for. Both halves have to be asked once and read twice, never asked
+    /// twice: the last time one question was answered in two places, the button
+    /// was enabled on one fact while the run guarded another, and Start did
+    /// nothing in silence.
+    ///
+    /// The selection deliberately does **not** go into
+    /// `ProcessCompose.RunCommandPlan`, which is where a reader will expect to
+    /// find it. `.nothing` there would take `declaredExecuteProcesses` with it —
+    /// that property matches on `.phaseScoped` — hiding the very checklist the
+    /// user needs in order to check a box again, and taking the Start button
+    /// away instead of disabling it. The plan answers "is there a safe command
+    /// for this source"; the answer does not change because a checkbox did.
+    ///
+    /// Reads the store rather than any cached copy, for the reason
+    /// `processesToStart` gives: Start is reachable from the palette and
+    /// ⌘⇧⏎ with the Execution tab never opened. `executeSelectionChanges` is
+    /// what re-renders the button when a checkbox writes a new one.
+    ///
+    /// - Parameter declared: `declaredExecuteProcesses`, passed in only so the
+    ///   body can resolve it once for the checklist and the button together —
+    ///   it parses the config's YAML, and this is called per render.
+    private func runnableExecuteSelection(declared: [String]) -> [String]? {
+        guard case .phaseScoped = runPlan else { return [] }
+        return processesToStart(
+            stored: ProcessCompose.TableModel.selection(for: workstreamID),
+            declared: declared
+        )
+    }
+
     /// Reads the stored `runPlan` rather than re-deriving one, so this is nil
     /// for exactly the plans whose `canRun` is false — which is what the Start
     /// button's enablement is drawn from. Deriving a second plan here is how
@@ -533,17 +581,17 @@ struct TerminalContainerView: View {
         case let .literal(command):
             return command
         case let .phaseScoped(config, binary):
+            // Nil is the checklist saying nothing is selected, and the refusal
+            // is the point: an empty name list would start the whole namespace.
+            guard let selected = runnableExecuteSelection(declared: declaredExecuteProcesses) else {
+                return nil
+            }
             ProcessCompose.PhaseRunner.ensureSocketDirectory()
             return ProcessCompose.PhaseRunner.startCommand(
                 config: config,
                 binary: binary,
                 workstreamID: workstreamID,
-                selectedProcesses: processesToStart(
-                    stored: ProcessCompose.TableModel.selected(for: workstreamID),
-                    declared: config.declaredProcesses(
-                        in: ProcessCompose.Phase.execute.namespace
-                    ) ?? []
-                )
+                selectedProcesses: selected
             )
         case .nothing:
             return nil
@@ -841,6 +889,10 @@ struct TerminalContainerView: View {
             if sessionMode == .waitingForTools {
                 terminalLoadingView(message: "Checking terminal tools...")
             } else {
+                // Resolved once and handed to both: `declaredExecuteProcesses`
+                // parses the config's YAML, and the checklist and the Start
+                // button must in any case be looking at the same list.
+                let declared = declaredExecuteProcesses
                 ExecutionTabView(
                     workstreamID: workstreamID,
                     workingDirectory: workingDirectory,
@@ -854,13 +906,15 @@ struct TerminalContainerView: View {
                     processTable: processTable,
                     showsProcessTable: usesProcessCompose,
                     portsByName: portPlan.values,
-                    declaredProcesses: declaredExecuteProcesses,
+                    declaredProcesses: declared,
                     canStart: runPlan.canRun,
+                    hasRunnableSelection: runnableExecuteSelection(declared: declared) != nil,
                     isReclaimingSocket: isReclaimingRunSocket,
                     devCommandFiles: devCommandFiles,
                     startUnavailableReason: runUnavailableReason,
                     unapprovedConfigFiles: configApproved ? [] : repositoryConfigFiles,
                     onReviewConfig: { isReviewingConfig = true },
+                    onSelectionChange: { executeSelectionChanges += 1 },
                     onStart: doStartRun,
                     onStop: stopRun,
                     onRestart: restartRun

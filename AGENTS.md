@@ -202,10 +202,23 @@ it receives only the `X.Y.Z` core; the suffix naming the commit rides on
   read by nothing, since the tab shows one run and an agent resolving an older
   id is worth less than a store that cannot grow without bound.
   `atelier.verifySelection.<workstreamID>` holds which checks the next run
-  starts; empty means all, stored as the *absence* of the key, not an empty
-  array. This is a **different key** from `atelier.processSelection.<id>`
+  starts. This is a **different key** from `atelier.processSelection.<id>`
   (`ProcessTableModel`'s, for the Execution tab's checklist) — one key for both
   would make checking a check in Verification uncheck a process in Execution.
+- **Both selection keys carry three states, not two**, and the encoding is
+  `ProcessSelection`: **key absent** means all, **key present holding an empty
+  array** means *nothing selected*, and names mean that subset. Two were not
+  enough because `PhaseRunner` reads an empty name list as *start everything* —
+  `up -n execute` with no names runs the whole namespace — so a stored empty
+  selection read back as "all": every checkbox re-checked itself and Start ran
+  everything, the opposite of what was asked. That was first patched by refusing
+  the click, disabling the last checked box, which left a checkbox dimmed for a
+  reason nothing on the pane gave. Now the box can be unchecked and the
+  **button** is what goes quiet — Start and Verification's Run are disabled,
+  each with a line beside it saying why. `ProcessSelection.namesToRun` is where
+  the distinction stops being losable: `.all` gives `[]` and `.nothing` gives
+  **nil**, so a caller cannot flatten them without the compiler objecting. No
+  migration was needed, because the empty case used to *remove* the key.
 
 ### Workstream lifecycle
 1. Creating a workstream: generates name, runs `git worktree add`; `AsyncSetupService` then runs the project's `bootstrap` namespace in the background
@@ -420,6 +433,19 @@ where the search looks. Background setup's own outcome, including `.completedWit
 rendered on the Info tab, which is permanent; nothing observed `.asyncSetupStateChanged` before,
 so those notes were written and discarded.
 
+**The checklist's own gate is deliberately *not* in that plan**, and a reviewer will
+pattern-match it to the second copy this document forbids, so say so in any commit that touches
+it. `TerminalContainerView.runnableExecuteSelection` is one expression with two consumers — the
+Start button's `.disabled` and `resolvedRunCommand`'s guard — which is the same one-decision rule
+applied to the other half: the plan answers "is there a safe command for this source", and this
+answers "is there anything selected to run it for". Folding the selection into
+`RunCommandPlan.plan` was tried on paper and is worse in a way that is not obvious:
+`declaredExecuteProcesses` matches on `.phaseScoped`, so a plan that went `.nothing` for an empty
+selection would take the **checklist** with it, hiding the checkboxes the user needs in order to
+tick one again — and `canRun` removes the Start button rather than disabling it, so the pane would
+answer "nothing to run" where the honest answer is "nothing selected". The two gates dim different
+things on purpose.
+
 **Five namespaces**, driven by `ProcessCompose.PhaseRunner` and `ProcessCompose.PhaseExecutor`:
 
 | Namespace | When | Interactive? |
@@ -633,13 +659,14 @@ reachable from the palette and Cmd+Shift+Return with the Execution tab never ope
 `ProcessSelectionView.onAppear` is what would otherwise have cleaned the stored value.
 `Verification.Runner.runnableChecks` could now delegate to it; it is left alone deliberately, since
 its doc already declares itself a mirror and the verify side was not this change's target.
-Unlike verify there is **no refusal**: `resolvedRunCommand` has no error channel and `canRun` comes
-from `RunCommandPlan`, so refusing here would manufacture exactly the button-versus-run
-disagreement that type exists to prevent. A stored selection whose members are all flag-shaped
-resolves to the canonical empty "all" instead — which is what the checklist renders for it too, so
-the two agree. Nothing runnable is withheld, and the precise claim is narrower than it looks: such
-a process still *starts*, on the empty selection that runs the namespace; what it cannot be is
-started **by name**, which process-compose could not do either.
+Unlike verify there is **no refusal** for a flag-shaped name: a stored selection whose members are
+all flag-shaped resolves to the canonical "all" instead — which is what the checklist renders for
+it too, so the two agree. Nothing runnable is withheld, and the precise claim is narrower than it
+looks: such a process still *starts*, on the empty selection that runs the namespace; what it
+cannot be is started **by name**, which process-compose could not do either. (An empty selection
+*is* refused, but that is the user having unchecked every box, and the Start button is disabled
+on the same fact — see "The checklist's own gate" above. A refusal only the run knows about is the
+thing to avoid, not a refusal.)
 
 **No agent can start a verify run yet.** `Verification.Runner`'s own doc already talks about "a run
 an agent started through `start_verification`" (`VerificationRunner.swift:12-17`), and that is why
