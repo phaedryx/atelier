@@ -485,6 +485,13 @@ final class AppEnvironment: ObservableObject {
         }
         let startedAt = Date()
         pathValiditySweepStartedAt = startedAt
+        // Superseded: this sweep carries a newer snapshot than anything deferred,
+        // so a pending request left behind by a sweep that died before its
+        // completion block has nothing to add. Clearing it here rather than only
+        // on completion is what keeps a stranded pending snapshot unreachable
+        // instead of merely unlikely — the same reason the guard is a timestamp
+        // and not a flag.
+        pendingPathValidityProjects = nil
 
         Task.detached {
             var results: [String: Bool] = [:]

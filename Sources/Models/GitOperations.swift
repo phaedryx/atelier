@@ -1452,6 +1452,14 @@ extension Git {
         /// Worktree paths only, skipping the bare repository entry. Cheap enough
         /// to call while resolving a project — see `registeredWorktrees`, which
         /// this is a projection of.
+        ///
+        /// **Deliberately flattens "could not ask" to "nothing there"**, which
+        /// `registeredWorktrees` refuses to do for its own callers. Safe only
+        /// because of what the single caller does with it: `projectLocation` is
+        /// looking for a checkout to prefer among candidates, and having no
+        /// candidate is already an outcome it handles — it falls back to the
+        /// directory it was given. A repair that *discards* a user's record on an
+        /// empty answer is the case that needs the distinction, and it has it.
         private static func worktreePaths(at path: String) -> [String] {
             registeredWorktrees(at: path)?.map(\.path) ?? []
         }

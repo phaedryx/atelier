@@ -745,6 +745,18 @@ struct ContentView: View {
     /// - **A git failure forgets nothing.** `registeredWorktrees` returns nil rather
     ///   than an empty array when it could not ask, because "git says no such
     ///   worktree" and "git did not answer" must not both mean discard.
+    ///
+    /// Repairs go one at a time through `attachWorktreePath`, so N of them in one
+    /// project cost N saves rather than one. Left that way on purpose: batching
+    /// would mean not reusing `attachWorktreePath`, and a second copy of its five
+    /// side effects is the drift this whole helper exists to prevent. N is the
+    /// number of *stranded* records, normally zero; and the sweep half collapses
+    /// anyway, since `refreshPathValidity` defers a request that arrives while one
+    /// is running and coalesces every later one into a single follow-up.
+    ///
+    /// The loop iterates a snapshot of ids and names taken before the `Task`, and
+    /// both mutating helpers re-look-up by id — so a repair that reshapes
+    /// `projects` cannot invalidate the iteration.
     private func reconcileStrandedWorkstreams() {
         let stranded: [(checkout: String, workstreams: [(id: UUID, name: String)])] = projects.compactMap { project in
             let unresolved = project.workstreams.filter { $0.worktreePath == nil }
