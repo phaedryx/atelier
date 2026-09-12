@@ -670,13 +670,29 @@ each starved a pool:
   "Preparing Coding Agent..." and git operations that had already succeeded on
   disk being reported as failures.
 
-So the invariant is now **a capture occupies exactly one thread, the caller's, and
-consults no pool at any point**. That is immunity by construction rather than by
-having enough threads, and it is what `Tests/ProcessRunnerTests.swift`'s two
+So the invariant is now **a capture pumps its pipes on exactly one thread, the
+caller's, consulting no pool** — immunity by construction rather than by having
+enough threads, and what `Tests/ProcessRunnerTests.swift`'s two
 `ConcurrentCaptures…` tests pin. Do not reintroduce a queue, a source or a
 detached drain here, however tidy it looks; the corollary for callers is that the
 thread is blocked for the child's whole life, so `capture` belongs off the main
-actor and off any pool narrow enough to matter. `PipePump` never closes a
+actor and off any pool narrow enough to matter.
+
+State that invariant about the *pump* and not about the whole call, because one
+off-thread dependency is left: `exited.wait` is signalled from
+`process.terminationHandler`, which Foundation delivers on machinery
+`ProcessRunner` does not own. The concurrency test is evidence it is not the
+cooperative pool — fourteen captures parked at the exit wait with none to spare
+would wedge identically — but that is one width measured, not a proof. The
+practical consequence is diagnostic: a capture starved there parks at the *exit
+wait*, which is a different stack from the pump and a different bug.
+
+One behaviour change came with it: **writing stdin is part of finishing.** A
+payload still unwritten at the deadline now fails the capture, where the abandoned
+writer thread it replaced reported success and parked forever. That needs a
+payload past the ~64 KB pipe buffer handed to a child that will not drain it, and
+`HookChannelProbe` is the only `standardInput:` caller in the app, at a few
+hundred bytes — so no caller today can reach it. `PipePump` never closes a
 descriptor it did not open — the `Pipe`s own them — with one exception, the stdin
 write end, whose close is what gives the child EOF.
 

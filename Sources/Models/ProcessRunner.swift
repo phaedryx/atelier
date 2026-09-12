@@ -13,12 +13,25 @@ private let logger = Logger(subsystem: "atelier", category: "process")
 /// still holds the write end of the pipe. Anything polling on a timer needs
 /// a deadline instead, or one wedged child stalls every later call.
 ///
-/// **A call occupies exactly one thread: the caller's.** Nothing here hands work
-/// to a queue or a pool, so no number of concurrent captures can starve each
-/// other — see `PipePump` for what that replaced and why it had to. The
-/// consequence for callers is the one the ABOUTME states: the thread is blocked
-/// for the child's whole life, so this belongs off the main actor and off any
-/// pool whose width is small enough to matter.
+/// **The pumping of a call's three pipes occupies exactly one thread: the
+/// caller's.** `PipePump` hands no work to a queue or a pool, so no number of
+/// concurrent captures can starve each other's *output* — see its doc for what
+/// that replaced and why it had to.
+///
+/// One dependency is left, and naming it is the point of stating the above
+/// precisely rather than as "no pool at all". `exited.wait` in `capture` waits on
+/// a semaphore that `process.terminationHandler` signals, and Foundation delivers
+/// that on machinery this type does not own. The evidence that it is not the
+/// cooperative pool is `testConcurrentCapturesFromTasksDoNotStarveEachOther`:
+/// fourteen captures sitting at the exit wait with no cooperative thread to spare
+/// would wedge exactly as the drains used to, and they do not. That is one
+/// measurement at one width, not a guarantee — so the diagnostic worth keeping is
+/// that a capture starved *there* parks at the exit wait, a different stack and a
+/// different bug from the one `PipePump` fixed.
+///
+/// The consequence for callers is the one the ABOUTME states: the thread is
+/// blocked for the child's whole life, so this belongs off the main actor and off
+/// any pool whose width is small enough to matter.
 ///
 /// Two spawn sites deliberately stay outside this type, and say so where they
 /// spawn: `BareRepoClone.run` and `QuickAction.Runner.runShellCommand`. Both run
@@ -296,6 +309,16 @@ enum ProcessRunner {
     /// here, with one exception: the stdin write end, whose close is what gives
     /// the child EOF. Without it a child like `cat` never exits and only the
     /// deadline ends the call.
+    ///
+    /// **Writing the payload is part of finishing**, which the abandoned writer
+    /// thread this replaced could not make it. A capture whose payload is still
+    /// unwritten at the deadline now fails rather than succeeding while its input
+    /// went nowhere — the old shape reported success and parked the writer for
+    /// good. Reaching that costs a payload past the ~64 KB pipe buffer handed to a
+    /// child that does not drain it; the only `standardInput:` caller in the app
+    /// is `HookChannelProbe`, whose payload is a few hundred bytes, so nothing
+    /// today can. A new caller with a large payload should know this is where its
+    /// timeout came from.
     private enum PipePump {
         struct Result {
             var stdout = Data()

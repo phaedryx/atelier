@@ -126,6 +126,12 @@ final class AppEnvironment: ObservableObject {
     /// probe rather than each starting their own. Without this the cache only
     /// helps the *second* visit, and the launch fan-out — every workstream
     /// mounting at once — is exactly the case that has no second visit yet.
+    ///
+    /// Untested, and knowingly: pinning it needs a seam to count probes through,
+    /// and the only honest one is injecting the git call, which would put a
+    /// parameter on `defaultBranch(for:)` that exists for the test alone. The
+    /// cache either side of it is pinned — see
+    /// `Tests/AppEnvironmentDefaultBranchTests.swift`.
     private var defaultBranchTasks: [String: Task<String, Never>] = [:]
 
     /// This repository's default branch, computed once per directory.
