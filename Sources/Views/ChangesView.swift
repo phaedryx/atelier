@@ -307,9 +307,7 @@ struct ChangesView: View {
                 bridge.lastDiffFiles = contents.files
                 bridge.lastFingerprint = fingerprint
                 bridge.lastMode = currentMode.rawValue
-                bridge.onContentReady = {
-                    isLoading = false
-                }
+                installContentReadyHandler(on: bridge, clearing: $isLoading)
                 annotations.reanchor(
                     mode: currentMode,
                     texts: Self.reanchorTexts(from: contents.payload),
@@ -362,9 +360,7 @@ struct ChangesView: View {
                 bridge.lastFingerprint = fingerprint
                 bridge.lastMode = currentMode.rawValue
                 isRefreshing = true
-                bridge.onContentReady = {
-                    isRefreshing = false
-                }
+                installContentReadyHandler(on: bridge, clearing: $isRefreshing)
                 annotations.reanchor(
                     mode: currentMode,
                     texts: Self.reanchorTexts(from: contents.payload),
@@ -401,31 +397,83 @@ struct ChangesView: View {
         }
     }
 
+    // MARK: - Callback installation
+
+    // The bridge *stores* these closures, so they outlive the view body. `ChangesView`
+    // is a struct holding `let bridge`, which makes any touch of `self` inside one of
+    // them fatal: reading a `@State` or an `@ObservedObject` captures a copy of the
+    // whole struct, bridge included, and the loop bridge → stored closure → struct copy
+    // → bridge closes for good. Unlike `MonacoDiffBridge.pendingOps` there is no flush
+    // to break it — `onContentReady` is simply reassigned on every load and refresh.
+    //
+    // So both installers take everything the closure needs as a parameter, and both
+    // bodies are written to be checkable by eye: no bare property reference resolves to
+    // `self`. They are instance methods rather than `static` only so that the pre-fix
+    // shape stays expressible, which is what `MonacoDiffBridgeTests` goes red on.
+    // `onLoadFile` needs no such treatment — it already captures locals and statics.
+
+    /// Install the "diff.js has finished rendering" callback, which drops whichever
+    /// progress flag the caller is showing.
+    ///
+    /// The flag arrives as a `Binding` because that is the route to a `@State` value
+    /// that is *not* the view struct: `$isLoading` closes over `State`'s own storage
+    /// box, so the closure holds the box and nothing else. A write after the view is
+    /// gone is a harmless no-op, which is the right answer for a late render report.
+    func installContentReadyHandler(on bridge: MonacoDiffBridge, clearing flag: Binding<Bool>) {
+        bridge.onContentReady = {
+            flag.wrappedValue = false
+        }
+    }
+
+    /// Install the comment-mutation callback: route add/edit/delete from diff.js
+    /// into the store, then push the authoritative set back down.
+    ///
+    /// `store` is captured strongly and that is fine — `ChangeAnnotationStore` holds no
+    /// reference back to the bridge, and `WorkspaceModel` owns both. The bridge is the
+    /// one thing that must be weak, because pushing the authoritative set back down is
+    /// the whole point of the callback; an event arriving after the bridge is gone has
+    /// nowhere to push and is correctly dropped.
+    func installCommentHandler(
+        on bridge: MonacoDiffBridge,
+        store: ChangeAnnotationStore,
+        mode: ChangesMode
+    ) {
+        bridge.onCommentEvent = { [weak bridge] event in
+            switch event {
+            case let .added(filePath, side, line, endLine, lineText, text):
+                store.add(
+                    filePath: filePath, mode: mode, side: side,
+                    line: line, endLine: endLine, lineText: lineText, text: text
+                )
+            case let .edited(id, text):
+                store.updateText(id: id, text: text)
+            case let .deleted(id):
+                store.delete(id: id)
+            }
+            guard let bridge else { return }
+            Self.pushComments(to: bridge, store: store, mode: mode)
+        }
+    }
+
     // MARK: - Review comments
 
     /// Route comment mutations from diff.js into the store, then push the
     /// authoritative set back down. The webview never owns comment state.
     private func configureCommentHandler() {
-        let currentMode = mode
-        bridge.onCommentEvent = { event in
-            switch event {
-            case let .added(filePath, side, line, endLine, lineText, text):
-                annotations.add(
-                    filePath: filePath, mode: currentMode, side: side,
-                    line: line, endLine: endLine, lineText: lineText, text: text
-                )
-            case let .edited(id, text):
-                annotations.updateText(id: id, text: text)
-            case let .deleted(id):
-                annotations.delete(id: id)
-            }
-            pushComments()
-        }
+        installCommentHandler(on: bridge, store: annotations, mode: mode)
     }
 
     /// Push the active mode's comments to diff.js for rendering.
     private func pushComments() {
-        let payload = annotations.comments(mode: mode).map { c -> [String: Any] in
+        Self.pushComments(to: bridge, store: annotations, mode: mode)
+    }
+
+    private static func pushComments(
+        to bridge: MonacoDiffBridge,
+        store: ChangeAnnotationStore,
+        mode: ChangesMode
+    ) {
+        let payload = store.comments(mode: mode).map { c -> [String: Any] in
             var entry: [String: Any] = [
                 "id": c.id.uuidString,
                 "filePath": c.filePath,
