@@ -389,6 +389,7 @@
 "Fast-forward this branch with the latest changes from origin" = "Fast-forward this branch with the latest changes from origin";
 "Pull failed" = "Pull failed";
 "Pulling…" = "Pulling…";
+"… %d more lines …" = "… %d more lines …";
 
 /* Script approval */
 "Approval" = "Approval";

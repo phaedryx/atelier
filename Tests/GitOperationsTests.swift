@@ -1921,4 +1921,63 @@ final class GitOperationsTests: XCTestCase {
     func testRenamedDestinationSplitsOnTheFirstArrow() {
         XCTAssertEqual(Git.Operations.renamedDestination(in: "a.swift -> b -> c.swift"), "b -> c.swift")
     }
+
+    // MARK: - truncatedForAlert
+
+    /// The real failure this exists for: `git pull --ff-only` over 150 locally
+    /// modified files. Measured at 155 lines, which renders as a 2574pt alert
+    /// panel on a 1084pt screen with the OK button below the bottom edge.
+    private func pullConflictOutput(files: Int) -> String {
+        var text = "From /repos/app\n   fc5c989..ae22ab0  main       -> origin/main\n"
+        text += "error: Your local changes to the following files would be overwritten by merge:\n"
+        for i in 1 ... files {
+            text += "\tf\(i).txt\n"
+        }
+        text += "Please commit your changes or stash them before you merge.\nAborting"
+        return text
+    }
+
+    func testTruncatedForAlertLeavesShortOutputAlone() {
+        let short = "fatal: Not possible to fast-forward, aborting."
+        XCTAssertEqual(Git.Operations.truncatedForAlert(short), short)
+    }
+
+    /// Nine lines is exactly head + tail, and a tenth would cost an elision line to
+    /// hide one line. Neither is worth cutting.
+    func testTruncatedForAlertDoesNotElideWhenNothingWouldBeSaved() {
+        let text = (1 ... 10).map { "line \($0)" }.joined(separator: "\n")
+        XCTAssertEqual(Git.Operations.truncatedForAlert(text), text)
+    }
+
+    /// Both ends survive: git states the problem at the top and what to do at the
+    /// bottom, and a one-ended trim drops one of the two.
+    func testTruncatedForAlertKeepsTheDiagnosisAndTheInstruction() {
+        let result = Git.Operations.truncatedForAlert(pullConflictOutput(files: 150))
+        XCTAssertTrue(result.contains("error: Your local changes to the following files"))
+        XCTAssertTrue(result.contains("Please commit your changes or stash them"))
+        XCTAssertTrue(result.hasSuffix("Aborting"))
+        XCTAssertTrue(result.contains("more lines"), "the elision has to say what was dropped")
+    }
+
+    func testTruncatedForAlertBoundsAConflictOverManyFiles() {
+        let result = Git.Operations.truncatedForAlert(pullConflictOutput(files: 150))
+        XCTAssertEqual(result.components(separatedBy: "\n").count, 10)
+        XCTAssertLessThanOrEqual(result.count, 900)
+    }
+
+    /// The line budget cannot bind on output with no newlines, and a single
+    /// 8000-character line measured 2310pt on its own. The character cap is what
+    /// bounds that case.
+    func testTruncatedForAlertBoundsASingleEnormousLine() {
+        let result = Git.Operations.truncatedForAlert(String(repeating: "x", count: 8000))
+        XCTAssertEqual(result.count, 900)
+        XCTAssertTrue(result.hasSuffix("…"))
+    }
+
+    /// Scale does not change the bound: the panel's height is what is being
+    /// capped, so 2000 files must fit in the same space as 150.
+    func testTruncatedForAlertIsBoundedRegardlessOfFileCount() {
+        let result = Git.Operations.truncatedForAlert(pullConflictOutput(files: 2000))
+        XCTAssertLessThanOrEqual(result.count, 900)
+    }
 }
