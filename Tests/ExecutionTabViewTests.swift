@@ -242,6 +242,45 @@ final class ExecutionTabViewTests: XCTestCase {
         XCTAssertEqual(processSelectionOnLoad(stored: [], declared: ["api", "bff"]), [])
     }
 
+    // MARK: - Names a run could not be scoped to
+
+    /// The finding: a process named `-web` is legal YAML, so it was declared,
+    /// offered in the checklist and stored — and then dropped by
+    /// `PhaseRunner.command` on its way to the shell. As the *only* selection
+    /// the filtered list was empty, which `up -n execute` reads as "start
+    /// everything": the user's selection inverted into its opposite, through a
+    /// guard that exists for security. It resolves to the canonical empty "all"
+    /// here instead, which is what the checklist renders for a selection
+    /// nothing survived.
+    func testASelectionOfOnlyAFlagShapedNameDoesNotSurviveAsASelection() {
+        XCTAssertEqual(processesToStart(stored: ["-web"], declared: ["api", "-web"]), [])
+    }
+
+    /// The quieter half: a mixed selection had its flag-shaped member dropped
+    /// somewhere the user could not see. It is not offered now, so the
+    /// resolution names exactly what the checkboxes showed.
+    func testAMixedSelectionKeepsOnlyTheNamesARunCanBeScopedTo() {
+        XCTAssertEqual(
+            processesToStart(stored: ["-web", "api"], declared: ["api", "-web", "bff"]),
+            ["api"]
+        )
+    }
+
+    /// A flag-shaped name is not a declared process as far as the checklist is
+    /// concerned, so selecting everything else is still "all" — and all is what
+    /// starts it, since an empty selection passes no names at all.
+    func testSelectingEveryRunnableProcessIsStillAll() {
+        XCTAssertEqual(processesToStart(stored: ["api", "bff"], declared: ["api", "-web", "bff"]), [])
+    }
+
+    /// The reconciliation the checklist does on load, done again for the run:
+    /// Start is reachable from the palette and Cmd+Shift+Return without the
+    /// Execution tab ever having been opened, so a stale stored name would
+    /// otherwise reach `up -n execute`, which does not know it.
+    func testARunReconcilesAStaleStoredNameWithoutTheChecklist() {
+        XCTAssertEqual(processesToStart(stored: ["gone", "bff"], declared: ["api", "bff"]), ["bff"])
+    }
+
     // MARK: - Keeping Start reachable under the checklist
 
     /// The vertical list is the layout that pushed Start off the pane once

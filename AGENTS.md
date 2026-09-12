@@ -609,6 +609,27 @@ later reader would plausibly "simplify" away without knowing why:
    such a name asked for explicitly, with `Failure.unrunnableChecks` rather than "No such check",
    which would be a lie about a name the YAML really declares.
 
+**`execute` has the same hole, and it is closed the same way.** The checklist and the run there
+had no filter at all: `declaredExecuteProcesses` offered a process named `-web` verbatim, the user
+checked it, and `resolvedRunCommand` handed it to `PhaseRunner.command`, which dropped it *after*
+the `!selectedProcesses.isEmpty` guard — so `up -n execute` ran with no names, which is the whole
+namespace. `ProcessCompose.PhaseRunner.runnableProcesses` is the one copy of the filter, kept
+beside the guard it must match rather than as a third spelling of it, and `command` itself is one
+of its callers. `declaredExecuteProcesses` calls it so the checkbox cannot be offered, and
+`processesToStart` (`ProcessTableView.swift`, beside `processSelectionOnLoad`) calls it on its own
+`declared` argument so the run does not depend on the checklist having rendered — Start is
+reachable from the palette and Cmd+Shift+Return with the Execution tab never opened, and
+`ProcessSelectionView.onAppear` is what would otherwise have cleaned the stored value.
+`Verification.Runner.runnableChecks` could now delegate to it; it is left alone deliberately, since
+its doc already declares itself a mirror and the verify side was not this change's target.
+Unlike verify there is **no refusal**: `resolvedRunCommand` has no error channel and `canRun` comes
+from `RunCommandPlan`, so refusing here would manufacture exactly the button-versus-run
+disagreement that type exists to prevent. A stored selection whose members are all flag-shaped
+resolves to the canonical empty "all" instead — which is what the checklist renders for it too, so
+the two agree. Nothing runnable is withheld, and the precise claim is narrower than it looks: such
+a process still *starts*, on the empty selection that runs the namespace; what it cannot be is
+started **by name**, which process-compose could not do either.
+
 **No agent can start a verify run yet.** `Verification.Runner`'s own doc already talks about "a run
 an agent started through `start_verification`" (`VerificationRunner.swift:12-17`), and that is why
 the type is app-level rather than owned by the tab — so an IPC adapter can attach to `runs` and

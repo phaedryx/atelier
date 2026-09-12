@@ -148,6 +148,29 @@ func processSelectionOnLoad(stored: [String], declared: [String]) -> [String] {
     return surviving.isEmpty || surviving == Set(declared) ? [] : surviving.sorted()
 }
 
+/// The selection to hand `ProcessCompose.PhaseRunner` for an `execute` run.
+///
+/// The run's own copy of the checklist's reconciliation, so the runner is
+/// self-sufficient: `ProcessSelectionView.onAppear` writes a cleaned selection
+/// back to the store, but Start is reachable from the command palette and
+/// Cmd+Shift+Return without that view ever having appeared, so a stored name the
+/// config no longer offers would otherwise go straight to the shell.
+///
+/// It filters `declared` itself rather than trusting a caller to have done it,
+/// for the reason `Verification.Runner.resolveChecks` gives for the same move:
+/// the guarantee must not depend on every call site remembering. That is what
+/// closes the inversion — a stored selection whose only members are flag-shaped
+/// resolves to the canonical empty "all" here, which is what the checklist
+/// renders too, instead of surviving as a non-empty selection that
+/// `PhaseRunner.command` then filters down to nothing and runs the whole
+/// namespace for.
+func processesToStart(stored: [String], declared: [String]) -> [String] {
+    processSelectionOnLoad(
+        stored: stored,
+        declared: ProcessCompose.PhaseRunner.runnableProcesses(declared)
+    )
+}
+
 /// Where a checklist's selection is stored.
 ///
 /// Injected rather than reached for, because there are now two checklists over

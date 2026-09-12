@@ -502,15 +502,26 @@ struct TerminalContainerView: View {
     /// be built — no config, or no binary — the answer is nil and Start reports
     /// that, rather than running something unscoped.
     ///
-    /// Processes the located config declares in `execute`.
+    /// Processes the located config declares in `execute`, minus the ones a run
+    /// could not be scoped to.
     ///
     /// Read off the stored plan's config rather than by locating again, so the
     /// selection list and the command Start builds cannot disagree about which
     /// config they mean. Empty when the config is unparseable, which the
     /// selection list treats as "offer no choices" rather than "no processes".
+    ///
+    /// `runnableProcesses` is `ProcessCompose.PhaseRunner`'s own filter, and
+    /// calling it here rather than repeating it is the point: a process named
+    /// `-web` is legal YAML, and offering it made the *only*-selected case run
+    /// the entire namespace. See `runnableProcesses`. The checklist is where the
+    /// user can no longer pick one; `processesToStart` is the other half, which
+    /// keeps a stored one out of the command whether or not this list was ever
+    /// rendered.
     private var declaredExecuteProcesses: [String] {
         guard case let .phaseScoped(config, _) = runPlan else { return [] }
-        return config.declaredProcesses(in: ProcessCompose.Phase.execute.namespace) ?? []
+        return ProcessCompose.PhaseRunner.runnableProcesses(
+            config.declaredProcesses(in: ProcessCompose.Phase.execute.namespace) ?? []
+        )
     }
 
     /// Reads the stored `runPlan` rather than re-deriving one, so this is nil
@@ -527,7 +538,12 @@ struct TerminalContainerView: View {
                 config: config,
                 binary: binary,
                 workstreamID: workstreamID,
-                selectedProcesses: ProcessCompose.TableModel.selected(for: workstreamID)
+                selectedProcesses: processesToStart(
+                    stored: ProcessCompose.TableModel.selected(for: workstreamID),
+                    declared: config.declaredProcesses(
+                        in: ProcessCompose.Phase.execute.namespace
+                    ) ?? []
+                )
             )
         case .nothing:
             return nil

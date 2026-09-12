@@ -128,9 +128,10 @@ extension ProcessCompose {
                 // command exists to scope. Names that could be read as flags are
                 // dropped rather than passed: process-compose cannot start a
                 // process by a name it would parse as a flag anyway, so nothing
-                // legitimate is lost.
-                parts += selectedProcesses
-                    .filter { !$0.hasPrefix("-") }
+                // legitimate is lost. `runnableProcesses` is that filter, shared
+                // with the checklists that choose what lands here — see its note
+                // for why the two must be one function.
+                parts += runnableProcesses(selectedProcesses)
                     .map { CommandBuilder.shellQuote($0) }
             }
 
@@ -165,6 +166,37 @@ extension ProcessCompose {
         /// declared prepare was skipped" for "Start never returns". The costs invert,
         /// so the direction does. Reachable today — a config with no top-level
         /// `processes:` key makes `declaredNamespaces` return nil.
+        /// The process names a run may actually be scoped to, with the ones
+        /// process-compose would read as flags dropped.
+        ///
+        /// **One copy, and `command` above is one of its two callers.** The other
+        /// is the `execute` checklist, which offers exactly these names and stores
+        /// exactly these names — because the filter and "what the user picked" did
+        /// not compose, and that is a security-guard inversion rather than a
+        /// cosmetic gap. A process named `-web` is legal YAML, so it was declared,
+        /// offered, and checked; as the *only* selection the filter emptied the
+        /// list, `selectedProcesses.isEmpty` was already past, and `up -n execute`
+        /// ran with no names — which starts the **whole namespace**. The user's
+        /// selection came back as its exact opposite, through a guard that exists
+        /// for security. `Verification.Runner.runnableChecks` closed the same hole
+        /// on the `verify` side; this is that fix's other half, kept beside the
+        /// filter it has to match rather than as a third spelling of it.
+        ///
+        /// Nothing runnable is withheld, but the precise claim is narrower than it
+        /// looks: such a process still *starts*, because an empty selection runs the
+        /// whole namespace and its name never reaches the command line. What it
+        /// cannot be is started **by name**, which process-compose could not do
+        /// either.
+        static func runnableProcesses(_ names: [String]) -> [String] {
+            names.filter { !isFlagShaped($0) }
+        }
+
+        /// Whether `command` would drop this name: a leading `-`, which is what
+        /// process-compose's own argument parser reads as a flag.
+        private static func isFlagShaped(_ name: String) -> Bool {
+            name.hasPrefix("-")
+        }
+
         static func startCommand(
             config: ProcessCompose.Config,
             binary: String,
