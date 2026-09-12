@@ -207,9 +207,10 @@ it receives only the `X.Y.Z` core; the suffix naming the commit rides on
 `Git.Operations.createWorktree` cuts a **new** branch from `BaseBranchSetting`. The GitHub
 button on a project row goes through `createWorktreeTrackingRemote` instead, which checks out a
 branch that already exists on origin. Do not merge them or reroute one through the other:
-`createWorktree` runs `worktree add -b <name> <dir> <base>`, so handing it a branch that lives
-only as `origin/<name>` **succeeds** and produces a worktree named for that branch while holding
-the base branch's code — and its `-b`-less fallback only rescues a *local* branch of the name.
+`createWorktree` runs `worktree add --no-track -b <name> <dir> <start>`, so handing it a branch
+that lives only as `origin/<name>` **succeeds** and produces a worktree named for that branch
+while holding the base branch's code — and its `-b`-less fallback only rescues a *local* branch
+of the name.
 
 `createWorktreeTrackingRemote` fetches the branch, then `worktree add --track -b <branch> <dir>
 origin/<branch>`. **In the `.bare` container layout the `-b` always fails and the fallback is the
@@ -273,6 +274,28 @@ It has **exactly one production reader**: `Git.Operations.createWorktree`, via
 `BaseBranchSetting.resolve(for:)`. `fetchDefaultBranch` takes an optional `branch:` so the
 branch that is fetched and the branch the worktree is cut from are the same one — swapping the
 selection without that gave "pick develop, fetch main".
+
+**The setting names a branch; the worktree is cut from `origin/<branch>`.** That indirection is
+`Git.Operations.creationStartPoint`, and it is what makes the fetch above mean anything. A fetch
+only ever writes `refs/remotes/origin/<base>`, while the bare name `main` resolves the *local*
+`refs/heads/main` first — and in the container layout that ref is the trunk checkout's own
+branch, which moves only when somebody pulls. So for a year the fetch updated a ref the
+`worktree add` never read, and every workstream started from whenever main was last pulled. The
+start point falls back to the name as given when origin has no such branch (no remote, a
+local-only base) and when the name already carries an `origin/` prefix, which `repositoryDefault`
+usually does. The local ref is deliberately **not** advanced the way `adoptRemoteBranch` advances
+one: here that ref belongs to the trunk checkout the user has open, and moving it under them is a
+larger promise than cutting one worktree from origin's tip. `Tests/WorktreeBaseBranchTests.swift`
+pins the three cases, and `fetchDefaultBranch`'s own "local main must not move" test
+(`Tests/GitOperationsTests.swift`) is still correct and still passing — it asserts what a *fetch*
+does, which this did not change.
+
+The `--no-track` on that `worktree add` is not decoration. `startPoint` is normally a
+remote-tracking ref, and git's default `branch.autoSetupMerge` would give the new branch an
+upstream of `origin/<base>` — a different name from the branch itself, which makes a bare
+`git push` in the workstream's terminal fail under `push.default=simple` and empties the
+`@{upstream}..HEAD` range `hasUnpushedCommits` guards a purge with. `pushCurrentBranch` passes
+`-u`, so the app's own push still sets an upstream when there is something to push.
 
 **Known limitation, deliberate and unfixed:** three comparison sites in `Git.Operations` call
 `defaultBranch(at:)` directly and do *not* consult this setting — `mergeBase` (the Changes tab's
