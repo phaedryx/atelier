@@ -26,6 +26,18 @@ final class MonacoDiffBridge: ObservableObject {
 
     /// Fired when diff.js reports all editors have finished rendering ("contentReady").
     /// ChangesView uses this to drop its loading / refreshing indicator.
+    ///
+    /// This and the two callbacks below are stored properties of the bridge, so
+    /// the same rule governs them as governs `pendingOps`: **a closure put here
+    /// must not capture anything that holds the bridge.** The installer is
+    /// `ChangesView`, a *struct* carrying `let bridge` — so a closure that
+    /// touches `self` (any `@State` write, any `@ObservedObject` read, any
+    /// instance method call) captures a copy of that reference and the graph
+    /// closes on itself. Nothing clears these slots; a load only replaces one
+    /// closure with another, which makes such a cycle permanent rather than a
+    /// window, and it needs no failure to reach — the ordinary happy path
+    /// installs it. Capture the `Binding`, the store, or a `[weak bridge]`
+    /// instead. `ChangesViewBridgeHandlerTests` pins the installers.
     var onContentReady: (() -> Void)?
 
     /// Resolves the (original, modified, languageId) content for a single deferred
