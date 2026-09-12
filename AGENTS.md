@@ -896,6 +896,18 @@ Facts worth keeping:
   live beside it, unpublished.
 - **Two attempts, not one.** `curl --max-time 1` drops a slow POST, so a single unanswered ping
   is expected and must not repaint anything.
+- **One rendezvous, and only its named owner may delete it.** `~/Library/Caches/atelier/hook-port`
+  is deliberately outside `AppConstants.cacheDirectory` (`HookEventReceiver.writePortFile`), so
+  debug and release share it and the last launch wins. Taking it is unconditional; giving it up is
+  not. `stop()` used to unlink the file on quit whatever it held, so quitting a worktree's debug
+  build deleted the *running* release app's port — and because `atelier-hook` exits 0 when the
+  file is missing, that silenced hooks for every Claude Code session on the machine. The surviving
+  app's probe reported "No Signal" and was right, with nothing able to say why. `removePortFile`
+  now removes the file only when it still names that instance's own port
+  (`HookEventReceiver.ownsPortFile`, pinned in `Tests/HookEventReceiverTests.swift`). The
+  comparison is exact on the trimmed contents; a prefix match would read `607980` as `60798`.
+  Overwriting on launch is untouched and still starves every other instance of events — that is
+  the one-rendezvous decision, not this bug.
 - **Checked at launch and on suspicion, never on a timer.** Launch (forced, past the debounce)
   is where a botched install or stale port file is most likely and most fixable; after that only
   when the sweep reports prolonged silence, debounced to `minimumInterval`. A healthy app spawns

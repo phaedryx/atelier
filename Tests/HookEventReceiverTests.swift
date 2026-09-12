@@ -44,7 +44,9 @@ final class HookEventReceiverTests: XCTestCase {
     /// developer's own checkout, arrived inside an inverted expectation's window.
     /// Worse than the flake, the permission cases here install handlers that
     /// answer `.allow` and `.deny`, so a real permission prompt could be decided
-    /// by a test — and `stop()` then deletes the app's port file on the way out.
+    /// by a test — and `stop()` would then delete the app's port file on the way
+    /// out, since a suite that published its own port is the file's named owner
+    /// and passes `ownsPortFile`.
     ///
     /// Nothing here needs the file; every helper reads `boundPort` directly.
     func test_aTestProcessDoesNotPublishItsPortToTheSharedFile() throws {
@@ -593,5 +595,55 @@ final class HookEventReceiverTests: XCTestCase {
         ], expectDelivery: false)
 
         XCTAssertNil(delivered)
+    }
+
+    // MARK: - Owning the rendezvous file
+
+    /// `hook-port` is one file shared by every Atelier on the machine, and
+    /// `atelier-hook` exits 0 without posting when it is missing. So an instance
+    /// that deletes a file naming somebody else's port does not merely starve
+    /// itself — it silences hook delivery for **every** Claude Code session on
+    /// the machine, including the instance that was receiving them.
+    ///
+    /// That is reachable with one release app running: quitting a debug build
+    /// from a worktree took the file with it. Hence the rule — only the instance
+    /// the file currently names may remove it.
+    func test_anInstanceTheFileNamesMayRemoveIt() {
+        XCTAssertTrue(HookEventReceiver.ownsPortFile(contents: "60798", ownPort: 60798))
+    }
+
+    /// `writePortFile` writes the bare number, but a file edited or written by
+    /// anything else may carry a trailing newline, and a quitting owner must
+    /// still recognise its own port there.
+    func test_trailingWhitespaceDoesNotHideOwnership() {
+        XCTAssertTrue(HookEventReceiver.ownsPortFile(contents: "60798\n", ownPort: 60798))
+    }
+
+    /// The case that caused the bug: another instance launched, overwrote the
+    /// file, and this one is now quitting.
+    func test_aFileNamingAnotherInstanceIsLeftAlone() {
+        XCTAssertFalse(HookEventReceiver.ownsPortFile(contents: "60983", ownPort: 60798))
+    }
+
+    /// Never bound — `setupListener` failed, or `stop()` arrived before the
+    /// listener reported ready. An instance with no port of its own cannot be
+    /// the owner of anything.
+    func test_anInstanceThatNeverBoundOwnsNothing() {
+        XCTAssertFalse(HookEventReceiver.ownsPortFile(contents: "60798", ownPort: nil))
+    }
+
+    /// Absent or unreadable. Nothing to delete, and "unreadable" must not be
+    /// read as "mine" — the file may be another instance's, written in an
+    /// encoding this read did not expect.
+    func test_anUnreadableFileIsNotOwned() {
+        XCTAssertFalse(HookEventReceiver.ownsPortFile(contents: nil, ownPort: 60798))
+    }
+
+    /// A number that is not this port, however similar. Pinned because a
+    /// prefix or substring comparison would pass the cases above and delete a
+    /// sibling's file.
+    func test_aSimilarNumberIsNotOwnership() {
+        XCTAssertFalse(HookEventReceiver.ownsPortFile(contents: "607980", ownPort: 60798))
+        XCTAssertFalse(HookEventReceiver.ownsPortFile(contents: "6079", ownPort: 60798))
     }
 }
