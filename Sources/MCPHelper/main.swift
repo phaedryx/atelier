@@ -645,10 +645,18 @@ final class IPCBridge {
     /// Unlocalized, like every other string this surface returns: these are
     /// answers to an agent, written to tell it what to do differently.
     private static func timedOutMessage(tool: IPC.Tool) -> String {
-        let seconds = Int(tool.replyDeadline)
-        var message = "Atelier did not answer \(tool.rawValue) within \(seconds)s. "
-            + "This is not a failure: the call may still be running, and may already have succeeded. "
-            + "Do not call it again — a second copy would race the first."
+        let opening = "Atelier did not answer \(tool.rawValue) within \(Int(tool.replyDeadline))s."
+
+        // Keyed on the replay policy rather than on `surface`, because that is
+        // exactly the question being answered: "may this be run twice?" A read
+        // that timed out is worth retrying and saying otherwise would be wrong.
+        guard !tool.isSafeToReplay else {
+            return opening + " Atelier may be busy rather than stuck, and this call changes nothing by "
+                + "running twice, so it is safe to try again."
+        }
+
+        var message = opening + " This is not a failure: the call may still be running, and may already "
+            + "have succeeded. Do not call it again — a second copy would race the first."
         if tool.surface == .workspaceAction {
             message += " Check what actually happened before doing anything else: list_peers shows an agent "
                 + "once it registers, and the sidebar shows a workstream as soon as it exists."

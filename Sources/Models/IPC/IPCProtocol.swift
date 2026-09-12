@@ -174,6 +174,20 @@ extension IPC {
         /// to recover the session's identity, and the tool is defined as a
         /// rename rather than a second registration.
         ///
+        /// **`send_message` and `broadcast` are the two judgement calls**, and
+        /// the choice is not an analogy to the rest. Replaying one risks a
+        /// second copy in a peer's inbox, which that agent then acts on twice;
+        /// refusing costs the sender an error for a message that may in fact
+        /// have landed. What breaks the tie is that the case replay exists for —
+        /// a restarted Atelier — cannot help these two anyway: the new app's
+        /// store is empty, so the recipient's peer id is already meaningless and
+        /// the replay would be refused. That leaves only a mid-flight close
+        /// against a *live* app, where a duplicate is the likelier outcome than
+        /// a rescue. And the refusal is reported, so nothing is lost silently:
+        /// the sender is told, and can re-send deliberately. `broadcast` settles
+        /// it on its own — its audience is resolved app-side, so one replay is a
+        /// duplicate to every peer at once.
+        ///
         /// Refusing a replay does not abandon the session. The helper still
         /// reconnects and re-registers; it just reports the interruption instead
         /// of guessing what the app did with the first copy.
