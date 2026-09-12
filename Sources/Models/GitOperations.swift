@@ -283,8 +283,85 @@ extension Git {
             )
         }
 
-        /// Detect the default branch. Prefers `development`, then falls back to auto-detection.
+        /// This repository's default branch, resolved once per directory.
+        ///
+        /// Prefers `development`, then falls back to auto-detection — see
+        /// `resolveDefaultBranch`, which is where that order lives.
+        ///
+        /// **Cached, because the cost is a fan-out and the answer is a property of
+        /// the repository.** Resolving costs up to six sequential git probes, and
+        /// the three comparison sites — `mergeBase`, `hasBranchCommits`,
+        /// `worktreeDetail` — are each called *per worktree*: `refreshPathValidity`
+        /// runs `hasBranchCommits` for every worktree on a 15-second timer, and
+        /// `listWorktreesWithInfo` does the same on every project-overview refresh.
+        /// Twelve workstreams in two projects meant ~72 subprocesses every tick
+        /// resolving two strings.
+        ///
+        /// The cache lives **here** rather than in `AppEnvironment` — which is
+        /// where it started — because half the callers structurally cannot reach a
+        /// `@MainActor` cache: `diffFingerprint` is called from
+        /// `Verification.Runner`, `IPC.VerificationRunnerBridge` and
+        /// `VerificationTabView`, and `ChangesView.baseRef` is `nonisolated`.
+        /// Threading a resolved branch down as a parameter instead would have had
+        /// to stop at those call sites or point `Verification.Runner` at
+        /// `AppEnvironment`, which is the wrong direction for that dependency.
+        /// `AppEnvironment.defaultBranch(for:)` now delegates here, so there is one
+        /// cache and one policy rather than two that can disagree.
+        ///
+        /// **The literal `"HEAD"` is never cached.** That is the sentinel for
+        /// "resolved nothing", which for a freshly added project usually means
+        /// `origin/HEAD` has not been fetched yet rather than that the repository
+        /// has no default branch — and `AppEnvironment.fetchOrigin` is running
+        /// concurrently to fix exactly that. Pinning the sentinel would make the
+        /// repair unobservable for the rest of the session.
+        ///
+        /// Not invalidated otherwise, deliberately. A repository whose default
+        /// branch genuinely renames mid-session serves the old answer until
+        /// relaunch; a TTL would not help the case that actually happens (the
+        /// unfetched repo above, which the sentinel rule already covers) and would
+        /// put the fan-out back on a timer.
         static func defaultBranch(at path: String) -> String {
+            if let cached = defaultBranchCache.value(for: path) {
+                return cached
+            }
+            let resolved = resolveDefaultBranch(at: path)
+            if resolved != "HEAD" {
+                defaultBranchCache.store(resolved, for: path)
+            }
+            return resolved
+        }
+
+        private static let defaultBranchCache = BranchCache()
+
+        /// Locked rather than actor-isolated: `defaultBranch` is synchronous and has
+        /// ~50 transitive callers in synchronous contexts, so an actor would force
+        /// the whole chain async for a dictionary read. Mirrors the locked-box
+        /// pattern in `CommandLineTools`.
+        ///
+        /// No in-flight de-duplication, which `AppEnvironment.defaultBranchTasks`
+        /// still provides for the callers that can await: a lock serialises
+        /// concurrent misses but does not merge them, so N simultaneous first-time
+        /// callers for one directory each resolve it. Bounded and once — every
+        /// later call is a hit.
+        private final class BranchCache: @unchecked Sendable {
+            private let lock = NSLock()
+            private var branches: [String: String] = [:]
+
+            func value(for path: String) -> String? {
+                lock.lock()
+                defer { lock.unlock() }
+                return branches[path]
+            }
+
+            func store(_ branch: String, for path: String) {
+                lock.lock()
+                defer { lock.unlock() }
+                branches[path] = branch
+            }
+        }
+
+        /// Detect the default branch. Prefers `development`, then falls back to auto-detection.
+        private static func resolveDefaultBranch(at path: String) -> String {
             // Prefer development branch if it exists (remote then local)
             for branch in ["origin/development", "development"] {
                 if run(args: ["rev-parse", "--verify", branch], in: path) != nil {

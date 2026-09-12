@@ -115,54 +115,43 @@ final class AppEnvironment: ObservableObject {
 
     // MARK: - Default Branch
 
-    /// Answers cached per repository directory. `Git.Operations.defaultBranch`
-    /// costs up to six sequential `rev-parse`/`symbolic-ref` probes, and the
-    /// question it answers belongs to the *project*, not the workstream — so a
-    /// project with a dozen workstreams was paying for the same string a dozen
-    /// times, once per visit to a workstream, forever.
-    private var defaultBranchCache: [String: String] = [:]
-
     /// Lookups still in flight, so the workstreams of one project share a single
-    /// probe rather than each starting their own. Without this the cache only
-    /// helps the *second* visit, and the launch fan-out — every workstream
-    /// mounting at once — is exactly the case that has no second visit yet.
+    /// probe rather than each starting their own.
+    ///
+    /// This is the half `Git.Operations`' own cache cannot provide: a lock
+    /// serialises concurrent misses but does not merge them, so without this the
+    /// launch fan-out — every workstream mounting at once — would resolve one
+    /// directory N times before the first answer landed. The cached-value half
+    /// lives in `Git.Operations.defaultBranch(at:)`, where callers that cannot
+    /// reach a `@MainActor` type can also see it.
     ///
     /// Untested, and knowingly: pinning it needs a seam to count probes through,
     /// and the only honest one is injecting the git call, which would put a
     /// parameter on `defaultBranch(for:)` that exists for the test alone. The
     /// cache either side of it is pinned — see
-    /// `Tests/AppEnvironmentDefaultBranchTests.swift`.
+    /// `Tests/AppEnvironmentDefaultBranchTests.swift` and
+    /// `Tests/GitOperationsTests.swift`.
     private var defaultBranchTasks: [String: Task<String, Never>] = [:]
 
-    /// This repository's default branch, computed once per directory.
+    /// This repository's default branch, off the main actor and de-duplicated.
     ///
-    /// The literal `"HEAD"` is deliberately **not** cached. That is what
-    /// `defaultBranch` returns when it resolves nothing, which for a freshly
-    /// added project usually means `origin/HEAD` has not been fetched yet rather
-    /// than that the repository has no default branch — and `fetchOrigin` is
-    /// running concurrently to fix exactly that. Caching the sentinel would pin
-    /// the wrong answer for the rest of the session.
+    /// The caching and the never-cache-`"HEAD"` rule belong to
+    /// `Git.Operations.defaultBranch(at:)`; this adds the two things a
+    /// `@MainActor` caller needs on top — somewhere to run a blocking git probe
+    /// that is not the main thread, and a way for concurrent callers to share one.
     func defaultBranch(for directory: String) async -> String {
-        if let cached = defaultBranchCache[directory] {
-            return cached
-        }
         if let inFlight = defaultBranchTasks[directory] {
             return await inFlight.value
         }
 
         // Detached because `defaultBranch` is synchronous and blocks its thread
-        // for the length of several child processes; running it inline would
-        // block the main actor. One per directory, awaited by every later
-        // caller, rather than one per caller.
+        // for the length of several child processes.
         let task = Task.detached(priority: .userInitiated) {
             Git.Operations.defaultBranch(at: directory)
         }
         defaultBranchTasks[directory] = task
         let branch = await task.value
         defaultBranchTasks.removeValue(forKey: directory)
-        if branch != "HEAD" {
-            defaultBranchCache[directory] = branch
-        }
         return branch
     }
 

@@ -170,6 +170,47 @@ final class GitOperationsTests: XCTestCase {
                        "with no development branch, origin/HEAD must resolve the default, got: \(branch)")
     }
 
+    /// The cache lives here rather than in `AppEnvironment` because callers like
+    /// `mergeBase`, `worktreeDetail` and `BaseBranchSetting.repositoryDefault`
+    /// never touch `AppEnvironment` at all. Deleting the repository between the
+    /// two calls is what makes this a test of the cache rather than of git: an
+    /// uncached second call has no directory to run in and would fall through to
+    /// the `"HEAD"` sentinel.
+    func testDefaultBranchCachesTheAnswerPerDirectory() throws {
+        let repoDir = tempDir.appendingPathComponent("cached")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: repoDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "--allow-empty", "-m", "init"], in: repoDir)
+
+        XCTAssertEqual(Git.Operations.defaultBranch(at: repoDir.path), "main")
+
+        try FileManager.default.removeItem(at: repoDir)
+        XCTAssertEqual(
+            Git.Operations.defaultBranch(at: repoDir.path), "main",
+            "the second call re-ran git instead of reading the cache"
+        )
+    }
+
+    /// `"HEAD"` means "resolved nothing", which for a fresh project usually means
+    /// `origin/HEAD` has not been fetched yet. Caching it would pin the wrong
+    /// answer for the process's whole life, and nothing would ever re-probe.
+    func testDefaultBranchDoesNotCacheTheUnresolvedSentinel() throws {
+        let repoDir = tempDir.appendingPathComponent("sentinel")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-b", "feature-only"], in: repoDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "--allow-empty", "-m", "init"], in: repoDir)
+
+        XCTAssertEqual(Git.Operations.defaultBranch(at: repoDir.path), "HEAD")
+
+        git(["branch", "main"], in: repoDir)
+        XCTAssertEqual(
+            Git.Operations.defaultBranch(at: repoDir.path), "main",
+            "the sentinel was cached, so the real answer could never be seen"
+        )
+    }
+
     // MARK: - fetchDefaultBranch
 
     func testFetchDefaultBranchDoesNotCrashWithoutRemote() throws {

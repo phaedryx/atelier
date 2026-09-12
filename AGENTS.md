@@ -301,16 +301,33 @@ and `ProcessCompose.PhaseEnvironment`'s four callers — `AsyncSetupService` for
 "what git thinks this repository's default branch is", and all five deliberately agree with each
 other rather than with the setting.
 
-`TerminalContainerView` reaches it through `AppEnvironment.defaultBranch(for:)` rather than calling
-`Git.Operations` directly, and that indirection is load-bearing rather than cosmetic. The answer
-belongs to the *project*, the call costs up to six sequential git probes, and the view asks once per
-visit to *every* workstream — so a project with a dozen workstreams paid for the same string a dozen
-times, on a `Task.detached` that ignored the view's cancellation and blocked a thread in
-`ProcessRunner.capture` until it finished. `AppEnvironment` caches per directory and de-duplicates
-lookups still in flight, so the launch fan-out spawns one probe per repository. It deliberately does
-**not** cache the literal `"HEAD"`: that is the sentinel `defaultBranch` returns when it resolves
-nothing, which for a freshly added project usually means `origin/HEAD` has not been fetched yet — and
-`fetchOrigin` is running concurrently to fix exactly that.
+**`defaultBranch(at:)` is cached, per directory, inside `Git.Operations` itself.** Resolving costs up
+to six sequential probes and the answer is a property of the repository, but the three comparison
+sites are each called *per worktree*: `refreshPathValidity` runs `hasBranchCommits` for every
+worktree on a 15-second timer, and `listWorktreesWithInfo` does the same on every project-overview
+refresh. Twelve workstreams in two projects meant ~72 subprocesses a tick resolving two strings.
+
+The cache lives there rather than in `AppEnvironment`, which is where it started, because half the
+callers structurally cannot reach a `@MainActor` type: `diffFingerprint` is called from
+`Verification.Runner`, `IPC.VerificationRunnerBridge` and `VerificationTabView`, and
+`ChangesView.baseRef` is `nonisolated`. The alternative — threading a resolved branch down as a
+parameter — would have had to stop at those call sites or point `Verification.Runner` at
+`AppEnvironment`, which is the wrong direction for that dependency.
+`AppEnvironment.defaultBranch(for:)` now **delegates** here and keeps only the two things a
+`@MainActor` caller needs on top: somewhere off the main thread to run a blocking probe, and
+in-flight de-duplication, which a lock gives no help with. One cache, one policy.
+
+It deliberately does **not** cache the literal `"HEAD"`: that is the sentinel for "resolved
+nothing", which for a freshly added project usually means `origin/HEAD` has not been fetched yet —
+and `fetchOrigin` is running concurrently to fix exactly that. There is no other invalidation and no
+TTL; a repository whose default branch genuinely renames mid-session serves the old answer until
+relaunch. Both halves are pinned in `Tests/GitOperationsTests.swift` and
+`Tests/AppEnvironmentDefaultBranchTests.swift`.
+
+None of this touches the all-or-none rule above. That rule governs *which* branch is compared — git's
+default versus `BaseBranchSetting` — not who pays to resolve it, and a cache that returns exactly
+what `defaultBranch(at:)` would have returned leaves the question byte-identical. Say so in any
+commit that touches it, because a reviewer will pattern-match it to the forbidden migration.
 
 ### The process-compose integration
 Everything a project asks Atelier to run lives in one **`process-compose.yaml`**, read by
