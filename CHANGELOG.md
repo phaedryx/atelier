@@ -109,6 +109,21 @@ point at the upstream repository.
 * **editor:** vscicons artwork for the file-tree icons, including the
   compound-extension walk that picks the right icon for names like
   `foo.test.tsx`.
+* **sidebar:** projects are `DisclosureGroup`s with a tree-guide spine down
+  their children, instead of project and workstream rows as flat siblings
+  separated by 8pt of indent and nothing else. The group owns the triangle but
+  not the state, so the expanded set still persists where it did; the project
+  header is the group's *label* rather than a Section header, because a section
+  header is not selectable in `List(selection:)` and that row has to keep its
+  tag. A project row can also be double-clicked to rename, which the overview
+  pane could already do and the sidebar could not.
+* **sidebar:** one workstream order, everywhere. A Recent/A-Z picker already
+  existed on the project overview, but the sidebar and the Cmd+[ / Cmd+] cycle
+  both hardcoded recency — so flipping it changed one list of three. All four
+  surfaces now read `atelier.workstreamSortOrder` through a single comparator,
+  and the picker moves to Settings → General, since it governs the whole app
+  rather than one pane. Sorting is on the label, so a renamed workstream sits
+  where the sidebar says it does.
 
 ### Bug Fixes
 
@@ -243,6 +258,101 @@ point at the upstream repository.
   a Release build takes `ARCHS_STANDARD` and the x86_64 half fails to link on
   every `ghostty_*` symbol, because `libghostty.a` is a thin arm64 archive — so
   the command had been failing outright rather than producing a wider binary.
+
+* **git:** new worktrees are cut from origin's tip, not a stale local branch.
+  `createWorktree` fetched the base branch and then ran `worktree add -b <ws>
+  <dir> main` — but the fetch only ever writes `refs/remotes/origin/main`, while
+  the bare name resolves `refs/heads/main` first, and in the container layout
+  that ref is the trunk checkout's own branch, which moves only when somebody
+  pulls. So the fetch updated a ref the `worktree add` never read, and every
+  workstream started from wherever local main was last pulled. Both the in-code
+  comment and AGENTS.md claimed the fetch prevented exactly that.
+* **ipc:** the MCP helper no longer replays a tool call that timed out. One 15s
+  receive timeout covered every tool, over a comment claiming every handler is
+  sub-millisecond — true of the messaging six and false of `create_workstream`,
+  which does not answer until `git worktree add` has. Past 15s the helper read
+  that as a dead app, reconnected to the *same* still-running app, re-registered
+  under a new peer id and re-sent the call: a generated name produced two
+  workstreams, two worktrees and two branches, while an explicit name produced a
+  refusal from the replay reported to a caller whose workstream had in fact been
+  created. Reproduced twice under load. Deadlines are now per tool, a timeout is
+  distinguished from a disconnection by errno rather than inferred, and a replay
+  is gated on idempotence.
+* **process-compose:** approval records the config bytes the user reviewed, not
+  the ones on disk when the button was pressed. The pane read and displayed the
+  config on appear while `ScriptTrust.approve` re-read it on the click, and the
+  gap between the two is unbounded — the pane can sit open for minutes, and the
+  coding agent writes in that same worktree. A config rewritten in that window
+  was fingerprinted as approved and handed straight to `bootstrap`, which runs
+  unattended: the one outcome the pane exists to prevent. The refusal is now
+  returned rather than discardable, and there is no overload that approves
+  whatever is on disk, so a future call site cannot reintroduce the ungated
+  write.
+* **process-compose:** an `execute` selection no longer inverts into the whole
+  namespace. Trailing process names beginning with `-` are dropped as a
+  flag-injection guard, and nothing on the execute side composed with it — a
+  process named `-web` is legal YAML, so it was offered in the checklist, stored
+  verbatim, and then dropped *after* the "is the selection empty" test. Selecting
+  only that one therefore ran `up -n execute` with no names, which starts
+  everything. This mirrors the fix the verify side already had: one copy of the
+  filter, called both where the checkbox is offered and where the run resolves,
+  so Start reached from the palette does not depend on the checklist having
+  rendered.
+* **editor:** the switch-file alert's Save no longer discards the edits it just
+  saved. `saveFile()` returned Void, so the alert awaited it and navigated
+  regardless — a write that failed on a read-only file, permissions or a full
+  disk only set an error, and navigation then replaced the Monaco model with the
+  next file's contents from disk. The save outcome is now a value the navigation
+  decision is taken from, exhaustively, and the error goes to its own channel
+  rather than to the one whose overlay would cover the unsaved text and leave
+  navigating — the thing that destroys it — as the only way back.
+* **editor:** both retain cycles that stranded the Monaco WebView are broken,
+  and both of the diff view's. The editor bridge leaked itself, its WKWebView
+  and every Monaco model for the life of the process — ~17 MB per workstream
+  that ever opened an editor tab, held long after the workstream was purged. The
+  diff side had the same queued-op cycle plus a worse one: `ChangesView` is a
+  struct, so three closures it installs as stored properties of the bridge
+  captured a copy of the bridge reference back. That one needs no failure to
+  reach — it is installed on every load and every refresh, on the path every
+  user takes.
+* **terminal:** the old ghostty surface is freed when an agent respawns. The
+  respawnable branch dropped the closed view from its map and built a
+  replacement without destroying it, and the view registry holds views strongly
+  — so the old view never deinited and `ghostty_surface_free` never ran. Every
+  Coding Agent exit, by Ctrl+D or a crash, permanently leaked one Metal-backed
+  surface.
+* **terminal:** the libghostty runtime callbacks hop to the main actor before
+  touching surface state. They run on whatever thread a surface's IO loop is on,
+  and the title branch read the view registry synchronously while the main
+  thread mutates it — a torn read of a Swift Dictionary mid-resize is a crash or
+  garbage, not a stale value. The registry is now main-actor isolated, so that
+  is enforced by the compiler rather than by remembering. Two deferred pointers
+  were also use-after-free: a reload-config that fired a runloop turn later with
+  no liveness check, and a close that unwrapped a raw `userdata` the same way. A
+  settings respawn, a purge or an agent exit in between is freed memory; both now
+  re-check liveness against the registry before using the pointer.
+* **git:** the "Pull failed" alert can be dismissed. A SwiftUI alert grows to fit
+  its message with no clamp and no scroll, and `git pull --ff-only` refusing over
+  150 locally-modified files names every one of them — the panel then measured
+  2574pt on a 1084pt screen, with the OK button off the bottom edge and no way to
+  close it. A single 8000-character line does the same thing, so a line budget
+  alone does not bound it. The message now keeps the first six lines and the last
+  three behind an elision marker, with a character backstop: git puts the
+  diagnosis first and the instruction last, so trimming one end drops half of
+  what the user needs to act on.
+* **setup:** `scripts/setup.sh` resolves the repository root instead of
+  taking the first worktree `git worktree list` reports, which in the container
+  layout is the `.bare` directory itself. `.bare/ghostty` does not exist, so the
+  guard was false and the whole submodule-init and symlink block was skipped
+  without a word — `dev.sh build` then died with a misleading "cd ghostty && zig
+  build" hint. The block was also conflating two lookups: the shared build
+  artifacts live at the container level, while a `--reference` needs an
+  initialized ghostty repo, which exists only inside some checkout. They are now
+  separate, the links are made on every run rather than gated behind the init,
+  and the reference is tried only against durable candidates — without
+  `--dissociate` the alternates file is a hard dependency on whatever it names,
+  so referencing a sibling worktree would corrupt this one when that sibling is
+  purged.
 
 ### Performance
 
