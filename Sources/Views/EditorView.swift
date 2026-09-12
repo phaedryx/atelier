@@ -48,6 +48,12 @@ struct EditorView: View {
     // Save confirmation for file switching
     @State private var pendingFilePath: String?
     @State private var showSaveAlert = false
+    /// A write that failed, reported in an alert rather than through
+    /// `loadError`. `loadError` draws an opaque overlay over the editor, which
+    /// is right for a file that could not be read and wrong for one that could
+    /// not be written: the unsaved text is still in the model, and covering it
+    /// hides the very thing the user is trying to rescue.
+    @State private var saveError: String?
 
     private var isDirty: Bool {
         isDirtyState
@@ -70,6 +76,28 @@ struct EditorView: View {
                     editorToolbar
                     editorPanel
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        // On the panel rather than beside the switch-file alert
+                        // below: that alert is dismissing at the moment an
+                        // async save sets `saveError`, and two alert modifiers
+                        // on one view are not reliable that close together. A
+                        // refusal to navigate that says nothing is the failure
+                        // this fix exists to remove, so the two sit on
+                        // different views.
+                        .alert(
+                            Text("The file could not be saved."),
+                            isPresented: Binding(
+                                get: { saveError != nil },
+                                set: {
+                                    if !$0 {
+                                        saveError = nil
+                                    }
+                                }
+                            )
+                        ) {
+                            Button(NSLocalizedString("OK", comment: "")) { saveError = nil }
+                        } message: {
+                            Text(saveError ?? "")
+                        }
                 }
             }
             if isFinderOpen {
@@ -103,8 +131,8 @@ struct EditorView: View {
         ) {
             Button(NSLocalizedString("Save", comment: "")) {
                 Task {
-                    await saveFile()
-                    if let pending = pendingFilePath {
+                    let outcome = await saveFile()
+                    if Self.mayNavigate(after: outcome), let pending = pendingFilePath {
                         navigateToFile(pending)
                     }
                     pendingFilePath = nil
@@ -530,18 +558,73 @@ struct EditorView: View {
         }
     }
 
-    private func saveFile() async {
-        guard let relativePath = currentFilePath, fileLoaded, isDirty else { return }
+    /// What a save did.
+    ///
+    /// Not `Void`, because the switch-file alert's Save button acts on the
+    /// answer: it navigates, and navigating replaces the Monaco model with the
+    /// next file's contents from disk. A save that failed is indistinguishable
+    /// from one that succeeded unless it says so, and what a caller loses by
+    /// confusing them is exactly the edits the user pressed Save to keep.
+    enum SaveOutcome: Equatable {
+        case saved
+        /// Nothing was written because nothing had changed.
+        case nothingToSave
+        case failed(String)
+    }
+
+    /// Whether the file the user picked may now be opened over the current one.
+    ///
+    /// Exhaustive and deliberately without a `default:`, so a fourth outcome has
+    /// to answer this question rather than inherit an answer — the inherited
+    /// answer here throws away unsaved work.
+    static func mayNavigate(after outcome: SaveOutcome) -> Bool {
+        switch outcome {
+        case .saved, .nothingToSave:
+            true
+        case .failed:
+            false
+        }
+    }
+
+    @discardableResult
+    private func saveFile() async -> SaveOutcome {
+        guard isDirty else { return .nothingToSave }
+        guard let relativePath = currentFilePath, fileLoaded else {
+            // Dirty with nowhere to write. Save As detaches the editor when
+            // it writes outside the working directory (`editedPath` returns
+            // nil), so a nil path is reachable; `isDirtyState` is a binding the
+            // parent owns, so this pairing cannot be ruled out from here. It is
+            // a failure rather than "nothing to save" because the latter would
+            // let the alert navigate over whatever the model is holding — the
+            // same bug by a different route.
+            return failedSave(NSLocalizedString(
+                "This editor is not pointing at a file in the worktree. Use Save As to choose where to write it.",
+                comment: ""
+            ))
+        }
         let fullPath = (workingDirectory as NSString).appendingPathComponent(relativePath)
-        guard let content = await bridge.getContent(modelId: modelId) else { return }
+        guard let content = await bridge.getContent(modelId: modelId) else {
+            // The model is dirty, so it exists; nil is the bridge failing to
+            // hand its text over rather than an absence of text.
+            return failedSave(NSLocalizedString(
+                "The editor could not read the file's contents.",
+                comment: ""
+            ))
+        }
         do {
             try content.write(toFile: fullPath, atomically: true, encoding: .utf8)
             bridge.markClean(modelId: modelId)
             isDirtyState = false
-
+            return .saved
         } catch {
-            loadError = error.localizedDescription
+            return failedSave(error.localizedDescription)
         }
+    }
+
+    /// Reports a failed write and leaves the model dirty, so ⌘S can retry it.
+    private func failedSave(_ message: String) -> SaveOutcome {
+        saveError = message
+        return .failed(message)
     }
 
     private func saveFileAs() async {
@@ -580,7 +663,7 @@ struct EditorView: View {
             isDirtyState = false
 
         } catch {
-            loadError = error.localizedDescription
+            saveError = error.localizedDescription
         }
     }
 
