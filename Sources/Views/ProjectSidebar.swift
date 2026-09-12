@@ -112,6 +112,9 @@ struct ProjectSidebar: View {
     /// at a time. Held here (not per-row) so periodic project mutations
     /// don't drop the edit state when rows rebuild.
     @State private var renamingWorkstreamID: UUID?
+    @State private var renamingProjectID: UUID?
+
+    @AppStorage(Project.SortOrder.storageKey) private var workstreamSortOrder: Project.SortOrder = .recent
 
     private func recomputeSortedIDs() -> [UUID] {
         projects
@@ -127,9 +130,7 @@ struct ProjectSidebar: View {
             for (wi, ws) in project.workstreams.enumerated() {
                 wsIndex[ws.id] = (pi, wi)
             }
-            sortedWS[project.id] = project.workstreams
-                .sorted { $0.lastAccessedAt > $1.lastAccessedAt }
-                .map(\.id)
+            sortedWS[project.id] = workstreamSortOrder.sorted(project.workstreams).map(\.id)
         }
         cachedWorkstreamIndex = wsIndex
         cachedSortedWorkstreamIDs = sortedWS
@@ -178,105 +179,202 @@ struct ProjectSidebar: View {
         }
     }
 
+    /// Projects and their workstreams, as rows of the sidebar `List`.
+    ///
+    /// A project with workstreams is a `DisclosureGroup`; one without is the bare
+    /// header row. Three things about that are load-bearing:
+    ///
+    /// 1. **The group owns the triangle, but not the state.** `isExpanded` is a
+    ///    computed `Binding` over `expandedProjects`, so expansion still lands in the
+    ///    same `Set` that `SidebarState.saveExpanded` persists and that
+    ///    `deferSelectionExpansion` opens on selection. Nothing downstream can tell
+    ///    the difference. `ProjectHeaderRow`'s own chevron was deleted when this
+    ///    landed — two controls for one piece of state is the trap `Section` has
+    ///    under `.listStyle(.sidebar)`, and it is just as available here.
+    /// 2. **The header row is the group's *label*, not a `Section` header.** A
+    ///    section header is not selectable in `List(selection:)`, and this row must
+    ///    stay selectable — it carries `.tag(SidebarSelection.project(_:))`, and
+    ///    selecting it is how the project overview opens. Tagging the label works;
+    ///    verified against the real sidebar, along with the label's hover buttons
+    ///    and context menu, which keep receiving clicks rather than toggling the
+    ///    group.
+    /// 3. **A childless project reserves no leading column.** The disclosure
+    ///    triangle is drawn in `List`'s own gutter, *left* of where row content
+    ///    starts, so a placeholder column in the header row compensates for nothing
+    ///    — it is 22pt of pure extra indent that leaves an ungrouped project sitting
+    ///    out at workstream depth with no triangle above it. Both branches go
+    ///    through `projectHeaderRow` unchanged; the alignment falls out for free.
+    ///
+    /// `.listStyle(.sidebar)` over `DisclosureGroup` with tagged children is not new
+    /// here — `ChangesFileTreeSidebar` shipped exactly that shape and only moved to
+    /// `.plain` later, for the vibrancy reason its own comment gives.
     private func projectRows() -> some View {
         ForEach(cachedSortedIDs, id: \.self) { projectID in
             let projectBind = projectBinding(for: projectID)
             let project = projectBind.wrappedValue
             let hasChildren = !project.workstreams.isEmpty
+            let isFirst = projectID == cachedSortedIDs.first
 
-            ProjectHeaderRow(
-                project: project,
-                isExpanded: expandedProjects.contains(project.id),
-                onToggle: hasChildren ? {
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        if expandedProjects.contains(project.id) {
-                            expandedProjects.remove(project.id)
-                        } else {
-                            expandedProjects.insert(project.id)
-                        }
-                    }
-                } : nil,
-                isGitRepo: appEnv.isGitRepo(project.directory),
-                githubURL: appEnv.githubURL(for: project.directory),
-                onAdd: { logger.warning("[Atelier] onAdd button tapped for project \(project.name, privacy: .public)"); addWorkstream(for: project.id) },
-                onAddWithPermissions: { addWorkstream(for: project.id, bypassPermissions: true) },
-                onAddWithoutPermissions: { addWorkstream(for: project.id, bypassPermissions: false) },
-                showShortcutButton: Shortcut.Settings.shouldShowButton(
-                    isGitRepo: appEnv.isGitRepo(project.directory),
-                    toggleEnabled: shortcutButtonEnabled,
-                    hasToken: hasShortcutToken
-                ),
-                onAddFromShortcut: { addWorkstreamFromShortcut(for: project.id) },
-                // Both halves are already cached in AppEnvironment and refreshed on its own
-                // schedule — asking git or gh from a row body would spawn a subprocess per render.
-                // `hasGitHubRemote` is the half that genuinely is: the path-validity sweep
-                // probes every project's own directory every 15s. `githubURL`, which used to
-                // stand here, is not — see `shouldShowBranchButton`.
-                showGitHubButton: GitHub.Operations.shouldShowBranchButton(
-                    isGitRepo: appEnv.isGitRepo(project.directory),
-                    hasGitHubRemote: appEnv.hasGitHubRemote(project.directory)
-                ),
-                onAddFromGitHub: { addWorkstreamFromGitHub(for: project.id) },
-                onDelete: { projectToDelete = project.id }
-            )
-            .tag(SidebarSelection.project(project.id))
-
-            if hasChildren, expandedProjects.contains(project.id) {
-                let sortedWorkstreamIDs = cachedSortedWorkstreamIDs[project.id] ?? project.workstreams.map(\.id)
-                ForEach(sortedWorkstreamIDs, id: \.self) { workstreamID in
-                    if let (pIdx, wIdx) = cachedWorkstreamIndex[workstreamID],
-                       projects.indices.contains(pIdx),
-                       projects[pIdx].workstreams.indices.contains(wIdx)
-                    {
-                        let workstream = projects[pIdx].workstreams[wIdx]
-                        let branch = appEnv.branchName(for: workstream.worktreePath)
-                        let pr = branch.flatMap { appEnv.githubPR(for: project.directory, branch: $0) }
-                        let wsRuns = agentStateTracker.runs(for: workstream.id)
-                        let mainRun = wsRuns.first(where: \.isMain)
-                        let subRuns = wsRuns.filter { !$0.isMain }
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            WorkstreamRow(
-                                name: workstream.label,
-                                branchName: branch,
-                                worktreePath: workstream.worktreePath,
-                                isPathValid: appEnv.isPathValid(workstream.worktreePath),
-                                isSelected: selection == .workstream(workstream.id),
-                                agentState: agentStateTracker.state(for: workstream.id),
-                                hasLiveSession: agentStateTracker.hasLiveSession(for: workstream.id),
-                                channelDown: channelProbe.state.isDown,
-                                mainActivity: mainRun?.activity,
-                                // Passed regardless of whether the main run
-                                // is still rostered: the tracker keeps the
-                                // last reading after a turn ends so the bar
-                                // persists (dimmed) at Done/Idle.
-                                mainContextUsage: agentStateTracker.mainContextUsage(for: workstream.id),
-                                startedAt: mainRun?.startedAt,
-                                githubURL: appEnv.githubURL(for: project.directory),
-                                taskDescription: appEnv.taskDescription(for: workstream.worktreePath),
-                                prTitle: pr?.title,
-                                prNumber: pr?.number,
-                                prState: pr?.state,
-                                isRenaming: Binding(
-                                    get: { renamingWorkstreamID == workstream.id },
-                                    set: { renamingWorkstreamID = $0 ? workstream.id : nil }
-                                ),
-                                onRemove: { workstreamToRemove = workstream.id },
-                                onPurge: { confirmPurge(workstream) },
-                                onRenameCommit: { commitRename(workstreamID: workstream.id, input: $0) }
-                            )
-
-                            if !subRuns.isEmpty {
-                                WorkstreamAgentRosterView(runs: subRuns, channelDown: channelProbe.state.isDown) {
-                                    selectAndFocusAgent(workstreamID: workstream.id)
+            if hasChildren {
+                DisclosureGroup(
+                    isExpanded: Binding(
+                        get: { expandedProjects.contains(projectID) },
+                        set: { on in
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                if on {
+                                    expandedProjects.insert(projectID)
+                                } else {
+                                    expandedProjects.remove(projectID)
                                 }
-                                .padding(.leading, 6)
                             }
                         }
-                        .tag(SidebarSelection.workstream(workstream.id))
-                        .padding(.leading, 8)
+                    )
+                ) {
+                    workstreamRows(project: project)
+                } label: {
+                    projectHeaderRow(project: project, isFirst: isFirst)
+                        .tag(SidebarSelection.project(project.id))
+                }
+            } else {
+                projectHeaderRow(project: project, isFirst: isFirst)
+                    .tag(SidebarSelection.project(project.id))
+            }
+        }
+    }
+
+    /// Separation between one project's group and the next is this row's own top
+    /// padding, never a `Divider()`. A separator emitted as a sibling of these rows
+    /// becomes a phantom row inside `List(selection:)` — untagged, but highlightable
+    /// and reachable with the arrow keys.
+    private func projectHeaderRow(project: Project, isFirst: Bool) -> some View {
+        ProjectHeaderRow(
+            project: project,
+            isGitRepo: appEnv.isGitRepo(project.directory),
+            githubURL: appEnv.githubURL(for: project.directory),
+            onAdd: { logger.warning("[Atelier] onAdd button tapped for project \(project.name, privacy: .public)"); addWorkstream(for: project.id) },
+            onAddWithPermissions: { addWorkstream(for: project.id, bypassPermissions: true) },
+            onAddWithoutPermissions: { addWorkstream(for: project.id, bypassPermissions: false) },
+            showShortcutButton: Shortcut.Settings.shouldShowButton(
+                isGitRepo: appEnv.isGitRepo(project.directory),
+                toggleEnabled: shortcutButtonEnabled,
+                hasToken: hasShortcutToken
+            ),
+            onAddFromShortcut: { addWorkstreamFromShortcut(for: project.id) },
+            // Both halves are already cached in AppEnvironment and refreshed on its own
+            // schedule — asking git or gh from a row body would spawn a subprocess per render.
+            // `hasGitHubRemote` is the half that genuinely is: the path-validity sweep
+            // probes every project's own directory every 15s. `githubURL`, which used to
+            // stand here, is not — see `shouldShowBranchButton`.
+            showGitHubButton: GitHub.Operations.shouldShowBranchButton(
+                isGitRepo: appEnv.isGitRepo(project.directory),
+                hasGitHubRemote: appEnv.hasGitHubRemote(project.directory)
+            ),
+            onAddFromGitHub: { addWorkstreamFromGitHub(for: project.id) },
+            isSelected: selection == .project(project.id),
+            isRenaming: Binding(
+                get: { renamingProjectID == project.id },
+                set: { renamingProjectID = $0 ? project.id : nil }
+            ),
+            onRenameCommit: { commitProjectRename(projectID: project.id, input: $0) },
+            onDelete: { projectToDelete = project.id }
+        )
+        .padding(.leading, Layout.projectTitleGap)
+        .padding(.top, isFirst ? 0 : Layout.projectGroupGap)
+    }
+
+    /// Sizes for the sidebar's grouping. Collected rather than inlined because the
+    /// three horizontal ones are a single decision: the trim pulls the group left,
+    /// the spine sits at the edge that leaves, `spineGap` is measured from the spine,
+    /// and `projectTitleGap` is what the spine is aligned against — moving one alone
+    /// puts the hairline somewhere the rows are not. The two vertical ones,
+    /// `projectGroupGap` and `spineOverhang`, are independent of all that.
+    private enum Layout {
+        /// Air above each project group but the first.
+        static let projectGroupGap: CGFloat = 8
+        /// Between `List`'s disclosure-triangle gutter and the project name.
+        /// Applied to childless projects too, which have no triangle, so every
+        /// project name still starts at one x.
+        static let projectTitleGap: CGFloat = 4
+        /// Pulls the workstream rows back toward the leading edge.
+        /// `DisclosureGroup`'s own indent is generous for rows this dense.
+        static let workstreamIndentTrim: CGFloat = -10
+        /// Between the spine and the workstream row's content.
+        static let spineGap: CGFloat = 8
+        /// How far each row's spine segment overhangs its own bounds, so adjacent
+        /// segments meet instead of leaving a dotted trail down the group. Half the
+        /// inter-row spacing at each end.
+        static let spineOverhang: CGFloat = 3
+    }
+
+    /// The workstreams of one project, as the content of its `DisclosureGroup`.
+    ///
+    /// Each row draws its own segment of the tree-guide spine. That is not a
+    /// stylistic choice: these rows are siblings of the `List`, so there is no
+    /// container to stroke down the side of — wrapping them in one would collapse
+    /// them into a single row and take per-workstream selection with it. The
+    /// segments are given a negative vertical padding so they overlap into their
+    /// neighbours and read as one continuous line.
+    private func workstreamRows(project: Project) -> some View {
+        let sortedWorkstreamIDs = cachedSortedWorkstreamIDs[project.id] ?? project.workstreams.map(\.id)
+        return ForEach(sortedWorkstreamIDs, id: \.self) { workstreamID in
+            if let (pIdx, wIdx) = cachedWorkstreamIndex[workstreamID],
+               projects.indices.contains(pIdx),
+               projects[pIdx].workstreams.indices.contains(wIdx)
+            {
+                let workstream = projects[pIdx].workstreams[wIdx]
+                let branch = appEnv.branchName(for: workstream.worktreePath)
+                let pr = branch.flatMap { appEnv.githubPR(for: project.directory, branch: $0) }
+                let wsRuns = agentStateTracker.runs(for: workstream.id)
+                let mainRun = wsRuns.first(where: \.isMain)
+                let subRuns = wsRuns.filter { !$0.isMain }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    WorkstreamRow(
+                        name: workstream.label,
+                        branchName: branch,
+                        worktreePath: workstream.worktreePath,
+                        isPathValid: appEnv.isPathValid(workstream.worktreePath),
+                        isSelected: selection == .workstream(workstream.id),
+                        agentState: agentStateTracker.state(for: workstream.id),
+                        hasLiveSession: agentStateTracker.hasLiveSession(for: workstream.id),
+                        channelDown: channelProbe.state.isDown,
+                        mainActivity: mainRun?.activity,
+                        // Passed regardless of whether the main run
+                        // is still rostered: the tracker keeps the
+                        // last reading after a turn ends so the bar
+                        // persists (dimmed) at Done/Idle.
+                        mainContextUsage: agentStateTracker.mainContextUsage(for: workstream.id),
+                        startedAt: mainRun?.startedAt,
+                        githubURL: appEnv.githubURL(for: project.directory),
+                        taskDescription: appEnv.taskDescription(for: workstream.worktreePath),
+                        prTitle: pr?.title,
+                        prNumber: pr?.number,
+                        prState: pr?.state,
+                        isRenaming: Binding(
+                            get: { renamingWorkstreamID == workstream.id },
+                            set: { renamingWorkstreamID = $0 ? workstream.id : nil }
+                        ),
+                        onRemove: { workstreamToRemove = workstream.id },
+                        onPurge: { confirmPurge(workstream) },
+                        onRenameCommit: { commitRename(workstreamID: workstream.id, input: $0) }
+                    )
+
+                    if !subRuns.isEmpty {
+                        WorkstreamAgentRosterView(runs: subRuns, channelDown: channelProbe.state.isDown) {
+                            selectAndFocusAgent(workstreamID: workstream.id)
+                        }
+                        .padding(.leading, 6)
                     }
                 }
+                .padding(.leading, Layout.spineGap)
+                .overlay(alignment: .leading) {
+                    Rectangle()
+                        .fill(.quaternary)
+                        .frame(width: 1)
+                        .padding(.vertical, -Layout.spineOverhang)
+                }
+                .padding(.leading, Layout.workstreamIndentTrim)
+                .tag(SidebarSelection.workstream(workstream.id))
             }
         }
     }
@@ -553,17 +651,22 @@ struct ProjectSidebar: View {
             projects[pi].lastAccessedAt = now
             projects[pi].workstreams[wi].lastAccessedAt = now
             onProjectsChanged()
-            // Workstreams are ordered by recency, so re-sort this project's
-            // workstreams on activity. Projects themselves are always A–Z.
-            cachedSortedWorkstreamIDs[projects[pi].id] = projects[pi].workstreams
-                .sorted { $0.lastAccessedAt > $1.lastAccessedAt }
-                .map(\.id)
+            // Only `.recent` can be reordered by a timestamp write, and this fires on
+            // every burst of terminal output — so under `.alphabetical` the re-sort is
+            // pure work for an order that cannot have changed. Projects themselves are
+            // always A–Z and never re-sorted here.
+            if workstreamSortOrder == .recent {
+                cachedSortedWorkstreamIDs[projects[pi].id] = workstreamSortOrder
+                    .sorted(projects[pi].workstreams)
+                    .map(\.id)
+            }
         }
         .onAppear {
             cachedSortedIDs = recomputeSortedIDs()
             rebuildIndices()
         }
         .onChange(of: expandedProjects) { _, newValue in SidebarState.saveExpanded(newValue) }
+        .onChange(of: workstreamSortOrder) { _, _ in rebuildIndices() }
         .onChange(of: projects.count) { _, _ in
             cachedSortedIDs = recomputeSortedIDs()
             rebuildIndices()
@@ -949,11 +1052,39 @@ struct ProjectSidebar: View {
         }
     }
 
+    /// Commit a project rename from the sidebar.
+    ///
+    /// Writes `Project.name` directly rather than adding a `displayName` override
+    /// the way `Workstream` does. A workstream's `name` tracks its git branch, so it
+    /// needs something to fall back to; a project's does not track anything, and
+    /// `ProjectOverviewView`'s title field has always written this same field — a
+    /// second, overriding one would make the two editors disagree about what the
+    /// project is called.
+    ///
+    /// An empty or whitespace-only input keeps the current name. `Workstream`'s
+    /// equivalent reads empty as "clear the override and follow the branch again";
+    /// here there is nothing to fall back to, so honouring it would leave a nameless
+    /// row that could only be fixed from the overview pane.
+    private func commitProjectRename(projectID: UUID, input: String) {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let index = projects.firstIndex(where: { $0.id == projectID }),
+              projects[index].name != trimmed
+        else { return }
+        projects[index].name = trimmed
+        onProjectsChanged()
+        // Projects are ordered A-Z, so a rename can move this row.
+        cachedSortedIDs = recomputeSortedIDs()
+        rebuildIndices()
+    }
+
     private func commitRename(workstreamID: UUID, input: String) {
         guard let pi = projects.firstIndex(where: { $0.id == workstreamProjectID(for: workstreamID) }),
               let wi = projects[pi].workstreams.firstIndex(where: { $0.id == workstreamID }) else { return }
         projects[pi].workstreams[wi].applyRename(input)
         onProjectsChanged()
+        // `.alphabetical` sorts on `label`, which this just changed.
+        rebuildIndices()
     }
 
     /// Begin an inline rename of the selected workstream (⌘⇧R / palette),
@@ -1222,8 +1353,6 @@ func openDirectoryInTerminal(_ directory: String) {
 
 private struct ProjectHeaderRow: View {
     let project: Project
-    let isExpanded: Bool
-    let onToggle: (() -> Void)?
     let isGitRepo: Bool
     var githubURL: URL?
     let onAdd: () -> Void
@@ -1233,39 +1362,49 @@ private struct ProjectHeaderRow: View {
     let onAddFromShortcut: () -> Void
     let showGitHubButton: Bool
     let onAddFromGitHub: () -> Void
+    /// Whether this row is the sidebar's current selection. Gates the
+    /// double-click-to-rename gesture — see `body`.
+    let isSelected: Bool
+    @Binding var isRenaming: Bool
+    let onRenameCommit: (String) -> Void
     let onDelete: () -> Void
 
     @State private var isHovering = false
-    @State private var isChevronHovering = false
 
     var body: some View {
         HStack(alignment: .center, spacing: 6) {
-            Group {
-                if onToggle != nil {
-                    Button(action: { onToggle?() }) {
-                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(isChevronHovering ? .primary : .secondary)
-                            .frame(width: 22, height: 22)
-                            .background(isChevronHovering ? Color.primary.opacity(0.1) : .clear)
-                            .clipShape(RoundedRectangle(cornerRadius: 4))
-                    }
-                    .buttonStyle(.borderless)
-                    .onHover { isChevronHovering = $0 }
-                    .accessibilityLabel(isExpanded ? "Collapse" : "Expand")
-                    .accessibilityValue(isExpanded ? "expanded" : "collapsed")
-                } else {
-                    Color.clear
-                }
-            }
-            .frame(width: 22)
-
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
-                    Text(project.name)
-                        .font(.system(size: 13, weight: .medium))
+                    if isRenaming {
+                        InlineTextField(
+                            initialText: project.name,
+                            accessibilityID: "project-rename-field",
+                            fontSize: 13,
+                            fontWeight: .medium,
+                            onCommit: { value in
+                                isRenaming = false
+                                onRenameCommit(value)
+                            },
+                            onCancel: { isRenaming = false }
+                        )
+                    } else {
+                        Text(project.name)
+                            .font(.system(size: 13, weight: .medium))
+                            // Same shape as `WorkstreamRow`'s, and for the same reason:
+                            // a gesture attached here swallows mouse-down inside the
+                            // label's bounds, so an unselected row would refuse to
+                            // select when clicked on its name — the part of the row
+                            // users aim at. `.none` leaves no recognizer to swallow
+                            // anything. It matters more here than there: this row is a
+                            // `DisclosureGroup` label, so a swallowed mouse-down would
+                            // take the group's own toggle with it.
+                            .simultaneousGesture(
+                                TapGesture(count: 2).onEnded { isRenaming = true },
+                                including: isSelected ? .gesture : .none
+                            )
+                    }
 
-                    if !project.workstreams.isEmpty {
+                    if !isRenaming, !project.workstreams.isEmpty {
                         Text("\(project.workstreams.count)")
                             .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(.secondary)
@@ -1344,6 +1483,9 @@ private struct ProjectHeaderRow: View {
                 Label("Copy project path", systemImage: "doc.on.doc")
             }
             Divider()
+            Button { isRenaming = true } label: {
+                Label("Rename…", systemImage: "pencil")
+            }
             Button(role: .destructive, action: onDelete) {
                 Label("Remove Project", systemImage: "trash")
             }

@@ -246,10 +246,53 @@ final class WorkspaceTabStateTests: XCTestCase {
             in: project,
             selectedWorkstreamID: firstID,
             direction: -1,
+            order: .recent,
             pathExists: { $0 != "/app/missing" }
         )
 
         XCTAssertEqual(id, previousID)
+    }
+
+    /// The cycle must walk the rows the sidebar drew. The fixture is chosen so the
+    /// two orders are not rotations of each other — recency cycles
+    /// alpha→zulu→mike, alphabetical cycles alpha→mike→zulu — so stepping once
+    /// from `alpha` distinguishes them.
+    func testCyclingFollowsTheConfiguredOrder() throws {
+        let alphaID = try XCTUnwrap(UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"))
+        let mikeID = try XCTUnwrap(UUID(uuidString: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB"))
+        let zuluID = try XCTUnwrap(UUID(uuidString: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC"))
+
+        let project = Project(
+            name: "app",
+            directory: "/app",
+            workstreams: [
+                Workstream(name: "alpha", worktreePath: "/app/alpha", id: alphaID, lastAccessedAt: Date(timeIntervalSince1970: 30)),
+                Workstream(name: "zulu", worktreePath: "/app/zulu", id: zuluID, lastAccessedAt: Date(timeIntervalSince1970: 20)),
+                Workstream(name: "mike", worktreePath: "/app/mike", id: mikeID, lastAccessedAt: Date(timeIntervalSince1970: 10)),
+            ]
+        )
+
+        XCTAssertEqual(
+            cycledWorkstreamID(in: project, selectedWorkstreamID: alphaID, direction: 1, order: .recent, pathExists: { _ in true }),
+            zuluID
+        )
+        XCTAssertEqual(
+            cycledWorkstreamID(in: project, selectedWorkstreamID: alphaID, direction: 1, order: .alphabetical, pathExists: { _ in true }),
+            mikeID
+        )
+    }
+
+    /// A renamed workstream sorts under its label, not the branch name behind it.
+    func testAlphabeticalOrderSortsOnTheDisplayLabel() throws {
+        let renamedID = try XCTUnwrap(UUID(uuidString: "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD"))
+        let plainID = try XCTUnwrap(UUID(uuidString: "EEEEEEEE-EEEE-EEEE-EEEE-EEEEEEEEEEEE"))
+
+        let workstreams = [
+            Workstream(name: "zulu-branch", displayName: "apple", id: renamedID),
+            Workstream(name: "banana", id: plainID),
+        ]
+
+        XCTAssertEqual(Project.SortOrder.alphabetical.sorted(workstreams).map(\.id), [renamedID, plainID])
     }
 }
 
