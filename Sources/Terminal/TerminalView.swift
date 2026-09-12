@@ -13,14 +13,51 @@ extension Notification.Name {
 @MainActor
 final class TerminalView: NSView {
     /// Maps ghostty surface pointers to their owning views.
-    nonisolated(unsafe) static var surfaceRegistry: [UnsafeMutableRawPointer: TerminalView] = [:]
+    ///
+    /// Main-actor isolated on purpose. libghostty calls its runtime callbacks
+    /// from whatever thread the surface's IO loop is on, and this dictionary is
+    /// mutated by `init` and `destroy()` — both on the main actor — so a
+    /// synchronous read from a callback is a torn read, not a stale one. The
+    /// isolation is the enforcement: a callback that wants this has to hop
+    /// first, and the compiler now says so.
+    static var surfaceRegistry: [UnsafeMutableRawPointer: TerminalView] = [:]
 
-    nonisolated static func view(for surface: ghostty_surface_t) -> TerminalView? {
+    /// The view owning `surface`, or nil if that surface is no longer live.
+    ///
+    /// Callers deferring a C callback onto the main actor use this as a
+    /// liveness check, and the residual risk is ABA: a freed surface pointer
+    /// reissued to a *new* surface registers under the same address, so the
+    /// lookup succeeds and answers about the wrong surface. The consequences
+    /// are bounded and both preferable to what they replace — a title
+    /// notification posted against the wrong workstream (cosmetic, and it
+    /// self-corrects on the next title change) and a config update applied to
+    /// a surface that is genuinely live and genuinely wants it. Neither
+    /// touches freed memory, which is the point.
+    @MainActor
+    static func view(for surface: ghostty_surface_t) -> TerminalView? {
         surfaceRegistry[surface]
     }
 
+    /// The object at `userdata`, if it is still one of `live`.
+    ///
+    /// A pointer handed to a C callback may already be freed by the time a
+    /// deferred block runs, so this compares `userdata` against the addresses
+    /// of objects known to be alive and never dereferences it. Generic over
+    /// `AnyObject` so the comparison can be tested without a live
+    /// `ghostty_app_t` to make real surfaces from.
+    nonisolated static func liveObject<V: AnyObject>(
+        at userdata: UnsafeMutableRawPointer,
+        among live: some Sequence<V>
+    ) -> V? {
+        live.first { Unmanaged.passUnretained($0).toOpaque() == userdata }
+    }
+
+    /// Stays `nonisolated(unsafe)`: `completeClipboardRead` reads it from a
+    /// nonisolated C callback. That read is safe for a different reason than
+    /// the registry's — the clipboard callbacks reach the main thread
+    /// synchronously, so nothing can free the surface underneath them.
     private(set) nonisolated(unsafe) var surface: ghostty_surface_t?
-    nonisolated(unsafe) var workstreamID: UUID?
+    var workstreamID: UUID?
     /// Last logical (point) size reported to the surface. Stored so
     /// `viewDidChangeBackingProperties` can re-report the correct framebuffer
     /// size after a scale factor change.

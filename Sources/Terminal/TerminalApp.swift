@@ -28,15 +28,27 @@ private func handleTerminalAction(
         if soft {
             if target.tag == GHOSTTY_TARGET_APP {
                 DispatchQueue.main.async {
-                    guard let app = TerminalApp.shared.app,
-                          let config = TerminalApp.shared.config else { return }
-                    ghostty_app_update_config(app, config)
+                    MainActor.assumeIsolated {
+                        guard let app = TerminalApp.shared.app,
+                              let config = TerminalApp.shared.config else { return }
+                        ghostty_app_update_config(app, config)
+                    }
                 }
             } else if target.tag == GHOSTTY_TARGET_SURFACE {
-                let surface = target.target.surface!
+                // Carry the pointer as bits and re-check liveness on the main
+                // actor: a settings respawn or a purge can free this surface
+                // between the callback and the hop, and
+                // `ghostty_surface_update_config` on freed memory is a crash.
+                // The registry is the liveness record, and `destroy()` clears
+                // the entry and the view's own `surface` together.
+                let surfaceBits = UInt(bitPattern: target.target.surface)
                 DispatchQueue.main.async {
-                    guard let config = TerminalApp.shared.config else { return }
-                    ghostty_surface_update_config(surface, config)
+                    MainActor.assumeIsolated {
+                        guard let key = UnsafeMutableRawPointer(bitPattern: surfaceBits),
+                              let surface = TerminalView.view(for: key)?.surface,
+                              let config = TerminalApp.shared.config else { return }
+                        ghostty_surface_update_config(surface, config)
+                    }
                 }
             }
         }
@@ -49,16 +61,28 @@ private func handleTerminalAction(
     switch action.tag {
     case GHOSTTY_ACTION_SET_TITLE:
         guard let cstr = action.action.set_title.title else { return false }
+        // The one read that must stay on this thread: libghostty does not
+        // promise the title pointer outlives the callback. Everything else —
+        // the registry lookup and the view's `workstreamID` — is main-actor
+        // state and moves inside the hop.
         let title = String(cString: cstr)
-        guard let view = TerminalView.view(for: target.target.surface),
-              let wsID = view.workstreamID else { return false }
+        let surfaceBits = UInt(bitPattern: target.target.surface)
         DispatchQueue.main.async {
-            NotificationCenter.default.post(
-                name: .terminalTitleChanged,
-                object: wsID,
-                userInfo: ["title": title]
-            )
+            MainActor.assumeIsolated {
+                guard let key = UnsafeMutableRawPointer(bitPattern: surfaceBits),
+                      let wsID = TerminalView.view(for: key)?.workstreamID else { return }
+                NotificationCenter.default.post(
+                    name: .terminalTitleChanged,
+                    object: wsID,
+                    userInfo: ["title": title]
+                )
+            }
         }
+        // Unconditionally true, where this used to return false for an
+        // unregistered surface: the action *was* accepted, and with delivery
+        // deferred there is no longer anything to report back. libghostty
+        // reads the return as "did the runtime handle this tag", not "did a
+        // notification get posted".
         return true
     case GHOSTTY_ACTION_DESKTOP_NOTIFICATION:
         let notification = action.action.desktop_notification
@@ -125,9 +149,23 @@ private func closeTerminalSurface(
     guard let userdata else { return }
     let userdataBits = UInt(bitPattern: userdata)
     DispatchQueue.main.async {
-        let userdata = UnsafeMutableRawPointer(bitPattern: userdataBits)!
-        let surfaceView = Unmanaged<TerminalView>.fromOpaque(userdata).takeUnretainedValue()
-        surfaceView.surfaceClosed()
+        MainActor.assumeIsolated {
+            // `takeUnretainedValue` on the raw `userdata` was a use-after-free:
+            // the view can be destroyed between this callback and the hop. The
+            // registry holds its views strongly, so matching the address
+            // against its values proves the object is alive without ever
+            // dereferencing the stale pointer.
+            //
+            // Skipping a view that is no longer registered is the wanted
+            // outcome, not a safe fallback: posting `.terminalSurfaceClosed`
+            // for an already-replaced view would drive a second respawn.
+            guard let userdata = UnsafeMutableRawPointer(bitPattern: userdataBits),
+                  let surfaceView = TerminalView.liveObject(
+                      at: userdata,
+                      among: TerminalView.surfaceRegistry.values
+                  ) else { return }
+            surfaceView.surfaceClosed()
+        }
     }
 }
 
@@ -248,13 +286,15 @@ final class TerminalApp {
             options: [.new, .initial]
         ) { [weak self] _, _ in
             DispatchQueue.main.async {
-                guard let app = self?.app else { return }
-                let scheme: ghostty_color_scheme_e = NSApplication.shared.effectiveAppearance.isDark
-                    ? GHOSTTY_COLOR_SCHEME_DARK
-                    : GHOSTTY_COLOR_SCHEME_LIGHT
-                ghostty_app_set_color_scheme(app, scheme)
-                for (ptr, _) in TerminalView.surfaceRegistry {
-                    ghostty_surface_set_color_scheme(ptr, scheme)
+                MainActor.assumeIsolated {
+                    guard let app = self?.app else { return }
+                    let scheme: ghostty_color_scheme_e = NSApplication.shared.effectiveAppearance.isDark
+                        ? GHOSTTY_COLOR_SCHEME_DARK
+                        : GHOSTTY_COLOR_SCHEME_LIGHT
+                    ghostty_app_set_color_scheme(app, scheme)
+                    for (ptr, _) in TerminalView.surfaceRegistry {
+                        ghostty_surface_set_color_scheme(ptr, scheme)
+                    }
                 }
             }
         }
