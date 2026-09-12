@@ -110,6 +110,98 @@ extension IPC {
                 .workspaceAction
             }
         }
+
+        /// How long the helper waits for this tool's reply before it stops
+        /// waiting. A liveness backstop, not a latency budget — but the numbers
+        /// have to be honest about the *slowest* thing the app does behind each
+        /// tool, because a deadline that fires while a handler is still working
+        /// is indistinguishable to the helper from an app that has died.
+        ///
+        /// One number for every tool is what made that confusion reachable: the
+        /// helper set a single 15-second socket timeout over a comment claiming
+        /// "every handler here is sub-millisecond", which is true of the
+        /// messaging six and false of `create_workstream`, whose answer waits on
+        /// `git worktree add`.
+        ///
+        /// The cost of a long one is paid by the whole session, not just the
+        /// call: the helper is a single-threaded `readLine` loop, so it stops
+        /// reading stdin for the length of a round trip. A wedged app therefore
+        /// blocks *all* MCP traffic for this long. That is why only the tool
+        /// that genuinely needs minutes gets them, and why the value is sized to
+        /// the realistic worst case rather than to every theoretical retry the
+        /// app might stack.
+        var replyDeadline: TimeInterval {
+            switch self {
+            // Actor hops and store reads. The original 15 seconds, which was
+            // always right for these.
+            case .registerPeer, .listPeers, .sendMessage, .receiveMessages, .broadcast, .getPeerStatus,
+                 .listTabs, .readReviewComments, .checkVerification:
+                15
+            // Main-actor work with a process-compose probe behind the worst of
+            // them (`start_verification` resolves a binary and parses a config
+            // before it answers with a run id).
+            case .openAgentTab, .openEditor, .requestAttention, .startVerification:
+                60
+            // `git worktree add` under `ProcessRunner.Timeout.userCommand` (300s)
+            // after a fetch under `.network` (120s). Named as literals because
+            // `ProcessRunner` is not compiled into the helper — `AtelierMCP`
+            // takes this file and nothing else out of `Models/IPC/`
+            // (`project.yml:198-200`).
+            case .createWorkstream:
+                480
+            }
+        }
+
+        /// Whether the helper may re-send this tool after losing the connection
+        /// mid-call.
+        ///
+        /// **A replay is a second execution, and only a tool that changes
+        /// nothing by running twice can afford one.** The helper reconnects and
+        /// replays so a restarted Atelier does not fail every later call; that
+        /// recovery is worth keeping for a read, and is a silent duplicate for
+        /// an action. `create_workstream` replayed produces two worktrees and
+        /// two branches under a generated name, or tells the caller its
+        /// creation failed under an explicit one — the same lie either way,
+        /// since the first call had already succeeded.
+        ///
+        /// The rule is idempotence rather than `surface`, because the two do not
+        /// line up: `receive_messages` is messaging and *drains an inbox*, so a
+        /// replay that lands after the app processed the first copy loses those
+        /// messages for good, while `open_editor` is a workspace action and puts
+        /// the same file on screen however many times it runs.
+        ///
+        /// `register_peer` has to be here: the reconnect path replays it by hand
+        /// to recover the session's identity, and the tool is defined as a
+        /// rename rather than a second registration.
+        ///
+        /// **`send_message` and `broadcast` are the two judgement calls**, and
+        /// the choice is not an analogy to the rest. Replaying one risks a
+        /// second copy in a peer's inbox, which that agent then acts on twice;
+        /// refusing costs the sender an error for a message that may in fact
+        /// have landed. What breaks the tie is that the case replay exists for —
+        /// a restarted Atelier — cannot help these two anyway: the new app's
+        /// store is empty, so the recipient's peer id is already meaningless and
+        /// the replay would be refused. That leaves only a mid-flight close
+        /// against a *live* app, where a duplicate is the likelier outcome than
+        /// a rescue. And the refusal is reported, so nothing is lost silently:
+        /// the sender is told, and can re-send deliberately. `broadcast` settles
+        /// it on its own — its audience is resolved app-side, so one replay is a
+        /// duplicate to every peer at once.
+        ///
+        /// Refusing a replay does not abandon the session. The helper still
+        /// reconnects and re-registers; it just reports the interruption instead
+        /// of guessing what the app did with the first copy.
+        var isSafeToReplay: Bool {
+            switch self {
+            case .registerPeer, .listPeers, .getPeerStatus,
+                 .listTabs, .readReviewComments, .checkVerification,
+                 .openEditor, .requestAttention:
+                true
+            case .sendMessage, .receiveMessages, .broadcast,
+                 .openAgentTab, .createWorkstream, .startVerification:
+                false
+            }
+        }
     }
 
     /// The three groups of `Tool` — see that type's doc comment.

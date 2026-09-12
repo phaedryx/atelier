@@ -1022,6 +1022,46 @@ shared enum and the exhaustive dispatch switch land ahead of the handlers.
 advertised name is a real `Tool`, and the unadvertised set is exactly the expected one — so a
 tool cannot be advertised before its handler exists or stay hidden after.
 
+**A tool call that is interrupted is never re-sent unless re-sending it changes nothing.**
+`IPC.Tool` carries two properties the helper reads — `replyDeadline` and `isSafeToReplay` —
+and both exist because one 15-second socket timeout with one reconnect-and-replay policy
+covered a surface where neither is uniform. `create_workstream` does not answer until
+`git worktree add` has, so the deadline fired while the app was still working, the helper read
+that as a dead app, reconnected to the *same* app, re-registered under a new peer id and re-sent
+the call. Silently: a generated name produced two worktrees and two branches, and an explicit
+one produced a refusal — `nameInUse`, or `git worktree add failed … may already be checked out`,
+depending on how far the first copy had got — reported to a caller whose workstream had in fact
+been created.
+
+Three things hold it shut, and each is easy to undo by accident:
+
+1. **A timeout is not a disconnection.** `IPCTransport.roundTrip` returns `.timedOut` for
+   `recv` = -1/`EAGAIN` and `.closed` for `recv` = 0 or a half-written frame. They were one case
+   — a nil return — and merging them is the whole bug: a closed socket says the app hung up, a
+   timeout says only that it has not answered *yet*, which is no evidence about whether it has
+   already acted. A `.timedOut` is reported and never replayed, and the connection is deliberately
+   left up, so the session keeps its peer id and a late reply is discarded by request id.
+2. **`isSafeToReplay` is idempotence, not `Tool.surface`.** The two do not line up:
+   `receive_messages` is messaging and *drains an inbox*, so a replay that lands after the app
+   processed the first copy loses those messages for good; `open_editor` is a workspace action and
+   puts the same file on screen however many times it runs. `register_peer` has to stay replayable
+   because the reconnect path replays it by hand. Refusing a replay still reconnects and
+   re-registers — only the call is abandoned, not the session.
+3. **The deadlines are sized to the app-side work, and the cost is paid session-wide.** The helper
+   is a single-threaded `readLine` loop, so it stops reading stdin for the length of a round trip:
+   a wedged app blocks *all* MCP traffic for that long. Only `create_workstream` gets minutes
+   (480s — `ProcessRunner.Timeout.userCommand` after a `.network` fetch, spelled as literals
+   because `ProcessRunner` is not compiled into `AtelierMCP`). Nothing waits less than the 15
+   seconds it replaced.
+
+The timeout message has to **forbid** a retry rather than invite one, and that is the finding's
+own conclusion rather than a style preference: the caller cannot tell a genuine `nameInUse` from
+one its own second attempt caused, so "try again under another name" risks the duplicate this
+rule exists to prevent. `IPCProtocolTests` pins the two tables and
+`IPCServerTests.test_helper_doesNotReplayACreateWorkstreamAfterLosingTheConnection` pins that
+`call()` consults them — against a listener that hangs up rather than a slow one, because both
+reach the same branch and only one of them finishes in milliseconds.
+
 **`open_agent_tab` spawns the surface already running the agent** —
 `TerminalSurfaceCache.surface(for:…command:)`, not a paste into a shell. There is no synthetic
 Return, no timing heuristic, and no question of whether the pane was interruptible. Two

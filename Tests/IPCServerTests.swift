@@ -475,6 +475,83 @@ final class IPCServerTests: XCTestCase {
         XCTAssertTrue(listed.contains("survivor"), "expected the re-registered peer, got: \(listed)")
     }
 
+    /// The bug: a lost connection made the helper re-send the call, and a
+    /// `create_workstream` sent twice creates two worktrees — or tells the
+    /// caller its creation failed, under a name the first copy had just taken.
+    ///
+    /// Driven against a listener that hangs up rather than a slow one, because
+    /// the two reach the same code path and this one finishes in milliseconds:
+    /// `create_workstream`'s real deadline is minutes by design.
+    func test_helper_doesNotReplayACreateWorkstreamAfterLosingTheConnection() throws {
+        let helper = try XCTUnwrap(MCPHelperLauncher.executableURL(), "atelier-mcp was not found in the host app bundle")
+        let stub = try takeOverTheEndpoint(hangingUpOn: .createWorkstream)
+        defer { stub.stop() }
+
+        let agent = try MCPProcess(helper: helper, environment: stubEnvironment())
+        let answer = try XCTUnwrap(agent.callTool("create_workstream", ["name": "fix-stale-base-branch"]))
+
+        XCTAssertEqual(stub.count(of: .createWorkstream), 1, "the call must not be sent a second time")
+        XCTAssertTrue(
+            answer.contains("not retried"),
+            "the agent has to be told the call was interrupted, not handed a guess: \(answer)"
+        )
+        XCTAssertGreaterThanOrEqual(
+            stub.count(of: .registerPeer), 2,
+            "the session still has to recover its identity, even though the call does not replay"
+        )
+    }
+
+    /// The other half: refusing to replay an action must not cost the recovery
+    /// that replay was added for. A read is still re-sent, and still answers.
+    func test_helper_stillReplaysAReadAfterLosingTheConnection() throws {
+        let helper = try XCTUnwrap(MCPHelperLauncher.executableURL(), "atelier-mcp was not found in the host app bundle")
+        let stub = try takeOverTheEndpoint(hangingUpOn: .listPeers)
+        defer { stub.stop() }
+
+        let agent = try MCPProcess(helper: helper, environment: stubEnvironment())
+        let answer = agent.callTool("list_peers")
+
+        XCTAssertEqual(stub.count(of: .listPeers), 2, "a read is safe to re-send, and the recovery depends on it")
+        XCTAssertEqual(answer, "No other agents are registered in this project.")
+    }
+
+    // MARK: - Stub listener
+
+    private func stubEnvironment() -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        environment["ATELIER_PROJECT_DIR"] = "/repos/atelier"
+        environment["ATELIER_WORKSTREAM"] = "wry-amber-lexer"
+        environment["ATELIER_WORKSTREAM_ID"] = UUID().uuidString
+        environment["ATELIER_SURFACE_ID"] = UUID().uuidString
+        return environment
+    }
+
+    /// Stops the real server and publishes a stub in its place, so a helper
+    /// launched afterwards connects to something whose behaviour this test
+    /// chooses. `ipc.json` is one shared path, so the handover has to wait for
+    /// the real server to finish removing it.
+    private func takeOverTheEndpoint(hangingUpOn tool: IPC.Tool) throws -> HangUpListener {
+        // Waited for first, not just stopped: `NWListener` publishes `ipc.json`
+        // from its own `.ready` callback, so a listener stopped before it came up
+        // writes the file *after* the stub has written its own — leaving the
+        // helper pointed at a port that was cancelled a moment later.
+        _ = try waitForEndpoint()
+        server.stop()
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline, IPC.Endpoint.read() != nil {
+            usleep(20_000)
+        }
+        guard IPC.Endpoint.read() == nil else {
+            throw XCTSkip("the real listener did not release ipc.json")
+        }
+        let stub = try HangUpListener(hangingUpOn: tool)
+        try FilePersistence.writeAtomically(
+            JSONEncoder().encode(IPC.Endpoint(port: stub.port, token: stub.token)),
+            to: IPC.Endpoint.fileURL
+        )
+        return stub
+    }
+
     /// Drives the built `atelier-mcp` over stdio exactly as Claude Code would.
     ///
     /// The helper resolves `ipc.json` through `AppConstants.cacheDirectory`,
@@ -675,5 +752,156 @@ private final class MCPProcess {
         let result = reply?["result"] as? [String: Any]
         let content = result?["content"] as? [[String: Any]]
         return content?.first?["text"] as? String
+    }
+}
+
+/// A loopback listener that answers every request, except that the first time
+/// one chosen tool arrives it hangs up without replying.
+///
+/// That is the `.disconnected` branch of `IPCBridge.call` — the one that
+/// reconnects, re-registers, and used to re-send whatever it was carrying. A
+/// real app that is merely *slow* reaches the same branch through a deadline
+/// instead, which is why this stands in for it: same code path, milliseconds
+/// rather than the minutes `create_workstream` is allowed.
+private final class HangUpListener {
+    let port: UInt16
+    let token = "stub-token-for-the-replay-tests"
+
+    private let listenFD: Int32
+    private let hangUpOn: IPC.Tool
+    private let lock = NSLock()
+    private var counts: [String: Int] = [:]
+    private var hungUp = false
+    private var running = true
+
+    init(hangingUpOn tool: IPC.Tool) throws {
+        hangUpOn = tool
+
+        // Bound through a local rather than the stored property: a closure in an
+        // initializer may not read `self` before every member has a value.
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw XCTSkip("could not open a stub listener socket") }
+        listenFD = fd
+
+        var reuse: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
+
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = 0
+        address.sin_addr.s_addr = INADDR_LOOPBACK.bigEndian
+        let bound = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard bound == 0, listen(fd, 8) == 0 else {
+            close(fd)
+            throw XCTSkip("could not bind a stub listener")
+        }
+
+        var assigned = sockaddr_in()
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let named = withUnsafeMutablePointer(to: &assigned) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getsockname(fd, $0, &length)
+            }
+        }
+        guard named == 0 else {
+            close(fd)
+            throw XCTSkip("could not read the stub listener's port")
+        }
+        port = assigned.sin_port.bigEndian
+
+        Thread.detachNewThread { [weak self] in
+            while let self, isRunning {
+                let connection = accept(fd, nil, nil)
+                guard connection >= 0 else { return }
+                serve(connection)
+                close(connection)
+            }
+        }
+    }
+
+    func stop() {
+        lock.lock()
+        running = false
+        lock.unlock()
+        close(listenFD)
+        try? FileManager.default.removeItem(at: IPC.Endpoint.fileURL)
+    }
+
+    func count(of tool: IPC.Tool) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return counts[tool.rawValue] ?? 0
+    }
+
+    private var isRunning: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return running
+    }
+
+    /// Reads frames until the peer goes away, or until the chosen tool arrives
+    /// for the first time — at which point the caller closes this connection.
+    private func serve(_ connection: Int32) {
+        var buffer = Data()
+        var chunk = [UInt8](repeating: 0, count: 65_536)
+        while isRunning {
+            let read = recv(connection, &chunk, chunk.count, 0)
+            guard read > 0 else { return }
+            buffer.append(contentsOf: chunk[0 ..< read])
+
+            let (lines, remainder) = IPC.Framing.lines(from: buffer)
+            buffer = remainder
+            for line in lines {
+                guard let request = try? JSONDecoder().decode(IPC.Request.self, from: line) else { continue }
+
+                lock.lock()
+                counts[request.tool.rawValue, default: 0] += 1
+                let shouldHangUp = request.tool == hangUpOn && !hungUp
+                if shouldHangUp {
+                    hungUp = true
+                }
+                lock.unlock()
+
+                if shouldHangUp {
+                    return
+                }
+                send(reply(to: request), on: connection)
+            }
+        }
+    }
+
+    private func reply(to request: IPC.Request) -> IPC.Response {
+        switch request.tool {
+        case .registerPeer:
+            .success(id: request.id, .peer(IPC.PeerInfo(
+                id: UUID().uuidString,
+                name: "wry-amber-lexer",
+                role: "",
+                workstream: "wry-amber-lexer",
+                surfaceID: nil,
+                lastSeenSecondsAgo: 0,
+                pendingMessages: 0
+            )))
+        case .listPeers:
+            .success(id: request.id, .peers([]))
+        default:
+            .success(id: request.id, .text("the stub answered \(request.tool.rawValue)"))
+        }
+    }
+
+    private func send(_ response: IPC.Response, on connection: Int32) {
+        guard let data = try? IPC.Framing.encode(response) else { return }
+        var sent = 0
+        while sent < data.count {
+            let written = data.withUnsafeBytes { bytes -> Int in
+                Darwin.send(connection, bytes.baseAddress!.advanced(by: sent), data.count - sent, 0)
+            }
+            guard written > 0 else { return }
+            sent += written
+        }
     }
 }
