@@ -3073,7 +3073,19 @@ final class TerminalSurfaceCache: ObservableObject {
                   let app = TerminalApp.shared.app else { return }
 
             respawning.insert(id)
-            surfaces.removeValue(forKey: id)
+            // Free the old surface before the replacement is built.
+            // `TerminalView.surfaceRegistry` holds views strongly, keyed by
+            // surface pointer, and only `destroy()` removes the entry — so a
+            // view dropped from `surfaces` alone never deinits and
+            // `ghostty_surface_free` never runs, leaking one Metal-backed
+            // surface per agent exit. `retrySurface` is the matching
+            // precedent: same id, replacement swapped in under a view still
+            // mounted in the NSView hierarchy until the next `updateNSView`.
+            // Not `removeSurface(for:)`, which would also clear
+            // `surfaceParams[id]` — the respawn's own input.
+            if let oldView = surfaces.removeValue(forKey: id) {
+                oldView.destroy()
+            }
             let newView = TerminalView(app: app, workingDirectory: params.workingDirectory, command: params.command, initialInput: params.initialInput, environmentVars: params.environmentVars)
             newView.workstreamID = id
             surfaces[id] = newView
