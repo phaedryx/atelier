@@ -259,7 +259,23 @@ enum ProcessRunner {
             Foundation.kill(pid, SIGKILL)
         }
         Foundation.kill(-pid, SIGKILL)
-        process.waitUntilExit()
+
+        // Bounded, where this was `process.waitUntilExit()` — the one unbounded
+        // wait left in this type. SIGKILL is not refusable, but it is also not
+        // *instant*: a process blocked in an uninterruptible kernel wait (a dead
+        // NFS mount, a wedged disk) stays in D state until the wait returns, and
+        // `waitUntilExit` would park the caller's thread on that with no deadline.
+        // That is the same shape of leak the drains used to have, arrived at from
+        // the other direction, and it lands on a thread the caller owns.
+        //
+        // Reaping is what this wait is for, and giving up on it costs a zombie
+        // until the process that will not die finally does. That is strictly
+        // better than never returning, and nothing reads `terminationStatus` on
+        // this path — every caller of `kill` returns nil immediately after.
+        let reapDeadline = Date().addingTimeInterval(terminationGrace)
+        while process.isRunning, Date() < reapDeadline {
+            usleep(20000)
+        }
     }
 
     /// Whether any process is left in `pid`'s group. Signal 0 asks whether a
