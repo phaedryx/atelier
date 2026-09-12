@@ -44,28 +44,54 @@ final class IPCTransport {
             return false
         }
 
-        // Without a receive timeout a stuck app hangs the agent's tool call
-        // forever: no reply, no close, and a blocking recv. Generous, since
-        // every handler here is sub-millisecond — this is a liveness backstop,
-        // not a latency budget.
-        var timeout = timeval(tv_sec: 15, tv_usec: 0)
-        setsockopt(socketFD, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        setsockopt(socketFD, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        // Without a send timeout a stuck app can park a write forever. Fixed at
+        // connect time and deliberately not per-tool: a request frame is a few
+        // hundred bytes, so this never fires against a peer that is reading at
+        // all, and varying it per call would be two syscalls of theatre.
+        var sendTimeout = timeval(tv_sec: 15, tv_usec: 0)
+        setsockopt(socketFD, SOL_SOCKET, SO_SNDTIMEO, &sendTimeout, socklen_t(MemoryLayout<timeval>.size))
 
         fd = socketFD
         return true
     }
 
-    /// Sends one request and blocks for its reply.
-    func roundTrip(_ request: IPC.Request) -> IPC.Response? {
-        guard fd >= 0, let data = try? IPC.Framing.encode(request) else { return nil }
+    /// What came back, or why nothing did.
+    ///
+    /// `timedOut` and `closed` were one case — `roundTrip` returning nil — and
+    /// merging them is what let a slow handler be read as a dead app. They are
+    /// different observations about *this* request: `closed` is the app hanging
+    /// up, so the request may never have been seen; `timedOut` is the deadline
+    /// passing on a connection that is still open, which says nothing at all
+    /// about whether the app has already acted on it.
+    enum Reply {
+        case response(IPC.Response)
+        case timedOut
+        case closed
+    }
+
+    /// Sends one request and blocks for its reply, for at most `deadline`.
+    ///
+    /// The receive timeout is set per call rather than at connect, because it is
+    /// a property of the tool being invoked rather than of the socket.
+    func roundTrip(_ request: IPC.Request, deadline: TimeInterval) -> Reply {
+        guard fd >= 0, let data = try? IPC.Framing.encode(request) else { return .closed }
+
+        var timeout = timeval(
+            tv_sec: Int(deadline),
+            tv_usec: suseconds_t((deadline - deadline.rounded(.down)) * 1_000_000)
+        )
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
 
         var sent = 0
         while sent < data.count {
             let written = data.withUnsafeBytes { bytes -> Int in
                 Darwin.send(fd, bytes.baseAddress!.advanced(by: sent), data.count - sent, 0)
             }
-            guard written > 0 else { return nil }
+            // A half-written frame poisons the app's read buffer, so this socket
+            // is finished whatever the app does next. `closed` rather than
+            // `timedOut`: the caller's job here is to reconnect, and a frame that
+            // never landed whole was never acted on.
+            guard written > 0 else { return .closed }
             sent += written
         }
 
@@ -77,16 +103,20 @@ final class IPCTransport {
             let (lines, remainder) = IPC.Framing.lines(from: buffer)
             buffer = remainder
             for line in lines {
+                // A reply to a request this one already gave up on can still be
+                // sitting in the stream. Matching on the id is what discards it.
                 if let response = try? JSONDecoder().decode(IPC.Response.self, from: line), response.id == request.id {
-                    return response
+                    return .response(response)
                 }
             }
 
             let read = recv(fd, &chunk, chunk.count, 0)
-            // 0 is a closed socket; -1 with EAGAIN is the timeout above. Both
-            // mean "no answer is coming", which the caller turns into a
-            // reconnect rather than a hang.
-            guard read > 0 else { return nil }
+            if read == 0 {
+                return .closed
+            }
+            if read < 0 {
+                return (errno == EAGAIN || errno == EWOULDBLOCK) ? .timedOut : .closed
+            }
             buffer.append(contentsOf: chunk[0 ..< read])
         }
     }
@@ -478,7 +508,13 @@ final class IPCBridge {
     private enum Attempt {
         case ok(IPC.Payload?)
         case refused(String)
+        /// The app hung up, or the frame never landed whole. Recoverable by
+        /// reconnecting.
         case disconnected
+        /// The tool's deadline passed on a connection that is still open. The
+        /// app may be wedged, or it may simply still be working — and nothing
+        /// here can tell those apart, which is why this is never replayed.
+        case timedOut
     }
 
     private let transport = IPCTransport()
@@ -533,6 +569,19 @@ final class IPCBridge {
         _ = attempt(tool: .registerPeer, arguments: registration ?? [:])
     }
 
+    /// Forwards one tool call, recovering the session — but never the call —
+    /// from an interruption.
+    ///
+    /// **A replay is a second execution.** The reconnect below exists so a
+    /// restarted Atelier does not fail every later call, and for a read that is
+    /// free. For anything that creates something it is a silent duplicate, and
+    /// `IPC.Tool.isSafeToReplay` is where that line is drawn.
+    ///
+    /// A *timeout* is never replayed, whatever the tool. It is not evidence that
+    /// the app is gone — only that it has not answered yet — so re-sending would
+    /// race the call's own first copy. That is what produced two worktrees for
+    /// one `create_workstream`, and a `nameInUse` refusal reported to a caller
+    /// whose workstream had in fact been created.
     func call(tool: IPC.Tool, arguments: [String: String]) -> Outcome {
         if let failure = connect() {
             return .failed(failure)
@@ -543,13 +592,19 @@ final class IPCBridge {
             return .ok(payload)
         case let .refused(message):
             return .failed(message)
+        case .timedOut:
+            // Deliberately without disconnecting: the socket is still open, the
+            // peer id still valid, and a late reply arriving on it is discarded
+            // by id in `roundTrip`. Tearing it down here would strand this
+            // session's inbox behind a dead id for no gain.
+            return .failed(Self.timedOutMessage(tool: tool))
         case .disconnected:
             break
         }
 
         // Atelier went away mid-session — almost always a restart during
-        // development. Reconnect once and replay, rather than making every
-        // later tool call fail until the agent itself is restarted.
+        // development. Reconnect so the rest of the session works, whether or
+        // not this particular call can be retried.
         transport.disconnect()
         endpoint = nil
         if let failure = connect() {
@@ -563,14 +618,50 @@ final class IPCBridge {
             _ = attempt(tool: .registerPeer, arguments: registration)
         }
 
+        guard tool.isSafeToReplay else {
+            return .failed(Self.notReplayedMessage(tool: tool))
+        }
+
         switch attempt(tool: tool, arguments: arguments) {
         case let .ok(payload):
             return .ok(payload)
         case let .refused(message):
             return .failed(message)
+        case .timedOut:
+            return .failed(Self.timedOutMessage(tool: tool))
         case .disconnected:
             return .failed("Atelier closed the IPC connection.")
         }
+    }
+
+    /// What the agent is told when a call outlived its deadline.
+    ///
+    /// It has to forbid a retry rather than invite one. The caller cannot tell a
+    /// genuine refusal from one its own second attempt caused, so "try again
+    /// under another name" risks exactly the duplicate this no-replay rule
+    /// exists to prevent. The honest instruction is to go and look, by the same
+    /// route `create_workstream`'s success string already documents.
+    ///
+    /// Unlocalized, like every other string this surface returns: these are
+    /// answers to an agent, written to tell it what to do differently.
+    private static func timedOutMessage(tool: IPC.Tool) -> String {
+        let seconds = Int(tool.replyDeadline)
+        var message = "Atelier did not answer \(tool.rawValue) within \(seconds)s. "
+            + "This is not a failure: the call may still be running, and may already have succeeded. "
+            + "Do not call it again — a second copy would race the first."
+        if tool.surface == .workspaceAction {
+            message += " Check what actually happened before doing anything else: list_peers shows an agent "
+                + "once it registers, and the sidebar shows a workstream as soon as it exists."
+        }
+        return message
+    }
+
+    /// What the agent is told when the connection dropped mid-call and the tool
+    /// is one a second execution would change something.
+    private static func notReplayedMessage(tool: IPC.Tool) -> String {
+        "Atelier closed the IPC connection while \(tool.rawValue) was in flight, and it was not retried: "
+            + "running it twice is not the same as running it once. The connection is back, so later calls will "
+            + "work. Check whether the first one took effect before repeating it."
     }
 
     /// Opens the connection if it isn't already up. Returns a message on
@@ -602,7 +693,12 @@ final class IPCBridge {
 
         let identity = IPC.ClientIdentity.fromEnvironment(peerID: peerID)
         let request = IPC.Request(token: endpoint.token, tool: tool, arguments: arguments, client: identity)
-        guard let response = transport.roundTrip(request) else { return .disconnected }
+        let response: IPC.Response
+        switch transport.roundTrip(request, deadline: tool.replyDeadline) {
+        case let .response(received): response = received
+        case .timedOut: return .timedOut
+        case .closed: return .disconnected
+        }
         if let error = response.error {
             // The app refuses a peer id whose previous connection it still
             // considers live — reachable when a reconnect overtakes the old
