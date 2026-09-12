@@ -42,6 +42,22 @@ func verificationCanRun(isLive: Bool) -> Bool {
     !isLive
 }
 
+/// Whether the **Run** button may be pressed: no run is live, and the checklist
+/// leaves at least one check to run.
+///
+/// Separate from `verificationCanRun` because "Run failed" is gated on liveness
+/// alone — it runs `run.failedNames`, not the checklist's selection, so an empty
+/// checklist has nothing to say about it.
+///
+/// The selection can be empty at all because every box may now be unchecked;
+/// the last one used to be `.disabled`. `runAll` refuses the same state, from
+/// the same store, so the button and the run agree — `Verification.Runner`
+/// reads no check names as *run everything*, which is the opposite of what an
+/// empty checklist asked for.
+func verificationCanRunSelection(isLive: Bool, hasChecks: Bool) -> Bool {
+    verificationCanRun(isLive: isLive) && hasChecks
+}
+
 /// Whether the process checklist should render.
 ///
 /// Hidden while live, not merely disabled: `Verification.Runner.start` reads
@@ -305,6 +321,14 @@ struct VerificationTabView: View {
     /// `verificationIsStale`.
     @State private var currentStamp: String?
     @State private var startError: String?
+    /// Bumped whenever the checklist writes a selection.
+    ///
+    /// A trigger, not a value — `hasChecksToRun` re-reads the store, which is
+    /// the one authoritative copy, the same shape `TerminalContainerView` uses
+    /// for Execution's half. Never read; assigning any `@State` re-runs the
+    /// body, which is all this has to do, and deleting it as unused would leave
+    /// the Run button stuck on the selection the tab was built with.
+    @State private var selectionChanges = 0
     /// Bumped on every staleness refresh; a completion whose token no longer
     /// matches belongs to a refresh this view has already superseded — the
     /// same guard `ChangesView.fullLoad` uses against its own git hop.
@@ -406,7 +430,7 @@ struct VerificationTabView: View {
                     workstreamID: workstreamID,
                     declaredProcesses: declaredProcesses,
                     store: .verify,
-                    lastSelectedHelp: NSLocalizedString("At least one check has to run.", comment: "")
+                    onSelectionChange: { selectionChanges += 1 }
                 )
             }
 
@@ -440,7 +464,16 @@ struct VerificationTabView: View {
                 Text("Run")
             }
             .buttonStyle(.borderedProminent)
-            .disabled(!verificationCanRun(isLive: isLive))
+            .disabled(!verificationCanRunSelection(isLive: isLive, hasChecks: hasChecksToRun))
+
+            // Beside the disabled button rather than in a tooltip on it: a
+            // tooltip on a disabled control is how the checklist used to
+            // explain its own dimmed checkbox, which is to say not at all.
+            if !isLive, !hasChecksToRun {
+                Text("Select a check to run.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
 
             if let run, !run.failedNames.isEmpty {
                 Button(action: runFailed) {
@@ -617,8 +650,19 @@ struct VerificationTabView: View {
 
     // MARK: - Actions
 
+    /// Whether the checklist leaves anything for Run to run. Read from the
+    /// store rather than held, so it cannot drift from what `runAll` resolves
+    /// out of the same key a moment later.
+    private var hasChecksToRun: Bool {
+        Verification.selection(for: workstreamID).namesToRun != nil
+    }
+
     private func runAll() {
-        startRun(checks: Verification.selected(for: workstreamID))
+        // The same store the Run button's enabled state is read from, so the
+        // two cannot disagree. Nil is the checklist's "nothing", and it has to
+        // stop here: `Runner.start` reads an empty list as every check.
+        guard let checks = Verification.selection(for: workstreamID).namesToRun else { return }
+        startRun(checks: checks)
     }
 
     private func runFailed() {

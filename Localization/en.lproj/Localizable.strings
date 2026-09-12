@@ -614,8 +614,8 @@
 "starts with FF_, which Atelier mirrors from ATELIER_*; declare the ATELIER_ name instead" = "starts with FF_, which Atelier mirrors from ATELIER_*; declare the ATELIER_ name instead";
 
 /* Process selection */
-"At least one check has to run." = "At least one check has to run.";
-"At least one process has to start." = "At least one process has to start.";
+"Select a process to start." = "Select a process to start.";
+"Select a check to run." = "Select a check to run.";
 "is not a usable variable name; use letters, digits and _, not starting with a digit" = "is not a usable variable name; use letters, digits and _, not starting with a digit";
 "pins port %d, which %@ already pins" = "pins port %d, which %@ already pins";
 
