@@ -45,6 +45,9 @@
 "Don't Save" = "Don't Save";
 "Do you want to save changes to \"%@\"?" = "Do you want to save changes to \"%@\"?";
 "Your changes will be lost if you don't save them." = "Your changes will be lost if you don't save them.";
+"The file could not be saved." = "The file could not be saved.";
+"This editor is not pointing at a file in the worktree. Use Save As to choose where to write it." = "This editor is not pointing at a file in the worktree. Use Save As to choose where to write it.";
+"The editor could not read the file's contents." = "The editor could not read the file's contents.";
 "Remove" = "Remove";
 "Worktree Creation Failed" = "Worktree Creation Failed";
 "Could not create the git worktree. The branch may already exist, or there may be an ongoing merge or rebase." = "Could not create the git worktree. The branch may already exist, or there may be an ongoing merge or rebase.";
