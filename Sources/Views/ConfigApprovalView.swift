@@ -153,7 +153,15 @@ struct ConfigApprovalView: View {
         }
         .padding(24)
         .frame(minWidth: 580, minHeight: 560)
-        .onAppear(perform: load)
+        // The warning is about the press that was just refused, so a pane
+        // presented afresh must not open carrying it. SwiftUI discards this
+        // view's state when the sheet is dismissed, so this is belt and braces
+        // rather than a fix — but a stale warning would accuse the repository
+        // of a change it did not make.
+        .onAppear {
+            changedWhileOpen = false
+            load()
+        }
         .onChange(of: filePaths) { load() }
     }
 
