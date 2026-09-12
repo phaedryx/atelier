@@ -247,6 +247,17 @@ struct ExecutionTabView: View {
     /// Neither arm renders when Start can do nothing and no run is up:
     /// `scriptInstructions` below the divider is the surface that explains
     /// that, and a disabled button beside its explanation says nothing extra.
+    ///
+    /// Stop and Rerun are ordinary chromed controls — `.borderedProminent` and
+    /// `.bordered`, the shapes `VerificationTabView.actionRow` already uses.
+    /// They were borderless and transparent until hovered, at 10/11pt, so the
+    /// two buttons that matter while a stack is up were the least visible
+    /// things in the pane, and Start — a filled accent button — was the only
+    /// one that looked pressable. Stop takes the prominent slot because while a
+    /// run is up it is the primary action, and the red tint is what makes it
+    /// readable at a glance; Verification's Stop stays `.bordered` because Run
+    /// is the primary action in that pane. Do not restyle these as borderless
+    /// again to match some other bar: the point is that they read as buttons.
     @ViewBuilder
     private var runControls: some View {
         let shortcut = "⌘⇧⏎"
@@ -258,9 +269,23 @@ struct ExecutionTabView: View {
                 // mid-run took the Stop button away from a live stack, leaving
                 // Ctrl+C in the surface as the only way out. Only Rerun needs to
                 // know a run can be started.
-                EnvActionButton(label: NSLocalizedString("Stop", comment: ""), icon: "stop.fill", shortcut: "", action: onStop)
+                Button(action: onStop) {
+                    Label("Stop", systemImage: "stop.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .accessibilityLabel(NSLocalizedString("Stop", comment: ""))
+
                 if runControlsEnabled {
-                    EnvActionButton(label: NSLocalizedString("Rerun", comment: ""), icon: "arrow.counterclockwise", shortcut: shortcut, action: onRestart)
+                    Button(action: onRestart) {
+                        Label("Rerun", systemImage: "arrow.counterclockwise")
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel(NSLocalizedString("Rerun", comment: ""))
+
+                    Text(shortcut)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
                 }
 
                 // Only while something is running: it warns that the browser
@@ -460,33 +485,4 @@ struct ExecutionTabView: View {
 
 extension Notification.Name {
     static let rerunScript = Notification.Name("atelier.rerunScript")
-}
-
-private struct EnvActionButton: View {
-    let label: String
-    let icon: String
-    let shortcut: String
-    let action: () -> Void
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.system(size: 10))
-                Text(label)
-                    .font(.system(size: 11))
-                Text(shortcut)
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(isHovering ? Color.primary.opacity(0.08) : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 4))
-        }
-        .buttonStyle(.borderless)
-        .onHover { isHovering = $0 }
-        .accessibilityLabel(label)
-    }
 }
