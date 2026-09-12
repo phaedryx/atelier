@@ -40,11 +40,35 @@ enum ScriptTrust {
         return configApprovals()[projectDirectory] == fingerprint
     }
 
-    static func approve(configFiles paths: [String], for projectDirectory: String) {
-        guard let fingerprint = fingerprint(configFiles: paths) else { return }
+    /// Approve the files the user actually reviewed.
+    ///
+    /// `reviewed` is the fingerprint of the bytes the approval pane displayed,
+    /// and the files are re-read here and compared against it: the pane can sit
+    /// open for minutes, and the coding agent runs in the same worktree, so the
+    /// file on disk at the moment of the click is not necessarily the file that
+    /// was on screen. Approving the disk copy would fingerprint content nobody
+    /// saw and hand it straight to `bootstrap`, which runs unattended — the one
+    /// outcome the pane exists to prevent.
+    ///
+    /// There is deliberately no overload that approves whatever is on disk. The
+    /// reviewed fingerprint is the only thing that makes this a gate, so it is a
+    /// required argument rather than something a call site can forget, and the
+    /// refusal is returned rather than discardable so ignoring it is a warning.
+    ///
+    /// Returns false when nothing was recorded: the files changed, or one of
+    /// them cannot be read.
+    static func approve(
+        configFiles paths: [String],
+        for projectDirectory: String,
+        matching reviewed: String
+    ) -> Bool {
+        guard let fingerprint = fingerprint(configFiles: paths), fingerprint == reviewed else {
+            return false
+        }
         var current = configApprovals()
         current[projectDirectory] = fingerprint
         saveConfigApprovals(current)
+        return true
     }
 
     static func revokeConfigFiles(for projectDirectory: String) {
@@ -67,13 +91,25 @@ enum ScriptTrust {
     /// Nil for an empty list, and nil if any single file cannot be read. Failing
     /// open here would run something nobody could review.
     static func fingerprint(configFiles paths: [String]) -> String? {
-        guard !paths.isEmpty else { return nil }
-        var hasher = SHA256()
+        var loaded: [(path: String, data: Data)] = []
         for path in paths {
             guard let data = FileManager.default.contents(atPath: path) else { return nil }
-            hasher.update(data: Data((path as NSString).lastPathComponent.utf8))
+            loaded.append((path: path, data: data))
+        }
+        return fingerprint(reviewedFiles: loaded)
+    }
+
+    /// The same value for bytes already in hand — what the approval pane
+    /// displayed, rather than what a second read would find. It is the one
+    /// caller: hashing the bytes on screen is what lets `approve` tell a config
+    /// that changed under the pane from one that did not.
+    static func fingerprint(reviewedFiles files: [(path: String, data: Data)]) -> String? {
+        guard !files.isEmpty else { return nil }
+        var hasher = SHA256()
+        for file in files {
+            hasher.update(data: Data((file.path as NSString).lastPathComponent.utf8))
             hasher.update(data: Data([0x01]))
-            hasher.update(data: data)
+            hasher.update(data: file.data)
             hasher.update(data: Data([0x02]))
         }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()

@@ -562,6 +562,7 @@
 "Not Now" = "Not Now";
 "Approve and Run Bootstrap" = "Approve and Run Bootstrap";
 "Could not read this file." = "Could not read this file.";
+"These files changed while you were reviewing them, so nothing was approved. What is shown above is what is on disk now — review it and approve again." = "These files changed while you were reviewing them, so nothing was approved. What is shown above is what is on disk now — review it and approve again.";
 "%@ came with this repository and has not been approved" = "%@ came with this repository and has not been approved";
 "Its bootstrap and dispose phases will not run until you review it. Start is unaffected." = "Its bootstrap and dispose phases will not run until you review it. Start is unaffected.";
 "Process Config" = "Process Config";

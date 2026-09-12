@@ -2073,9 +2073,27 @@ struct TerminalContainerView: View {
     /// anyone can see this, so approval on its own would only help the *next*
     /// worktree. `setupExistingWorktree` recomputes the plan against the
     /// worktree that already exists, which is what makes this one recoverable.
-    private func approveProcessConfig() {
-        guard !repositoryConfigFiles.isEmpty else { return }
-        ScriptTrust.approve(configFiles: repositoryConfigFiles, for: projectDirectory)
+    private func approveProcessConfig(matching reviewedFingerprint: String) -> Bool {
+        guard !repositoryConfigFiles.isEmpty else { return false }
+        // The fingerprint is of the bytes the pane displayed, and `approve`
+        // refuses if the files on disk have moved on since. Re-resolve the set
+        // before the pane reloads: what changed may be *which* files the config
+        // loads, not their contents — a worktree that gains an
+        // `atelier.process-compose.yaml` is a different set, tier 1 beating
+        // tier 3 — and the user has to review the set that will actually run.
+        guard ScriptTrust.approve(
+            configFiles: repositoryConfigFiles,
+            for: projectDirectory,
+            matching: reviewedFingerprint
+        ) else {
+            refreshConfigApproval()
+            // Nothing left to approve: the config went away while the pane was
+            // open, and an empty pane has no button to dismiss itself with.
+            if repositoryConfigFiles.isEmpty {
+                isReviewingConfig = false
+            }
+            return false
+        }
         isReviewingConfig = false
         refreshConfigApproval()
         // Approval is one of `PhasePolicy.plan`'s four facts, and it is the one
@@ -2083,11 +2101,12 @@ struct TerminalContainerView: View {
         // it. Without this the Verification tab would keep telling the user to
         // approve a config they just approved.
         refreshVerificationAvailability()
-        // An unreadable file has no fingerprint, so `approve` was a no-op and
-        // nothing has been trusted. Do not run anything on the strength of a
-        // button press that did not take.
-        guard configApproved else { return }
+        // `approve` returning true means the fingerprint was stored, so this is
+        // now only reachable if the file vanished between the two reads. Do not
+        // run anything on the strength of a button press that did not take.
+        guard configApproved else { return true }
         rerunBootstrap()
+        return true
     }
 
     /// Run the project's `bootstrap` namespace against this worktree again.

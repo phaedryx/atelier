@@ -22,29 +22,59 @@ import SwiftUI
 struct ConfigApprovalView: View {
     /// The repository-provided files, in the order they are fingerprinted.
     let filePaths: [String]
-    let onApprove: () -> Void
+    /// Hands over the fingerprint of the bytes this pane *displayed*, and
+    /// answers whether the approval took. False means the files on disk are no
+    /// longer the ones on screen — see `approve()`.
+    let onApprove: (String) -> Bool
     let onCancel: () -> Void
 
-    /// One file, read once. Both this and `isReadable` used to be computed from
-    /// `body`: the fingerprint hashed every file and the preview did a synchronous
-    /// `String(contentsOfFile:)` per file, on every re-render of a security
-    /// dialog. Read on appear instead — the set of files does not change while
-    /// the pane is up, and if it did, `.onChange` reloads.
+    /// One file, read once. Both this and `reviewedFingerprint` used to be
+    /// computed from `body`: the fingerprint hashed every file and the preview did
+    /// a synchronous `String(contentsOfFile:)` per file, on every re-render of a
+    /// security dialog. Read on appear instead — and the one read is now the
+    /// point, not just the saving: it is the same bytes that are displayed and
+    /// fingerprinted. If the set of files changes while the pane is up,
+    /// `.onChange` reloads.
     private struct LoadedFile: Identifiable {
         var id: String {
             path
         }
 
         let path: String
-        let text: String
+        /// The bytes, kept rather than re-read: they are what the fingerprint
+        /// Approve offers is computed from. Nil for a file that cannot be read.
+        let data: Data?
+
+        /// Rendered lossily on purpose. Bytes that are not valid UTF-8 are still
+        /// the bytes that will run, and refusing to show them would leave the
+        /// project's bootstrap unapprovable with no way back. The gate needs the
+        /// bytes hashed to be the bytes shown, which holds however they render.
+        var text: String {
+            guard let data else {
+                return NSLocalizedString("Could not read this file.", comment: "")
+            }
+            return String(decoding: data, as: UTF8.self)
+        }
     }
 
     @State private var loadedFiles: [LoadedFile] = []
 
-    /// A file with no fingerprint cannot be approved — `ScriptTrust.approve`
-    /// would silently do nothing — so the button is disabled rather than left as
-    /// one that never takes effect. The previews say which file is unreadable.
-    @State private var isReadable = false
+    /// The fingerprint of what is on screen — what Approve offers, and nil when
+    /// any file could not be read. A file with no fingerprint cannot be approved
+    /// so the button is disabled rather than left as one that never takes
+    /// effect; the previews say which file is unreadable.
+    ///
+    /// This is the whole of the fix for approving a file nobody saw: the value
+    /// handed to `onApprove` is computed from the bytes displayed, never from a
+    /// second read at click time. The pane can sit open for minutes and the
+    /// coding agent writes in this same worktree.
+    @State private var reviewedFingerprint: String?
+
+    /// Set when Approve was refused because the files changed while the pane was
+    /// open. Deliberately not cleared by `load()`, which runs immediately after:
+    /// the reload is what replaces the content, and the user has to be told that
+    /// is why their click did nothing.
+    @State private var changedWhileOpen = false
 
     private var fileNames: String {
         filePaths.map { ($0 as NSString).lastPathComponent }.joined(separator: ", ")
@@ -100,11 +130,19 @@ struct ConfigApprovalView: View {
             .background(Color.primary.opacity(0.05))
             .clipShape(RoundedRectangle(cornerRadius: 6))
 
+            if changedWhileOpen {
+                Text("These files changed while you were reviewing them, so nothing was approved. What is shown above is what is on disk now — review it and approve again.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.orange)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 460)
+            }
+
             HStack(spacing: 10) {
                 Button(NSLocalizedString("Not Now", comment: ""), action: onCancel)
-                Button(NSLocalizedString("Approve and Run Bootstrap", comment: ""), action: onApprove)
+                Button(NSLocalizedString("Approve and Run Bootstrap", comment: ""), action: approve)
                     .buttonStyle(.borderedProminent)
-                    .disabled(!isReadable)
+                    .disabled(reviewedFingerprint == nil)
             }
 
             Text("Approval covers this repository until any of these files changes. Start is never gated by it.")
@@ -115,20 +153,45 @@ struct ConfigApprovalView: View {
         }
         .padding(24)
         .frame(minWidth: 580, minHeight: 560)
-        .onAppear(perform: load)
+        // The warning is about the press that was just refused, so a pane
+        // presented afresh must not open carrying it. SwiftUI discards this
+        // view's state when the sheet is dismissed, so this is belt and braces
+        // rather than a fix — but a stale warning would accuse the repository
+        // of a change it did not make.
+        .onAppear {
+            changedWhileOpen = false
+            load()
+        }
         .onChange(of: filePaths) { load() }
     }
 
-    private func load() {
-        loadedFiles = filePaths.map { LoadedFile(path: $0, text: contents(of: $0)) }
-        isReadable = ScriptTrust.fingerprint(configFiles: filePaths) != nil
+    /// Offers the reviewed fingerprint, and on a refusal shows what is on disk
+    /// now instead of approving it. Approving the current contents on the user's
+    /// behalf is the bug: they clicked about the file they had read.
+    private func approve() {
+        guard let reviewedFingerprint else { return }
+        guard !onApprove(reviewedFingerprint) else { return }
+        changedWhileOpen = true
+        load()
     }
 
-    /// One file's whole text. An unreadable file shows as such rather than as an
-    /// empty box: approving something you cannot see is the one outcome this
-    /// pane exists to prevent.
-    private func contents(of path: String) -> String {
-        (try? String(contentsOfFile: path, encoding: .utf8))
-            ?? NSLocalizedString("Could not read this file.", comment: "")
+    private func load() {
+        let files = filePaths.map {
+            LoadedFile(path: $0, data: FileManager.default.contents(atPath: $0))
+        }
+        loadedFiles = files
+
+        var reviewed: [(path: String, data: Data)] = []
+        for file in files {
+            // One unreadable file makes the whole set unapprovable — the rule
+            // `ScriptTrust.fingerprint` follows, for the same reason: a list
+            // that is not the list is not what will run.
+            guard let data = file.data else {
+                reviewedFingerprint = nil
+                return
+            }
+            reviewed.append((path: file.path, data: data))
+        }
+        reviewedFingerprint = ScriptTrust.fingerprint(reviewedFiles: reviewed)
     }
 }

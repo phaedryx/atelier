@@ -98,7 +98,11 @@ final class WorkstreamArchiverDisposeTests: XCTestCase {
             ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path)
         )
         XCTAssertEqual(config.repositoryProvidedFiles, [path])
-        ScriptTrust.approve(configFiles: config.repositoryProvidedFiles, for: project.path)
+        XCTAssertTrue(try ScriptTrust.approve(
+            configFiles: config.repositoryProvidedFiles,
+            for: project.path,
+            matching: XCTUnwrap(ScriptTrust.fingerprint(configFiles: config.repositoryProvidedFiles))
+        ))
 
         let plan = Workstream.Archiver.disposePlan(
             worktreePath: worktree.path, projectDirectory: project.path
