@@ -762,8 +762,7 @@ extension Git {
             // against, so fetch the origin-HEAD guess first, the same way
             // `defaultBranch` looks for one. A named setting (main/master/trunk/
             // develop) already tells us exactly what to fetch — fetching the
-            // origin-HEAD guess instead would leave a worktree cut from a stale
-            // local copy of the branch the user actually chose.
+            // origin-HEAD guess instead would fetch a branch the user did not pick.
             let baseBranchSetting = BaseBranchSetting.current
             if baseBranchSetting == .repositoryDefault {
                 fetchDefaultBranch(at: projectPath)
@@ -775,14 +774,30 @@ extension Git {
                 fetchDefaultBranch(at: projectPath, branch: baseBranch)
             }
 
+            // The fetch alone does not make the start point current — see
+            // `creationStartPoint`, which is what turns `main` into `origin/main`.
+            let startPoint = creationStartPoint(forBase: baseBranch, at: projectPath)
+
             // Create parent directories
             try? FileManager.default.createDirectory(
                 at: worktreeDir.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
 
-            // Create worktree with new branch based off the default branch
-            let result = runOnWholeTree(args: ["worktree", "add", "-b", branchName, worktreeDir.path, baseBranch], in: projectPath)
+            // Create worktree with new branch based off the base branch.
+            //
+            // `--no-track` because `startPoint` is usually a remote-tracking ref, and
+            // git's default `branch.autoSetupMerge` would then set the new branch's
+            // upstream to `origin/<base>` — a different name from the branch itself.
+            // That breaks a bare `git push` in the workstream's terminal under the
+            // default `push.default=simple`, and quietly weakens the purge guard:
+            // `hasUnpushedCommits` reads `@{upstream}..HEAD`, which is empty for a
+            // workstream that has not committed yet. `pushCurrentBranch` passes `-u`,
+            // so the app's own push sets the upstream when there is something to push.
+            let result = runOnWholeTree(
+                args: ["worktree", "add", "--no-track", "-b", branchName, worktreeDir.path, startPoint],
+                in: projectPath
+            )
 
             if result == nil {
                 // Branch might already exist, try without -b
@@ -793,6 +808,35 @@ extension Git {
             addExcludeEntry(at: projectPath, pattern: ".atelier-state/")
 
             return worktreeDir.path
+        }
+
+        /// The ref a new workstream branch is actually cut from, given the base branch's name.
+        ///
+        /// `BaseBranchSetting` names a *branch* — `main`, `master`, `trunk`, `develop` — and git
+        /// resolves that name to the local `refs/heads/main` long before it looks at
+        /// `refs/remotes/origin/main`. In the README's container layout `refs/heads/main` is the
+        /// trunk checkout's own branch, and it moves only when somebody pulls. So fetching
+        /// `origin/main` and then cutting from `main` starts every workstream from whenever that
+        /// last happened: the fetch updates a ref the `worktree add` never reads.
+        ///
+        /// Preferring the remote-tracking ref is what makes the fetch mean something. The fallback
+        /// to the name as given covers a repository with no origin, a base branch that exists only
+        /// locally, and `repositoryDefault` — `defaultBranch` already prefers `origin/*` refs, so
+        /// re-prefixing its answer would ask for `origin/origin/main`.
+        ///
+        /// Deliberately *not* `adoptRemoteBranch`'s treatment. That advances the local branch, and
+        /// here the local branch is the trunk checkout the user has open in another worktree;
+        /// moving it under them is a larger promise than cutting one new worktree from origin's
+        /// tip. This also leaves `createWorktree`'s `-b`-less fallback exactly as it was — a
+        /// workstream name that collides with a branch the bare clone captured still checks that
+        /// stale local branch out, which is a different bug from this one.
+        private static func creationStartPoint(forBase base: String, at path: String) -> String {
+            guard !base.hasPrefix("origin/") else { return base }
+            guard let sha = run(
+                args: ["rev-parse", "--verify", "--quiet", "refs/remotes/origin/\(base)"],
+                in: path
+            )?.trimmingCharacters(in: .whitespacesAndNewlines), !sha.isEmpty else { return base }
+            return "origin/\(base)"
         }
 
         /// Create a git worktree for a branch that already exists on origin, checking that
