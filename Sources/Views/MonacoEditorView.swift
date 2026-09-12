@@ -147,6 +147,12 @@ class EditorWebView: WKWebView {
 final class MonacoEditorBridge {
     private(set) var webView: EditorWebView?
     private(set) var isReady = false
+    /// Operations queued until Monaco posts "ready". Every one of them is
+    /// created with `[weak self]`, because this array is a stored property of
+    /// the bridge: a queued closure capturing `self` strongly is a cycle that
+    /// only `markReady`'s flush can break, and `ready` never arrives if the
+    /// Monaco bundle fails to load. Dropping an op whose bridge is gone is
+    /// correct — there is nothing left to run it against.
     private var pendingOps: [() -> Void] = []
     private var coordinator: Coordinator?
     private var appearanceObserver: NSKeyValueObservation?
@@ -204,8 +210,8 @@ final class MonacoEditorBridge {
     /// before. Out-of-range values are clamped on the JavaScript side, where the
     /// line count is known.
     func openFile(modelId: String, text: String, languageId: String, filePath: String? = nil, line: Int? = nil) {
-        enqueue {
-            guard let webView = self.webView else { return }
+        enqueue { [weak self] in
+            guard let self, let webView else { return }
             nonisolated(unsafe) let wv = webView
             Task { @MainActor in
                 var args: [String: Any] = [
@@ -231,9 +237,9 @@ final class MonacoEditorBridge {
     }
 
     func switchModel(modelId: String) {
-        enqueue {
-            guard let webView = self.webView else { return }
-            webView.evaluateJavaScript("window.editorAPI.switchModel(\(self.jsLiteral(modelId)))")
+        enqueue { [weak self] in
+            guard let self, let webView else { return }
+            webView.evaluateJavaScript("window.editorAPI.switchModel(\(jsLiteral(modelId)))")
         }
     }
 
@@ -250,22 +256,22 @@ final class MonacoEditorBridge {
     }
 
     func markClean(modelId: String) {
-        enqueue {
-            guard let webView = self.webView else { return }
-            webView.evaluateJavaScript("window.editorAPI.markClean(\(self.jsLiteral(modelId)))")
+        enqueue { [weak self] in
+            guard let self, let webView else { return }
+            webView.evaluateJavaScript("window.editorAPI.markClean(\(jsLiteral(modelId)))")
         }
     }
 
     func closeModel(modelId: String) {
-        enqueue {
-            guard let webView = self.webView else { return }
-            webView.evaluateJavaScript("window.editorAPI.closeModel(\(self.jsLiteral(modelId)))")
+        enqueue { [weak self] in
+            guard let self, let webView else { return }
+            webView.evaluateJavaScript("window.editorAPI.closeModel(\(jsLiteral(modelId)))")
         }
     }
 
     func setTheme(isDark: Bool) {
-        enqueue {
-            guard let webView = self.webView else { return }
+        enqueue { [weak self] in
+            guard let self, let webView else { return }
             webView.evaluateJavaScript("window.editorAPI.setTheme(\(isDark))")
         }
     }
@@ -273,8 +279,8 @@ final class MonacoEditorBridge {
     /// Force Monaco to recalculate its layout. Call after reparenting the
     /// WKWebView into a new container so the editor fills the available space.
     func relayout() {
-        enqueue {
-            guard let webView = self.webView else { return }
+        enqueue { [weak self] in
+            guard let self, let webView else { return }
             webView.evaluateJavaScript("window.editorAPI.layout()")
         }
     }
@@ -333,7 +339,12 @@ final class MonacoEditorBridge {
     // MARK: - Coordinator
 
     final class Coordinator: NSObject, WKScriptMessageHandler, @unchecked Sendable {
-        private let bridge: MonacoEditorBridge
+        /// Weak: the bridge owns this coordinator, and the WKUserContentController it
+        /// is registered on is reachable from the bridge's own WKWebView. A strong
+        /// reference back would keep the bridge — and its ~17 MB WebView and every
+        /// Monaco model — alive for the process's lifetime, long after the workstream
+        /// that owned it was purged. Mirrors `MonacoDiffBridge.Coordinator`.
+        private weak var bridge: MonacoEditorBridge?
 
         init(bridge: MonacoEditorBridge) {
             self.bridge = bridge
@@ -344,17 +355,18 @@ final class MonacoEditorBridge {
             didReceive message: WKScriptMessage
         ) {
             Task { @MainActor in
-                guard let body = message.body as? [String: Any],
+                guard let bridge = self.bridge,
+                      let body = message.body as? [String: Any],
                       let type = body["type"] as? String else { return }
 
                 switch type {
                 case "ready":
-                    self.bridge.markReady()
+                    bridge.markReady()
                 case "contentChanged":
                     if let modelId = body["modelId"] as? String,
                        let dirty = body["dirty"] as? Bool
                     {
-                        self.bridge.onContentChanged?(modelId, dirty)
+                        bridge.onContentChanged?(modelId, dirty)
                     }
                 case "error":
                     if let msg = body["message"] as? String {
