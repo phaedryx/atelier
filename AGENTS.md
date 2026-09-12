@@ -43,12 +43,23 @@ uvx prek run --all-files            # run hooks on all files (optional)
 ```
 
 It stamps the version from `git describe` before building, so a local Release
-build reports what it actually is — `0.2.1-76-gbe4598a`, or `0.2.1-dirty` when
+build reports what it actually is — `0.2.1-20-gbe4598ac`, or `0.2.1-dirty` when
 built over uncommitted changes — rather than the `0.0.0-dev` placeholder. That
 matters because a local Release build is one somebody installs and then has to
 identify weeks later. `project.yml` is copied aside and restored on exit,
 including when the stamp fails, so the bump is never left in the working tree.
 Debug builds are untouched and still report `0.0.0-dev (Debug)`.
+
+**The count is `--first-parent`, so it means "PRs merged since the tag".** Plain
+`git describe` counts every commit reachable from HEAD that the tag cannot
+reach, which includes each commit that arrived *inside* a merged PR branch —
+three days and 27 merges past v0.2.1 described as `0.2.1-95`, a number that
+reads like months of history. The identifying part of the string is the `-g<sha>`
+suffix; the count only says roughly how far past the tag a build is, and it
+should stay on the same scale as the release notes. Do not drop the flag to
+"match what git does by default". One consequence, harmless and one-time: across
+the change a build stamped `-95` is followed by a later build stamped `-27`, and
+it resets at the next tag.
 
 `./scripts/release.sh <version>` builds a signed, notarized DMG, but requires
 `ATELIER_SIGNING_IDENTITY` and `ATELIER_TEAM_ID` and refuses to run without

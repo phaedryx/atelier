@@ -28,9 +28,16 @@ ensure_ghostty_resources() {
 # build made over uncommitted changes, which is otherwise indistinguishable from
 # the commit it was built on. With no matching tag in the history at all
 # `describe` fails, and the sha alone is not a version set-version.sh accepts.
+#
+# `--first-parent` makes the count "PRs merged since the tag" rather than
+# "commits reachable since the tag". Without it every commit that arrived inside
+# a merged PR branch is counted too, so three days and 27 merges past v0.2.1 read
+# as `0.2.1-95` — a number that looks like months of history and tells a reader
+# nothing they can act on. The `-g<sha>` suffix is what identifies the build; the
+# count is only meant to say roughly how far past the tag it is.
 release_version() {
   local described
-  described="$(git describe --tags --match 'v[0-9]*.[0-9]*.[0-9]*' --dirty 2>/dev/null || true)"
+  described="$(git describe --tags --first-parent --match 'v[0-9]*.[0-9]*.[0-9]*' --dirty 2>/dev/null || true)"
   if [ -n "$described" ]; then
     echo "${described#v}"
   else

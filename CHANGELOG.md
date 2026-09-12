@@ -4,6 +4,286 @@ Atelier was forked from [Factory Floor](https://github.com/alltuner/factoryfloor
 at v0.1.79. Everything below that release is Factory Floor's history; those links
 point at the upstream repository.
 
+## [0.2.2](https://github.com/phaedryx/atelier/compare/v0.2.1...v0.2.2) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* **`process-compose.override.yml` is no longer loaded or approved.** The config
+  lookup is now four tiers, the first of which exists — `atelier.process-compose.y*ml`
+  in the worktree, the same name in the project directory, then
+  `process-compose.y*ml` in each — and exactly one file is loaded. Tier one is
+  what the override stood in for: a worktree that wants its own arrangement
+  names its own config and says so, rather than having two files merged by rules
+  a reader has to hold in their head to predict what runs. A worktree still
+  carrying an override file will silently stop contributing it, and the fix is
+  to fold it into an `atelier.process-compose.yaml`.
+
+  The `atelier.` prefix exists because a repository may run process-compose for
+  its own reasons, and such a file declares the project's own namespaces rather
+  than Atelier's five. It was indistinguishable from an Atelier config and won
+  the lookup outright, so `bootstrap` and `prepare` silently did nothing,
+  Verification reported no checks, and Start ran `up -n execute` against a
+  namespace nobody had declared. Precedence follows explicitness, not location.
+  Tier three still beats tier four, so a project with a single unprefixed config
+  is unaffected.
+
+### Features
+
+* **verify:** a fifth process-compose namespace, `verify`, and a Verification
+  workspace tab that runs it against the worktree and reports each check as the
+  poll sees it. Checks are chosen from a checklist whose selection persists per
+  workstream, the latest run is persisted with its stamp, and a failed check
+  carries the tail of its own output. That tail is the only copy that survives
+  the run — the log lives in the control server, which is torn down once the run
+  is sealed — so every string the truncation flag drives says as much, and points
+  at re-running the one check rather than at a fuller log that is nowhere.
+* **ipc:** `start_verification` and `check_verification`. A start answers with a
+  run id rather than a result, because a real suite outlives an MCP tool call;
+  the result reaches the agent two ways, as a summary posted into its inbox when
+  the run ends and as a read it can perform itself, since delivery is a pull and
+  the nudge is best-effort. The completion notice is the first message Atelier
+  sends on its own behalf, which is why `IPC.Message.from` became a `Sender`
+  enum — a run finishing has no peer behind it, and a reserved peer would have
+  had to be filtered out of `list_peers`, out of a broadcast audience, and out
+  of the surface map.
+* **ipc:** an agent can act on the workstream it is running in — `list_tabs`,
+  `read_review_comments`, `open_editor`, `request_attention`, and
+  `open_agent_tab`, which spawns a terminal tab already running a second agent
+  rather than pasting into a shell. There is no approval gate and that is a
+  decision rather than an omission: every one of these acts on the caller's own
+  workstream and no other, and `atelier.agentIPC` already defaults off.
+* **ipc:** `create_workstream` makes a new workstream, with its own worktree and
+  its own branch, and with a prompt starts an agent in its Coding Agent tab —
+  the surface whose id *is* the workstream id, so the user opening that
+  workstream lands on the conversation. It inherits `bootstrap`'s approval gate
+  by not touching it: the handler posts the same three notifications the UI
+  producers post, and `ContentView`'s handler is what runs `PhasePolicy`. It
+  deliberately does not take the selection.
+* **sidebar:** create a workstream from a branch that already exists on origin,
+  from a GitHub button on each project row. This needed its own path rather than
+  the existing one: `createWorktree` runs `worktree add -b <name> <dir> <base>`,
+  so a branch that lives only as `origin/<name>` *succeeds* and produces a
+  worktree named for that branch while holding the base branch's code. The
+  dialog resolves the branch before anything is created, so a typo or a branch
+  another worktree already holds is a message in the sheet rather than an
+  optimistic row that appears and rolls back.
+* **palette:** jump to any project or workstream by name. The palette had
+  exactly one navigation command — Back to Project — in an app whose whole shape
+  is many projects times many workstreams. Also adds the menu actions that were
+  reachable by chord but not by search: New Workstream, New Project, tab and
+  workstream and project cycling, Focus Address Bar, Toggle Sidebar, and a deep
+  link per Settings pane.
+* **context:** the context meter's numbers come from Claude Code's status line
+  rather than from the transcript. Hook payloads carry no token or context
+  fields at all; the status line command is the one interface Claude Code hands
+  the figures to, already resolved, including whether the session is on a 1M
+  window — a fact nothing else can observe from outside the process. Atelier
+  never writes the user's `statusLine` key, which holds a single command;
+  instead the agent launches with a `--settings` layer naming `atelier-statusline`,
+  which POSTs the payload and then runs the user's own status line verbatim. A
+  session with no configured status line falls back to the transcript, because
+  registering one anyway would give a user a status line they never asked for.
+* **sidebar:** the context meter is on the same color scale as the plan usage
+  bars below it. Four bars in one sidebar ran two palettes, so a color meant one
+  thing in the top three and something else in the fourth. The two pressures are
+  now split across two channels rather than folded into one: capacity colors the
+  bar, and the absolute token count colors the number. The old single color made
+  the bar lie about the one thing a bar is read for — 250k of a 1M window is a
+  quarter full, and the quality floor painted that stripe orange.
+* **tabs:** quick-add buttons for Changes, Execution and Verification, and a
+  workstream now opens with Info and Agent and nothing else. The singletons are
+  opened when they are wanted, from those buttons, the command palette, or their
+  toggles. The seed and the `activeTab` clamp move together, because a saved
+  `.changes` restored onto a strip with no Changes tab renders the pane with
+  nothing selected.
+* **changes:** the "Files changed" tree is styled like the editor's — plain list
+  style over the window's own background instead of sidebar vibrancy, so the two
+  trees in one window stop reading as two different surfaces — and carries the
+  vscicons file and folder icons at the editor's metrics. The A/M/D/R status
+  letter moved to the trailing slot in a fixed-width frame, so the letters line
+  up down the tree.
+* **editor:** Palenight for dark appearance, vendored as a real VS Code theme
+  extension. Monaco here is `@codingame/monaco-vscode-api` with the theme and
+  textmate service overrides, so a theme's `tokenColors` actually apply — on
+  stock Monaco, where Monarch does the tokenizing, most of them would be inert.
+* **editor:** vscicons artwork for the file-tree icons, including the
+  compound-extension walk that picks the right icon for names like
+  `foo.test.tsx`.
+
+### Bug Fixes
+
+* **process:** concurrent git captures no longer starve each other. `ProcessRunner.capture`
+  blocked the thread it was called on while its drain needed a thread of its own
+  to deliver EOF; when the callers are Swift `Task`s that pool is the cooperative
+  one, `hw.ncpu` wide rather than libdispatch's ~64, so the waiters consumed the
+  very threads that would have completed them. Measured in 0.2.1 with twelve
+  workstreams: 14 of 14 cooperative threads parked in `capture`, every child
+  killed at its deadline, `tmux -V` blowing a 120s bound. The user-visible
+  symptom was a workstream stuck on "Preparing Coding Agent..." and git
+  operations that had already succeeded on disk being reported as failures.
+  `ProcessRunner.PipePump` now moves stdin, stdout and stderr together in one
+  `poll(2)` loop on the calling thread, so starvation is unreachable by
+  construction rather than by having enough threads. The suite's own wall clock
+  fell from 205s to 115s, which is the same contention measured a different way.
+* **process:** the deadline kills the process group, not just the child. A child
+  that backgrounds something and exits leaves the grandchild running past the
+  deadline, holding the pipe, and Foundation has reaped the child by then — so
+  `terminate()` has nothing to signal. `sh -c 'server &'` is an ordinary thing
+  for a project's own command to be, and one repro left 36 stray `sleep`
+  processes behind in a single run. Both facts this rests on were measured
+  rather than recalled, because being wrong means signalling a stranger: a pid
+  live as a group id is never reissued (~98,000 forks drove the counter a full
+  lap past an orphaned group and the number was never allocated), and anything
+  calling `setsid` — the tmux server — escapes, which it must.
+* **process:** `ProcessRunner.kill` no longer waits without a deadline. SIGKILL
+  is not refusable but it is not instant either, and a child in an
+  uninterruptible kernel wait — a dead NFS mount — parks the caller's thread on
+  it forever. It is now bounded by the same grace period; giving up costs a
+  zombie until the process finally dies, which beats never returning.
+* **workstream:** a half-created workstream no longer reaches the durable store,
+  and the ones already stranded are repaired at launch. A workstream whose `git
+  worktree add` has not finished has no `worktreePath` — a wanted *in-memory*
+  state, so the sidebar row can appear immediately — but `ProjectStore.save`
+  re-encodes the whole list, so any unrelated edit during the creation window
+  cemented the half-made record. A quit in that window left a workstream that
+  could never render: the detail pane spun on "Preparing workstream..." forever
+  and nothing in the UI repaired it. `save` now drops nil-path workstreams, and
+  `reconcileStrandedWorkstreams` reattaches records whose worktrees are still on
+  disk, matching on **branch** rather than name so a name freed by a purge and
+  reused cannot reattach a record to the wrong worktree.
+* **workstream:** only one path-validity sweep runs at a time. The 15-second
+  timer called `refreshPathValidity` unconditionally and each sweep spawns a
+  fresh detached task, so a sweep that outlived its own period stacked — and
+  every one of them fans a blocking capture out per worktree. The guard is a
+  timestamp with a ceiling rather than a flag, because a flag cleared in a
+  completion block that never runs disables the sweep for the rest of the
+  session, which is worse than the stacking and silent. A request arriving
+  mid-sweep is deferred, not dropped.
+* **sidebar:** a dead hook channel is reported instead of inferred. The 45-second
+  silence mark used to set the yellow "stalled" dot directly, which was wrong far
+  more often than right — a build, a long response and a slow MCP call all pass
+  45 seconds routinely. It now asks `HookChannelProbe` whether events are
+  arriving at all, by writing a real payload to the real hook script and waiting
+  for the nonce to come back out of the listener; only prolonged silence past a
+  much longer threshold, with no tool in flight and no compaction and no
+  permission prompt, reports a wedge. A verified-down channel masks exactly the
+  two states that absence established, and a banner in the sidebar's bottom bar
+  covers the case no row can speak for — a channel already broken at launch
+  leaves every row silent.
+* **shell:** backticks in agent system prompts are no longer substituted by bash.
+  Ghostty does not hand a surface command to `/bin/sh -c` on macOS; it runs it
+  through `bash -c`, and the outermost token was fish-quoted with double quotes,
+  inside which bash performs command substitution. So a new workstream opened
+  with a wall of `bash: register_peer: command not found`, the IPC prompt arrived
+  with every backticked tool name deleted from it, and the auto-rename prompt was
+  worse — bash *ran* its `git branch -m` and the `mkdir`/`echo` pair, on every
+  agent launch, before Claude saw the prompt. Four sites now follow one rule: the
+  outermost token is POSIX-quoted, because ghostty's bash wrapper is what strips
+  it. The three tests that stayed green through all of this checked the quote
+  style itself; they are replaced by a harness that runs a generated command
+  through ghostty's real wrapper and asserts what the child's argv contains.
+* **agent:** option parsing ends before the seeded prompt. Claude Code's
+  `--mcp-config` is variadic and consumes every following argument until the next
+  option, including the positional initial prompt — so the CLI died opening a
+  ~2KB prompt as a config path before any session existed, and every
+  prompt-seeded launch failed and lost its prompt whenever agent IPC was on. The
+  prompt now emits its own `--`, so an option added between them cannot reopen
+  the hole.
+* **sidebar:** the GitHub branch button appears without `gh` and without a
+  visited project overview. It was gated on a cached GitHub URL written only by
+  a refresher that runs from three views the sidebar never draws, and whose other
+  fallback is keyed by the project's *checkout* — so a container-layout project
+  had a GitHub remote and no GitHub URL at the same time, for the whole session,
+  and the feature shipped invisible. One `git remote get-url origin` in the
+  path-validity sweep now fills both facts, keyed by `directory`.
+* **sidebar:** a click on a workstream's name selects it. The name carried a
+  double-tap rename gesture, and a SwiftUI gesture inside the row swallows
+  mouse-down within the label's own bounds — so the one part of the row users aim
+  at was the one part that did nothing. Rename is now armed only on the
+  already-selected row, which also makes double-clicking an unselected workstream
+  select it rather than rename it, the Finder and Xcode pattern.
+* **context-meter:** a 1M session is measured against a 1M window. The `[1m]`
+  marker appears in no transcript Claude Code has ever written — it records the
+  resolved model — so the extended-window branch was unreachable and a 133.5k
+  Opus session read as 66% where Claude Code said 13%. The marker survives only
+  in the model *selection*, which is where Claude Code itself looks, and it may
+  widen a window only when it names the same model family the transcript
+  recorded.
+* **changes:** the diff cache notices an edit that leaves the line counts alone.
+  The fingerprint was HEAD's SHA plus a hash of `git diff --stat`, which reports
+  counts — so renaming an identifier, rewriting a line or swapping two lines did
+  not move it, and the tab went on rendering the pre-edit diff until Refresh was
+  pressed. It now folds in `git hash-object` over every path whose working-tree
+  content the SHA does not already pin.
+* **github:** both PR refreshers agree on what an absent PR means. They asked
+  `gh` the same question and drew opposite conclusions from a branch missing from
+  the answer; the bulk refresher deleted the cached PR, while its sibling refused
+  to and said why — the PR may simply be older than the 100-item window. Opening
+  Project Overview dropped the key and nothing put it back, so the badge stayed
+  blank and the action menu offered **Create PR** for a branch that already had
+  one. Absence is now a question rather than an answer, asked in one place both
+  refreshers call.
+* **tabs:** the tab strip's scroll arrows report its actual position.
+  `scrollOffset` was declared and read and written nowhere, so it sat at its
+  initial `0` for the life of the view: the left chevron never appeared however
+  far right the strip was scrolled, and the right chevron never went away at the
+  end of it.
+* **process-compose:** Start refuses an `execute` namespace no process declares,
+  and says why. `up -n execute` against an undeclared namespace neither fails
+  nor exits — measured against v1.122.0, it idles indefinitely with no output —
+  so Start opened a TUI with an empty process list and Stop as the only way out.
+  The refusal lives in `RunCommandPlan.plan` rather than in the command builder,
+  because `canRun` is what enables the Start button and deciding it later would
+  leave the button enabled over a run that does nothing. It fires on `.empty`
+  only, never on a config that could not be read, since a failure to parse must
+  not become a permanently dead Start button. `ExecutionTabView` renders the
+  reason, which is what makes the refusal safe: it is the silence, not the skip,
+  that was the problem.
+* **dev:** `./scripts/dev.sh release` pins `ARCHS=arm64`, as CI does. Without it
+  a Release build takes `ARCHS_STANDARD` and the x86_64 half fails to link on
+  every `ghostty_*` symbol, because `libghostty.a` is a thin arm64 archive — so
+  the command had been failing outright rather than producing a wider binary.
+
+### Performance
+
+* **git:** `defaultBranch(at:)` is cached per directory inside `Git.Operations`.
+  Resolving it costs up to six sequential probes and the answer is a property of
+  the repository, but its three comparison sites are each called per *worktree*:
+  twelve workstreams in two projects meant ~72 subprocesses a tick resolving two
+  strings. The cache lives there rather than in `AppEnvironment` because half the
+  callers structurally cannot reach a `@MainActor` type. It deliberately does not
+  cache the literal `"HEAD"`, which is the sentinel for "resolved nothing".
+
+### Refactoring
+
+* **workspace:** the Environment tab is now the Execution tab. "Environment" was
+  already this codebase's word for two other things — the env-var machinery and
+  the Settings pane listing detected tools — and "Execution" names what the tab
+  does. Settings → Environment is untouched. Two persisted ids reset once, both
+  self-healing: a workstream last on Environment reopens on Info, and the
+  palette's frequency count for that one command starts over.
+* **execution:** the run controls are one left-aligned group in the upper left —
+  the dev command, then the checklist of what Start will run, then the buttons
+  that run it. They had been spread across three places whose visibility changed
+  with the run state, so pressing Start moved the buttons from the middle of the
+  pane to a bar at the top.
+
+### Build System
+
+* a local Release build is stamped from `git describe` instead of reporting the
+  committed `0.0.0-dev` placeholder, so a build somebody installs into
+  `/Applications` can be identified later. `CFBundleVersion` takes only the
+  `X.Y.Z` core because it must be period-separated integers; the suffix naming
+  the commit rides on `CFBundleShortVersionString`, which is what the app
+  displays. `project.yml` is restored from a copy rather than with `git checkout
+  --`, including on the rejection path, so an uncommitted edit to it is never
+  discarded.
+* the stamp's commit count is `--first-parent`, so it means "PRs merged since the
+  tag". Plain `git describe` counts every commit that arrived inside a merged PR
+  branch too, which described three days and 27 merges past v0.2.1 as
+  `0.2.1-95` — a number that reads like months of history and tells a reader
+  nothing they can act on.
+
 ## [0.2.1](https://github.com/phaedryx/atelier/compare/v0.2.0...v0.2.1) (2026-09-09)
 
 ### ⚠ BREAKING CHANGES
