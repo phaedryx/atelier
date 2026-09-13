@@ -90,9 +90,17 @@ extension Verification {
 
         /// Stop watching, and drop a callback that has not fired yet.
         ///
-        /// `lastFired` deliberately survives: re-arming on tab entry must not
-        /// hand the floor a clean slate, or switching tabs in a loop would be a
-        /// way to run a git sweep per switch.
+        /// **The owner must release the watcher as well as disarming it.** This
+        /// clears the FSEvents stream's own callback, not `onChange` — which
+        /// captures the view — so a watcher kept alive after disarming is a
+        /// retained view per mount. `TerminalContainerView`'s file-tree watcher
+        /// is the precedent: `stopFileTreeWatcherIfUnneeded` does `stop()` *and*
+        /// sets its `@State` to nil.
+        ///
+        /// `lastFired` survives a disarm, which bounds re-arming within one
+        /// mount. It does not survive the mount: `@State` goes with the view
+        /// when the tab switches away, and tab entry runs its own
+        /// `refreshStaleness` regardless of this floor.
         func disarm() {
             watcher?.stop()
             watcher = nil

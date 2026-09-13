@@ -404,8 +404,12 @@ struct VerificationTabView: View {
         .onDisappear {
             // The tab leaves the tree on every tab switch, and an FSEvents
             // stream on a whole worktree is not something to leave running for
-            // a pane nobody is looking at.
+            // a pane nobody is looking at. Released as well as disarmed: its
+            // `onChange` captures this view, so a disarmed watcher still held
+            // here is a retained view per mount — the same pairing
+            // `stopFileTreeWatcherIfUnneeded` makes.
             worktreeWatcher?.disarm()
+            worktreeWatcher = nil
         }
         .onReceive(NotificationCenter.default.publisher(for: .worktreeGitActivity)) { notification in
             guard notification.object as? String == worktreePath else { return }
@@ -767,6 +771,7 @@ struct VerificationTabView: View {
     private func syncWorktreeWatcher(hasRun: Bool) {
         guard hasRun else {
             worktreeWatcher?.disarm()
+            worktreeWatcher = nil
             return
         }
         if worktreeWatcher == nil {
