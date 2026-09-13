@@ -8,7 +8,7 @@ import XCTest
 final class VerificationStalenessWatcherTests: XCTestCase {
     private var root: URL!
 
-    override func setUpWithError() throws {
+    override func setUp() async throws {
         root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("staleness-" + UUID().uuidString)
         // A `.git` directory so the fixture is shaped like a worktree: the whole
@@ -18,7 +18,7 @@ final class VerificationStalenessWatcherTests: XCTestCase {
         )
     }
 
-    override func tearDownWithError() throws {
+    override func tearDown() async throws {
         try? FileManager.default.removeItem(at: root)
     }
 

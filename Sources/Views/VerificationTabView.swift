@@ -111,8 +111,8 @@ func verificationIsStale(run: Verification.Run, currentStamp: String?) -> Bool {
 /// itself — no config lookup, no binary resolution, no approval hash.
 ///
 /// **This function is not the decision, and must not be treated as one.**
-/// The call site — `TerminalContainerView`, the same way `refreshDevCommand`
-/// already resolves `ExecutionTabView`'s equivalent state — is required to
+/// The call site — `ProcessCompose.ResolutionModel`, which resolves
+/// `ExecutionTabView`'s equivalent state in the same pass — is required to
 /// take *whether anything can run* from `PhasePolicy.plan(phase: .verify, …)`
 /// itself, and to call this function only for the copy, only once `plan`
 /// has returned `.nothingToDo`. `ExecutionTabView.swift:117-122` is this
@@ -314,11 +314,10 @@ func verificationAvailability(
 /// SHA-256 over the approval-relevant files, all on the main actor, and stale
 /// the moment any of Settings' process-compose switch, its binary path, or
 /// the config's approval state changed without the tab happening to
-/// re-appear. `TerminalContainerView` already holds all four facts as
-/// trigger-refreshed state for `ExecutionTabView`'s sake
-/// (`refreshDevCommand`); Task 10 is expected to resolve this tab's
-/// `declaredProcesses`/`unavailableReason` the same way, from the same
-/// triggers, and hand them in.
+/// re-appear. `ProcessCompose.ResolutionModel` holds all four
+/// facts and resolves this tab's `declaredProcesses`/`unavailableReason` in
+/// the same pass as `ExecutionTabView`'s — off the main actor, from the
+/// triggers `TerminalContainerView` owns — and hands them in.
 struct VerificationTabView: View {
     let workstreamID: UUID
     let worktreePath: String
