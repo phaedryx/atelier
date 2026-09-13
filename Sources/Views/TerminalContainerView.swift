@@ -2664,15 +2664,16 @@ private struct ScrollableTabStrip<TabContent: View>: View {
         case left, right
     }
 
+    /// An indicator, not a control: it says there are more tabs that way, and the strip is
+    /// scrolled by dragging it or by `.onChange(of: activeTab)` above. It was a `Button` with
+    /// an empty action, so it drew press feedback and took a place in the keyboard and
+    /// accessibility order for a click that did nothing. The frame is kept so the strip's
+    /// layout does not move.
     private func scrollArrow(direction: ScrollDirection) -> some View {
-        Button(action: {}) {
-            Image(systemName: direction == .left ? "chevron.left" : "chevron.right")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 16, height: 20)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.borderless)
+        Image(systemName: direction == .left ? "chevron.left" : "chevron.right")
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .frame(width: 16, height: 20)
     }
 
     private func checkOverflow() {
