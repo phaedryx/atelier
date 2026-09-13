@@ -31,7 +31,8 @@ final class IPCVerificationSummaryTests: XCTestCase {
         duration: Double? = 50,
         checks: [IPC.VerificationCheckInfo],
         isStale: Bool = false,
-        failureDetail: String? = nil
+        failureDetail: String? = nil,
+        unstartedChecksDetail: String? = nil
     ) -> IPC.VerificationRunInfo {
         IPC.VerificationRunInfo(
             runID: id,
@@ -42,7 +43,8 @@ final class IPCVerificationSummaryTests: XCTestCase {
             durationSeconds: duration,
             checks: checks,
             isStale: isStale,
-            failureDetail: failureDetail
+            failureDetail: failureDetail,
+            unstartedChecksDetail: unstartedChecksDetail
         )
     }
 
@@ -160,6 +162,32 @@ final class IPCVerificationSummaryTests: XCTestCase {
         XCTAssertTrue(lines[1].hasPrefix("The run itself failed: "), message)
         XCTAssertTrue(lines[1].contains("line 12"), message)
         XCTAssertTrue(message.contains("· rspec  not run"), message)
+    }
+
+    /// The mixed case an agent has to be able to act on: some checks ran, the
+    /// rest never started, and the executor's own message is the only account of
+    /// why. It must not arrive under the run-level failure's wording — that
+    /// would tell an agent its suite never started when most of it did.
+    func test_message_reportsChecksThatNeverStartedUnderTheirOwnWording() {
+        let message = IPC.VerificationSummary.message(for: run(
+            duration: 3,
+            checks: [check("rspec", .passed, duration: 3), check("rubocop", .notRun)],
+            unstartedChecksDetail: "process-compose: process rubocop: working_dir does not exist"
+        ))
+
+        let lines = message.split(separator: "\n").map(String.init)
+        XCTAssertTrue(lines[1].hasPrefix("Some checks never started: "), message)
+        XCTAssertTrue(lines[1].contains("working_dir"), message)
+        XCTAssertFalse(message.contains("The run itself failed"), message)
+    }
+
+    func test_message_boundsChecksThatNeverStartedLikeEverythingElse() {
+        let message = IPC.VerificationSummary.message(for: run(
+            checks: [check("rspec", .passed), check("rubocop", .notRun)],
+            unstartedChecksDetail: String(repeating: "spew ", count: 50_000)
+        ))
+
+        XCTAssertLessThanOrEqual(message.utf8.count, IPC.VerificationSummary.maxMessageBytes)
     }
 
     func test_message_boundsARunLevelFailureLikeEverythingElse() {

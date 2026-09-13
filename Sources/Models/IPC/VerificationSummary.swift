@@ -85,10 +85,18 @@ extension IPC {
             let pointer = run.checks.isEmpty ? nil : pointerLine(runID: run.runID)
 
             let failure = run.failureDetail.map(failureLine)
+            // Its own line and its own sentence: this run *did* report on some
+            // checks, so the failure wording above would be false for it. Both
+            // are charged to the budget, though `Runner.execute` sets at most
+            // one of them.
+            let unstarted = run.unstartedChecksDetail.map(unstartedLine)
 
             var budget = maxMessageBytes - header.utf8.count
             if let failure {
                 budget -= failure.utf8.count + 1
+            }
+            if let unstarted {
+                budget -= unstarted.utf8.count + 1
             }
             if run.isStale {
                 budget -= staleNotice.utf8.count + 1
@@ -111,6 +119,10 @@ extension IPC {
             // Before the verdicts: it explains why they all say "not run".
             if let failure {
                 lines.append(failure)
+            }
+            // Likewise, for the ones that say it while others ran.
+            if let unstarted {
+                lines.append(unstarted)
             }
             if run.isStale {
                 lines.append(staleNotice)
@@ -263,7 +275,8 @@ extension IPC {
                 durationSeconds: run.durationSeconds,
                 checks: checks,
                 isStale: run.isStale,
-                failureDetail: run.failureDetail
+                failureDetail: run.failureDetail,
+                unstartedChecksDetail: run.unstartedChecksDetail
             )
         }
 
@@ -330,6 +343,13 @@ extension IPC {
         private static func failureLine(_ detail: String) -> String {
             let trimmed = detail.trimmingCharacters(in: .whitespacesAndNewlines)
             return "The run itself failed: " + clamped(trimmed, to: maxFailureDetailBytes).text
+        }
+
+        /// The same text under honest wording for the mixed case: the run
+        /// reported on some checks and never started the rest.
+        private static func unstartedLine(_ detail: String) -> String {
+            let trimmed = detail.trimmingCharacters(in: .whitespacesAndNewlines)
+            return "Some checks never started: " + clamped(trimmed, to: maxFailureDetailBytes).text
         }
 
         private static let staleNotice =

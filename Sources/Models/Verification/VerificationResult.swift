@@ -104,6 +104,32 @@ extension Verification {
         /// Optional, and defaulted, so a run persisted before this field
         /// existed still decodes.
         var failureDetail: String? = nil
+        /// The executor's own error text for a run that **did** report on some
+        /// checks and left others never started.
+        ///
+        /// A separate field rather than a second meaning for `failureDetail`,
+        /// because which field is set is the discriminator: the banner
+        /// `failureDetail` drives is headlined *"the run itself failed to start
+        /// its checks"*, and that headline is false here — a poll reported on at
+        /// least one check. `Runner.serverReportedAnyCheck` is deliberately
+        /// "was any check ever reported" and not "did any check finish"
+        /// (`PhaseExecutor.run` returns `.failed` with checks still executing
+        /// when its own deadline ends a run), so narrowing *that* gate to
+        /// recover this text would fire the wrong headline over a suite that
+        /// ran for its whole timeout. This field is what stops the text being
+        /// dropped instead: some checks reported, the rest died with a config
+        /// error, and the executor's explanation used to go nowhere.
+        ///
+        /// Set only when a check the server never mentioned is left behind — a
+        /// row still `.pending` when the run ends. A suite where every check
+        /// reported and one of them failed still sets neither field: that check's
+        /// own state and `output` explain it, and duplicating the fact up here
+        /// would misdescribe an ordinary test failure.
+        ///
+        /// Optional, and defaulted, so a run persisted before this field existed
+        /// still decodes — `Verification.Store.latest` *discards* a run it
+        /// cannot decode, so a missing default would silently lose stored runs.
+        var unstartedChecksDetail: String? = nil
 
         var isFinished: Bool {
             !checks.contains { $0.state == .running || $0.state == .pending }

@@ -438,7 +438,19 @@ struct VerificationTabView: View {
     private func content(run: Verification.Run?) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             if let detail = run?.failureDetail {
-                failureDetailBanner(detail)
+                detailBanner(
+                    headline: Text("The run itself failed to start its checks"), detail: detail
+                )
+            }
+            // A second banner, not a second spelling of the first: the run did
+            // report on some checks here, so "the run itself failed to start its
+            // checks" is false — and dropping the executor's text with the
+            // headline left the rows that say "not run" with no explanation
+            // anywhere. `Run.unstartedChecksDetail` carries it. The two fields
+            // are mutually exclusive where they are set (`Runner.execute`), so
+            // at most one of these draws.
+            if let detail = run?.unstartedChecksDetail {
+                detailBanner(headline: Text("Some checks never started"), detail: detail)
             }
 
             // Hidden, not merely disabled, while a run is live —
@@ -584,12 +596,14 @@ struct VerificationTabView: View {
         .padding(.vertical, 4)
     }
 
-    private func failureDetailBanner(_ detail: String) -> some View {
+    /// One banner shape, two headlines — see the call site for why the headline
+    /// is the part that has to differ.
+    private func detailBanner(headline: Text, detail: String) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "exclamationmark.triangle")
                 .foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 2) {
-                Text("The run itself failed to start its checks")
+                headline
                     .font(.system(size: 12, weight: .semibold))
                 // Bounded, not left to grow with `detail`: `PhaseExecutor`
                 // keeps up to 2000 characters of process output for exactly

@@ -594,6 +594,7 @@
 "Nothing to verify yet" = "Nothing to verify yet";
 "This result no longer reflects the worktree's current content." = "This result no longer reflects the worktree's current content.";
 "The run itself failed to start its checks" = "The run itself failed to start its checks";
+"Some checks never started" = "Some checks never started";
 "Showing the last lines captured. There is nothing more to fetch: the run's own output no longer exists anywhere." = "Showing the last lines captured. There is nothing more to fetch: the run's own output no longer exists anywhere.";
 "The process-compose integration is off. Turn it on in Settings to run checks." = "The process-compose integration is off. Turn it on in Settings to run checks.";
 "Add an atelier.process-compose.yaml to this worktree or the project directory to declare checks." = "Add an atelier.process-compose.yaml to this worktree or the project directory to declare checks.";

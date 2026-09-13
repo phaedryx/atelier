@@ -450,6 +450,9 @@ func renderText(_ payload: IPC.Payload?) -> String {
         if let failureDetail = run.failureDetail {
             lines.append("The run itself failed: \(failureDetail)")
         }
+        if let unstarted = run.unstartedChecksDetail {
+            lines.append("Some checks never started: \(unstarted)")
+        }
         if run.isStale {
             lines.append("STALE: the worktree has changed since this run started, so these results no longer describe the code on disk.")
         }

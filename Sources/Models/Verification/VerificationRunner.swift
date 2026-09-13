@@ -697,10 +697,24 @@ extension Verification {
             // its checks" over a suite that ran and failed is exactly the lie
             // being fixed. A spawn that never bound a socket still leaves
             // every row `.pending`, so it still gets its detail.
-            if !Self.serverReportedAnyCheck(runs[workstreamID]?.checks ?? []),
-               let outcome = state.outcome, let detail = Self.failureDetail(for: outcome)
-            {
-                runs[workstreamID]?.failureDetail = detail
+            //
+            // **The mixed case keeps the text and loses only the headline.**
+            // Some checks reported and the rest died with a config error is a
+            // real shape, and this gate is right to refuse it the headline
+            // above — but the executor's own explanation was dropped with it,
+            // which left the run's only account of why those rows say "not run"
+            // nowhere at all. `unstartedChecksDetail` carries it under its own
+            // wording. The discriminator is a row the server never mentioned,
+            // still `.pending` here because `seal` has not run yet; a suite
+            // where every check reported still sets neither field, so an
+            // ordinary failure is still explained by the failing check alone.
+            if let outcome = state.outcome, let detail = Self.failureDetail(for: outcome) {
+                let checks = runs[workstreamID]?.checks ?? []
+                if !Self.serverReportedAnyCheck(checks) {
+                    runs[workstreamID]?.failureDetail = detail
+                } else if Self.someCheckNeverStarted(checks) {
+                    runs[workstreamID]?.unstartedChecksDetail = detail
+                }
             }
             // Before `seal`, because `seal` is what makes `isLive` false by
             // inserting into `sealedRunIDs` — and this workstream's socket is
@@ -765,6 +779,25 @@ extension Verification {
         /// fix, pointed the other way.
         static func serverReportedAnyCheck(_ checks: [Verification.CheckResult]) -> Bool {
             checks.contains { $0.state != .pending }
+        }
+
+        /// Whether a check the control server never mentioned is left behind.
+        ///
+        /// The other side of `serverReportedAnyCheck`, asked of the same rows at
+        /// the same moment and for the same reason: `.pending` is exactly "never
+        /// seen", because `apply` leaves a name the server has not mentioned
+        /// alone and a run is seeded entirely `.pending`. Asked **before**
+        /// `seal`, which is what relabels those rows `.notRun` — afterwards the
+        /// distinction between "never reported" and "reported as not run" is
+        /// gone.
+        ///
+        /// Not a liveness test and not a terminal-states test: a run the
+        /// executor's own deadline ended leaves its rows `.running`, which is
+        /// *reported*, so neither this nor `serverReportedAnyCheck` fires a
+        /// banner over a suite that simply ran out of time with everything
+        /// started.
+        static func someCheckNeverStarted(_ checks: [Verification.CheckResult]) -> Bool {
+            checks.contains { $0.state == .pending }
         }
 
         /// What `Run.failureDetail` should say for a non-`.succeeded` outcome,
