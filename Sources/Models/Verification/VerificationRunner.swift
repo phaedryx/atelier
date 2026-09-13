@@ -186,10 +186,9 @@ extension Verification {
                         "No such check: %@. This project declares: %@.", comment: ""
                     ), unknown.joined(separator: ", "), valid.joined(separator: ", "))
                 case let .unrunnableChecks(names):
-                    String(format: NSLocalizedString(
-                        "process-compose cannot start a check whose name begins with \"-\": %@. Rename it in process-compose.yaml.",
-                        comment: "Verification: a declared check named like a flag, which cannot be run"
-                    ), names.joined(separator: ", "))
+                    // The shared copy, not a second spelling of it — see
+                    // `unrunnableChecksMessage`.
+                    Runner.unrunnableChecksMessage(names)
                 }
             }
         }
@@ -255,12 +254,21 @@ extension Verification {
             // four times before the invariant moved to the consumer. The
             // parked `start_verification` handler is the next caller, and would
             // plausibly hand `declaredProcesses` straight through.
-            let declared = runnableChecks(declared)
-            guard !declared.isEmpty else { return .failure(.nothingDeclared) }
-            guard !requested.isEmpty else { return .success(declared) }
-            let unknown = requested.filter { !declared.contains($0) }
+            let runnable = runnableChecks(declared)
+            // **"Declares nothing" and "declares nothing runnable" are not the
+            // same refusal.** A namespace whose every process is named like a
+            // flag declares checks — they are in the YAML, the user can grep
+            // them — so reporting "declares no verify processes" sends them
+            // looking for a namespace they already wrote. The filter is
+            // unchanged and nothing flag-shaped is ever started; only the
+            // wording of the refusal distinguishes the two cases.
+            guard !runnable.isEmpty else {
+                return .failure(declared.isEmpty ? .nothingDeclared : .unrunnableChecks(declared))
+            }
+            guard !requested.isEmpty else { return .success(runnable) }
+            let unknown = requested.filter { !runnable.contains($0) }
             guard unknown.isEmpty else {
-                return .failure(.unknownChecks(unknown, valid: declared))
+                return .failure(.unknownChecks(unknown, valid: runnable))
             }
             return .success(requested)
         }
@@ -278,6 +286,25 @@ extension Verification {
         /// anyway, so nothing runnable is withheld.
         nonisolated static func runnableChecks(_ declared: [String]) -> [String] {
             declared.filter { !isFlagShaped($0) }
+        }
+
+        /// The one copy of the wording for declared names process-compose
+        /// cannot start.
+        ///
+        /// Two paths reach this situation and they must say the same thing.
+        /// `Failure.unrunnableChecks` reports it for a name a *request* asked
+        /// for; `verificationUnavailableReason` reports it for a project whose
+        /// `verify` namespace declares nothing else, where there is no request
+        /// to refuse — the checklist is empty and Run is disabled, so that tab
+        /// used to claim "This project declares no verify checks", which is
+        /// untrue and leaves the user nothing to act on. A second sentence
+        /// written beside this one would drift from it; this is the one the
+        /// request path already got right.
+        nonisolated static func unrunnableChecksMessage(_ names: [String]) -> String {
+            String(format: NSLocalizedString(
+                "process-compose cannot start a check whose name begins with \"-\": %@. Rename it in process-compose.yaml.",
+                comment: "Verification: a declared check named like a flag, which cannot be run"
+            ), names.joined(separator: ", "))
         }
 
         /// Whether `PhaseRunner.command` would drop this name.
@@ -520,11 +547,16 @@ extension Verification {
                     comment: ""
                 ))
             }
-            // Filtered here and in `verificationAvailability`, through the one
-            // shared function, so the checks the checklist offers and the
-            // checks a run can address are the same set — see `runnableChecks`.
+            // `declared` goes in **as parsed**, and that does not weaken the
+            // filter: `resolveChecks` applies `runnableChecks` to it itself —
+            // documented there as being self-sufficient rather than trusting a
+            // caller — and refuses a flag-shaped `requested` name before it
+            // looks at `declared` at all. Pre-filtering here threw the
+            // distinction away instead: a namespace whose every check is named
+            // like a flag arrived as an empty list and was refused as "declares
+            // no verify processes", which is untrue and unactionable.
             let resolved = try Self.resolveChecks(
-                requested: checks, declared: Self.runnableChecks(declared)
+                requested: checks, declared: declared
             ).get()
 
             let runID = makeRunID()

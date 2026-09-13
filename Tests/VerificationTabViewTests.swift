@@ -165,6 +165,43 @@ final class VerificationTabViewTests: XCTestCase {
         XCTAssertNotEqual(parseFailure, noneDeclared)
     }
 
+    /// The third case, and the one #99 raised: a namespace that declares
+    /// checks none of which can be started. All three are unavailable and all
+    /// three are different facts — a broken config, an empty namespace, and a
+    /// namespace whose every name process-compose would refuse. Today's
+    /// two-way assertion above passes even if this case collapses into
+    /// "declares no verify checks", which is the untrue message being fixed.
+    func test_unavailableReason_distinguishesParseFailureNoChecksAndNoRunnableChecks() {
+        let parseFailure = verificationUnavailableReason(
+            isEnabled: true, hasConfig: true, hasBinary: true, isApproved: true, declared: nil
+        )
+        let noneDeclared = verificationUnavailableReason(
+            isEnabled: true, hasConfig: true, hasBinary: true, isApproved: true, declared: []
+        )
+        let noneRunnable = verificationUnavailableReason(
+            isEnabled: true, hasConfig: true, hasBinary: true, isApproved: true, declared: ["-n"]
+        )
+        XCTAssertNotNil(noneRunnable)
+        XCTAssertEqual(Set([parseFailure, noneDeclared, noneRunnable]).count, 3)
+        // And it is the request path's own sentence, not a second one written
+        // beside it — `Failure.unrunnableChecks` reports the same situation for
+        // a name that was asked for explicitly.
+        XCTAssertEqual(noneRunnable, Verification.Runner.unrunnableChecksMessage(["-n"]))
+        XCTAssertEqual(
+            noneRunnable,
+            Verification.Runner.Failure.unrunnableChecks(["-n"]).errorDescription
+        )
+    }
+
+    /// One flag-shaped name among runnable ones is not this case: it is simply
+    /// left out of the checklist, and the tab stays available.
+    func test_unavailableReason_isNilWhenOnlySomeNamesAreFlagShaped() {
+        XCTAssertNil(verificationUnavailableReason(
+            isEnabled: true, hasConfig: true, hasBinary: true, isApproved: true,
+            declared: ["-n", "rspec"]
+        ))
+    }
+
     // MARK: - Availability, as one decision
 
     private static let binaryPath = "/opt/homebrew/bin/process-compose"
@@ -244,6 +281,42 @@ final class VerificationTabViewTests: XCTestCase {
         )
         XCTAssertNil(result.reason)
         XCTAssertEqual(result.declared, ["rspec"])
+    }
+
+    /// **#99's undiagnosable state, end to end.** A project whose `verify`
+    /// namespace declares nothing but flag-shaped names offers no checks — the
+    /// filter is a flag-injection guard and stays — but it must not be reported
+    /// as declaring none: the checklist is empty and Run is disabled, so the
+    /// message is the only thing left that can explain itself.
+    func test_availability_explainsAProjectWhoseOnlyChecksAreFlagShaped() throws {
+        let onlyFlagShaped = try verificationAvailability(
+            isEnabled: true,
+            config: makeConfig(yaml: """
+            version: "0.5"
+            processes:
+              "-n":
+                namespace: verify
+                command: echo a
+              "--help":
+                namespace: verify
+                command: echo b
+            """),
+            binary: Self.binaryPath, isApproved: { _ in true }
+        )
+        let noneDeclared = try verificationAvailability(
+            isEnabled: true, config: makeConfig(yaml: Self.noChecks),
+            binary: Self.binaryPath, isApproved: { _ in true }
+        )
+        // Nothing flag-shaped is offered, and nothing is startable.
+        XCTAssertEqual(onlyFlagShaped.declared, [])
+        XCTAssertNotNil(onlyFlagShaped.reason)
+        XCTAssertNotEqual(
+            onlyFlagShaped.reason, noneDeclared.reason,
+            "a project that declares checks must not be told it declares none"
+        )
+        // Both names, so the user knows which ones to rename.
+        XCTAssertEqual(onlyFlagShaped.reason?.contains("-n"), true)
+        XCTAssertEqual(onlyFlagShaped.reason?.contains("--help"), true)
     }
 
     /// One case per precondition `PhasePolicy.plan` evaluates. Each is

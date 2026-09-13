@@ -36,6 +36,20 @@ final class VerificationRunnerTests: XCTestCase {
         }
     }
 
+    /// A namespace whose every declared name is flag-shaped does declare
+    /// checks — they are in the YAML and the user can grep them — so the
+    /// refusal has to say what is actually wrong rather than "declares no
+    /// verify processes", which is both untrue and unactionable. The filter is
+    /// unchanged: nothing flag-shaped is ever started.
+    func test_resolveChecks_doesNotCallAnAllFlagShapedNamespaceEmpty() {
+        switch Verification.Runner.resolveChecks(requested: [], declared: ["-n", "--help"]) {
+        case let .success(names): XCTFail("expected a refusal, got \(names)")
+        case let .failure(failure):
+            XCTAssertEqual(failure, .unrunnableChecks(["-n", "--help"]))
+            XCTAssertNotEqual(failure, .nothingDeclared)
+        }
+    }
+
     func test_resolveChecks_refusesUnknownNamesAndListsTheValidOnes() {
         switch Verification.Runner.resolveChecks(
             requested: ["rspec", "typo"], declared: ["rspec", "rubocop"]

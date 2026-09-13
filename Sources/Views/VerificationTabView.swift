@@ -131,11 +131,20 @@ func verificationIsStale(run: Verification.Run, currentStamp: String?) -> Bool {
 /// will fail to compile if that step is missed.
 ///
 /// - Parameter declared: the checks the located config declares in the
-///   `verify` namespace, or `nil` when the config exists but could not be
-///   parsed — distinct from an empty array, which means it parsed and named
-///   nothing. Only consulted once the first four preconditions all hold; a
-///   caller must not pass a meaningful value here while any earlier
-///   precondition is false; the guards below never reach it in that case.
+///   `verify` namespace **as parsed, before `Verification.Runner.runnableChecks`**,
+///   or `nil` when the config exists but could not be parsed — distinct from an
+///   empty array, which means it parsed and named nothing. Only consulted once
+///   the first four preconditions all hold; a caller must not pass a meaningful
+///   value here while any earlier precondition is false; the guards below never
+///   reach it in that case.
+///
+///   **Unfiltered, and the distinction is the whole of the third case below.**
+///   Handing the filtered list here is what made a project whose only checks
+///   are named like flags report "This project declares no verify checks" —
+///   untrue, and undiagnosable, because the checklist is empty and Run is
+///   disabled so there is no request left that could explain itself. This
+///   function applies the filter itself, through the same one copy
+///   `Runner.start` uses, so the three cases stay three.
 func verificationUnavailableReason(
     isEnabled: Bool,
     hasConfig: Bool,
@@ -183,6 +192,16 @@ func verificationUnavailableReason(
             "This project declares no verify checks.",
             comment: "Verification tab: unavailable because the verify namespace is empty"
         )
+    }
+    // A third case, and not a restatement of the one above it: the namespace
+    // declares checks and none of them can be started. `runnableChecks` is the
+    // one copy of that filter — a flag-injection guard shared with `execute`,
+    // never to be weakened here — so this reports the situation rather than
+    // trying to run such a check, and it borrows the request path's own
+    // sentence so the two cannot drift. Reached only when *every* declared name
+    // is flag-shaped; one among several simply does not appear in the checklist.
+    guard !Verification.Runner.runnableChecks(declared).isEmpty else {
+        return Verification.Runner.unrunnableChecksMessage(declared)
     }
     return nil
 }
@@ -259,21 +278,24 @@ func verificationAvailability(
     // like a flag — `-n` is legal YAML — is dropped by `PhaseRunner.command`
     // before it reaches the shell, and offering it made the *only*-selected
     // case run the entire namespace. See `runnableChecks`.
-    let declared: [String]? = switch plan {
+    // Two lists, deliberately: the *offered* one is filtered, and the wording
+    // needs the unfiltered one to tell "declares nothing" from "declares
+    // nothing runnable". Both come off `plan`'s own returned config, so neither
+    // is a second `locate`, and nil-for-unparseable survives into both.
+    let parsed: [String]? = switch plan {
     case let .run(planConfig, _):
         planConfig.declaredProcesses(in: ProcessCompose.Phase.verify.namespace)
-            .map(Verification.Runner.runnableChecks)
     case .nothingToDo:
         nil
     }
     return (
-        declared: declared ?? [],
+        declared: parsed.map(Verification.Runner.runnableChecks) ?? [],
         reason: verificationUnavailableReason(
             isEnabled: isEnabled,
             hasConfig: config != nil,
             hasBinary: binary != nil,
             isApproved: approvalHolds,
-            declared: declared
+            declared: parsed
         )
     )
 }
