@@ -60,6 +60,27 @@ struct OnboardingView: View {
                             status: toolStatus.git,
                             version: toolStatus.gitVersion
                         )
+                        // Required, and listed above tmux for that reason: it
+                        // runs every phase a project declares — bootstrap,
+                        // prepare, execute, dispose, verify — so a machine
+                        // without it has nothing Atelier can do for a project.
+                        // It is also the row where the install link earns its
+                        // place, since process-compose is not in homebrew-core
+                        // and the three directories `resolveBinary` searches
+                        // miss every shim-based install.
+                        //
+                        // `status` comes from `ToolStatus`, which resolves this
+                        // one through `ProcessCompose.Settings.resolveBinary()`
+                        // rather than the generic binary search — so this row
+                        // and the Execution tab's Start button cannot disagree
+                        // about whether there is a binary.
+                        PrerequisiteRow(
+                            name: "process-compose",
+                            label: "Process Compose",
+                            status: toolStatus.processCompose,
+                            version: toolStatus.processComposeVersion,
+                            installURL: URL(string: "https://f1bonacc1.github.io/process-compose/installation/")
+                        )
                         PrerequisiteRow(
                             name: "tmux",
                             label: "tmux",

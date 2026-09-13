@@ -213,10 +213,9 @@ extension Verification {
                         "No such check: %@. This project declares: %@.", comment: ""
                     ), unknown.joined(separator: ", "), valid.joined(separator: ", "))
                 case let .unrunnableChecks(names):
-                    String(format: NSLocalizedString(
-                        "process-compose cannot start a check whose name begins with \"-\": %@. Rename it in process-compose.yaml.",
-                        comment: "Verification: a declared check named like a flag, which cannot be run"
-                    ), names.joined(separator: ", "))
+                    // The shared copy, not a second spelling of it — see
+                    // `unrunnableChecksMessage`.
+                    Runner.unrunnableChecksMessage(names)
                 }
             }
         }
@@ -282,12 +281,21 @@ extension Verification {
             // four times before the invariant moved to the consumer. The
             // parked `start_verification` handler is the next caller, and would
             // plausibly hand `declaredProcesses` straight through.
-            let declared = runnableChecks(declared)
-            guard !declared.isEmpty else { return .failure(.nothingDeclared) }
-            guard !requested.isEmpty else { return .success(declared) }
-            let unknown = requested.filter { !declared.contains($0) }
+            let runnable = runnableChecks(declared)
+            // **"Declares nothing" and "declares nothing runnable" are not the
+            // same refusal.** A namespace whose every process is named like a
+            // flag declares checks — they are in the YAML, the user can grep
+            // them — so reporting "declares no verify processes" sends them
+            // looking for a namespace they already wrote. The filter is
+            // unchanged and nothing flag-shaped is ever started; only the
+            // wording of the refusal distinguishes the two cases.
+            guard !runnable.isEmpty else {
+                return .failure(declared.isEmpty ? .nothingDeclared : .unrunnableChecks(declared))
+            }
+            guard !requested.isEmpty else { return .success(runnable) }
+            let unknown = requested.filter { !runnable.contains($0) }
             guard unknown.isEmpty else {
-                return .failure(.unknownChecks(unknown, valid: declared))
+                return .failure(.unknownChecks(unknown, valid: runnable))
             }
             return .success(requested)
         }
@@ -305,6 +313,25 @@ extension Verification {
         /// anyway, so nothing runnable is withheld.
         nonisolated static func runnableChecks(_ declared: [String]) -> [String] {
             declared.filter { !isFlagShaped($0) }
+        }
+
+        /// The one copy of the wording for declared names process-compose
+        /// cannot start.
+        ///
+        /// Two paths reach this situation and they must say the same thing.
+        /// `Failure.unrunnableChecks` reports it for a name a *request* asked
+        /// for; `verificationUnavailableReason` reports it for a project whose
+        /// `verify` namespace declares nothing else, where there is no request
+        /// to refuse — the checklist is empty and Run is disabled, so that tab
+        /// used to claim "This project declares no verify checks", which is
+        /// untrue and leaves the user nothing to act on. A second sentence
+        /// written beside this one would drift from it; this is the one the
+        /// request path already got right.
+        nonisolated static func unrunnableChecksMessage(_ names: [String]) -> String {
+            String(format: NSLocalizedString(
+                "process-compose cannot start a check whose name begins with \"-\": %@. Rename it in process-compose.yaml.",
+                comment: "Verification: a declared check named like a flag, which cannot be run"
+            ), names.joined(separator: ", "))
         }
 
         /// Whether `PhaseRunner.command` would drop this name.
@@ -428,6 +455,104 @@ extension Verification {
             stopRequested.insert(workstreamID)
         }
 
+        /// How long `stopAndWait` waits before reporting that the run is still
+        /// live.
+        ///
+        /// `ProcessRunner.Timeout.userCommand`, and it has to be at least that
+        /// tier. The wait covers two things this layer cannot bound itself: the
+        /// window before `up` binds its control socket, which is a shell spawn
+        /// plus whatever the project's own `verify` processes do before they
+        /// report; and the run loop's teardown, which is a repository-authored
+        /// `down` already bounded by `Timeout.local` (60s). So `local` is
+        /// structurally too tight — the teardown alone may use all of it — and
+        /// `userCommand` is the next tier, the same bound `runDispose` uses for
+        /// the very next step of the same purge.
+        ///
+        /// **Not `Timeout.suite`.** That bounds a suite running to *completion*,
+        /// and this wait is for one being *stopped*. Blocking an archive for
+        /// half an hour is worse than the hazard the wait exists to close.
+        static let stopWaitTimeout = Duration.seconds(ProcessRunner.Timeout.userCommand)
+
+        /// Ask this workstream's run to stop, and wait until nothing of it is
+        /// live. Returns whether it got there before `timeout`.
+        ///
+        /// **This adds no second teardown, and that is the whole shape of it.**
+        /// It calls `stop`, which sets a flag, and then polls `isLive` — so the
+        /// run loop remains the single owner of `shutDown`, and every ordering
+        /// that loop guarantees (final snapshot, log capture, seal, *then*
+        /// teardown) happens exactly once, in that order, however this is
+        /// called. `Workstream.Archiver.purge` is the caller this exists for:
+        /// it used to reach past the runner to `PhaseExecutor.shutDown`, which
+        /// **no-ops when the socket file is not there yet**, so a purge landing
+        /// during the binding window went on to `dispose` and `git worktree
+        /// remove --force` while a suite was still coming up in that tree.
+        ///
+        /// It composes with `shouldStop` rather than working around it. That
+        /// guard withholds a pending Stop until the control server has answered
+        /// once, for the same reason: a teardown ordered before the socket
+        /// exists does nothing while the suite keeps running. So a run still
+        /// binding is not stopped *yet* — it is stopped as soon as it can be,
+        /// and this waits for that rather than assuming it.
+        ///
+        /// `isLive`, not `Run.isFinished`: a run's rows are all terminal for the
+        /// last stretch of its life, and the socket is not released until the
+        /// teardown returns.
+        ///
+        /// **The bound is real and the caller must handle `false`.** A spawn
+        /// that never binds is only bounded by `Timeout.suite`, far past
+        /// anything an archive can wait for, so on expiry this reports the truth
+        /// and lets the caller decide. For `purge` that decision is to proceed:
+        /// a workstream stranded half-archived is worse than cleanup that did
+        /// not happen.
+        @discardableResult
+        func stopAndWait(
+            workstreamID: UUID, timeout: Duration = Runner.stopWaitTimeout
+        ) async -> Bool {
+            stop(workstreamID: workstreamID)
+            let deadline = ContinuousClock.now.advanced(by: timeout)
+            while isLive(workstreamID) {
+                guard ContinuousClock.now < deadline else { return false }
+                do {
+                    try await Task.sleep(for: pollInterval)
+                } catch {
+                    // Cancelled. Report what is true rather than spinning on a
+                    // sleep that will now throw immediately every time.
+                    return !isLive(workstreamID)
+                }
+            }
+            return true
+        }
+
+        // MARK: - Forgetting a workstream
+
+        /// Drop what this type remembers about a workstream that no longer
+        /// exists.
+        ///
+        /// `Workstream.Archiver.purge` is the production caller. Without it
+        /// `runs[workstreamID]` held a sealed run for a destroyed workstream for
+        /// the rest of the session — the same one-entry-per-archive leak
+        /// `AsyncSetupService.clearState` was added to close.
+        ///
+        /// Called after `stopAndWait`, so on the ordinary path the loop has
+        /// already sealed and torn down and there is nothing in flight. On the
+        /// expired-wait path the loop is still running, and forgetting *first*
+        /// is what makes that safe: `seal`, `apply` and `captureFailedOutput`
+        /// all guard on finding the run, so each becomes a no-op — no
+        /// `Store.save` for a workstream being deleted, and no `onFinish`, which
+        /// would otherwise post an `atelier/verification` completion notice
+        /// about a workstream that is being destroyed as it is written.
+        ///
+        /// **Deliberately not `tearingDown`.** The run loop owns that set and
+        /// removes its own entry on the way out; clearing it here would report
+        /// `isLive == false` while the socket is still being released, which is
+        /// the one thing it exists to prevent. `issuedRunIDs` and `sealedRunIDs`
+        /// are left alone too — they are keyed by run id and exist so an id is
+        /// never reused, which outliving one workstream is the point of.
+        func forget(workstreamID: UUID) {
+            runs.removeValue(forKey: workstreamID)
+            stopRequested.remove(workstreamID)
+        }
+
         // MARK: - Sealing
 
         /// Turn a final `processes()` read into the run's authoritative result.
@@ -543,7 +668,6 @@ extension Verification {
             // does not apply — to a user press or to an agent call.
             let plan = PhasePolicy.plan(
                 phase: .verify,
-                isEnabled: ProcessCompose.Settings.isEnabled,
                 config: ProcessCompose.Config.locate(
                     worktree: worktreePath, projectDirectory: projectDirectory
                 ),
@@ -585,11 +709,16 @@ extension Verification {
                     comment: ""
                 ))
             }
-            // Filtered here and in `verificationAvailability`, through the one
-            // shared function, so the checks the checklist offers and the
-            // checks a run can address are the same set — see `runnableChecks`.
+            // `declared` goes in **as parsed**, and that does not weaken the
+            // filter: `resolveChecks` applies `runnableChecks` to it itself —
+            // documented there as being self-sufficient rather than trusting a
+            // caller — and refuses a flag-shaped `requested` name before it
+            // looks at `declared` at all. Pre-filtering here threw the
+            // distinction away instead: a namespace whose every check is named
+            // like a flag arrived as an empty list and was refused as "declares
+            // no verify processes", which is untrue and unactionable.
             let resolved = try Self.resolveChecks(
-                requested: checks, declared: Self.runnableChecks(declared)
+                requested: checks, declared: declared
             ).get()
 
             let runID = makeRunID()
@@ -735,10 +864,24 @@ extension Verification {
             // its checks" over a suite that ran and failed is exactly the lie
             // being fixed. A spawn that never bound a socket still leaves
             // every row `.pending`, so it still gets its detail.
-            if !Self.serverReportedAnyCheck(runs[workstreamID]?.checks ?? []),
-               let outcome = state.outcome, let detail = Self.failureDetail(for: outcome)
-            {
-                runs[workstreamID]?.failureDetail = detail
+            //
+            // **The mixed case keeps the text and loses only the headline.**
+            // Some checks reported and the rest died with a config error is a
+            // real shape, and this gate is right to refuse it the headline
+            // above — but the executor's own explanation was dropped with it,
+            // which left the run's only account of why those rows say "not run"
+            // nowhere at all. `unstartedChecksDetail` carries it under its own
+            // wording. The discriminator is a row the server never mentioned,
+            // still `.pending` here because `seal` has not run yet; a suite
+            // where every check reported still sets neither field, so an
+            // ordinary failure is still explained by the failing check alone.
+            if let outcome = state.outcome, let detail = Self.failureDetail(for: outcome) {
+                let checks = runs[workstreamID]?.checks ?? []
+                if !Self.serverReportedAnyCheck(checks) {
+                    runs[workstreamID]?.failureDetail = detail
+                } else if Self.someCheckNeverStarted(checks) {
+                    runs[workstreamID]?.unstartedChecksDetail = detail
+                }
             }
             // Before `seal`, because `seal` is what makes `isLive` false by
             // inserting into `sealedRunIDs` — and this workstream's socket is
@@ -810,6 +953,25 @@ extension Verification {
         /// fix, pointed the other way.
         static func serverReportedAnyCheck(_ checks: [Verification.CheckResult]) -> Bool {
             checks.contains { $0.state != .pending }
+        }
+
+        /// Whether a check the control server never mentioned is left behind.
+        ///
+        /// The other side of `serverReportedAnyCheck`, asked of the same rows at
+        /// the same moment and for the same reason: `.pending` is exactly "never
+        /// seen", because `apply` leaves a name the server has not mentioned
+        /// alone and a run is seeded entirely `.pending`. Asked **before**
+        /// `seal`, which is what relabels those rows `.notRun` — afterwards the
+        /// distinction between "never reported" and "reported as not run" is
+        /// gone.
+        ///
+        /// Not a liveness test and not a terminal-states test: a run the
+        /// executor's own deadline ended leaves its rows `.running`, which is
+        /// *reported*, so neither this nor `serverReportedAnyCheck` fires a
+        /// banner over a suite that simply ran out of time with everything
+        /// started.
+        static func someCheckNeverStarted(_ checks: [Verification.CheckResult]) -> Bool {
+            checks.contains { $0.state == .pending }
         }
 
         /// What `Run.failureDetail` should say for a non-`.succeeded` outcome,

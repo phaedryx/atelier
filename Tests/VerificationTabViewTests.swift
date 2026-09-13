@@ -19,6 +19,27 @@ final class VerificationTabViewTests: XCTestCase {
         XCTAssertTrue(verificationCanRun(isLive: false))
     }
 
+    /// Run is gated on the checklist as well as on liveness, because every box
+    /// may now be unchecked and `Verification.Runner` reads no check names as
+    /// *run everything* — the opposite of what an empty checklist asked for.
+    func testRunIsDisabledWhenNothingIsChecked() {
+        XCTAssertFalse(verificationCanRunSelection(isLive: false, hasChecks: false))
+        XCTAssertTrue(verificationCanRunSelection(isLive: false, hasChecks: true))
+    }
+
+    /// And liveness still wins on its own: a live run is a live run however
+    /// many boxes are ticked.
+    func testRunStaysDisabledDuringARunWhateverIsChecked() {
+        XCTAssertFalse(verificationCanRunSelection(isLive: true, hasChecks: true))
+    }
+
+    /// "Run failed" runs the previous run's `failedNames`, not the checklist,
+    /// so an empty checklist has nothing to say about it. It is gated on
+    /// liveness alone — which is what `verificationCanRun` still answers.
+    func testRunFailedIsNotGatedOnTheChecklist() {
+        XCTAssertTrue(verificationCanRun(isLive: false))
+    }
+
     // MARK: - Checklist visibility
 
     // Hidden while live, not merely disabled: clicking a box that cannot take
@@ -161,41 +182,38 @@ final class VerificationTabViewTests: XCTestCase {
 
     // MARK: - The unavailable state
 
-    /// Reads the same four preconditions `PhasePolicy.plan` evaluates, in the
+    /// Reads the same three preconditions `PhasePolicy.plan` evaluates, in the
     /// same order, so the *decision* is one copy with that gate and only the
     /// *rendering* is separate. `PhasePolicy`'s own strings are past tense
     /// ("so no `verify` ran"); this tab has not run anything yet, so none of
     /// these may read as a report on a run that already happened.
     func test_unavailableReason_isNilOnceEveryPreconditionHolds() {
         XCTAssertNil(verificationUnavailableReason(
-            isEnabled: true, hasConfig: true, hasBinary: true, isApproved: true,
+            hasConfig: true, hasBinary: true, isApproved: true,
             declared: ["rspec", "rubocop"]
         ))
     }
 
-    func test_unavailableReason_reportsTheIntegrationSwitch() {
+    /// There is no integration switch to report any more; a missing config is
+    /// the first precondition. The present-tense assertion travels with it,
+    /// because it was the switch's test that carried it.
+    func test_unavailableReason_reportsAMissingConfig() {
         let reason = verificationUnavailableReason(
-            isEnabled: false, hasConfig: true, hasBinary: true, isApproved: true, declared: ["rspec"]
+            hasConfig: false, hasBinary: true, isApproved: true, declared: nil
         )
         XCTAssertNotNil(reason)
-        XCTAssertFalse(reason?.contains("ran") ?? true, "must not read as a report on a run that already happened: \(reason ?? "")")
-    }
-
-    func test_unavailableReason_reportsAMissingConfig() {
-        XCTAssertNotNil(verificationUnavailableReason(
-            isEnabled: true, hasConfig: false, hasBinary: true, isApproved: true, declared: nil
-        ))
+        XCTAssertFalse(reason?.contains(" ran") ?? true, "must not read as a report on a run that already happened: \(reason ?? "")")
     }
 
     func test_unavailableReason_reportsAMissingBinary() {
         XCTAssertNotNil(verificationUnavailableReason(
-            isEnabled: true, hasConfig: true, hasBinary: false, isApproved: true, declared: nil
+            hasConfig: true, hasBinary: false, isApproved: true, declared: nil
         ))
     }
 
     func test_unavailableReason_reportsAnUnapprovedConfig() {
         XCTAssertNotNil(verificationUnavailableReason(
-            isEnabled: true, hasConfig: true, hasBinary: true, isApproved: false, declared: nil
+            hasConfig: true, hasBinary: true, isApproved: false, declared: nil
         ))
     }
 
@@ -206,14 +224,51 @@ final class VerificationTabViewTests: XCTestCase {
     /// never folds an unparseable config into "declares no verify processes").
     func test_unavailableReason_distinguishesParseFailureFromNoChecksDeclared() {
         let parseFailure = verificationUnavailableReason(
-            isEnabled: true, hasConfig: true, hasBinary: true, isApproved: true, declared: nil
+            hasConfig: true, hasBinary: true, isApproved: true, declared: nil
         )
         let noneDeclared = verificationUnavailableReason(
-            isEnabled: true, hasConfig: true, hasBinary: true, isApproved: true, declared: []
+            hasConfig: true, hasBinary: true, isApproved: true, declared: []
         )
         XCTAssertNotNil(parseFailure)
         XCTAssertNotNil(noneDeclared)
         XCTAssertNotEqual(parseFailure, noneDeclared)
+    }
+
+    /// The third case, and the one #99 raised: a namespace that declares
+    /// checks none of which can be started. All three are unavailable and all
+    /// three are different facts — a broken config, an empty namespace, and a
+    /// namespace whose every name process-compose would refuse. Today's
+    /// two-way assertion above passes even if this case collapses into
+    /// "declares no verify checks", which is the untrue message being fixed.
+    func test_unavailableReason_distinguishesParseFailureNoChecksAndNoRunnableChecks() {
+        let parseFailure = verificationUnavailableReason(
+            hasConfig: true, hasBinary: true, isApproved: true, declared: nil
+        )
+        let noneDeclared = verificationUnavailableReason(
+            hasConfig: true, hasBinary: true, isApproved: true, declared: []
+        )
+        let noneRunnable = verificationUnavailableReason(
+            hasConfig: true, hasBinary: true, isApproved: true, declared: ["-n"]
+        )
+        XCTAssertNotNil(noneRunnable)
+        XCTAssertEqual(Set([parseFailure, noneDeclared, noneRunnable]).count, 3)
+        // And it is the request path's own sentence, not a second one written
+        // beside it — `Failure.unrunnableChecks` reports the same situation for
+        // a name that was asked for explicitly.
+        XCTAssertEqual(noneRunnable, Verification.Runner.unrunnableChecksMessage(["-n"]))
+        XCTAssertEqual(
+            noneRunnable,
+            Verification.Runner.Failure.unrunnableChecks(["-n"]).errorDescription
+        )
+    }
+
+    /// One flag-shaped name among runnable ones is not this case: it is simply
+    /// left out of the checklist, and the tab stays available.
+    func test_unavailableReason_isNilWhenOnlySomeNamesAreFlagShaped() {
+        XCTAssertNil(verificationUnavailableReason(
+            hasConfig: true, hasBinary: true, isApproved: true,
+            declared: ["-n", "rspec"]
+        ))
     }
 
     // MARK: - Availability, as one decision
@@ -263,7 +318,7 @@ final class VerificationTabViewTests: XCTestCase {
 
     func test_availability_offersTheDeclaredChecksWhenEveryPreconditionHolds() throws {
         let result = try verificationAvailability(
-            isEnabled: true, config: makeConfig(yaml: Self.twoChecks),
+            config: makeConfig(yaml: Self.twoChecks),
             binary: Self.binaryPath, isApproved: { _ in true }
         )
         XCTAssertNil(result.reason)
@@ -280,7 +335,6 @@ final class VerificationTabViewTests: XCTestCase {
     /// offered here is exactly what a run can address.
     func test_availability_doesNotOfferAFlagShapedCheck() throws {
         let result = try verificationAvailability(
-            isEnabled: true,
             config: makeConfig(yaml: """
             version: "0.5"
             processes:
@@ -297,7 +351,43 @@ final class VerificationTabViewTests: XCTestCase {
         XCTAssertEqual(result.declared, ["rspec"])
     }
 
-    /// One case per precondition `PhasePolicy.plan` evaluates. Each is
+    /// **#99's undiagnosable state, end to end.** A project whose `verify`
+    /// namespace declares nothing but flag-shaped names offers no checks — the
+    /// filter is a flag-injection guard and stays — but it must not be reported
+    /// as declaring none: the checklist is empty and Run is disabled, so the
+    /// message is the only thing left that can explain itself.
+    func test_availability_explainsAProjectWhoseOnlyChecksAreFlagShaped() throws {
+        let onlyFlagShaped = try verificationAvailability(
+            config: makeConfig(yaml: """
+            version: "0.5"
+            processes:
+              "-n":
+                namespace: verify
+                command: echo a
+              "--help":
+                namespace: verify
+                command: echo b
+            """),
+            binary: Self.binaryPath, isApproved: { _ in true }
+        )
+        let noneDeclared = try verificationAvailability(
+            config: makeConfig(yaml: Self.noChecks),
+            binary: Self.binaryPath, isApproved: { _ in true }
+        )
+        // Nothing flag-shaped is offered, and nothing is startable.
+        XCTAssertEqual(onlyFlagShaped.declared, [])
+        XCTAssertNotNil(onlyFlagShaped.reason)
+        XCTAssertNotEqual(
+            onlyFlagShaped.reason, noneDeclared.reason,
+            "a project that declares checks must not be told it declares none"
+        )
+        // Both names, so the user knows which ones to rename.
+        XCTAssertEqual(onlyFlagShaped.reason?.contains("-n"), true)
+        XCTAssertEqual(onlyFlagShaped.reason?.contains("--help"), true)
+    }
+
+    /// One case per precondition `PhasePolicy.plan` evaluates — three now that
+    /// process-compose is a requirement and the switch is gone. Each is
     /// unavailable, offers nothing, and says so in the present tense — the
     /// gate's own strings are past tense ("so no `verify` ran") and reporting
     /// on a run that never happened is the specific wrongness being excluded.
@@ -306,17 +396,14 @@ final class VerificationTabViewTests: XCTestCase {
         // Approval only applies to a config that arrived with the repository.
         let repositoryConfig = try makeConfig(yaml: Self.twoChecks, isRepositoryProvided: true)
         let cases: [(String, (declared: [String], reason: String?))] = [
-            ("integration off", verificationAvailability(
-                isEnabled: false, config: config, binary: Self.binaryPath, isApproved: { _ in true }
-            )),
             ("no config", verificationAvailability(
-                isEnabled: true, config: nil, binary: Self.binaryPath, isApproved: { _ in true }
+                config: nil, binary: Self.binaryPath, isApproved: { _ in true }
             )),
             ("no binary", verificationAvailability(
-                isEnabled: true, config: config, binary: nil, isApproved: { _ in true }
+                config: config, binary: nil, isApproved: { _ in true }
             )),
             ("not approved", verificationAvailability(
-                isEnabled: true, config: repositoryConfig, binary: Self.binaryPath,
+                config: repositoryConfig, binary: Self.binaryPath,
                 isApproved: { _ in false }
             )),
         ]
@@ -338,21 +425,21 @@ final class VerificationTabViewTests: XCTestCase {
     /// here, and disagreed with the `plan` that was happily running.
     func test_availability_doesNotAskApprovalOfAProjectDirectoryConfig() throws {
         let result = try verificationAvailability(
-            isEnabled: true, config: makeConfig(yaml: Self.twoChecks),
+            config: makeConfig(yaml: Self.twoChecks),
             binary: Self.binaryPath, isApproved: { _ in false }
         )
         XCTAssertNil(result.reason)
         XCTAssertEqual(result.declared, ["rspec", "rubocop"])
     }
 
-    /// `plan` answers four preconditions and stops, so it returns `.run` for a
+    /// `plan` answers three preconditions and stops, so it returns `.run` for a
     /// config whose `verify` namespace is empty — while `Runner.start` refuses
     /// it, because `up -n verify` on an empty namespace never exits. Taking
     /// `.run` as the whole of availability is what would put an enabled Run in
     /// front of the user here.
     func test_availability_refusesAConfigThatDeclaresNoChecks() throws {
         let result = try verificationAvailability(
-            isEnabled: true, config: makeConfig(yaml: Self.noChecks),
+            config: makeConfig(yaml: Self.noChecks),
             binary: Self.binaryPath, isApproved: { _ in true }
         )
         XCTAssertNotNil(result.reason)
@@ -372,11 +459,11 @@ final class VerificationTabViewTests: XCTestCase {
     /// for the wrong reason.
     func test_availability_refusesAnUnparseableConfigWithItsOwnWording() throws {
         let parseFailure = try verificationAvailability(
-            isEnabled: true, config: makeConfig(yaml: "processes: [this, is, not, a, mapping]\n"),
+            config: makeConfig(yaml: "processes: [this, is, not, a, mapping]\n"),
             binary: Self.binaryPath, isApproved: { _ in true }
         )
         let noneDeclared = try verificationAvailability(
-            isEnabled: true, config: makeConfig(yaml: Self.noChecks),
+            config: makeConfig(yaml: Self.noChecks),
             binary: Self.binaryPath, isApproved: { _ in true }
         )
         XCTAssertNotNil(parseFailure.reason)
@@ -391,11 +478,11 @@ final class VerificationTabViewTests: XCTestCase {
     /// `namespacePresence` calls `.present`.
     func test_availability_treatsAMissingProcessesKeyAsDeclaringNothing() throws {
         let noProcessesKey = try verificationAvailability(
-            isEnabled: true, config: makeConfig(yaml: "version: \"0.5\"\nenvironment:\n  - A=b\n"),
+            config: makeConfig(yaml: "version: \"0.5\"\nenvironment:\n  - A=b\n"),
             binary: Self.binaryPath, isApproved: { _ in true }
         )
         let noneDeclared = try verificationAvailability(
-            isEnabled: true, config: makeConfig(yaml: Self.noChecks),
+            config: makeConfig(yaml: Self.noChecks),
             binary: Self.binaryPath, isApproved: { _ in true }
         )
         XCTAssertEqual(noProcessesKey.declared, [])
@@ -403,7 +490,7 @@ final class VerificationTabViewTests: XCTestCase {
     }
 
     /// **The biconditional this whole split rests on.** Across every
-    /// combination of the four facts, `reason == nil` must hold exactly when
+    /// combination of the three facts, `reason == nil` must hold exactly when
     /// `plan` says `.run` *and* the config declares at least one check.
     /// Nothing in the types enforces that — `verificationUnavailableReason`
     /// hand-mirrors `plan`'s preconditions and cannot check that it agrees —
@@ -412,31 +499,29 @@ final class VerificationTabViewTests: XCTestCase {
     /// approval fact actually changes `plan`'s answer.
     func test_availability_agreesWithPhasePolicyOnEveryCombination() throws {
         let config = try makeConfig(yaml: Self.twoChecks, isRepositoryProvided: true)
-        for isEnabled in [true, false] {
-            for hasConfig in [true, false] {
-                for hasBinary in [true, false] {
-                    for isApproved in [true, false] {
-                        let suppliedConfig = hasConfig ? config : nil
-                        let binary = hasBinary ? Self.binaryPath : nil
-                        let plan = PhasePolicy.plan(
-                            phase: .verify, isEnabled: isEnabled, config: suppliedConfig,
-                            binary: binary, isApproved: { _ in isApproved }
-                        )
-                        let result = verificationAvailability(
-                            isEnabled: isEnabled, config: suppliedConfig,
-                            binary: binary, isApproved: { _ in isApproved }
-                        )
-                        let label = "enabled=\(isEnabled) config=\(hasConfig) binary=\(hasBinary) approved=\(isApproved)"
-                        switch plan {
-                        case .run:
-                            // The fixture declares two checks, so `.run` is the
-                            // whole of availability for this config.
-                            XCTAssertNil(result.reason, "plan said .run but the tab refuses: \(label)")
-                            XCTAssertEqual(result.declared, ["rspec", "rubocop"], label)
-                        case .nothingToDo:
-                            XCTAssertNotNil(result.reason, "plan refused but the tab would run: \(label)")
-                            XCTAssertEqual(result.declared, [], label)
-                        }
+        for hasConfig in [true, false] {
+            for hasBinary in [true, false] {
+                for isApproved in [true, false] {
+                    let suppliedConfig = hasConfig ? config : nil
+                    let binary = hasBinary ? Self.binaryPath : nil
+                    let plan = PhasePolicy.plan(
+                        phase: .verify, config: suppliedConfig,
+                        binary: binary, isApproved: { _ in isApproved }
+                    )
+                    let result = verificationAvailability(
+                        config: suppliedConfig,
+                        binary: binary, isApproved: { _ in isApproved }
+                    )
+                    let label = "config=\(hasConfig) binary=\(hasBinary) approved=\(isApproved)"
+                    switch plan {
+                    case .run:
+                        // The fixture declares two checks, so `.run` is the
+                        // whole of availability for this config.
+                        XCTAssertNil(result.reason, "plan said .run but the tab refuses: \(label)")
+                        XCTAssertEqual(result.declared, ["rspec", "rubocop"], label)
+                    case .nothingToDo:
+                        XCTAssertNotNil(result.reason, "plan refused but the tab would run: \(label)")
+                        XCTAssertEqual(result.declared, [], label)
                     }
                 }
             }

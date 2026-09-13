@@ -118,7 +118,8 @@ final class IPCVerificationToolsTests: XCTestCase {
             durationSeconds: 50,
             checks: checks,
             isStale: false,
-            failureDetail: nil
+            failureDetail: nil,
+            unstartedChecksDetail: nil
         )
     }
 

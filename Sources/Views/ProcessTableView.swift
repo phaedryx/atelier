@@ -100,55 +100,75 @@ struct ProcessTableView: View {
     }
 }
 
-/// The selection to store after toggling one checkbox, or nil if the toggle
-/// must be refused.
+/// The selection to store after toggling one checkbox.
 ///
-/// `current` is the stored selection, where **empty means all** — that is what
-/// `ProcessCompose.PhaseRunner` already means by it, since `up -n execute` with no names
-/// starts the whole namespace. Keeping "all" canonical as empty is what lets a
-/// project add a process to its YAML and have it included automatically.
+/// `current` is the stored selection, where `.all` is canonical for "every
+/// declared process" — that is what `ProcessCompose.PhaseRunner` already means
+/// by an empty name list, since `up -n execute` with no names starts the whole
+/// namespace, and keeping it canonical is what lets a project add a process to
+/// its YAML and have it included automatically.
 ///
-/// The trap is that "nothing selected" wants the same representation. Storing
-/// it made unchecking the last box self-contradictory: it stored empty, the
-/// view read empty back as *all*, every checkbox re-checked itself, and Start
-/// then ran the entire namespace — the opposite of what was asked. There is no
-/// third state to store, because process-compose has no way to express "start
-/// nothing"; so the toggle is refused instead, and the view disables that last
-/// checkbox rather than accepting a click it would have to undo.
+/// Unchecking the last box gives `.nothing`, which is a state and not a
+/// refusal. It used to be refused — the last checked box was `.disabled`, so a
+/// selection could never empty — because the store had no way to say "nothing"
+/// that the view did not read back as "all". `ProcessSelection` has one now, so
+/// the click is accepted and the Start button is what goes quiet.
 func processSelectionAfterToggling(
     _ name: String,
     on isOn: Bool,
-    current: Set<String>,
+    current: ProcessSelection,
     declared: [String]
-) -> [String]? {
+) -> ProcessSelection {
     let all = Set(declared)
-    var next = current.isEmpty ? all : current
+    var next: Set<String> = switch current {
+    case .all:
+        all
+    case .nothing:
+        []
+    case let .only(names):
+        Set(names)
+    }
     if isOn {
         next.insert(name)
     } else {
         next.remove(name)
     }
-    guard !next.isEmpty else { return nil }
-    return next == all ? [] : next.sorted()
+    if next.isEmpty {
+        return .nothing
+    }
+    return next == all ? .all : .only(next.sorted())
 }
 
 /// The stored selection, reconciled against what the config declares now.
 ///
 /// A selection persists per workstream while the YAML it names does not. Rename
 /// or remove a process and the stored name rides along forever: it matches
-/// nothing, so `effectiveSelection` is non-empty but contains none of the real
+/// nothing, so the selection is a non-empty subset containing none of the real
 /// names — every checkbox renders unchecked — and Start passes the dead name to
 /// `up -n execute`, which does not know it.
 ///
 /// Names that no longer exist are dropped. If nothing survives, the result is
-/// empty, which is the canonical "all" — the same answer a fresh workstream
-/// gets, and the only sane reading of "everything I chose is gone".
-func processSelectionOnLoad(stored: [String], declared: [String]) -> [String] {
-    let surviving = Set(stored).intersection(declared)
-    return surviving.isEmpty || surviving == Set(declared) ? [] : surviving.sorted()
+/// `.all` — the same answer a fresh workstream gets, and the only sane reading
+/// of "everything I chose is gone". That is deliberately *not* `.nothing`:
+/// nothing selected is a thing the user did, and a config edit they did not
+/// make must not be reported back to them as a choice they made.
+///
+/// `.nothing` itself survives any config change, for the same reason: it names
+/// no processes, so there is nothing in it for a rename to invalidate.
+func processSelectionOnLoad(stored: ProcessSelection, declared: [String]) -> ProcessSelection {
+    switch stored {
+    case .all:
+        return .all
+    case .nothing:
+        return .nothing
+    case let .only(names):
+        let surviving = Set(names).intersection(declared)
+        return surviving.isEmpty || surviving == Set(declared) ? .all : .only(surviving.sorted())
+    }
 }
 
-/// The selection to hand `ProcessCompose.PhaseRunner` for an `execute` run.
+/// The names to hand `ProcessCompose.PhaseRunner` for an `execute` run, or nil
+/// when the checklist has nothing selected and there is nothing to run.
 ///
 /// The run's own copy of the checklist's reconciliation, so the runner is
 /// self-sufficient: `ProcessSelectionView.onAppear` writes a cleaned selection
@@ -160,15 +180,18 @@ func processSelectionOnLoad(stored: [String], declared: [String]) -> [String] {
 /// for the reason `Verification.Runner.resolveChecks` gives for the same move:
 /// the guarantee must not depend on every call site remembering. That is what
 /// closes the inversion — a stored selection whose only members are flag-shaped
-/// resolves to the canonical empty "all" here, which is what the checklist
-/// renders too, instead of surviving as a non-empty selection that
-/// `PhaseRunner.command` then filters down to nothing and runs the whole
-/// namespace for.
-func processesToStart(stored: [String], declared: [String]) -> [String] {
+/// resolves to `.all` here, which is what the checklist renders too, instead of
+/// surviving as a non-empty selection that `PhaseRunner.command` then filters
+/// down to nothing and runs the whole namespace for.
+///
+/// The nil is the other half of that: `.all` and `.nothing` both name no
+/// processes, and only the type keeps them apart on the way to a runner that
+/// reads no names as *everything*.
+func processesToStart(stored: ProcessSelection, declared: [String]) -> [String]? {
     processSelectionOnLoad(
         stored: stored,
         declared: ProcessCompose.PhaseRunner.runnableProcesses(declared)
-    )
+    ).namesToRun
 }
 
 /// Where a checklist's selection is stored.
@@ -177,17 +200,17 @@ func processesToStart(stored: [String], declared: [String]) -> [String] {
 /// two namespaces: Execution's picks what `execute` starts, Verification's picks
 /// which checks run. One key for both would make checking `rspec` uncheck `bff`.
 struct ProcessSelectionStore: Sendable {
-    let read: @Sendable (UUID) -> [String]
-    let write: @Sendable ([String], UUID) -> Void
+    let read: @Sendable (UUID) -> ProcessSelection
+    let write: @Sendable (ProcessSelection, UUID) -> Void
 
     static let execute = ProcessSelectionStore(
-        read: { ProcessCompose.TableModel.selected(for: $0) },
-        write: { ProcessCompose.TableModel.setSelected($0, for: $1) }
+        read: { ProcessCompose.TableModel.selection(for: $0) },
+        write: { ProcessCompose.TableModel.setSelection($0, for: $1) }
     )
 
     static let verify = ProcessSelectionStore(
-        read: { Verification.selected(for: $0) },
-        write: { Verification.setSelected($0, for: $1) }
+        read: { Verification.selection(for: $0) },
+        write: { Verification.setSelection($0, for: $1) }
     )
 }
 
@@ -250,20 +273,37 @@ func processChecklistHeight(
 /// The choices come from the config rather than from the live API for the same
 /// reason it moved out of the table: before Start there is nothing running to
 /// enumerate.
+///
+/// **Every box may be unchecked.** The last checked one used to be `.disabled`,
+/// so a selection could never empty — the store had no way to say "nothing"
+/// that this view did not read back as "all". It has one now
+/// (`ProcessSelection`), and the consequence of an empty checklist is that the
+/// button which would start it is disabled and says why: `runControls` for
+/// Execution, `actionRow` for Verification. The refusal moved to where it can
+/// be explained, rather than living here as a checkbox that dimmed for reasons
+/// only a tooltip on a disabled control could have given.
 struct ProcessSelectionView: View {
     let workstreamID: UUID
     let declaredProcesses: [String]
     let store: ProcessSelectionStore
-    let lastSelectedHelp: String
+    /// Told that the stored selection changed — including the reconciled value
+    /// `onAppear` writes back, which is a change the user did not make and the
+    /// owner still has to hear about.
+    ///
+    /// A bare ping, carrying no value on purpose. The owner re-reads the store,
+    /// which is the one authoritative copy; handing it the new selection here
+    /// would invite it to keep a second one, and a second copy is free to
+    /// disagree with what Start would actually run.
+    let onSelectionChange: () -> Void
 
-    @State private var selection: Set<String> = []
+    @State private var selection: ProcessSelection = .all
 
     /// A bare vertical checklist, with no heading and no "All" button.
     ///
     /// The heading named a pane that no longer exists: sitting between the dev
     /// command and Start, a column of checkboxes reads as the thing Start will
-    /// run without a label saying so. "All" went with it — checking every box canonicalises
-    /// back to the stored empty set on its own, so it was a shortcut for
+    /// run without a label saying so. "All" went with it — checking every box
+    /// canonicalises back to `.all` on its own, so it was a shortcut for
     /// something the checkboxes already do.
     ///
     /// Always a `ScrollView`, even for the two-process case that cannot
@@ -296,8 +336,6 @@ struct ProcessSelectionView: View {
                     }
                     .toggleStyle(.checkbox)
                     .frame(height: processChecklistRowHeight)
-                    .disabled(isLastSelected(name))
-                    .help(isLastSelected(name) ? lastSelectedHelp : "")
                 }
             }
         }
@@ -305,14 +343,12 @@ struct ProcessSelectionView: View {
         .frame(height: processChecklistHeight(count: sortedProcesses.count))
         .fixedSize(horizontal: true, vertical: false)
         .onAppear {
-            let cleaned = processSelectionOnLoad(
-                stored: store.read(workstreamID),
-                declared: declaredProcesses
-            )
-            selection = Set(cleaned)
             // Written back, not just filtered for display: otherwise Start
             // keeps reading the stale name straight out of UserDefaults.
-            store.write(cleaned, workstreamID)
+            persist(processSelectionOnLoad(
+                stored: store.read(workstreamID),
+                declared: declaredProcesses
+            ))
         }
     }
 
@@ -322,38 +358,36 @@ struct ProcessSelectionView: View {
         declaredProcesses.sorted()
     }
 
-    /// What Start will run.
-    ///
-    /// Stored empty when everything is selected, because that is what
-    /// `ProcessCompose.PhaseRunner` already means by empty: `up -n execute` with no names
-    /// starts the whole namespace. Keeping "all" canonical as empty means a
+    /// Which boxes are ticked. `.all` is canonical for "everything", because
+    /// that is what `ProcessCompose.PhaseRunner` already means by an empty name
+    /// list: `up -n execute` with no names starts the whole namespace, so a
     /// project that adds a process to its YAML picks it up automatically
-    /// instead of silently excluding it.
-    private var effectiveSelection: Set<String> {
-        selection.isEmpty ? Set(declaredProcesses) : selection
+    /// instead of being silently excluded.
+    private func isSelected(_ name: String) -> Bool {
+        switch selection {
+        case .all:
+            true
+        case .nothing:
+            false
+        case let .only(names):
+            names.contains(name)
+        }
     }
 
     private func binding(for name: String) -> Binding<Bool> {
         Binding(
-            get: { effectiveSelection.contains(name) },
+            get: { isSelected(name) },
             set: { isOn in
-                guard let next = processSelectionAfterToggling(
+                persist(processSelectionAfterToggling(
                     name, on: isOn, current: selection, declared: declaredProcesses
-                ) else { return }
-                persist(next)
+                ))
             }
         )
     }
 
-    /// Whether unchecking this one would leave nothing selected. Disabled
-    /// rather than silently refused, so the state reads as unavailable instead
-    /// of as a click that did nothing.
-    private func isLastSelected(_ name: String) -> Bool {
-        effectiveSelection == [name]
-    }
-
-    private func persist(_ canonical: [String]) {
-        selection = Set(canonical)
+    private func persist(_ canonical: ProcessSelection) {
+        selection = canonical
         store.write(canonical, workstreamID)
+        onSelectionChange()
     }
 }

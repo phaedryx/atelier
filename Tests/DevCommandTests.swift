@@ -8,21 +8,14 @@ final class DevCommandTests: XCTestCase {
     private var tmpDir: URL!
     private var projectContainers: [URL] = []
     private let workstreamID = UUID()
-    private var originallyEnabled = false
 
     override func setUp() {
         super.setUp()
         tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try! FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-        // Detection is gated on the setting, and the setting defaults off. Every
-        // test below that expects a command needs it on; the ones that check the
-        // gate itself turn it back off explicitly.
-        originallyEnabled = ProcessCompose.Settings.isEnabled
-        ProcessCompose.Settings.isEnabled = true
     }
 
     override func tearDown() {
-        ProcessCompose.Settings.isEnabled = originallyEnabled
         DevCommand.Resolver.saveOverride(nil, for: workstreamID)
         for container in projectContainers {
             try? FileManager.default.removeItem(at: container)
@@ -32,64 +25,29 @@ final class DevCommandTests: XCTestCase {
         super.tearDown()
     }
 
-    // MARK: - The integration switch gates detection
+    // MARK: - Detection is not gated on a switch
 
-    /// The security case for the guard, stated as a test.
-    ///
-    /// `detectProcessCompose` emits `process-compose up -U -f <files>` with no
-    /// `-n`, so process-compose runs *every* namespace it finds — including
-    /// `bootstrap` and `dispose`, the two that `PhasePolicy` gates behind the
-    /// user having approved every repository-provided file. This command never
-    /// goes through `PhasePolicy`. And it is reachable exactly when the setting
-    /// is off, because `usesProcessCompose` is false then, which sends
-    /// `resolvedRunCommand` down to `resolvedDevCommand?.command` — this.
-    ///
-    /// So with the integration disabled there must be nothing here to run.
-    func testDisabledIntegrationDetectsNothingEvenWithAConfigPresent() throws {
+    // There used to be five tests here, all about
+    // `ProcessCompose.Settings.isEnabled` gating `detectProcessCompose`. They
+    // are gone with the switch: process-compose is a requirement rather than an
+    // integration, so a located config is always detected.
+    //
+    // Nothing they were protecting was lost. The security case they stated —
+    // that `detectProcessCompose` emits `process-compose up -U -f <files>` with
+    // no `-n`, so running it would run `bootstrap` and `dispose` past
+    // `PhasePolicy` — does not rest on this guard and has not since
+    // `ProcessCompose.RunCommandPlan` took the invariant to the consumer. The
+    // switch being off was *itself* one of the four routes by which that hole
+    // reopened, which is the point: `RunCommandPlanTests` pins that no
+    // combination of inputs yields the un-`-n`'d string, and removing a
+    // precondition cannot reopen what is no longer defended by enumerating
+    // preconditions.
+    //
+    // The one case worth keeping is the override, because it is the escape
+    // hatch and it must still win over a config that is now always found.
+
+    func testTheOverrideStillBeatsAnAlwaysDetectedConfig() throws {
         try writeProcessCompose(named: "process-compose.yaml")
-        ProcessCompose.Settings.isEnabled = false
-
-        XCTAssertNil(DevCommand.Resolver.detectProcessCompose(
-            in: tmpDir.path, projectDirectory: tmpDir.path
-        ))
-    }
-
-    /// The whole-resolver view of the same thing. `resolvedRunCommand`'s
-    /// fallback is `resolvedDevCommand?.command`, and `resolvedDevCommand` is
-    /// exactly what this returns — so a nil here is a Start button with nothing
-    /// behind it rather than an ungated all-namespace invocation.
-    func testDisabledIntegrationResolvesToNoProcessComposeInvocation() throws {
-        try writeProcessCompose(named: "process-compose.yaml")
-        ProcessCompose.Settings.isEnabled = false
-
-        let resolved = DevCommand.Resolver.resolve(
-            workingDirectory: tmpDir.path,
-            projectDirectory: tmpDir.path,
-            override: nil
-        )
-
-        XCTAssertNil(resolved)
-    }
-
-    /// A config in the project directory is the user's own, but the switch still
-    /// governs: "off" means "do not run process-compose", not "only distrust the
-    /// repository's copy".
-    func testDisabledIntegrationAlsoIgnoresAProjectDirectoryConfig() throws {
-        let project = try makeProjectContainer()
-        try writeProcessCompose(named: "process-compose.yaml", in: project)
-        ProcessCompose.Settings.isEnabled = false
-
-        XCTAssertNil(DevCommand.Resolver.detectProcessCompose(
-            in: tmpDir.path, projectDirectory: project.path
-        ))
-    }
-
-    /// The override is the escape hatch, and it must survive the switch being
-    /// off — otherwise turning the integration off would leave a project with
-    /// no way to start anything at all.
-    func testDisabledIntegrationStillHonoursTheOverride() throws {
-        try writeProcessCompose(named: "process-compose.yaml")
-        ProcessCompose.Settings.isEnabled = false
         DevCommand.Resolver.saveOverride("npm run dev", for: workstreamID)
 
         let resolved = DevCommand.Resolver.resolve(
@@ -102,20 +60,16 @@ final class DevCommandTests: XCTestCase {
         XCTAssertEqual(resolved?.source, .override)
     }
 
-    /// Turning it back on restores detection, so the guard is a switch and not
-    /// a one-way door.
-    func testEnablingTheIntegrationRestoresDetection() throws {
-        try writeProcessCompose(named: "process-compose.yaml")
-        ProcessCompose.Settings.isEnabled = false
-        XCTAssertNil(DevCommand.Resolver.detectProcessCompose(
-            in: tmpDir.path, projectDirectory: tmpDir.path
-        ))
-
-        ProcessCompose.Settings.isEnabled = true
+    /// A config in the project directory is the user's own and is detected the
+    /// same way a worktree's is — there is no switch left that could make one
+    /// invisible.
+    func testAProjectDirectoryConfigIsDetected() throws {
+        let project = try makeProjectContainer()
+        try writeProcessCompose(named: "process-compose.yaml", in: project)
 
         XCTAssertEqual(
             DevCommand.Resolver.detectProcessCompose(
-                in: tmpDir.path, projectDirectory: tmpDir.path
+                in: tmpDir.path, projectDirectory: project.path
             )?.source,
             .processCompose
         )
@@ -386,8 +340,6 @@ final class DevCommandTests: XCTestCase {
     /// an `.override` and run literally, past PhasePolicy, on every Start.
     func testAStoredUnscopedProcessComposeCommandIsIgnored() throws {
         let dir = try makeWorktreeWithConfig()
-        ProcessCompose.Settings.isEnabled = true
-        defer { ProcessCompose.Settings.isEnabled = false }
 
         let resolved = DevCommand.Resolver.resolve(
             workingDirectory: dir,

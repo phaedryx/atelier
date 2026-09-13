@@ -36,6 +36,20 @@ final class VerificationRunnerTests: XCTestCase {
         }
     }
 
+    /// A namespace whose every declared name is flag-shaped does declare
+    /// checks — they are in the YAML and the user can grep them — so the
+    /// refusal has to say what is actually wrong rather than "declares no
+    /// verify processes", which is both untrue and unactionable. The filter is
+    /// unchanged: nothing flag-shaped is ever started.
+    func test_resolveChecks_doesNotCallAnAllFlagShapedNamespaceEmpty() {
+        switch Verification.Runner.resolveChecks(requested: [], declared: ["-n", "--help"]) {
+        case let .success(names): XCTFail("expected a refusal, got \(names)")
+        case let .failure(failure):
+            XCTAssertEqual(failure, .unrunnableChecks(["-n", "--help"]))
+            XCTAssertNotEqual(failure, .nothingDeclared)
+        }
+    }
+
     func test_resolveChecks_refusesUnknownNamesAndListsTheValidOnes() {
         switch Verification.Runner.resolveChecks(
             requested: ["rspec", "typo"], declared: ["rspec", "rubocop"]
@@ -131,8 +145,8 @@ final class VerificationRunnerTests: XCTestCase {
         XCTAssertEqual(runner.runs, before)
     }
 
-    /// Reachable without a binary or config: the process-compose integration
-    /// defaults off, so a plain start reaches `PhasePolicy.plan`'s
+    /// Reachable without a binary or config: the temp paths below hold no
+    /// process-compose config, so a plain start reaches `PhasePolicy.plan`'s
     /// `.nothingToDo` and must throw before touching `runs`.
     func test_start_leavesRunsUntouchedWhenNothingCanRun() {
         let runner = Verification.Runner()
@@ -298,12 +312,31 @@ final class VerificationRunnerTests: XCTestCase {
         XCTAssertTrue(runner.runs.isEmpty)
     }
 
+    func test_stopAndWait_returnsImmediatelyWhenNothingIsLive() async {
+        let runner = Verification.Runner()
+        let quiet = await runner.stopAndWait(workstreamID: UUID(), timeout: .milliseconds(50))
+        XCTAssertTrue(quiet)
+        XCTAssertTrue(runner.runs.isEmpty, "a wait must not invent a run to wait for")
+    }
+
+    func test_forget_leavesNoEntryForAWorkstream() {
+        let runner = Verification.Runner()
+        let id = UUID()
+        runner.seedInFlightForTesting(workstreamID: id, runID: "abcd1234")
+
+        runner.forget(workstreamID: id)
+
+        XCTAssertNil(runner.runs[id])
+        XCTAssertNil(runner.run(id: "abcd1234"))
+        XCTAssertFalse(runner.isLive(id))
+    }
+
     // MARK: - The run loop
 
     /// A run request the stub spawner never dereferences. `execute` is driven
-    /// directly, because `start`'s gate needs the integration switched on, a
-    /// located config and a real binary — none of which says anything about the
-    /// ordering these tests exist for.
+    /// directly, because `start`'s gate needs a located config and a real
+    /// binary — neither of which says anything about the ordering these tests
+    /// exist for.
     private func request(workstreamID: UUID, checks: [String]) -> Verification.Runner.SpawnRequest {
         Verification.Runner.SpawnRequest(
             workstreamID: workstreamID,
@@ -764,6 +797,52 @@ final class VerificationRunnerTests: XCTestCase {
         XCTAssertEqual(sealed?.failureDetail, "binary exited 127")
         XCTAssertEqual(sealed?.checks.map(\.state), [.notRun], "no entries ever arrived to report anything else")
         XCTAssertEqual(Verification.Store.latest(for: id)?.failureDetail, "binary exited 127", "must reach the persisted run, not only the in-memory one")
+        XCTAssertNil(
+            sealed?.unstartedChecksDetail,
+            "the headline field owns this case; the mixed-case field must stay empty"
+        )
+    }
+
+    /// **The mixed case, which used to drop the executor's text entirely.**
+    ///
+    /// The server reports on `rspec` and never mentions `rubocop` — a config
+    /// error in that one process, which `PhaseExecutor` reports as a `.failed`
+    /// outcome. `serverReportedAnyCheck` is right to refuse the "the run itself
+    /// failed to start its checks" headline here, since a check did report; but
+    /// the executor's own message was refused along with it, leaving the
+    /// `.notRun` row with no explanation anywhere — the run's log is gone with
+    /// its control server, so there is nowhere else to look. It now rides on
+    /// `unstartedChecksDetail`, under its own wording.
+    func test_execute_keepsTheExecutorsTextWhenSomeChecksNeverStarted() async {
+        let id = UUID()
+        addTeardownBlock { Verification.Store.clear(for: id) }
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: [.list([entry("rspec", status: "Completed", isRunning: false, exitCode: 0)])],
+            latency: .zero
+        )
+        let detail = "process-compose: process rubocop: working_dir does not exist"
+        let spawner = StubSpawner(
+            client: client, finishAfter: .milliseconds(30), outcome: .failed(detail)
+        )
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec", "rubocop"])
+
+        await drive(
+            runner, request(workstreamID: id, checks: ["rspec", "rubocop"]), runID: "abcd1234"
+        )
+
+        let sealed = runner.run(id: "abcd1234")
+        XCTAssertEqual(sealed?.checks.map(\.state), [.passed, .notRun])
+        XCTAssertNil(
+            sealed?.failureDetail,
+            "a run that reported on a check did not fail to start its checks"
+        )
+        XCTAssertEqual(sealed?.unstartedChecksDetail, detail)
+        XCTAssertEqual(
+            Verification.Store.latest(for: id)?.unstartedChecksDetail, detail,
+            "must reach the persisted run, not only the in-memory one"
+        )
     }
 
     /// The bug this test pins: `PhaseExecutor` reports a `.failed` outcome
@@ -955,6 +1034,10 @@ final class VerificationRunnerTests: XCTestCase {
             sealed?.failureDetail,
             "a suite that ran to the deadline did not fail to start its checks"
         )
+        XCTAssertNil(
+            sealed?.unstartedChecksDetail,
+            "every row was reported, so nothing here never started either"
+        )
     }
 
     /// A check the server never mentioned at all still seals `.notRun`, which
@@ -1040,6 +1123,151 @@ final class VerificationRunnerTests: XCTestCase {
         }
 
         XCTAssertEqual(runner.run(id: "abcd1234")?.wasStopped, true)
+    }
+
+    // MARK: - Stopping for a purge
+
+    /// **The binding window, which is the hazard `stopAndWait` exists for.**
+    /// `PhaseExecutor.shutDown` returns immediately when the socket file is not
+    /// there yet, so `Workstream.Archiver.purge` used to report the verify run
+    /// dealt with and go on to `dispose` and `git worktree remove --force` while
+    /// the suite was still coming up in that tree.
+    ///
+    /// The client throws `.notRunning` for its first forty polls — `up` has been
+    /// asked for but has not bound — so `shouldStop` correctly withholds the
+    /// Stop, and the only right answer to "is it gone" is *no*. The wait then
+    /// has to be bounded, because a spawn that never binds is bounded only by
+    /// `Timeout.suite`: it reports false, and `purge` proceeds anyway rather
+    /// than leaving a workstream half-archived.
+    ///
+    /// The second call is the other half: once the server answers, the withheld
+    /// Stop is acted on, the loop seals and tears down, and the wait returns
+    /// true — without ever having torn anything down itself.
+    func test_stopAndWait_doesNotReportClearWhileTheSpawnIsStillBinding() async {
+        let id = UUID()
+        addTeardownBlock { Verification.Store.clear(for: id) }
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: Array(repeating: .failure(.notRunning), count: 40)
+                + [.list([entry("rspec", status: "Running", isRunning: true, exitCode: 0)])],
+            latency: .zero
+        )
+        // Nil: the namespace is still running when the loop seals, so the
+        // teardown is what ends it — the stop path.
+        let spawner = StubSpawner(client: client, finishAfter: nil)
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
+        let stillBinding = Flag()
+        let liveWhileBinding = Flag()
+        let quietOnceBound = Flag()
+
+        await drive(runner, request(workstreamID: id, checks: ["rspec"]), runID: "abcd1234") {
+            // Shorter than the ~200ms of `.notRunning` above, so the deadline is
+            // reached while the server genuinely has not answered.
+            let early = await runner.stopAndWait(workstreamID: id, timeout: .milliseconds(50))
+            stillBinding.value = !early
+            liveWhileBinding.value = runner.isLive(id)
+            quietOnceBound.value = await runner.stopAndWait(workstreamID: id, timeout: .seconds(4))
+        }
+
+        XCTAssertTrue(stillBinding.value, "a run that has not bound yet must not be reported gone")
+        XCTAssertTrue(liveWhileBinding.value, "and it is still live when the wait gives up")
+        XCTAssertTrue(quietOnceBound.value, "once the server answers, the withheld Stop lands")
+        XCTAssertFalse(runner.isLive(id))
+        let shutDowns = await spawner.shutDowns
+        XCTAssertEqual(shutDowns, 1, "stopAndWait must not add a teardown of its own")
+    }
+
+    /// **The run-level flag and the row states must agree.** A purge used to
+    /// tear the socket down behind the runner's back, so `stopRequested` was
+    /// never set: the loop saw its polls start failing, sealed with
+    /// `wasStopped: false`, and relabelled the still-`Running` rows `.stopped`.
+    /// The stored run then said nobody stopped it over rows saying somebody had.
+    /// Going through `stopAndWait` — which goes through `stop` — is what makes
+    /// the two the same answer.
+    func test_stopAndWait_sealsWasStoppedInStepWithTheStoppedRows() async {
+        let id = UUID()
+        addTeardownBlock { Verification.Store.clear(for: id) }
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: [.list([
+                entry("rspec", status: "Running", isRunning: true, exitCode: 0),
+                entry("rubocop", status: "Completed", isRunning: false, exitCode: 0),
+            ])],
+            latency: .zero
+        )
+        let spawner = StubSpawner(client: client, finishAfter: nil)
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec", "rubocop"])
+        let quiet = Flag()
+
+        await drive(runner, request(workstreamID: id, checks: ["rspec", "rubocop"]), runID: "abcd1234") {
+            quiet.value = await runner.stopAndWait(workstreamID: id, timeout: .seconds(4))
+        }
+
+        XCTAssertTrue(quiet.value)
+        let sealed = Verification.Store.latest(for: id)
+        XCTAssertEqual(sealed?.wasStopped, true, "the flag must not disagree with the rows")
+        XCTAssertEqual(sealed?.checks.first { $0.name == "rspec" }?.state, .stopped)
+        XCTAssertEqual(sealed?.checks.first { $0.name == "rubocop" }?.state, .passed)
+    }
+
+    /// A purged workstream leaves nothing in `runs`. It held a sealed run for a
+    /// workstream that no longer existed for the rest of the session.
+    func test_forget_afterAStopAndWaitLeavesNoEntryBehind() async {
+        let id = UUID()
+        addTeardownBlock { Verification.Store.clear(for: id) }
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: [.list([entry("rspec", status: "Running", isRunning: true, exitCode: 0)])],
+            latency: .zero
+        )
+        let spawner = StubSpawner(client: client, finishAfter: nil)
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
+
+        await drive(runner, request(workstreamID: id, checks: ["rspec"]), runID: "abcd1234") {
+            await runner.stopAndWait(workstreamID: id, timeout: .seconds(4))
+            runner.forget(workstreamID: id)
+        }
+
+        XCTAssertNil(runner.runs[id])
+        XCTAssertNil(runner.run(id: "abcd1234"))
+        XCTAssertFalse(runner.isLive(id))
+    }
+
+    /// The expired-wait path: `purge` forgets the workstream while the loop is
+    /// still running, and everything the loop had left to do becomes a no-op.
+    ///
+    /// That is what `forget` is placed before the destructive work for. A `seal`
+    /// landing afterwards would write `atelier.verifyRun.<id>` back for a
+    /// workstream being deleted, *and* fire `onFinish` — which is how an agent
+    /// gets an `atelier/verification` completion notice about a worktree that no
+    /// longer exists.
+    func test_forget_stopsALateSealWritingBackAPurgedWorkstream() async {
+        let id = UUID()
+        addTeardownBlock { Verification.Store.clear(for: id) }
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: [.list([entry("rspec", status: "Running", isRunning: true, exitCode: 0)])],
+            latency: .zero
+        )
+        // The namespace ends on its own, so the loop reaches `seal` without any
+        // Stop having been acted on — the shape of a wait that expired.
+        let spawner = StubSpawner(client: client, finishAfter: .milliseconds(80))
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
+        let announced = Flag()
+        runner.onFinish = { _ in announced.value = true }
+
+        await drive(runner, request(workstreamID: id, checks: ["rspec"]), runID: "abcd1234") {
+            try? await Task.sleep(for: .milliseconds(20))
+            runner.forget(workstreamID: id)
+        }
+
+        XCTAssertNil(runner.runs[id], "the loop must not resurrect a forgotten workstream")
+        XCTAssertNil(Verification.Store.latest(for: id), "and must not persist a run for it")
+        XCTAssertFalse(announced.value, "nor announce one to an agent")
     }
 }
 

@@ -6,7 +6,7 @@ final class VerificationStoreTests: XCTestCase {
 
     override func tearDown() {
         Verification.Store.clear(for: workstreamID)
-        Verification.setSelected([], for: workstreamID)
+        Verification.setSelection(.all, for: workstreamID)
         super.tearDown()
     }
 
@@ -43,15 +43,23 @@ final class VerificationStoreTests: XCTestCase {
         XCTAssertTrue(Verification.selectionKey(for: workstreamID).hasPrefix("atelier.verifySelection."))
     }
 
-    /// Empty means all, and "all" is stored as the absence of a value — the
-    /// convention ProcessCompose.TableModel already uses, so a project adding a
-    /// check to its YAML picks it up automatically.
-    func test_setSelected_emptyRemovesTheKey() {
-        Verification.setSelected(["rspec"], for: workstreamID)
-        XCTAssertEqual(Verification.selected(for: workstreamID), ["rspec"])
-        Verification.setSelected([], for: workstreamID)
-        XCTAssertEqual(Verification.selected(for: workstreamID), [])
+    /// "All" is stored as the absence of a value — the convention
+    /// ProcessCompose.TableModel already uses, so a project adding a check to
+    /// its YAML picks it up automatically. `.nothing` is what the empty array
+    /// now means, and the two must not collapse into each other: `up -n verify`
+    /// with no names runs every check, so a `.nothing` read back as `.all`
+    /// would run the suite the user had just unchecked.
+    func test_setSelection_allRemovesTheKeyAndNothingKeepsIt() {
+        Verification.setSelection(.only(["rspec"]), for: workstreamID)
+        XCTAssertEqual(Verification.selection(for: workstreamID), .only(["rspec"]))
+
+        Verification.setSelection(.all, for: workstreamID)
+        XCTAssertEqual(Verification.selection(for: workstreamID), .all)
         XCTAssertNil(UserDefaults.standard.object(forKey: Verification.selectionKey(for: workstreamID)))
+
+        Verification.setSelection(.nothing, for: workstreamID)
+        XCTAssertEqual(Verification.selection(for: workstreamID), .nothing)
+        XCTAssertNotNil(UserDefaults.standard.object(forKey: Verification.selectionKey(for: workstreamID)))
     }
 
     /// The verify selection must not share Execution's key.

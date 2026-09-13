@@ -11,9 +11,10 @@ enum AsyncSetupState: Equatable {
     case idle
     case inProgress(step: String, progress: Double)
     case completed
-    /// Setup finished without doing anything, and the note says why: the
-    /// integration is off, no `process-compose.yaml` was found, the binary is
-    /// missing, or the config declares no `bootstrap` processes. The worktree
+    /// Setup finished without doing anything, and the note says why: no
+    /// `process-compose.yaml` was found, the binary is missing, the config
+    /// came with the repository and is unapproved, or it declares no
+    /// `bootstrap` processes. The worktree
     /// exists and is usable either way — this is deliberately neither
     /// `.completed`, which would claim work that never happened, nor
     /// `.failed`, which would claim a broken worktree.
@@ -81,7 +82,7 @@ actor AsyncSetupService {
     ///
     /// Nothing here can stop the worktree from being usable. It already exists
     /// by the time this runs, and every way of having no bootstrap to run —
-    /// integration off, no config, no binary, config not approved, no
+    /// no config, no binary, config not approved, no
     /// `bootstrap` processes — reports `.completedWithNote` rather than
     /// `.failed`. `PhasePolicy` owns both of those decisions; this method
     /// is only the plumbing between them.
@@ -108,7 +109,6 @@ actor AsyncSetupService {
 
         let plan = PhasePolicy.plan(
             phase: .bootstrap,
-            isEnabled: ProcessCompose.Settings.isEnabled,
             config: ProcessCompose.Config.locate(worktree: worktreePath, projectDirectory: projectPath),
             binary: ProcessCompose.Settings.resolveBinary(),
             isApproved: {

@@ -58,9 +58,13 @@ git worktree add "$def"
 
 ## Configuration
 
-Turn on **Enable process-compose** in Settings first — it is off by default, and
-nothing below runs until it is on, including the Execution tab's Start button
-and the Verification tab's Run button.
+Atelier runs a project's commands through
+[process-compose](https://f1bonacc1.github.io/process-compose/), so it needs
+that binary on the machine. It is a requirement rather than an option: there is
+no switch to turn it on, and nothing below works without it, including the
+Execution tab's Start button and the Verification tab's Run button. Settings →
+Environment lists it under **Detected Tools** beside `git` and `claude`, with a
+path field for an install the usual locations do not cover.
 
 ### What Atelier reads
 
@@ -322,13 +326,18 @@ own dependencies; it does not install the toolchain or start the daemons.
 `prepare` is the right place to check for those — a stack that fails on a
 missing daemon should say so once, before five processes each fail differently.
 
-`process-compose` itself has to be findable. Atelier does not search `PATH`: it
-looks at `/opt/homebrew/bin`, `/usr/local/bin` and `~/.local/bin`, in that order,
-and otherwise uses the path set in Settings verbatim — a configured path that is
-wrong fails rather than falling back to a search, because silently running a
-different binary than the one you named is worse. Installs by way of `go
-install`, nix, mise or asdf land outside those three, so point the setting at the
-binary — not the directory holding it.
+`process-compose` itself has to be findable, and it is **auto-detected with no
+override**. Atelier does not search `PATH`: it looks at `/opt/homebrew/bin`,
+`/usr/local/bin` and `~/.local/bin`, in that order, and takes the first
+executable it finds. There is no setting — the `process-compose` row under
+Settings → Environment → **Detected Tools** reports what resolved, its refresh
+button re-probes, and the onboarding screen lists it as a prerequisite beside
+`git` and `claude`.
+
+The consequence is worth stating plainly: an install by way of `go install`, nix,
+mise or asdf lands outside those three directories, and there is no path field to
+point at it. Such a binary is simply not found, and the fix is to put one where
+Atelier looks — a symlink into `~/.local/bin` does it.
 
 ### Approval, and when there is no config
 
@@ -343,9 +352,9 @@ in play, not the command Start runs.
 
 If a project has no config at any of the four locations, worktrees are still created and the
 Execution tab says there is nothing to run; a per-workstream command typed into
-Customize is the escape hatch. When Start cannot run for some other reason — the
-integration is switched off, process-compose is not on disk where Atelier looks,
-or the config declares no `execute` processes — the tab says which, and the Info
+Customize is the escape hatch. When Start cannot run for some other reason —
+process-compose is not on disk where Atelier looks, or the config declares no
+`execute` processes — the tab says which, and the Info
 tab reports what background setup did or did not do. That last one is a refusal
 rather than a dead button on purpose: `process-compose up -n execute` against a
 namespace nothing declares neither fails nor exits, so starting it would give you

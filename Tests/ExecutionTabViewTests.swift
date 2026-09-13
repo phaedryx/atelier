@@ -176,43 +176,65 @@ final class ExecutionTabViewTests: XCTestCase {
 
     // MARK: - Process selection toggling
 
-    /// The reported bug, pinned. Unchecking the last box used to store empty,
-    /// which the view reads back as "all": every checkbox re-checked itself and
-    /// Start ran the whole namespace — the opposite of what was asked.
-    func testUncheckingTheLastSelectedProcessIsRefused() {
-        XCTAssertNil(
-            processSelectionAfterToggling("b", on: false, current: ["b"], declared: ["a", "b"])
+    /// The reported bug, pinned twice over. Unchecking the last box used to
+    /// store empty, which the view read back as "all": every checkbox
+    /// re-checked itself and Start ran the whole namespace — the opposite of
+    /// what was asked. The fix for *that* was to refuse the click, which left a
+    /// checkbox dimmed for a reason nothing on the pane gave. It is now a state
+    /// of its own, and Start is what goes quiet.
+    func testUncheckingTheLastSelectedProcessLeavesNothingSelected() {
+        XCTAssertEqual(
+            processSelectionAfterToggling("b", on: false, current: .only(["b"]), declared: ["a", "b"]),
+            .nothing
         )
     }
 
-    /// The same click from the untouched state, where empty means all: it must
-    /// narrow to the others, never empty.
+    /// The same click from the untouched state, where `.all` means every
+    /// process: it must narrow to the others, never to nothing.
     func testUncheckingFromTheAllSelectedStateNarrows() {
         XCTAssertEqual(
-            processSelectionAfterToggling("a", on: false, current: [], declared: ["a", "b"]),
-            ["b"]
+            processSelectionAfterToggling("a", on: false, current: .all, declared: ["a", "b"]),
+            .only(["b"])
         )
     }
 
-    func testUncheckingTheLastOfASingleProcessConfigIsRefused() {
-        XCTAssertNil(
-            processSelectionAfterToggling("only", on: false, current: [], declared: ["only"])
-        )
-    }
-
-    /// Re-checking everything canonicalises back to empty, so a process added
-    /// to the YAML later is included instead of silently dropped.
-    func testSelectingEveryProcessStoresEmptyMeaningAll() {
+    /// A single-process config has one box, and unchecking it is the whole
+    /// selection going away — `.all` and `.nothing` name the same one process
+    /// here, so only the type keeps them apart.
+    func testUncheckingTheLastOfASingleProcessConfigLeavesNothingSelected() {
         XCTAssertEqual(
-            processSelectionAfterToggling("a", on: true, current: ["b"], declared: ["a", "b"]),
-            []
+            processSelectionAfterToggling("only", on: false, current: .all, declared: ["only"]),
+            .nothing
+        )
+    }
+
+    /// Checking a box from nothing selected is how the user gets back, and the
+    /// last one they check must canonicalise to `.all` like any other route to
+    /// a full selection.
+    func testCheckingABoxFromNothingSelectedStartsASubset() {
+        XCTAssertEqual(
+            processSelectionAfterToggling("a", on: true, current: .nothing, declared: ["a", "b"]),
+            .only(["a"])
+        )
+        XCTAssertEqual(
+            processSelectionAfterToggling("only", on: true, current: .nothing, declared: ["only"]),
+            .all
+        )
+    }
+
+    /// Re-checking everything canonicalises back to `.all`, so a process added
+    /// to the YAML later is included instead of silently dropped.
+    func testSelectingEveryProcessStoresAll() {
+        XCTAssertEqual(
+            processSelectionAfterToggling("a", on: true, current: .only(["b"]), declared: ["a", "b"]),
+            .all
         )
     }
 
     func testCheckingAnotherProcessKeepsAnExplicitSubsetSorted() {
         XCTAssertEqual(
-            processSelectionAfterToggling("b", on: true, current: ["c"], declared: ["a", "b", "c"]),
-            ["b", "c"]
+            processSelectionAfterToggling("b", on: true, current: .only(["c"]), declared: ["a", "b", "c"]),
+            .only(["b", "c"])
         )
     }
 
@@ -223,23 +245,31 @@ final class ExecutionTabViewTests: XCTestCase {
     /// process-compose does not know.
     func testANameThatNoLongerExistsIsDropped() {
         XCTAssertEqual(
-            processSelectionOnLoad(stored: ["gone", "bff"], declared: ["api", "bff"]),
-            ["bff"]
+            processSelectionOnLoad(stored: .only(["gone", "bff"]), declared: ["api", "bff"]),
+            .only(["bff"])
         )
     }
 
-    /// Everything chosen is gone: fall back to all, which is what empty means
-    /// and what a fresh workstream gets.
+    /// Everything chosen is gone: fall back to all, which is what a fresh
+    /// workstream gets. Not `.nothing` — a config edit the user did not make
+    /// must not come back to them as a choice they made.
     func testASelectionWithNothingSurvivingBecomesAll() {
-        XCTAssertEqual(processSelectionOnLoad(stored: ["gone", "also-gone"], declared: ["api"]), [])
+        XCTAssertEqual(processSelectionOnLoad(stored: .only(["gone", "also-gone"]), declared: ["api"]), .all)
+    }
+
+    /// And the other direction: an explicit empty selection is a choice, so no
+    /// amount of reconciling turns it into "run everything".
+    func testNothingSelectedSurvivesReconciliation() {
+        XCTAssertEqual(processSelectionOnLoad(stored: .nothing, declared: ["api", "bff"]), .nothing)
+        XCTAssertNil(processesToStart(stored: .nothing, declared: ["api", "bff"]))
     }
 
     func testASelectionCoveringEveryProcessCanonicalisesToAll() {
-        XCTAssertEqual(processSelectionOnLoad(stored: ["api", "bff"], declared: ["bff", "api"]), [])
+        XCTAssertEqual(processSelectionOnLoad(stored: .only(["api", "bff"]), declared: ["bff", "api"]), .all)
     }
 
     func testAnUntouchedSelectionStaysUntouched() {
-        XCTAssertEqual(processSelectionOnLoad(stored: [], declared: ["api", "bff"]), [])
+        XCTAssertEqual(processSelectionOnLoad(stored: .all, declared: ["api", "bff"]), .all)
     }
 
     // MARK: - Names a run could not be scoped to
@@ -253,7 +283,7 @@ final class ExecutionTabViewTests: XCTestCase {
     /// here instead, which is what the checklist renders for a selection
     /// nothing survived.
     func testASelectionOfOnlyAFlagShapedNameDoesNotSurviveAsASelection() {
-        XCTAssertEqual(processesToStart(stored: ["-web"], declared: ["api", "-web"]), [])
+        XCTAssertEqual(processesToStart(stored: .only(["-web"]), declared: ["api", "-web"]), [])
     }
 
     /// The quieter half: a mixed selection had its flag-shaped member dropped
@@ -261,7 +291,7 @@ final class ExecutionTabViewTests: XCTestCase {
     /// resolution names exactly what the checkboxes showed.
     func testAMixedSelectionKeepsOnlyTheNamesARunCanBeScopedTo() {
         XCTAssertEqual(
-            processesToStart(stored: ["-web", "api"], declared: ["api", "-web", "bff"]),
+            processesToStart(stored: .only(["-web", "api"]), declared: ["api", "-web", "bff"]),
             ["api"]
         )
     }
@@ -270,7 +300,7 @@ final class ExecutionTabViewTests: XCTestCase {
     /// concerned, so selecting everything else is still "all" — and all is what
     /// starts it, since an empty selection passes no names at all.
     func testSelectingEveryRunnableProcessIsStillAll() {
-        XCTAssertEqual(processesToStart(stored: ["api", "bff"], declared: ["api", "-web", "bff"]), [])
+        XCTAssertEqual(processesToStart(stored: .only(["api", "bff"]), declared: ["api", "-web", "bff"]), [])
     }
 
     /// The reconciliation the checklist does on load, done again for the run:
@@ -278,7 +308,7 @@ final class ExecutionTabViewTests: XCTestCase {
     /// Execution tab ever having been opened, so a stale stored name would
     /// otherwise reach `up -n execute`, which does not know it.
     func testARunReconcilesAStaleStoredNameWithoutTheChecklist() {
-        XCTAssertEqual(processesToStart(stored: ["gone", "bff"], declared: ["api", "bff"]), ["bff"])
+        XCTAssertEqual(processesToStart(stored: .only(["gone", "bff"]), declared: ["api", "bff"]), ["bff"])
     }
 
     // MARK: - Keeping Start reachable under the checklist
@@ -329,14 +359,14 @@ final class ExecutionTabViewTests: XCTestCase {
     func test_selectionStores_useDifferentKeys() {
         let id = UUID()
         addTeardownBlock {
-            ProcessSelectionStore.execute.write([], id)
-            ProcessSelectionStore.verify.write([], id)
+            ProcessSelectionStore.execute.write(.all, id)
+            ProcessSelectionStore.verify.write(.all, id)
         }
-        ProcessSelectionStore.execute.write(["bff"], id)
-        ProcessSelectionStore.verify.write(["rspec"], id)
+        ProcessSelectionStore.execute.write(.only(["bff"]), id)
+        ProcessSelectionStore.verify.write(.only(["rspec"]), id)
         // Sharing one key would make checking a check in Verification uncheck a
         // process in Execution.
-        XCTAssertEqual(ProcessSelectionStore.execute.read(id), ["bff"])
-        XCTAssertEqual(ProcessSelectionStore.verify.read(id), ["rspec"])
+        XCTAssertEqual(ProcessSelectionStore.execute.read(id), .only(["bff"]))
+        XCTAssertEqual(ProcessSelectionStore.verify.read(id), .only(["rspec"]))
     }
 }
