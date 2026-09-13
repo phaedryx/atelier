@@ -19,10 +19,12 @@ extension ProcessCompose {
     /// The invariant used to be defended by guarding its *preconditions* — and that
     /// failed four times, each time by a different route: a worktree override
     /// process-compose discovered but Atelier never showed; `compose.yaml` winning
-    /// discovery outright; the integration toggle being off; and the binary being
-    /// unresolvable while the toggle was on. Each fix closed one door. The shape of
-    /// the bug is that the fallback is reachable whenever *any* precondition of the
-    /// gated path fails, so enumerating preconditions can only ever be behind.
+    /// discovery outright; the process-compose switch — since removed, because
+    /// process-compose is a requirement rather than an integration — being off; and
+    /// the binary being unresolvable while that switch was on. Each fix closed one
+    /// door. The shape of the bug is that the fallback is reachable whenever *any*
+    /// precondition of the gated path fails, so enumerating preconditions can only
+    /// ever be behind.
     ///
     /// So the decision is made on the **source** instead, here, at the consumer. A
     /// `.processCompose` source has exactly one legal command — the phase-scoped one
@@ -81,24 +83,20 @@ extension ProcessCompose {
         /// This only explains *why*, and both are set together in one refresh so
         /// they cannot describe different states.
         ///
-        /// - Parameter isEnabled: whether the integration is switched on. Needed
-        ///   because `DevCommand.Resolver` detects nothing while it is off, which
-        ///   arrives here as `devCommand == nil` — indistinguishable, without this,
-        ///   from a project that genuinely has no config, and those want opposite
-        ///   advice.
+        /// `devCommand == nil` returns nil rather than a phrase: with no override
+        /// typed and no config located there is nothing to say that
+        /// `ExecutionTabView.scriptInstructions`' own copy does not already say.
+        /// It used to mean a second thing as well — the process-compose switch
+        /// being off, which made the resolver detect nothing — and that needed
+        /// distinguishing here because the two wanted opposite advice. The switch
+        /// is gone: process-compose is a requirement, so a nil dev command has one
+        /// meaning again.
         static func unavailableReason(
             devCommand: DevCommand?,
             config: ProcessCompose.Config?,
-            binary: String?,
-            isEnabled: Bool
+            binary: String?
         ) -> String? {
-            guard let devCommand else {
-                guard !isEnabled else { return nil }
-                return NSLocalizedString(
-                    "The process-compose integration is turned off, so nothing was detected. Turn it on in Settings, or set a command with Customize.",
-                    comment: ""
-                )
-            }
+            guard let devCommand else { return nil }
             switch devCommand.source {
             case .override:
                 return nil
@@ -111,7 +109,7 @@ extension ProcessCompose {
                 }
                 if binary == nil {
                     return NSLocalizedString(
-                        "process-compose was not found. Install it, or set its path in Settings, then try again.",
+                        "process-compose was not found. Install it, then refresh Detected Tools in Settings.",
                         comment: ""
                     )
                 }

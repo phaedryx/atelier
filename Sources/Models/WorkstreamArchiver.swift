@@ -297,7 +297,6 @@ extension Workstream {
         static func disposePlan(worktreePath: String, projectDirectory: String) -> PhasePolicy.Plan {
             PhasePolicy.plan(
                 phase: .dispose,
-                isEnabled: ProcessCompose.Settings.isEnabled,
                 config: ProcessCompose.Config.locate(
                     worktree: worktreePath, projectDirectory: projectDirectory
                 ),

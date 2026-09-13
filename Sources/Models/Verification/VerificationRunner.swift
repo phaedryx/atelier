@@ -478,7 +478,6 @@ extension Verification {
             // does not apply — to a user press or to an agent call.
             let plan = PhasePolicy.plan(
                 phase: .verify,
-                isEnabled: ProcessCompose.Settings.isEnabled,
                 config: ProcessCompose.Config.locate(
                     worktree: worktreePath, projectDirectory: projectDirectory
                 ),
