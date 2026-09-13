@@ -204,4 +204,157 @@ final class WorkstreamArchiverPurgeTests: XCTestCase {
         process.waitUntilExit()
         return process.terminationStatus == 0
     }
+
+    // MARK: - What a purge must not leave behind
+
+    /// Both checklists' stored selections, and the stored run, gone together.
+    ///
+    /// `atelier.verifySelection.<id>` and `atelier.processSelection.<id>` are
+    /// deliberately separate keys — one key for both would make checking a
+    /// verify check uncheck an execute process — so they leak separately too,
+    /// and a purge that dropped one and forgot the other is what this pins.
+    /// `purge` proper destroys a worktree, so the seam is what is tested.
+    func test_clearWorkstreamState_dropsBothSelectionKeysAndTheStoredRun() {
+        let id = UUID()
+        addTeardownBlock {
+            Workstream.Archiver.clearWorkstreamState(for: id)
+        }
+        Verification.setSelection(.only(["rspec"]), for: id)
+        ProcessCompose.TableModel.setSelection(.only(["web"]), for: id)
+        Verification.Store.save(Verification.Run(
+            id: "abcd1234", workstreamID: id, startedAt: Date(), stamp: "s",
+            checks: [], wasStopped: false
+        ))
+
+        Workstream.Archiver.clearWorkstreamState(for: id)
+
+        XCTAssertNil(
+            UserDefaults.standard.object(forKey: Verification.selectionKey(for: id)),
+            "the verify checklist's key outlived the workstream"
+        )
+        XCTAssertNil(
+            UserDefaults.standard.object(forKey: ProcessCompose.TableModel.selectionKey(for: id)),
+            "the execution checklist's key outlived the workstream"
+        )
+        XCTAssertNil(Verification.Store.latest(for: id))
+    }
+
+    // MARK: - Waiting for a verify run before the tree goes
+
+    /// **A purge issued while a verify spawn is still binding must wait.**
+    /// `ProcessCompose.PhaseExecutor.shutDown` no-ops when the socket file does
+    /// not exist yet, so reaching for it directly let `purge` go straight on to
+    /// `dispose` and `git worktree remove --force` under a suite that was still
+    /// coming up. Going through the runner's own stop-and-wait is what closes
+    /// that, and the control server here never answers within the deadline — so
+    /// the honest answer is that the run is still live.
+    ///
+    /// The wait is bounded and the purge proceeds past it; what is pinned here
+    /// is that it waits first and reports the truth, not that it blocks
+    /// forever.
+    @MainActor
+    func test_quiesceVerification_waitsWhileTheVerifySpawnIsStillBinding() async {
+        let id = UUID()
+        addTeardownBlock { Verification.Store.clear(for: id) }
+        // Forty polls of `.notRunning` at a 5ms cadence — `up` asked for, not
+        // yet bound — then a server that answers, which is what lets the
+        // withheld Stop finally land and the loop end.
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: Array(repeating: .failure(.notRunning), count: 40)
+                + [.list([verifyEntry("rspec", status: "Running", isRunning: true, exitCode: 0)])],
+            latency: .zero
+        )
+        let spawner = ParkedVerifySpawner(client: client)
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
+        let loop = Task { await runner.execute(verifyRequest(workstreamID: id), runID: "abcd1234") }
+
+        let began = ContinuousClock.now
+        let early = await Workstream.Archiver.quiesceVerification(
+            workstreamID: id, runner: runner, timeout: .milliseconds(50)
+        )
+        let waited = ContinuousClock.now - began
+
+        XCTAssertFalse(early, "a run that has not bound yet must not be reported gone")
+        XCTAssertGreaterThanOrEqual(waited, .milliseconds(50), "purge must wait, not sail through")
+        XCTAssertTrue(runner.isLive(id))
+
+        let quiet = await Workstream.Archiver.quiesceVerification(
+            workstreamID: id, runner: runner, timeout: .seconds(4)
+        )
+        XCTAssertTrue(quiet, "once the server answers, the withheld Stop lands and the run ends")
+        XCTAssertFalse(runner.isLive(id))
+        await loop.value
+        let shutDowns = await spawner.shutDowns
+        XCTAssertEqual(shutDowns, 1, "the run loop stays the only owner of the teardown")
+    }
+
+    /// The ordinary case: no run, no wait. This is also what a socket left by a
+    /// crashed session looks like from here — the runner knows nothing about it,
+    /// and `purge`'s own best-effort `shutDown` is what deals with that.
+    @MainActor
+    func test_quiesceVerification_returnsAtOnceWhenNoRunIsLive() async {
+        let quiet = await Workstream.Archiver.quiesceVerification(
+            workstreamID: UUID(), runner: Verification.Runner(), timeout: .milliseconds(50)
+        )
+        XCTAssertTrue(quiet)
+    }
+
+    private func verifyEntry(
+        _ name: String, status: String, isRunning: Bool, exitCode: Int
+    ) -> ProcessCompose.ProcessEntry {
+        ProcessCompose.ProcessEntry(
+            name: name, namespace: "verify", status: status, isReady: "",
+            hasReadyProbe: false, restarts: 0, exitCode: exitCode,
+            pid: 0, isRunning: isRunning
+        )
+    }
+
+    private func verifyRequest(workstreamID: UUID) -> Verification.Runner.SpawnRequest {
+        Verification.Runner.SpawnRequest(
+            workstreamID: workstreamID,
+            config: ProcessCompose.Config(
+                path: "/tmp/process-compose.yaml", isRepositoryProvided: false
+            ),
+            binary: "/usr/bin/true",
+            projectName: "app",
+            workstreamName: "wisp",
+            projectDirectory: "/tmp",
+            worktreePath: "/tmp",
+            checks: ["rspec"]
+        )
+    }
+}
+
+/// A verify spawn that never ends on its own, so the namespace is still running
+/// when a purge arrives — the only shape in which "purge waited" is a question.
+///
+/// A local, smaller cousin of `VerificationRunnerTests`' own stub rather than a
+/// share of it: that one is private to the file whose orderings it exists to
+/// expose, and this needs two of its four behaviours.
+private actor ParkedVerifySpawner: Verification.Runner.Spawning {
+    nonisolated let client: StubComposeClient
+    private(set) var shutDowns = 0
+    private var parked: CheckedContinuation<Void, Never>?
+
+    init(client: StubComposeClient) {
+        self.client = client
+    }
+
+    func run(_: Verification.Runner.SpawnRequest) async -> ProcessCompose.PhaseExecutor.Outcome {
+        await withCheckedContinuation { parked = $0 }
+        return .succeeded
+    }
+
+    nonisolated func controlClient(for _: Verification.Runner.SpawnRequest) -> ProcessCompose.Controlling {
+        client
+    }
+
+    func shutDown(_: Verification.Runner.SpawnRequest) async {
+        shutDowns += 1
+        await client.endServer()
+        parked?.resume()
+        parked = nil
+    }
 }

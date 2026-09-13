@@ -203,6 +203,19 @@ extension ProcessCompose {
             ProcessSelection.stored(forKey: selectionKey(for: workstreamID))
         }
 
+        /// Drop this workstream's stored process selection.
+        ///
+        /// `Workstream.Archiver.clearWorkstreamState` is its production caller,
+        /// in step with `Verification.clearSelection` — the key outlives a
+        /// purged workstream otherwise, and both checklists leak the same way.
+        ///
+        /// Removes the key rather than writing `.all`, which happens to remove
+        /// it too: that is `ProcessSelection`'s encoding, not this function's
+        /// promise, and "no key" is the thing being asked for.
+        nonisolated static func clearSelection(for workstreamID: UUID) {
+            UserDefaults.standard.removeObject(forKey: selectionKey(for: workstreamID))
+        }
+
         nonisolated static func setSelection(_ selection: ProcessSelection, for workstreamID: UUID) {
             selection.store(forKey: selectionKey(for: workstreamID))
         }

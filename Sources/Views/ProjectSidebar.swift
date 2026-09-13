@@ -52,6 +52,11 @@ extension Notification.Name {
 struct ProjectSidebar: View {
     @Binding var projects: [Project]
     @Binding var selection: SidebarSelection?
+    /// The app's one verification runner, handed down rather than taken from
+    /// the environment: `performPurge` needs the reference, and nothing here
+    /// renders a run — an `@EnvironmentObject` would redraw the whole sidebar
+    /// on every live poll of every workstream's suite.
+    let verificationRunner: Verification.Runner
     let onProjectsChanged: () -> Void
 
     @State private var showingAddProjectChoice = false
@@ -1121,7 +1126,11 @@ struct ProjectSidebar: View {
         guard let wsID = workstreamToPurge,
               let pi = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
         let projectID = projects[pi].id
-        Workstream.Archiver.purge(wsID, in: &projects[pi], surfaceCache: surfaceCache, tmuxPath: appEnv.toolStatus.tmux.path)
+        Workstream.Archiver.purge(
+            wsID, in: &projects[pi], surfaceCache: surfaceCache,
+            tmuxPath: appEnv.toolStatus.tmux.path,
+            verificationRunner: verificationRunner
+        )
         agentStateTracker.clear(workstreamID: wsID)
         rebuildIndices()
         if case let .workstream(id) = selection, id == wsID {
