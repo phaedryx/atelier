@@ -422,11 +422,11 @@ purpose) and `XCTSkipIf`s instead; that is safe only because `ci.yml` installs p
 and hard-fails if it is not on `searchPaths`, in the same job and immediately before the tests.
 
 Removing the flag took out a guard in each of three places — `PhasePolicy.plan` (so no
-unattended phase runs), `refreshConfigApproval` (so nothing asks for approval it will not use),
+unattended phase runs), the approval resolution (so nothing asks for approval it will not use),
 and `DevCommand.Resolver.detectProcessCompose` (so Start has nothing to detect). Only the third
 was ever near a security boundary, and it stopped being the boundary when
 `ProcessCompose.RunCommandPlan` took the invariant to the consumer — see below. A consequence
-worth knowing rather than fixing: `refreshConfigApproval` now runs for a project that ships its
+worth knowing rather than fixing: the approval resolution now runs for a project that ships its
 own `process-compose.yaml` for its own reasons, so such a project gets an approval prompt where
 it previously got silence.
 
@@ -464,9 +464,17 @@ if the fallback is put back. Do not replace this with another precondition check
 pane's Start button, and `doStartRun` refuses on the same stored plan, so the two cannot
 disagree — they did, for a round: the button was enabled on `devCommand?.command != nil` while
 the run guarded the resolved command, and an unresolvable binary rendered an enabled Start that
-did nothing in silence. `TerminalContainerView.refreshDevCommand` resolves the dev command, the
-plan and the reason together, in one function, because *agreement* is the invariant here rather
-than freshness. `ProcessCompose.RunCommandPlan.unavailableReason` explains a `.nothing`, and
+did nothing in silence. `ProcessCompose.ResolutionModel` resolves the dev command, the plan, the
+reason, the execute checklist, the verify availability and the approval together and publishes
+them as **one `Resolution` value**, because *agreement* is the invariant here rather than
+freshness — one struct assigned in one statement holds by construction what eight separate
+`@State`s in `TerminalContainerView.refreshDevCommand` held by convention. That is also what
+makes it safe for the resolution to run off the main actor, which it now does: a consumer reading
+mid-flight reads the previous pass whole rather than a half-updated one. The **first** resolution
+is synchronous, in the model's `init`, because a pane with nothing resolved is not neutral — a nil
+verify reason reads as "everything is fine" and put an enabled Run over an empty check list. The
+approval paths re-resolve synchronously too (`refreshNow`), because they read the result of the
+write they just made. `ProcessCompose.RunCommandPlan.unavailableReason` explains a `.nothing`, and
 `ExecutionTabView.scriptInstructions` — the surface that already drew for "nothing to run" —
 renders it: a config that cannot be located, a binary that is not where the search looks, an
 `execute` namespace nothing declares. Background setup's own outcome, including `.completedWithNote`, is
@@ -475,13 +483,14 @@ so those notes were written and discarded.
 
 **The checklist's own gate is deliberately *not* in that plan**, and a reviewer will
 pattern-match it to the second copy this document forbids, so say so in any commit that touches
-it. `TerminalContainerView.runnableExecuteSelection` is one expression with two consumers — the
+it. `TerminalContainerView.runnableExecuteSelection` stays in the view, reading the selection
+store per render, and is one expression with two consumers — the
 Start button's `.disabled` and `resolvedRunCommand`'s guard — which is the same one-decision rule
 applied to the other half: the plan answers "is there a safe command for this source", and this
 answers "is there anything selected to run it for". Folding the selection into
 `RunCommandPlan.plan` was tried on paper and is worse in a way that is not obvious:
-`declaredExecuteProcesses` matches on `.phaseScoped`, so a plan that went `.nothing` for an empty
-selection would take the **checklist** with it, hiding the checkboxes the user needs in order to
+`Resolution.declaredExecuteProcesses` is derived by matching on `.phaseScoped`, so a plan that went
+`.nothing` for an empty selection would take the **checklist** with it, hiding the checkboxes the user needs in order to
 tick one again — and `canRun` removes the Start button rather than disabling it, so the pane would
 answer "nothing to run" where the honest answer is "nothing selected". The two gates dim different
 things on purpose.

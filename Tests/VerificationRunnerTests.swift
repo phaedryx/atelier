@@ -36,6 +36,20 @@ final class VerificationRunnerTests: XCTestCase {
         }
     }
 
+    /// A namespace whose every declared name is flag-shaped does declare
+    /// checks — they are in the YAML and the user can grep them — so the
+    /// refusal has to say what is actually wrong rather than "declares no
+    /// verify processes", which is both untrue and unactionable. The filter is
+    /// unchanged: nothing flag-shaped is ever started.
+    func test_resolveChecks_doesNotCallAnAllFlagShapedNamespaceEmpty() {
+        switch Verification.Runner.resolveChecks(requested: [], declared: ["-n", "--help"]) {
+        case let .success(names): XCTFail("expected a refusal, got \(names)")
+        case let .failure(failure):
+            XCTAssertEqual(failure, .unrunnableChecks(["-n", "--help"]))
+            XCTAssertNotEqual(failure, .nothingDeclared)
+        }
+    }
+
     func test_resolveChecks_refusesUnknownNamesAndListsTheValidOnes() {
         switch Verification.Runner.resolveChecks(
             requested: ["rspec", "typo"], declared: ["rspec", "rubocop"]
@@ -688,6 +702,52 @@ final class VerificationRunnerTests: XCTestCase {
         XCTAssertEqual(sealed?.failureDetail, "binary exited 127")
         XCTAssertEqual(sealed?.checks.map(\.state), [.notRun], "no entries ever arrived to report anything else")
         XCTAssertEqual(Verification.Store.latest(for: id)?.failureDetail, "binary exited 127", "must reach the persisted run, not only the in-memory one")
+        XCTAssertNil(
+            sealed?.unstartedChecksDetail,
+            "the headline field owns this case; the mixed-case field must stay empty"
+        )
+    }
+
+    /// **The mixed case, which used to drop the executor's text entirely.**
+    ///
+    /// The server reports on `rspec` and never mentions `rubocop` — a config
+    /// error in that one process, which `PhaseExecutor` reports as a `.failed`
+    /// outcome. `serverReportedAnyCheck` is right to refuse the "the run itself
+    /// failed to start its checks" headline here, since a check did report; but
+    /// the executor's own message was refused along with it, leaving the
+    /// `.notRun` row with no explanation anywhere — the run's log is gone with
+    /// its control server, so there is nowhere else to look. It now rides on
+    /// `unstartedChecksDetail`, under its own wording.
+    func test_execute_keepsTheExecutorsTextWhenSomeChecksNeverStarted() async {
+        let id = UUID()
+        addTeardownBlock { Verification.Store.clear(for: id) }
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: [.list([entry("rspec", status: "Completed", isRunning: false, exitCode: 0)])],
+            latency: .zero
+        )
+        let detail = "process-compose: process rubocop: working_dir does not exist"
+        let spawner = StubSpawner(
+            client: client, finishAfter: .milliseconds(30), outcome: .failed(detail)
+        )
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec", "rubocop"])
+
+        await drive(
+            runner, request(workstreamID: id, checks: ["rspec", "rubocop"]), runID: "abcd1234"
+        )
+
+        let sealed = runner.run(id: "abcd1234")
+        XCTAssertEqual(sealed?.checks.map(\.state), [.passed, .notRun])
+        XCTAssertNil(
+            sealed?.failureDetail,
+            "a run that reported on a check did not fail to start its checks"
+        )
+        XCTAssertEqual(sealed?.unstartedChecksDetail, detail)
+        XCTAssertEqual(
+            Verification.Store.latest(for: id)?.unstartedChecksDetail, detail,
+            "must reach the persisted run, not only the in-memory one"
+        )
     }
 
     /// The bug this test pins: `PhaseExecutor` reports a `.failed` outcome
@@ -878,6 +938,10 @@ final class VerificationRunnerTests: XCTestCase {
         XCTAssertNil(
             sealed?.failureDetail,
             "a suite that ran to the deadline did not fail to start its checks"
+        )
+        XCTAssertNil(
+            sealed?.unstartedChecksDetail,
+            "every row was reported, so nothing here never started either"
         )
     }
 

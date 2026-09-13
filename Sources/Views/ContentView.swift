@@ -131,9 +131,15 @@ struct ContentView: View {
     /// subscribes to it. Nothing here renders from the runner, so a
     /// subscription would re-evaluate this whole body on every `runs` publish —
     /// about once a second for the length of a run — and each re-evaluation
-    /// re-initialises `TerminalContainerView`, whose `init` eagerly resolves
-    /// the dev command and so locates a process-compose config. `@State` keeps
-    /// the lifetime and drops the subscription.
+    /// re-initialises `TerminalContainerView`. That used to cost a
+    /// process-compose config lookup every time, because its `init` resolved
+    /// the dev command eagerly into a `State(initialValue:)`, which is an
+    /// ordinary argument and so is evaluated on every init. It no longer does:
+    /// `ProcessCompose.ResolutionModel` is held as a `@StateObject`, whose
+    /// `wrappedValue` is an autoclosure SwiftUI calls once per view identity.
+    /// The decision here is unchanged and still not cosmetic — a redundant
+    /// re-evaluation of this body is worth avoiding on its own — but the
+    /// filesystem cost it used to name is gone.
     @State private var verificationRunner = Verification.Runner()
     @ObservedObject private var agentStateTracker = Workstream.AgentStateTracker.shared
     @ObservedObject private var channelProbe = HookChannelProbe.shared

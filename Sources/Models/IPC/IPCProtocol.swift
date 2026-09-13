@@ -385,6 +385,17 @@ extension IPC {
         /// all say "not run" and no reason anywhere. It is the only place that
         /// reason exists.
         let failureDetail: String?
+        /// The executor's own error text for a run that reported on some checks
+        /// and left others never started.
+        ///
+        /// Separate from `failureDetail` because the two need different
+        /// sentences: that one means the run produced no per-check answer at
+        /// all, and rendering this under the same words would tell an agent its
+        /// suite never started when most of it did. It rides along for the
+        /// reason `failureDetail` exists at all — without it, the checks that say
+        /// "not run" reach the agent with the reason dropped, which is the same
+        /// loss one layer out.
+        let unstartedChecksDetail: String?
     }
 
     /// Whether a verification run is still going, finished on its own, or was

@@ -153,7 +153,8 @@ extension IPC {
                 durationSeconds: finished.map { $0.timeIntervalSince(run.startedAt) },
                 checks: run.checks.map(Self.projection(of:)),
                 isStale: isStale(run),
-                failureDetail: run.failureDetail
+                failureDetail: run.failureDetail,
+                unstartedChecksDetail: run.unstartedChecksDetail
             )
         }
 

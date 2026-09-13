@@ -111,8 +111,8 @@ func verificationIsStale(run: Verification.Run, currentStamp: String?) -> Bool {
 /// itself — no config lookup, no binary resolution, no approval hash.
 ///
 /// **This function is not the decision, and must not be treated as one.**
-/// The call site — `TerminalContainerView`, the same way `refreshDevCommand`
-/// already resolves `ExecutionTabView`'s equivalent state — is required to
+/// The call site — `ProcessCompose.ResolutionModel`, which resolves
+/// `ExecutionTabView`'s equivalent state in the same pass — is required to
 /// take *whether anything can run* from `PhasePolicy.plan(phase: .verify, …)`
 /// itself, and to call this function only for the copy, only once `plan`
 /// has returned `.nothingToDo`. `ExecutionTabView.swift:117-122` is this
@@ -133,11 +133,20 @@ func verificationIsStale(run: Verification.Run, currentStamp: String?) -> Bool {
 /// here by hand too.
 ///
 /// - Parameter declared: the checks the located config declares in the
-///   `verify` namespace, or `nil` when the config exists but could not be
-///   parsed — distinct from an empty array, which means it parsed and named
-///   nothing. Only consulted once the first three preconditions all hold; a
-///   caller must not pass a meaningful value here while any earlier
-///   precondition is false; the guards below never reach it in that case.
+///   `verify` namespace **as parsed, before `Verification.Runner.runnableChecks`**,
+///   or `nil` when the config exists but could not be parsed — distinct from an
+///   empty array, which means it parsed and named nothing. Only consulted once
+///   the first three preconditions all hold; a caller must not pass a meaningful
+///   value here while any earlier precondition is false; the guards below never
+///   reach it in that case.
+///
+///   **Unfiltered, and the distinction is the whole of the third case below.**
+///   Handing the filtered list here is what made a project whose only checks
+///   are named like flags report "This project declares no verify checks" —
+///   untrue, and undiagnosable, because the checklist is empty and Run is
+///   disabled so there is no request left that could explain itself. This
+///   function applies the filter itself, through the same one copy
+///   `Runner.start` uses, so the three cases stay three.
 func verificationUnavailableReason(
     hasConfig: Bool,
     hasBinary: Bool,
@@ -178,6 +187,16 @@ func verificationUnavailableReason(
             "This project declares no verify checks.",
             comment: "Verification tab: unavailable because the verify namespace is empty"
         )
+    }
+    // A third case, and not a restatement of the one above it: the namespace
+    // declares checks and none of them can be started. `runnableChecks` is the
+    // one copy of that filter — a flag-injection guard shared with `execute`,
+    // never to be weakened here — so this reports the situation rather than
+    // trying to run such a check, and it borrows the request path's own
+    // sentence so the two cannot drift. Reached only when *every* declared name
+    // is flag-shaped; one among several simply does not appear in the checklist.
+    guard !Verification.Runner.runnableChecks(declared).isEmpty else {
+        return Verification.Runner.unrunnableChecksMessage(declared)
     }
     return nil
 }
@@ -252,20 +271,23 @@ func verificationAvailability(
     // like a flag — `-n` is legal YAML — is dropped by `PhaseRunner.command`
     // before it reaches the shell, and offering it made the *only*-selected
     // case run the entire namespace. See `runnableChecks`.
-    let declared: [String]? = switch plan {
+    // Two lists, deliberately: the *offered* one is filtered, and the wording
+    // needs the unfiltered one to tell "declares nothing" from "declares
+    // nothing runnable". Both come off `plan`'s own returned config, so neither
+    // is a second `locate`, and nil-for-unparseable survives into both.
+    let parsed: [String]? = switch plan {
     case let .run(planConfig, _):
         planConfig.declaredProcesses(in: ProcessCompose.Phase.verify.namespace)
-            .map(Verification.Runner.runnableChecks)
     case .nothingToDo:
         nil
     }
     return (
-        declared: declared ?? [],
+        declared: parsed.map(Verification.Runner.runnableChecks) ?? [],
         reason: verificationUnavailableReason(
             hasConfig: config != nil,
             hasBinary: binary != nil,
             isApproved: approvalHolds,
-            declared: declared
+            declared: parsed
         )
     )
 }
@@ -283,12 +305,11 @@ func verificationAvailability(
 /// and `ScriptTrust.isApproved` directly — a config lookup, a file stat and a
 /// SHA-256 over the approval-relevant files, all on the main actor, and stale
 /// the moment either Settings' process-compose binary path or the config's
-/// approval state changed without the tab happening to
-/// re-appear. `TerminalContainerView` already holds all three facts as
-/// trigger-refreshed state for `ExecutionTabView`'s sake
-/// (`refreshDevCommand`); Task 10 is expected to resolve this tab's
-/// `declaredProcesses`/`unavailableReason` the same way, from the same
-/// triggers, and hand them in.
+/// approval state changed without the tab happening to re-appear.
+/// `ProcessCompose.ResolutionModel` holds all three facts and resolves this
+/// tab's `declaredProcesses`/`unavailableReason` in the same pass as
+/// `ExecutionTabView`'s — off the main actor, from the triggers
+/// `TerminalContainerView` owns — and hands them in.
 struct VerificationTabView: View {
     let workstreamID: UUID
     let worktreePath: String
@@ -346,6 +367,12 @@ struct VerificationTabView: View {
     /// standing. One pending bit rather than a queue, because every waiting
     /// request wants the same thing: one more read, after this one.
     @State private var stalenessRefreshPending = false
+    /// Watches the worktree itself for the edits `.worktreeGitActivity` cannot
+    /// see — an ordinary save touches nothing inside `.git`, so a result on a
+    /// tab the user is sitting on kept reading fresh. `@State` so it lives as
+    /// long as this view does; armed and disarmed from the triggers below, never
+    /// from `body`. See `Verification.StalenessWatcher` for what bounds its cost.
+    @State private var worktreeWatcher: Verification.StalenessWatcher?
 
     var body: some View {
         // One read of `currentRun` per body evaluation, threaded through both
@@ -364,6 +391,17 @@ struct VerificationTabView: View {
         }
         .onAppear {
             refreshStaleness()
+            syncWorktreeWatcher(hasRun: currentRun != nil)
+        }
+        .onDisappear {
+            // The tab leaves the tree on every tab switch, and an FSEvents
+            // stream on a whole worktree is not something to leave running for
+            // a pane nobody is looking at. Released as well as disarmed: its
+            // `onChange` captures this view, so a disarmed watcher still held
+            // here is a retained view per mount — the same pairing
+            // `stopFileTreeWatcherIfUnneeded` makes.
+            worktreeWatcher?.disarm()
+            worktreeWatcher = nil
         }
         .onReceive(NotificationCenter.default.publisher(for: .worktreeGitActivity)) { notification in
             guard notification.object as? String == worktreePath else { return }
@@ -378,6 +416,10 @@ struct VerificationTabView: View {
         // stamp predates the edits and a current result would read as stale.
         .onChange(of: run?.id) {
             refreshStaleness()
+            // The watcher is armed only while there is a run to compare
+            // against, and the first run of a session is when that becomes
+            // true.
+            syncWorktreeWatcher(hasRun: run != nil)
         }
         // A run *ending*, which is the case the trigger above cannot answer: a
         // check that writes to the tree — a formatter, codegen — leaves
@@ -408,7 +450,19 @@ struct VerificationTabView: View {
     private func content(run: Verification.Run?) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             if let detail = run?.failureDetail {
-                failureDetailBanner(detail)
+                detailBanner(
+                    headline: Text("The run itself failed to start its checks"), detail: detail
+                )
+            }
+            // A second banner, not a second spelling of the first: the run did
+            // report on some checks here, so "the run itself failed to start its
+            // checks" is false — and dropping the executor's text with the
+            // headline left the rows that say "not run" with no explanation
+            // anywhere. `Run.unstartedChecksDetail` carries it. The two fields
+            // are mutually exclusive where they are set (`Runner.execute`), so
+            // at most one of these draws.
+            if let detail = run?.unstartedChecksDetail {
+                detailBanner(headline: Text("Some checks never started"), detail: detail)
             }
 
             // Hidden, not merely disabled, while a run is live —
@@ -554,12 +608,14 @@ struct VerificationTabView: View {
         .padding(.vertical, 4)
     }
 
-    private func failureDetailBanner(_ detail: String) -> some View {
+    /// One banner shape, two headlines — see the call site for why the headline
+    /// is the part that has to differ.
+    private func detailBanner(headline: Text, detail: String) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "exclamationmark.triangle")
                 .foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 2) {
-                Text("The run itself failed to start its checks")
+                headline
                     .font(.system(size: 12, weight: .semibold))
                 // Bounded, not left to grow with `detail`: `PhaseExecutor`
                 // keeps up to 2000 characters of process output for exactly
@@ -699,6 +755,23 @@ struct VerificationTabView: View {
     /// queuing a matching burst of `git` spawns behind it. Absorbed, not
     /// discarded: see `stalenessRefreshPending` for why the run-completion
     /// trigger cannot afford to have its request dropped.
+    /// Arm the worktree watcher while there is a result to go stale, and not
+    /// otherwise.
+    ///
+    /// Created lazily rather than in an initialiser: `@State` initial values are
+    /// built for every view SwiftUI makes, and this one owns an FSEvents stream.
+    private func syncWorktreeWatcher(hasRun: Bool) {
+        guard hasRun else {
+            worktreeWatcher?.disarm()
+            worktreeWatcher = nil
+            return
+        }
+        if worktreeWatcher == nil {
+            worktreeWatcher = Verification.StalenessWatcher { refreshStaleness() }
+        }
+        worktreeWatcher?.arm(path: worktreePath)
+    }
+
     private func refreshStaleness() {
         // **The in-flight guard comes first, and the order is the whole point.**
         // `currentRun` falls through to `Verification.Store.latest` — a

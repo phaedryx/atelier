@@ -289,71 +289,44 @@ struct TerminalContainerView: View {
     @StateObject private var portDetector: Port.Detector
     @State private var browserStartPending = false
     @State private var devCommandOverride: String?
-    @State private var resolvedDevCommand: DevCommand?
     @State private var defaultBranch = "main"
-    /// Every repository-provided file process-compose would load here, or empty
-    /// when there is nothing to approve — no config was found, or the only
-    /// config sits in the project directory and is the user's own with no
-    /// worktree override beside it.
-    ///
-    /// A list, not a path: a repository can ship a benign base config plus an
-    /// override that discovery loads, and showing only the base would ask the
-    /// user to approve a file that is not the whole of what runs.
-    ///
-    /// Resolved with a bare `ProcessCompose.Config.locate`, deliberately not
-    /// through `processComposeConfig`: that one is narrowed to the *run*, so it
-    /// disappears when the user has a per-workstream override. Bootstrap and
-    /// dispose locate unconditionally, so hanging the approval off the run's
-    /// config would hide it in exactly the case where bootstrap still wants to
-    /// run.
-    @State private var repositoryConfigFiles: [String] = []
-    @State private var configApproved = false
     @State private var isReviewingConfig = false
     /// Resolved once per change rather than per render: resolving binds a socket
     /// to check whether each port is free.
     @State private var portPlan: ProcessCompose.PortPlan = .empty
-    /// What Start may run, decided once per change in `refreshDevCommand`.
+    /// Everything the panes read about this workstream's process-compose config,
+    /// resolved together and published as one value.
     ///
-    /// Stored rather than recomputed because *agreement* is the invariant here,
-    /// not freshness. The Execution pane's Start button is enabled on this
-    /// value and `doStartRun` refuses on this value, so the two cannot describe
-    /// different worlds; a plan that is a moment stale but consistent is
-    /// harmless, while a fresh plan disagreeing with the button is exactly the
-    /// bug — an enabled Start that silently did nothing. Do not turn this back
-    /// into a computed property: `ProcessCompose.RunCommandPlan.plan` locates the config and
-    /// stats the binary, so reading it from the view body would also put
-    /// filesystem work in every render pass.
+    /// **Stored rather than recomputed, because *agreement* is the invariant
+    /// here and not freshness.** The Execution pane's Start button is enabled on
+    /// `resolution.plan` and `doStartRun` refuses on `resolution.plan`, so the
+    /// two cannot describe different worlds; a plan that is a moment stale but
+    /// consistent with the reason beside it is harmless, while a fresh plan
+    /// disagreeing with the button is exactly the bug — an enabled Start that
+    /// silently did nothing. It was eight `@State`s written by one function,
+    /// which honoured that by convention; it is one struct assigned in one
+    /// statement, which honours it by construction. Do not unpick it back into
+    /// separate values, and do not read a plan from anywhere else:
+    /// `RunCommandPlan.plan` locates the config and stats the binary, so
+    /// deriving one in a render pass would put filesystem work there too.
     ///
-    /// What invalidates it: the per-workstream override, and **whether
-    /// process-compose was detected**, observed off `appEnv.toolStatus` because
-    /// it changes in a different window that never touches this view. Neither is
-    /// optional. The plan's own message tells the user to go and install
-    /// process-compose, so a plan that did not notice would leave Start disabled
-    /// after they had done exactly what it asked. Do not drop them when adding
+    /// What invalidates it: the per-workstream override, **whether
+    /// process-compose was detected** — observed off `appEnv.toolStatus`,
+    /// because installing it is something the user does elsewhere and the
+    /// plan's own message is what told them to — and the config itself, which
+    /// is why the tab switch refreshes too. Do not drop any of them when adding
     /// another input here.
     ///
-    /// There were three inputs once: the integration switch and the binary path
-    /// were both `@AppStorage` keys, and both are gone — process-compose is a
-    /// requirement and is auto-detected. No process-compose *setting* reaches
-    /// this view any more; the detection observer is the whole of what Settings
-    /// can change here.
-    @State private var runPlan: ProcessCompose.RunCommandPlan = .nothing
-    /// Every file the run's config will load, for the pane to show in place of a
-    /// command string. Set in the same refresh as `runPlan`.
-    @State private var devCommandFiles: [String] = []
-    /// Why Start can do nothing, when it can do nothing and the pane's own copy
-    /// does not already explain it. Set in the same refresh as `runPlan`.
-    @State private var runUnavailableReason: String?
-    /// The Verification tab's two availability inputs, resolved together in
-    /// `refreshVerificationAvailability` and handed in.
-    ///
-    /// State rather than computed properties for the same two reasons `runPlan`
-    /// is: resolving them locates the config, stats the binary and hashes the
-    /// approval-relevant files, which has no business in a render pass — and
-    /// *agreement* is the invariant, since `Verification.Runner.start` guards
-    /// on the same `PhasePolicy.plan` the reason below was produced from.
-    @State private var declaredVerifyChecks: [String] = []
-    @State private var verifyUnavailableReason: String?
+    /// There were two process-compose *settings* once, an integration switch
+    /// and a binary path, both `@AppStorage` and both gone: process-compose is
+    /// a requirement and is auto-detected.
+    @StateObject private var processComposeResolver: ProcessCompose.ResolutionModel
+    /// The current resolution, read through one property so every consumer is
+    /// looking at the same value from the same pass.
+    private var resolved: ProcessCompose.Resolution {
+        processComposeResolver.resolution
+    }
+
     /// Bumped whenever the Execution checklist writes a selection.
     ///
     /// A trigger, not a value. `runnableExecuteSelection` re-reads the store,
@@ -416,8 +389,13 @@ struct TerminalContainerView: View {
 
         let savedOverride = DevCommand.Resolver.savedOverride(for: workstreamID)
         _devCommandOverride = State(initialValue: savedOverride)
-        _resolvedDevCommand = State(initialValue: DevCommand.Resolver.resolve(
-            workingDirectory: workingDirectory,
+        // Resolved synchronously, once, here: a pane with nothing resolved is
+        // not a neutral state — a nil verify reason reads as "everything is
+        // fine" and puts an enabled Run over an empty check list, which is why
+        // the view used to resolve on `.onAppear` as well. Every later
+        // resolution is off the main actor. See `ProcessCompose.ResolutionModel`.
+        _processComposeResolver = StateObject(wrappedValue: ProcessCompose.ResolutionModel(
+            worktree: workingDirectory,
             projectDirectory: projectDirectory,
             override: savedOverride
         ))
@@ -479,56 +457,6 @@ struct TerminalContainerView: View {
         portDetector.status == .starting || (portDetector.status == .none && browserStartPending)
     }
 
-    /// The located process-compose config, when this workstream's run is a
-    /// process-compose run.
-    ///
-    /// Asks the same question as `usesProcessCompose` — whether the resolved dev
-    /// command came from a config rather than from the user's own override, which
-    /// `DevCommand.Resolver.resolve` prefers. It takes the dev command as a
-    /// parameter rather than reading `resolvedDevCommand` because
-    /// `refreshDevCommand` needs the config for the resolution it is in the
-    /// middle of storing, not for the previous one.
-    ///
-    /// A function, and called only from `refreshDevCommand`, so locating the
-    /// config never happens in a render pass.
-    private func processComposeConfig(for devCommand: DevCommand?) -> ProcessCompose.Config? {
-        guard devCommand?.source == .processCompose else { return nil }
-        return ProcessCompose.Config.locate(worktree: workingDirectory, projectDirectory: projectDirectory)
-    }
-
-    /// The command that starts the dev server: process-compose's chained
-    /// `prepare && execute`, or the user's own per-workstream override.
-    ///
-    /// The decision itself lives in `ProcessCompose.RunCommandPlan.plan`, which is where the
-    /// reasoning is. The short version: this must never fall back to
-    /// `resolvedDevCommand?.command` for a `.processCompose` source, because
-    /// that string carries no `-n` and would run `bootstrap` and `dispose`
-    /// without ever passing `PhasePolicy`. If the phase-scoped command cannot
-    /// be built — no config, or no binary — the answer is nil and Start reports
-    /// that, rather than running something unscoped.
-    ///
-    /// Processes the located config declares in `execute`, minus the ones a run
-    /// could not be scoped to.
-    ///
-    /// Read off the stored plan's config rather than by locating again, so the
-    /// selection list and the command Start builds cannot disagree about which
-    /// config they mean. Empty when the config is unparseable, which the
-    /// selection list treats as "offer no choices" rather than "no processes".
-    ///
-    /// `runnableProcesses` is `ProcessCompose.PhaseRunner`'s own filter, and
-    /// calling it here rather than repeating it is the point: a process named
-    /// `-web` is legal YAML, and offering it made the *only*-selected case run
-    /// the entire namespace. See `runnableProcesses`. The checklist is where the
-    /// user can no longer pick one; `processesToStart` is the other half, which
-    /// keeps a stored one out of the command whether or not this list was ever
-    /// rendered.
-    private var declaredExecuteProcesses: [String] {
-        guard case let .phaseScoped(config, _) = runPlan else { return [] }
-        return ProcessCompose.PhaseRunner.runnableProcesses(
-            config.declaredProcesses(in: ProcessCompose.Phase.execute.namespace) ?? []
-        )
-    }
-
     /// The processes Start will launch, reconciled against what the config
     /// declares now — or **nil when the checklist has nothing selected**, which
     /// is not the same as an empty list: `PhaseRunner` reads no names as *start
@@ -560,25 +488,27 @@ struct TerminalContainerView: View {
     ///   body can resolve it once for the checklist and the button together —
     ///   it parses the config's YAML, and this is called per render.
     private func runnableExecuteSelection(declared: [String]) -> [String]? {
-        guard case .phaseScoped = runPlan else { return [] }
+        guard case .phaseScoped = resolved.plan else { return [] }
         return processesToStart(
             stored: ProcessCompose.TableModel.selection(for: workstreamID),
             declared: declared
         )
     }
 
-    /// Reads the stored `runPlan` rather than re-deriving one, so this is nil
+    /// Reads the stored resolution's plan rather than re-deriving one, so this is nil
     /// for exactly the plans whose `canRun` is false — which is what the Start
     /// button's enablement is drawn from. Deriving a second plan here is how
     /// the button and this guard came to disagree.
     private var resolvedRunCommand: String? {
-        switch runPlan {
+        switch resolved.plan {
         case let .literal(command):
             return command
         case let .phaseScoped(config, binary):
             // Nil is the checklist saying nothing is selected, and the refusal
             // is the point: an empty name list would start the whole namespace.
-            guard let selected = runnableExecuteSelection(declared: declaredExecuteProcesses) else {
+            guard let selected = runnableExecuteSelection(
+                declared: resolved.declaredExecuteProcesses
+            ) else {
                 return nil
             }
             ProcessCompose.PhaseRunner.ensureSocketDirectory()
@@ -860,8 +790,8 @@ struct TerminalContainerView: View {
                 workstreamID: workstreamID,
                 workingDirectory: workingDirectory,
                 projectDirectory: projectDirectory,
-                repositoryConfigFiles: repositoryConfigFiles,
-                configApproved: configApproved,
+                repositoryConfigFiles: resolved.repositoryConfigFiles,
+                configApproved: resolved.isApproved,
                 setupState: setupState,
                 onReviewConfig: { isReviewingConfig = true },
                 onRevokeConfig: revokeProcessConfig,
@@ -887,14 +817,14 @@ struct TerminalContainerView: View {
                 // Resolved once and handed to both: `declaredExecuteProcesses`
                 // parses the config's YAML, and the checklist and the Start
                 // button must in any case be looking at the same list.
-                let declared = declaredExecuteProcesses
+                let declared = resolved.declaredExecuteProcesses
                 ExecutionTabView(
                     workstreamID: workstreamID,
                     workingDirectory: workingDirectory,
                     useTmux: useTmux,
                     environmentVars: runEnvironmentVars,
                     runCommand: model.runCommandString,
-                    devCommand: resolvedDevCommand,
+                    devCommand: resolved.devCommand,
                     devCommandOverride: $devCommandOverride,
                     runStarted: $model.runStarted,
                     runGeneration: model.runGeneration,
@@ -902,12 +832,13 @@ struct TerminalContainerView: View {
                     showsProcessTable: usesProcessCompose,
                     portsByName: portPlan.values,
                     declaredProcesses: declared,
-                    canStart: runPlan.canRun,
+                    canStart: resolved.plan.canRun,
                     hasRunnableSelection: runnableExecuteSelection(declared: declared) != nil,
                     isReclaimingSocket: isReclaimingRunSocket,
-                    devCommandFiles: devCommandFiles,
-                    startUnavailableReason: runUnavailableReason,
-                    unapprovedConfigFiles: configApproved ? [] : repositoryConfigFiles,
+                    devCommandFiles: resolved.loadedFiles,
+                    startUnavailableReason: resolved.startUnavailableReason,
+                    unapprovedConfigFiles: resolved.isApproved
+                        ? [] : resolved.repositoryConfigFiles,
                     onReviewConfig: { isReviewingConfig = true },
                     onSelectionChange: { executeSelectionChanges += 1 },
                     onStart: doStartRun,
@@ -931,8 +862,8 @@ struct TerminalContainerView: View {
                 projectDirectory: projectDirectory,
                 projectName: projectName,
                 workstreamName: workstreamName,
-                declaredProcesses: declaredVerifyChecks,
-                unavailableReason: verifyUnavailableReason,
+                declaredProcesses: resolved.declaredVerifyChecks,
+                unavailableReason: resolved.verifyUnavailableReason,
                 runner: verificationRunner
             )
         case .agent:
@@ -1182,20 +1113,16 @@ struct TerminalContainerView: View {
             }
             restoreRunState()
             syncProcessPolling()
-            // Here as well as in `refreshDevCommand`, and this is not
-            // belt-and-braces. `startWorkspace` — which is what calls
-            // `refreshDevCommand` on first mount — runs from a `.task` behind a
-            // 50ms sleep *and* a `Git.Operations.defaultBranch` hop, so until it
-            // lands `verifyUnavailableReason` is still its initial nil, which
-            // this tab reads as "everything is fine": an enabled Run over an
-            // empty check list. Observed, not theorised — a workstream whose
-            // repository-provided config was unapproved rendered exactly that.
-            // Nothing here touches git, so it can run at appear and close the
-            // window to a frame. (`Verification.Runner.start` calls
-            // `PhasePolicy.plan` itself and throws `Failure.unavailable`, which
-            // the tab renders, so even that frame explains itself rather than
-            // silently doing nothing.)
-            refreshVerificationAvailability()
+            // The window this used to close no longer exists: the resolver
+            // resolves synchronously in `init`, so there is no moment where a
+            // nil verify reason reads as "everything is fine" and puts an
+            // enabled Run over an empty check list. (That was observed, not
+            // theorised — a workstream whose repository-provided config was
+            // unapproved rendered exactly that, because `startWorkspace` runs
+            // from a `.task` behind a sleep and a git hop.) This refresh is
+            // still worth making: a config edited while the pane existed but was
+            // not on screen is invisible otherwise.
+            processComposeResolver.refresh(override: devCommandOverride)
         }
         .onDisappear {
             if isActive {
@@ -1219,15 +1146,15 @@ struct TerminalContainerView: View {
             // invisible to the Execution pane's own state, and this is cheap
             // enough not to need a guard on which tab was opened.
             //
-            // `refreshConfigApproval` comes along because it answers the same
-            // question about the same file, and observed on screen: with only
-            // the verify half refreshed here, editing a worktree's config left
-            // the Info tab still reading "Approved" from mount time while the
-            // Verification tab correctly said the changed file needs approval
-            // again. Approval is keyed on content, so a stale file list is also
-            // the wrong thing to hand the approval sheet.
-            refreshConfigApproval()
-            refreshVerificationAvailability()
+            // Approval comes along because it answers the same question about
+            // the same file, and observed on screen: with only the verify half
+            // refreshed here, editing a worktree's config left the Info tab
+            // still reading "Approved" from mount time while the Verification
+            // tab correctly said the changed file needs approval again. One
+            // resolution answers both — and this is the switch whose cost the
+            // resolver's own doc is about, so it is the one that must not be
+            // synchronous.
+            processComposeResolver.refresh(override: devCommandOverride)
         }
         .onChange(of: model.isActiveEditorDirty) {
             guard isActive else { return }
@@ -1246,9 +1173,9 @@ struct TerminalContainerView: View {
             // Execution banner and the Info row open it and Execution is a
             // closeable tab.
             .sheet(isPresented: $isReviewingConfig) {
-                if !repositoryConfigFiles.isEmpty {
+                if !resolved.repositoryConfigFiles.isEmpty {
                     ConfigApprovalView(
-                        filePaths: repositoryConfigFiles,
+                        filePaths: resolved.repositoryConfigFiles,
                         onApprove: approveProcessConfig,
                         onCancel: { isReviewingConfig = false }
                     )
@@ -1256,12 +1183,15 @@ struct TerminalContainerView: View {
             }
             .onChange(of: devCommandOverride) { _, newValue in
                 DevCommand.Resolver.saveOverride(newValue, for: workstreamID)
-                refreshDevCommand()
+                // Passed explicitly rather than left to the resolver's stored
+                // copy: clearing Customize is a change like any other.
+                processComposeResolver.refresh(override: newValue)
             }
-            // Whether process-compose exists is an input to `runPlan`, and it
+            // Whether process-compose exists is an input to the resolution, and it
             // can change while this pane is open — the plan's own message tells
-            // the user to go and install it, so a plan that did not notice would
-            // leave Start disabled after they had done exactly what it asked.
+            // the user to go and install it, so a resolution that did not notice
+            // would leave Start disabled after they had done exactly what it
+            // asked.
             //
             // This replaces an `@AppStorage` observer on the binary-path
             // setting, which was that trigger until the path stopped being
@@ -1272,11 +1202,12 @@ struct TerminalContainerView: View {
             // action and this is how it reaches Start. Do not delete it without
             // putting another trigger in its place.
             //
-            // Approval is deliberately not refreshed alongside: what needs
-            // approving is decided by a config's *location*, which installing a
-            // binary cannot change.
+            // Approval rides along in the same pass, which costs nothing here:
+            // one resolution answers both questions, and what needs approving is
+            // decided by a config's *location*, which installing a binary cannot
+            // change.
             .onChange(of: appEnv.toolStatus.processCompose.path) { _, _ in
-                refreshDevCommand()
+                processComposeResolver.refresh(override: devCommandOverride)
             }
             .onChange(of: model.runStarted) { _, started in
                 // A session restored from tmux (or started before TerminalApp
@@ -1604,7 +1535,7 @@ struct TerminalContainerView: View {
     /// no switch to read any more: process-compose is a requirement, so the
     /// source is the whole question.
     private var usesProcessCompose: Bool {
-        resolvedDevCommand?.source == .processCompose
+        resolved.usesProcessCompose
     }
 
     /// Polls the control socket exactly while a process-compose run is up.
@@ -1719,73 +1650,6 @@ struct TerminalContainerView: View {
         ))
 
         return finalCommand
-    }
-
-    /// Re-resolve the dev command *and* the run plan, together.
-    ///
-    /// One function on purpose. The plan is derived from the dev command, and
-    /// every caller that invalidates one invalidates the other, so splitting
-    /// them would give the pane a way to render a button whose plan came from an
-    /// earlier dev command. Both are also the only two inputs the Start button
-    /// reads, so this is the whole of what has to stay in step.
-    private func refreshDevCommand() {
-        let devCommand = DevCommand.Resolver.resolve(
-            workingDirectory: workingDirectory,
-            projectDirectory: projectDirectory,
-            override: devCommandOverride
-        )
-        resolvedDevCommand = devCommand
-        let config = processComposeConfig(for: devCommand)
-        let binary = ProcessCompose.Settings.resolveBinary()
-        devCommandFiles = config?.loadedFiles ?? []
-        runPlan = ProcessCompose.RunCommandPlan.plan(devCommand: devCommand, config: config, binary: binary)
-        runUnavailableReason = ProcessCompose.RunCommandPlan.unavailableReason(
-            devCommand: devCommand,
-            config: config,
-            binary: binary
-        )
-        // Same triggers, deliberately: the Verification tab answers to whether
-        // process-compose was detected too, and Task 11's first version resolved
-        // it on `.onAppear` alone — so a change made in Settings never reached
-        // the tab.
-        refreshVerificationAvailability()
-    }
-
-    /// Resolve the Verification tab's two availability inputs together.
-    ///
-    /// The decision itself is `verificationAvailability`'s, which asks
-    /// `PhasePolicy.plan(phase: .verify, …)` — the same gate
-    /// `Verification.Runner.start` calls — and is where the reasoning and the
-    /// tests live. This function's whole job is the four facts it feeds in.
-    ///
-    /// Called from `refreshDevCommand`, so every trigger that re-resolves the
-    /// Execution tab's equivalent state re-resolves this too; from the
-    /// container's `.onAppear` and from `.onChange(of: model.activeTab)`; and
-    /// from the two approval paths, because approval is one of the four facts
-    /// and `refreshDevCommand` has no reason to watch it — Start is never
-    /// gated by it.
-    private func refreshVerificationAvailability() {
-        // Located unconditionally, the way `refreshConfigApproval` does it and
-        // `processComposeConfig(for:)` deliberately does not: that one is
-        // narrowed to the *run*, so it disappears behind a per-workstream
-        // override — and verify is not the run.
-        let availability = verificationAvailability(
-            config: ProcessCompose.Config.locate(
-                worktree: workingDirectory, projectDirectory: projectDirectory
-            ),
-            binary: ProcessCompose.Settings.resolveBinary(),
-            // The same closure `AsyncSetupService` and
-            // `Verification.Runner.start` hand `PhasePolicy.plan`, because it
-            // reaches the same gate. `requiresApproval` is folded in inside
-            // `verificationAvailability`, not here.
-            isApproved: {
-                ScriptTrust.isApproved(
-                    configFiles: $0.repositoryProvidedFiles, for: projectDirectory
-                )
-            }
-        )
-        declaredVerifyChecks = availability.declared
-        verifyUnavailableReason = availability.reason
     }
 
     /// Re-reads ports.yaml and resolves it for this worktree. A malformed file
@@ -2042,9 +1906,10 @@ struct TerminalContainerView: View {
         }
         appEnv.refreshWorktreeState(for: workingDirectory, projectDirectory: projectDirectory)
         rebuildClaudeCommand()
-        refreshConfigApproval()
         refreshPortPlan()
-        refreshDevCommand()
+        // The resolution `init` produced is already on screen; this is the
+        // ordinary "the world may have moved" refresh, and it is off the actor.
+        processComposeResolver.refresh(override: devCommandOverride)
         surfaceCache.respawnableIDs.insert(claudeID)
         preloadSurfaces()
         // Eagerly create the Monaco bridge so it's ready when the user opens
@@ -2116,25 +1981,6 @@ struct TerminalContainerView: View {
 
     // MARK: - Process config approval
 
-    /// Re-reads whether this worktree has a repository-provided config and
-    /// whether it is approved. Called on appear and after an approval, not from
-    /// the view body: it stats the worktree and hashes a file.
-    private func refreshConfigApproval() {
-        guard let config = ProcessCompose.Config.locate(
-            worktree: workingDirectory, projectDirectory: projectDirectory
-        ),
-            config.requiresApproval
-        else {
-            repositoryConfigFiles = []
-            configApproved = false
-            return
-        }
-        repositoryConfigFiles = config.repositoryProvidedFiles
-        configApproved = ScriptTrust.isApproved(
-            configFiles: repositoryConfigFiles, for: projectDirectory
-        )
-    }
-
     /// Approve the repository's config, then run the bootstrap it was refused.
     ///
     /// Bootstrap already ran — and reported that it did nothing — by the time
@@ -2142,7 +1988,7 @@ struct TerminalContainerView: View {
     /// worktree. `setupExistingWorktree` recomputes the plan against the
     /// worktree that already exists, which is what makes this one recoverable.
     private func approveProcessConfig(matching reviewedFingerprint: String) -> Bool {
-        guard !repositoryConfigFiles.isEmpty else { return false }
+        guard !resolved.repositoryConfigFiles.isEmpty else { return false }
         // The fingerprint is of the bytes the pane displayed, and `approve`
         // refuses if the files on disk have moved on since. Re-resolve the set
         // before the pane reloads: what changed may be *which* files the config
@@ -2150,29 +1996,31 @@ struct TerminalContainerView: View {
         // `atelier.process-compose.yaml` is a different set, tier 1 beating
         // tier 3 — and the user has to review the set that will actually run.
         guard ScriptTrust.approve(
-            configFiles: repositoryConfigFiles,
+            configFiles: resolved.repositoryConfigFiles,
             for: projectDirectory,
             matching: reviewedFingerprint
         ) else {
-            refreshConfigApproval()
+            // **Synchronously, and this is the one path that needs it.** The
+            // next two lines read the result of the write that just happened;
+            // an asynchronous refresh would answer about the state before the
+            // click. Approval is also one of `PhasePolicy.plan`'s four facts and
+            // the one no other trigger watches — Start is never gated by it — so
+            // without a refresh here the Verification tab would keep telling the
+            // user to approve a config they just approved.
+            let refreshed = processComposeResolver.refreshNow(override: devCommandOverride)
             // Nothing left to approve: the config went away while the pane was
             // open, and an empty pane has no button to dismiss itself with.
-            if repositoryConfigFiles.isEmpty {
+            if refreshed.repositoryConfigFiles.isEmpty {
                 isReviewingConfig = false
             }
             return false
         }
         isReviewingConfig = false
-        refreshConfigApproval()
-        // Approval is one of `PhasePolicy.plan`'s four facts, and it is the one
-        // `refreshDevCommand` has no reason to watch — Start is never gated by
-        // it. Without this the Verification tab would keep telling the user to
-        // approve a config they just approved.
-        refreshVerificationAvailability()
+        let refreshed = processComposeResolver.refreshNow(override: devCommandOverride)
         // `approve` returning true means the fingerprint was stored, so this is
         // now only reachable if the file vanished between the two reads. Do not
         // run anything on the strength of a button press that did not take.
-        guard configApproved else { return true }
+        guard refreshed.isApproved else { return true }
         rerunBootstrap()
         return true
     }
@@ -2184,7 +2032,7 @@ struct TerminalContainerView: View {
     /// was too late for; the Info tab's Rerun button and the palette's Rerun
     /// Bootstrap call it because the user asked.
     ///
-    /// In particular this is **not** behind `configApproved`.
+    /// In particular this is **not** behind the resolution's `isApproved`.
     /// `approveProcessConfig` checks that before calling, because there the
     /// guard is asking whether the approval it just wrote actually took — an
     /// unreadable file has no fingerprint, so `approve` was a no-op. A manual
@@ -2214,8 +2062,10 @@ struct TerminalContainerView: View {
 
     private func revokeProcessConfig() {
         ScriptTrust.revokeConfigFiles(for: projectDirectory)
-        refreshConfigApproval()
-        refreshVerificationAvailability()
+        // Synchronous for the same reason the approval path is: the row the user
+        // just clicked has to stop saying "Approved" on this pass, not the next
+        // one.
+        processComposeResolver.refreshNow(override: devCommandOverride)
     }
 
     private func terminalLoadingView(message: String) -> some View {

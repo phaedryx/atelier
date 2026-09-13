@@ -587,7 +587,8 @@ final class IPCServerTests: XCTestCase {
                 ),
             ],
             isStale: false,
-            failureDetail: nil
+            failureDetail: nil,
+            unstartedChecksDetail: nil
         )))
         _ = try waitForEndpoint()
 
