@@ -72,6 +72,78 @@ final class VerificationTabViewTests: XCTestCase {
 
     // MARK: - Row glyphs
 
+    // MARK: - What a check's output group shows
+
+    /// Live wins over captured, and the window where both exist is real:
+    /// `Runner.captureFailedOutput` attaches a failed check's tail while
+    /// `isLive` is still true, and the server still holds whatever arrived
+    /// after that copy was taken.
+    func test_outputContent_prefersTheLiveServerOverACapturedTail() {
+        XCTAssertEqual(
+            verificationOutputContent(state: .failed(1), hasCapturedOutput: true, isLive: true),
+            .live
+        )
+        XCTAssertEqual(
+            verificationOutputContent(state: .failed(1), hasCapturedOutput: true, isLive: false),
+            .captured
+        )
+    }
+
+    /// A running check is the case the feature exists for: nothing is captured
+    /// for it and nothing ever will be, so the live server is the only source.
+    func test_outputContent_streamsARunningCheck() {
+        XCTAssertEqual(
+            verificationOutputContent(state: .running, hasCapturedOutput: false, isLive: true),
+            .live
+        )
+    }
+
+    /// A check that ran and kept nothing is `.notKept`, never `.notStarted`:
+    /// the copy for the two has to differ, because one lost something and the
+    /// other never had it. Only a failed check's tail is captured, so this is
+    /// the ordinary post-run state of a passing check.
+    func test_outputContent_distinguishesOutputLostFromOutputNeverProduced() {
+        XCTAssertEqual(
+            verificationOutputContent(state: .passed, hasCapturedOutput: false, isLive: false),
+            .notKept
+        )
+        XCTAssertEqual(
+            verificationOutputContent(state: .stopped, hasCapturedOutput: false, isLive: false),
+            .notKept
+        )
+        for state in [Verification.CheckResult.State.skipped, .pending, .notRun] {
+            XCTAssertEqual(
+                verificationOutputContent(state: state, hasCapturedOutput: false, isLive: false),
+                .notStarted,
+                "\(state) never ran, so nothing about it was lost"
+            )
+        }
+    }
+
+    /// A check that has not started must not poll, however live the run is.
+    /// This is the gate on how many sockets the tab opens per second: a
+    /// `.pending` check has nothing to read and a server that answers every
+    /// poll with an error is still a poll.
+    func test_outputContent_doesNotStreamACheckThatHasNotStarted() {
+        for state in [Verification.CheckResult.State.pending, .notRun, .skipped] {
+            XCTAssertNotEqual(
+                verificationOutputContent(state: state, hasCapturedOutput: false, isLive: true),
+                .live,
+                "\(state) has produced no output for a poll to find"
+            )
+        }
+    }
+
+    /// A skipped check with a tail from an earlier state still shows it rather
+    /// than claiming it has produced nothing — `hasCapturedOutput` is a fact
+    /// about the run, and it outranks the state's own guess.
+    func test_outputContent_showsACapturedTailWhateverTheState() {
+        XCTAssertEqual(
+            verificationOutputContent(state: .skipped, hasCapturedOutput: true, isLive: false),
+            .captured
+        )
+    }
+
     func test_rowGlyph_distinguishesEveryState() {
         let states: [Verification.CheckResult.State] =
             [.notRun, .pending, .running, .passed, .failed(1), .skipped, .stopped]
