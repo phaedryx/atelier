@@ -78,10 +78,12 @@ extension Verification {
         /// completion message hangs off this; nothing else may assume it is the
         /// only subscriber.
         ///
-        /// Reserved, not dead: nothing on this branch sets it. Its consumer is
-        /// the `VerificationControlling` adapter owned by the
-        /// `verification-ipc-tools` branch, which is not merged — the tab reads
-        /// `runs` directly and needs no callback.
+        /// **One slot, and `IPC.VerificationRunnerBridge` holds it** — which is
+        /// why that type routes completions per run id rather than assuming
+        /// every finish is one an agent asked about: this fires for the user's
+        /// own presses too. Constructing a second bridge silently unsubscribes
+        /// the first, so `ContentView` builds exactly one. The tab is not a
+        /// subscriber; it reads `runs` directly and needs no callback.
         var onFinish: ((Verification.Run) -> Void)?
 
         /// Everything one verify run needs from process-compose, resolved by
@@ -308,9 +310,11 @@ extension Verification {
             // than relying on every caller having remembered to wrap its own
             // `declared` — the "guard the precondition at each call site" shape
             // `ProcessCompose.RunCommandPlan`'s note records being reopened
-            // four times before the invariant moved to the consumer. The
-            // parked `start_verification` handler is the next caller, and would
-            // plausibly hand `declaredProcesses` straight through.
+            // four times before the invariant moved to the consumer.
+            // `start_verification` reaches this through `start`, which does
+            // wrap its own `declared` — but the guarantee must not rest on
+            // every caller having remembered to, which is the shape that was
+            // reopened four times.
             let runnable = runnableChecks(declared)
             // **"Declares nothing" and "declares nothing runnable" are not the
             // same refusal.** A namespace whose every process is named like a
@@ -374,11 +378,12 @@ extension Verification {
 
         /// The run with this id, whichever workstream it belongs to.
         ///
-        /// Reserved, not dead: nothing on this branch calls it in production.
-        /// It exists for `check_verification`, whose handler lives on the
-        /// unmerged `verification-ipc-tools` branch and is where the caller is
-        /// confined to its own workstream — see `makeRunID` on why that scoping
-        /// is not this type's. The tab looks runs up by workstream instead.
+        /// **Unscoped, and its caller is what scopes it.**
+        /// `IPC.VerificationRunnerBridge.verificationRun(id:in:)` is that
+        /// caller — it is where `check_verification` is confined to its own
+        /// workstream, and see `makeRunID` on why that confinement is not this
+        /// type's job. The tab never comes through here; it looks runs up by
+        /// workstream.
         func run(id: String) -> Verification.Run? {
             runs.values.first { $0.id == id }
         }
@@ -816,10 +821,11 @@ extension Verification {
         /// `start` answers the four preconditions — integration enabled, a
         /// located config, a resolvable binary, approval of every
         /// repository-provided file — and hands the results here in a
-        /// `SpawnRequest`. Any future caller, the parked IPC adapter included,
-        /// **must enter through `start`**; calling this directly runs a
-        /// repository's YAML unattended and ungated, which is exactly what that
-        /// one gate exists to prevent.
+        /// `SpawnRequest`. Every caller **must enter through `start`** —
+        /// `IPC.VerificationRunnerBridge` does, which is why the IPC half adds
+        /// no gate of its own; calling this directly runs a repository's YAML
+        /// unattended and ungated, which is exactly what that one gate exists
+        /// to prevent.
         ///
         /// Internal rather than private so a test can drive it with a seeded run
         /// and a stub spawner; `start` is its only production caller.
