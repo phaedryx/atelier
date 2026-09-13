@@ -480,7 +480,17 @@ final class PhaseRunnerTests: XCTestCase {
             let stored = declared.enumerated()
                 .filter { mask & (1 << $0.offset) != 0 }
                 .map(\.element)
-            let resolved = processesToStart(stored: stored, declared: declared)
+            // The empty mask is `.nothing` rather than `.only([])`: an empty
+            // subset is not a state the checklist can store, and `.nothing`
+            // resolves to nil — no command at all — which is the one answer
+            // that cannot invert into the whole namespace.
+            guard let resolved = processesToStart(
+                stored: stored.isEmpty ? .nothing : .only(stored),
+                declared: declared
+            ) else {
+                XCTAssertTrue(stored.isEmpty, "a selection of \(stored) resolved to no run at all")
+                continue
+            }
 
             XCTAssertTrue(
                 resolved.allSatisfy(runnable.contains),

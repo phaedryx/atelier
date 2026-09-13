@@ -68,19 +68,17 @@ extension Verification {
         selectionKeyPrefix + workstreamID.uuidString.lowercased()
     }
 
-    /// Which checks a run should start. Empty means all of them, matching what
-    /// `up -n verify` does when given no names — and matching
-    /// `ProcessCompose.TableModel.selected(for:)`, whose convention the shared
-    /// checklist depends on.
-    static func selected(for workstreamID: UUID) -> [String] {
-        UserDefaults.standard.stringArray(forKey: selectionKey(for: workstreamID)) ?? []
+    /// Which checks a run should start: all of them, none of them, or a named
+    /// subset — the same three states `ProcessCompose.TableModel.selection(for:)`
+    /// stores, under this tab's own key, because the two checklists share a view
+    /// and must not share a key. `ProcessSelection.namesToRun` is what turns the
+    /// answer into the list `up -n verify` takes, where no names means every
+    /// check.
+    static func selection(for workstreamID: UUID) -> ProcessSelection {
+        ProcessSelection.stored(forKey: selectionKey(for: workstreamID))
     }
 
-    static func setSelected(_ names: [String], for workstreamID: UUID) {
-        if names.isEmpty {
-            UserDefaults.standard.removeObject(forKey: selectionKey(for: workstreamID))
-        } else {
-            UserDefaults.standard.set(names, forKey: selectionKey(for: workstreamID))
-        }
+    static func setSelection(_ selection: ProcessSelection, for workstreamID: UUID) {
+        selection.store(forKey: selectionKey(for: workstreamID))
     }
 }

@@ -19,6 +19,27 @@ final class VerificationTabViewTests: XCTestCase {
         XCTAssertTrue(verificationCanRun(isLive: false))
     }
 
+    /// Run is gated on the checklist as well as on liveness, because every box
+    /// may now be unchecked and `Verification.Runner` reads no check names as
+    /// *run everything* — the opposite of what an empty checklist asked for.
+    func testRunIsDisabledWhenNothingIsChecked() {
+        XCTAssertFalse(verificationCanRunSelection(isLive: false, hasChecks: false))
+        XCTAssertTrue(verificationCanRunSelection(isLive: false, hasChecks: true))
+    }
+
+    /// And liveness still wins on its own: a live run is a live run however
+    /// many boxes are ticked.
+    func testRunStaysDisabledDuringARunWhateverIsChecked() {
+        XCTAssertFalse(verificationCanRunSelection(isLive: true, hasChecks: true))
+    }
+
+    /// "Run failed" runs the previous run's `failedNames`, not the checklist,
+    /// so an empty checklist has nothing to say about it. It is gated on
+    /// liveness alone — which is what `verificationCanRun` still answers.
+    func testRunFailedIsNotGatedOnTheChecklist() {
+        XCTAssertTrue(verificationCanRun(isLive: false))
+    }
+
     // MARK: - Checklist visibility
 
     // Hidden while live, not merely disabled: clicking a box that cannot take

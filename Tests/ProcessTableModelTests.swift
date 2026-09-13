@@ -10,37 +10,69 @@ final class ProcessTableModelTests: XCTestCase {
     private let workstreamID = UUID()
 
     override func tearDown() {
-        ProcessCompose.TableModel.setSelected([], for: workstreamID)
+        ProcessCompose.TableModel.setSelection(.all, for: workstreamID)
         super.tearDown()
     }
 
     /// No stored selection means everything runs — a fresh workstream should
     /// start the whole stack, not nothing.
     func testNoSelectionMeansAll() {
-        XCTAssertTrue(ProcessCompose.TableModel.selected(for: workstreamID).isEmpty)
+        XCTAssertEqual(ProcessCompose.TableModel.selection(for: workstreamID), .all)
     }
 
     func testSelectionRoundTrips() {
-        ProcessCompose.TableModel.setSelected(["bff", "api"], for: workstreamID)
+        ProcessCompose.TableModel.setSelection(.only(["api", "bff"]), for: workstreamID)
 
-        XCTAssertEqual(ProcessCompose.TableModel.selected(for: workstreamID).sorted(), ["api", "bff"])
+        XCTAssertEqual(ProcessCompose.TableModel.selection(for: workstreamID), .only(["api", "bff"]))
+    }
+
+    /// The whole of the tri-state encoding, and the one thing in it that is a
+    /// property of `UserDefaults` rather than of this code: a stored empty array
+    /// comes back from `stringArray(forKey:)` as `[]` and not as nil, which is
+    /// what keeps "nothing selected" distinguishable from "no key, so all". If
+    /// this ever stopped holding, a stack the user had switched off would start
+    /// itself — `.nothing` would read back as `.all`, and `up -n execute` with
+    /// no names runs the whole namespace.
+    func testNothingSelectedRoundTripsAndIsNotAll() {
+        ProcessCompose.TableModel.setSelection(.nothing, for: workstreamID)
+
+        XCTAssertEqual(ProcessCompose.TableModel.selection(for: workstreamID), .nothing)
+        XCTAssertNil(ProcessCompose.TableModel.selection(for: workstreamID).namesToRun)
+    }
+
+    /// The same encoding under the Verification tab's own key, because the two
+    /// checklists share a view and a type but not a key.
+    func testNothingSelectedRoundTripsForVerificationToo() {
+        let id = UUID()
+        addTeardownBlock { Verification.setSelection(.all, for: id) }
+        Verification.setSelection(.nothing, for: id)
+
+        XCTAssertEqual(Verification.selection(for: id), .nothing)
+    }
+
+    /// `.all` is stored as the *absence* of the key, so a workstream that has
+    /// been narrowed and widened again leaves nothing behind that a later read
+    /// could mistake for an empty selection.
+    func testSelectingEverythingRemovesTheKey() {
+        ProcessCompose.TableModel.setSelection(.only(["bff"]), for: workstreamID)
+        ProcessCompose.TableModel.setSelection(.all, for: workstreamID)
+
+        XCTAssertNil(
+            UserDefaults.standard.stringArray(
+                forKey: ProcessCompose.TableModel.selectionKey(for: workstreamID)
+            )
+        )
+        XCTAssertEqual(ProcessCompose.TableModel.selection(for: workstreamID), .all)
     }
 
     func testSelectionIsPerWorkstream() {
         let other = UUID()
-        defer { ProcessCompose.TableModel.setSelected([], for: other) }
-        ProcessCompose.TableModel.setSelected(["bff"], for: workstreamID)
-        ProcessCompose.TableModel.setSelected(["api"], for: other)
+        defer { ProcessCompose.TableModel.setSelection(.all, for: other) }
+        ProcessCompose.TableModel.setSelection(.only(["bff"]), for: workstreamID)
+        ProcessCompose.TableModel.setSelection(.only(["api"]), for: other)
 
-        XCTAssertEqual(ProcessCompose.TableModel.selected(for: workstreamID), ["bff"])
-        XCTAssertEqual(ProcessCompose.TableModel.selected(for: other), ["api"])
-    }
-
-    func testClearingSelectionRemovesIt() {
-        ProcessCompose.TableModel.setSelected(["bff"], for: workstreamID)
-        ProcessCompose.TableModel.setSelected([], for: workstreamID)
-
-        XCTAssertTrue(ProcessCompose.TableModel.selected(for: workstreamID).isEmpty)
+        XCTAssertEqual(ProcessCompose.TableModel.selection(for: workstreamID), .only(["bff"]))
+        XCTAssertEqual(ProcessCompose.TableModel.selection(for: other), .only(["api"]))
     }
 
     // MARK: - Port matching

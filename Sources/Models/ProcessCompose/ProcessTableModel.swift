@@ -196,18 +196,15 @@ extension ProcessCompose {
             selectionKeyPrefix + workstreamID.uuidString.lowercased()
         }
 
-        /// Which processes `execute` should start. Empty means all of them —
-        /// process-compose starts everything in the namespace when given no names.
-        nonisolated static func selected(for workstreamID: UUID) -> [String] {
-            UserDefaults.standard.stringArray(forKey: selectionKey(for: workstreamID)) ?? []
+        /// Which processes `execute` should start: all of them, none of them, or
+        /// a named subset. The encoding — and why an empty array means *none*
+        /// rather than *all* — is `ProcessSelection.stored(forKey:in:)`.
+        nonisolated static func selection(for workstreamID: UUID) -> ProcessSelection {
+            ProcessSelection.stored(forKey: selectionKey(for: workstreamID))
         }
 
-        nonisolated static func setSelected(_ names: [String], for workstreamID: UUID) {
-            if names.isEmpty {
-                UserDefaults.standard.removeObject(forKey: selectionKey(for: workstreamID))
-            } else {
-                UserDefaults.standard.set(names, forKey: selectionKey(for: workstreamID))
-            }
+        nonisolated static func setSelection(_ selection: ProcessSelection, for workstreamID: UUID) {
+            selection.store(forKey: selectionKey(for: workstreamID))
         }
 
         // MARK: - Ports

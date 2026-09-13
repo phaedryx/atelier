@@ -122,6 +122,22 @@ struct ExecutionTabView: View {
     /// resolved command — and an unresolvable process-compose binary rendered an
     /// enabled Start that did nothing and explained nothing.
     let canStart: Bool
+    /// Whether the checklist leaves `execute` anything to start.
+    ///
+    /// **Passed in, never re-derived here**, for the same reason `canStart` is:
+    /// this is `runnableExecuteSelection != nil` for the very selection
+    /// `resolvedRunCommand` will resolve, so Start's enabled state and the
+    /// run's own guard are one answer asked once.
+    ///
+    /// Separate from `canStart` rather than folded into it, because the two
+    /// mean different things to the pane: `canStart` decides whether a Start
+    /// button exists at all — there is nothing runnable, and
+    /// `scriptInstructions` explains that instead — while this one leaves the
+    /// button in place and disabled, with a line beside it saying what to do.
+    /// Folding it in would take the checklist with it: `declaredExecuteProcesses`
+    /// reads the run plan, so a plan that went `.nothing` on an empty selection
+    /// would hide the very checkboxes needed to make it non-empty.
+    let hasRunnableSelection: Bool
     /// Whether Start is currently shutting down a server that still holds this
     /// workstream's execute socket, before it can run anything.
     ///
@@ -143,6 +159,10 @@ struct ExecutionTabView: View {
     /// user has not approved, or empty when there is nothing to ask about.
     let unapprovedConfigFiles: [String]
     let onReviewConfig: () -> Void
+    /// The checklist wrote a new selection. Forwarded so the owner can re-read
+    /// the store and re-decide `hasRunnableSelection`; see
+    /// `ProcessSelectionView.onSelectionChange`.
+    let onSelectionChange: () -> Void
     let onStart: () -> Void
     let onStop: () -> Void
     let onRestart: () -> Void
@@ -231,7 +251,7 @@ struct ExecutionTabView: View {
                     workstreamID: workstreamID,
                     declaredProcesses: declaredProcesses,
                     store: .execute,
-                    lastSelectedHelp: NSLocalizedString("At least one process has to start.", comment: "")
+                    onSelectionChange: onSelectionChange
                 )
             }
 
@@ -248,6 +268,17 @@ struct ExecutionTabView: View {
     /// Neither arm renders when Start can do nothing and no run is up:
     /// `scriptInstructions` below the divider is the surface that explains
     /// that, and a disabled button beside its explanation says nothing extra.
+    ///
+    /// Stop and Rerun are ordinary chromed controls — `.borderedProminent` and
+    /// `.bordered`, the shapes `VerificationTabView.actionRow` already uses.
+    /// They were borderless and transparent until hovered, at 10/11pt, so the
+    /// two buttons that matter while a stack is up were the least visible
+    /// things in the pane, and Start — a filled accent button — was the only
+    /// one that looked pressable. Stop takes the prominent slot because while a
+    /// run is up it is the primary action, and the red tint is what makes it
+    /// readable at a glance; Verification's Stop stays `.bordered` because Run
+    /// is the primary action in that pane. Do not restyle these as borderless
+    /// again to match some other bar: the point is that they read as buttons.
     @ViewBuilder
     private var runControls: some View {
         let shortcut = "⌘⇧⏎"
@@ -255,12 +286,27 @@ struct ExecutionTabView: View {
             HStack(spacing: 8) {
                 // Stop's precondition is that something is running, and that is
                 // all. It used to be gated on `canStart` alongside Rerun, so
-                // breaking the binary path mid-run took the Stop button away
-                // from a live stack, leaving Ctrl+C in the surface as the only
-                // way out. Only Rerun needs to know a run can be started.
-                EnvActionButton(label: NSLocalizedString("Stop", comment: ""), icon: "stop.fill", shortcut: "", action: onStop)
+                // a process-compose binary that stopped resolving mid-run took
+                // the Stop button away from a live stack, leaving Ctrl+C in the
+                // surface as the only way out. Only Rerun needs to know a run
+                // can be started.
+                Button(action: onStop) {
+                    Label("Stop", systemImage: "stop.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .accessibilityLabel(NSLocalizedString("Stop", comment: ""))
+
                 if runControlsEnabled {
-                    EnvActionButton(label: NSLocalizedString("Rerun", comment: ""), icon: "arrow.counterclockwise", shortcut: shortcut, action: onRestart)
+                    Button(action: onRestart) {
+                        Label("Rerun", systemImage: "arrow.counterclockwise")
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel(NSLocalizedString("Rerun", comment: ""))
+
+                    Text(shortcut)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
                 }
 
                 // Only while something is running: it warns that the browser
@@ -293,14 +339,25 @@ struct ExecutionTabView: View {
                     .background(Color.accentColor)
                     .foregroundStyle(.white)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .opacity(isReclaimingSocket ? 0.6 : 1)
+                    .opacity(startEnabled ? 1 : 0.6)
                 }
                 .buttonStyle(.borderless)
-                .disabled(isReclaimingSocket)
+                .disabled(!startEnabled)
 
-                Text(shortcut)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                // The shortcut gives way to the reason, rather than sitting
+                // beside it: ⌘⇧⏎ goes through `resolvedRunCommand`, which
+                // refuses the same empty selection, so advertising it next to a
+                // disabled button would name a second way to press it that is
+                // just as inert.
+                if hasRunnableSelection {
+                    Text(shortcut)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Select a process to start.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
             }
         }
     }
@@ -453,40 +510,34 @@ struct ExecutionTabView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    /// Whether Rerun may be pressed.
+    ///
+    /// The selection half is defensive rather than a case anyone can reach
+    /// today, and it is worth knowing which: the checklist is hidden during a
+    /// run, and the one path that sets `runStarted` without a Start press — the
+    /// tmux restore in `TerminalContainerView` — passes
+    /// `hasRunScript: resolvedRunCommand != nil`, which is already nil for an
+    /// empty selection. So a run cannot currently be live over one.
+    ///
+    /// It is gated anyway because `restartRun` guards on `resolvedRunCommand`,
+    /// and a Rerun offered over an empty selection would stop the run and then
+    /// decline to start one — a Stop wearing Rerun's label. That is the failure
+    /// this button already had once, for the neighbouring reason, and a future
+    /// restore path that stopped consulting the command should not be able to
+    /// bring it back.
     private var runControlsEnabled: Bool {
-        canStart
+        canStart && hasRunnableSelection
+    }
+
+    /// Start is pressable when there is something to start and no socket is
+    /// being reclaimed. Both halves dim the button rather than removing it —
+    /// removing it is `canStart`'s job, and it comes with an explanation
+    /// elsewhere on the pane.
+    private var startEnabled: Bool {
+        hasRunnableSelection && !isReclaimingSocket
     }
 }
 
 extension Notification.Name {
     static let rerunScript = Notification.Name("atelier.rerunScript")
-}
-
-private struct EnvActionButton: View {
-    let label: String
-    let icon: String
-    let shortcut: String
-    let action: () -> Void
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.system(size: 10))
-                Text(label)
-                    .font(.system(size: 11))
-                Text(shortcut)
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(isHovering ? Color.primary.opacity(0.08) : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 4))
-        }
-        .buttonStyle(.borderless)
-        .onHover { isHovering = $0 }
-        .accessibilityLabel(label)
-    }
 }
