@@ -376,6 +376,12 @@ struct VerificationTabView: View {
     /// standing. One pending bit rather than a queue, because every waiting
     /// request wants the same thing: one more read, after this one.
     @State private var stalenessRefreshPending = false
+    /// Watches the worktree itself for the edits `.worktreeGitActivity` cannot
+    /// see — an ordinary save touches nothing inside `.git`, so a result on a
+    /// tab the user is sitting on kept reading fresh. `@State` so it lives as
+    /// long as this view does; armed and disarmed from the triggers below, never
+    /// from `body`. See `Verification.StalenessWatcher` for what bounds its cost.
+    @State private var worktreeWatcher: Verification.StalenessWatcher?
 
     var body: some View {
         // One read of `currentRun` per body evaluation, threaded through both
@@ -394,6 +400,13 @@ struct VerificationTabView: View {
         }
         .onAppear {
             refreshStaleness()
+            syncWorktreeWatcher(hasRun: currentRun != nil)
+        }
+        .onDisappear {
+            // The tab leaves the tree on every tab switch, and an FSEvents
+            // stream on a whole worktree is not something to leave running for
+            // a pane nobody is looking at.
+            worktreeWatcher?.disarm()
         }
         .onReceive(NotificationCenter.default.publisher(for: .worktreeGitActivity)) { notification in
             guard notification.object as? String == worktreePath else { return }
@@ -408,6 +421,10 @@ struct VerificationTabView: View {
         // stamp predates the edits and a current result would read as stale.
         .onChange(of: run?.id) {
             refreshStaleness()
+            // The watcher is armed only while there is a run to compare
+            // against, and the first run of a session is when that becomes
+            // true.
+            syncWorktreeWatcher(hasRun: run != nil)
         }
         // A run *ending*, which is the case the trigger above cannot answer: a
         // check that writes to the tree — a formatter, codegen — leaves
@@ -743,6 +760,22 @@ struct VerificationTabView: View {
     /// queuing a matching burst of `git` spawns behind it. Absorbed, not
     /// discarded: see `stalenessRefreshPending` for why the run-completion
     /// trigger cannot afford to have its request dropped.
+    /// Arm the worktree watcher while there is a result to go stale, and not
+    /// otherwise.
+    ///
+    /// Created lazily rather than in an initialiser: `@State` initial values are
+    /// built for every view SwiftUI makes, and this one owns an FSEvents stream.
+    private func syncWorktreeWatcher(hasRun: Bool) {
+        guard hasRun else {
+            worktreeWatcher?.disarm()
+            return
+        }
+        if worktreeWatcher == nil {
+            worktreeWatcher = Verification.StalenessWatcher { refreshStaleness() }
+        }
+        worktreeWatcher?.arm(path: worktreePath)
+    }
+
     private func refreshStaleness() {
         // **The in-flight guard comes first, and the order is the whole point.**
         // `currentRun` falls through to `Verification.Store.latest` — a
