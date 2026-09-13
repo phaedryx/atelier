@@ -363,6 +363,104 @@ extension Verification {
             stopRequested.insert(workstreamID)
         }
 
+        /// How long `stopAndWait` waits before reporting that the run is still
+        /// live.
+        ///
+        /// `ProcessRunner.Timeout.userCommand`, and it has to be at least that
+        /// tier. The wait covers two things this layer cannot bound itself: the
+        /// window before `up` binds its control socket, which is a shell spawn
+        /// plus whatever the project's own `verify` processes do before they
+        /// report; and the run loop's teardown, which is a repository-authored
+        /// `down` already bounded by `Timeout.local` (60s). So `local` is
+        /// structurally too tight — the teardown alone may use all of it — and
+        /// `userCommand` is the next tier, the same bound `runDispose` uses for
+        /// the very next step of the same purge.
+        ///
+        /// **Not `Timeout.suite`.** That bounds a suite running to *completion*,
+        /// and this wait is for one being *stopped*. Blocking an archive for
+        /// half an hour is worse than the hazard the wait exists to close.
+        static let stopWaitTimeout = Duration.seconds(ProcessRunner.Timeout.userCommand)
+
+        /// Ask this workstream's run to stop, and wait until nothing of it is
+        /// live. Returns whether it got there before `timeout`.
+        ///
+        /// **This adds no second teardown, and that is the whole shape of it.**
+        /// It calls `stop`, which sets a flag, and then polls `isLive` — so the
+        /// run loop remains the single owner of `shutDown`, and every ordering
+        /// that loop guarantees (final snapshot, log capture, seal, *then*
+        /// teardown) happens exactly once, in that order, however this is
+        /// called. `Workstream.Archiver.purge` is the caller this exists for:
+        /// it used to reach past the runner to `PhaseExecutor.shutDown`, which
+        /// **no-ops when the socket file is not there yet**, so a purge landing
+        /// during the binding window went on to `dispose` and `git worktree
+        /// remove --force` while a suite was still coming up in that tree.
+        ///
+        /// It composes with `shouldStop` rather than working around it. That
+        /// guard withholds a pending Stop until the control server has answered
+        /// once, for the same reason: a teardown ordered before the socket
+        /// exists does nothing while the suite keeps running. So a run still
+        /// binding is not stopped *yet* — it is stopped as soon as it can be,
+        /// and this waits for that rather than assuming it.
+        ///
+        /// `isLive`, not `Run.isFinished`: a run's rows are all terminal for the
+        /// last stretch of its life, and the socket is not released until the
+        /// teardown returns.
+        ///
+        /// **The bound is real and the caller must handle `false`.** A spawn
+        /// that never binds is only bounded by `Timeout.suite`, far past
+        /// anything an archive can wait for, so on expiry this reports the truth
+        /// and lets the caller decide. For `purge` that decision is to proceed:
+        /// a workstream stranded half-archived is worse than cleanup that did
+        /// not happen.
+        @discardableResult
+        func stopAndWait(
+            workstreamID: UUID, timeout: Duration = Runner.stopWaitTimeout
+        ) async -> Bool {
+            stop(workstreamID: workstreamID)
+            let deadline = ContinuousClock.now.advanced(by: timeout)
+            while isLive(workstreamID) {
+                guard ContinuousClock.now < deadline else { return false }
+                do {
+                    try await Task.sleep(for: pollInterval)
+                } catch {
+                    // Cancelled. Report what is true rather than spinning on a
+                    // sleep that will now throw immediately every time.
+                    return !isLive(workstreamID)
+                }
+            }
+            return true
+        }
+
+        // MARK: - Forgetting a workstream
+
+        /// Drop what this type remembers about a workstream that no longer
+        /// exists.
+        ///
+        /// `Workstream.Archiver.purge` is the production caller. Without it
+        /// `runs[workstreamID]` held a sealed run for a destroyed workstream for
+        /// the rest of the session — the same one-entry-per-archive leak
+        /// `AsyncSetupService.clearState` was added to close.
+        ///
+        /// Called after `stopAndWait`, so on the ordinary path the loop has
+        /// already sealed and torn down and there is nothing in flight. On the
+        /// expired-wait path the loop is still running, and forgetting *first*
+        /// is what makes that safe: `seal`, `apply` and `captureFailedOutput`
+        /// all guard on finding the run, so each becomes a no-op — no
+        /// `Store.save` for a workstream being deleted, and no `onFinish`, which
+        /// would otherwise post an `atelier/verification` completion notice
+        /// about a workstream that is being destroyed as it is written.
+        ///
+        /// **Deliberately not `tearingDown`.** The run loop owns that set and
+        /// removes its own entry on the way out; clearing it here would report
+        /// `isLive == false` while the socket is still being released, which is
+        /// the one thing it exists to prevent. `issuedRunIDs` and `sealedRunIDs`
+        /// are left alone too — they are keyed by run id and exist so an id is
+        /// never reused, which outliving one workstream is the point of.
+        func forget(workstreamID: UUID) {
+            runs.removeValue(forKey: workstreamID)
+            stopRequested.remove(workstreamID)
+        }
+
         // MARK: - Sealing
 
         /// Turn a final `processes()` read into the run's authoritative result.

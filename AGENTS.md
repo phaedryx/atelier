@@ -273,7 +273,7 @@ a decision spelled inline in a row body is one nothing can pin.
 | Reached by | ⌘⇧W, the menu's "Archive Workstream", the palette, the sidebar context menu's "Remove" | the sidebar context menu's "Purge", and the Purge button on `WorkstreamInfoView`'s merged-PR banner |
 | Runs `dispose`? | no | yes, before the worktree goes |
 | Files on disk | **kept** | `git worktree remove`, local branch deleted, default branch re-fetched |
-| Also | kills tmux sessions, evicts surfaces, drops `IPC.Config` and the launch log | same, plus cancels a running `bootstrap` and stops the dev stack first |
+| Also | kills tmux sessions, evicts surfaces, drops `IPC.Config` and the launch log | same, plus cancels a running `bootstrap`, stops the dev stack, waits out a live verify run through `Verification.Runner.stopAndWait`, then `forget`s that workstream in the runner and drops both checklist selection keys |
 | Guarded by | nothing — it destroys nothing | `purgeWarning` / `destroyableWorktreePath` |
 
 The naming is not self-consistent and reading it as such is the trap: the *menu*
@@ -645,6 +645,32 @@ later reader would plausibly "simplify" away without knowing why:
    argument too, so the guarantee does not depend on a caller remembering, and additionally refuses
    such a name asked for explicitly, with `Failure.unrunnableChecks` rather than "No such check",
    which would be a lie about a name the YAML really declares.
+
+9. **A purge stops a verify run *through the runner*, and the wait is bounded.**
+   `Workstream.Archiver.purge` used to call `ProcessCompose.PhaseExecutor.shutDown` for the
+   verify socket directly. That call returns immediately when the socket file does not exist
+   yet (`PhaseExecutor.swift:452-453`), so a purge landing in the binding window reported the
+   run dealt with and went on to `dispose` and `git worktree remove --force` while a suite was
+   still coming up in that tree — the same hazard `shouldStop` defends at the *other* end of a
+   run's life, and it composes with it rather than working around it.
+   `Verification.Runner.stopAndWait` is the replacement, reached through
+   `Archiver.quiesceVerification`: it calls `stop`, which only sets a flag, then polls `isLive`
+   — so **the run loop is still the single owner of `shutDown`**, and every ordering it
+   guarantees happens once, in order. The bound is `ProcessRunner.Timeout.userCommand`, which
+   has to be at least that tier: the wait covers a binding window this layer cannot bound plus
+   the loop's teardown, itself already `Timeout.local`, and `userCommand` is the same bound
+   `runDispose` uses for the very next step. **Not `Timeout.suite`** — purge waits for a suite
+   to be *stopped*, not to *finish*. On expiry `purge` logs and proceeds, because a workstream
+   stranded half-archived is worse than cleanup that did not happen; the direct `shutDown` is
+   still there afterwards, now only for a socket no live run owns (a crashed session's leftover)
+   or a wait that expired. Two consequences follow from going through `stop`:
+   `Verification.Runner.forget` drops the in-memory entry that otherwise held a sealed run for a
+   destroyed workstream for the session, and it is called **before** the destructive work, so a
+   loop still running after an expired wait seals into nothing — no `Store.save` and no
+   `onFinish`, which would otherwise post an `atelier/verification` notice about a worktree being
+   deleted as it is written. And the run seals `wasStopped: true` in step with its `.stopped`
+   rows, where tearing the socket down behind the runner's back sealed `wasStopped: false` over
+   the same rows.
 
 **`execute` has the same hole, and it is closed the same way.** The checklist and the run there
 had no filter at all: `declaredExecuteProcesses` offered a process named `-web` verbatim, the user
