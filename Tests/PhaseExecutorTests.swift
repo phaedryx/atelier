@@ -469,6 +469,128 @@ final class PhaseOutcomeReportingTests: XCTestCase {
         XCTAssertEqual(outcome(.serverGone, output(0)), .succeeded)
     }
 
+    // MARK: - Waiting for the spawned command's status
+
+    /// A locked handoff, so the "arrives late" test can store from one thread and
+    /// read from the one under test. Mirrors `PhaseExecutor`'s own `OutputBox`,
+    /// which is private to it.
+    private final class LateCaptureBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: ProcessRunner.Output?
+
+        func store(_ output: ProcessRunner.Output) {
+            lock.lock()
+            defer { lock.unlock() }
+            value = output
+        }
+
+        func read() -> ProcessRunner.Output? {
+            lock.lock()
+            defer { lock.unlock() }
+            return value
+        }
+    }
+
+    private func settled(
+        _ poll: ProcessCompose.PhaseExecutor.PollResult,
+        finished: DispatchSemaphore,
+        grace: TimeInterval,
+        read: () -> ProcessRunner.Output?
+    ) -> ProcessRunner.Output? {
+        ProcessCompose.PhaseExecutor.settledOutput(
+            poll: poll, phase: .verify, finished: finished, grace: grace, read: read
+        )
+    }
+
+    /// The bug. With `shutDownWhenDone: false` — the `verify` path — nothing
+    /// waited for the capture thread, so a namespace that shut itself down
+    /// (`restart: exit_on_failure`) reached `outcome` with a nil status purely
+    /// because the store had not happened yet, and was persisted as a timeout that
+    /// never happened. The status arriving a moment later must be the report.
+    func test_serverGone_waitsForACaptureThatArrivesLate() {
+        let box = LateCaptureBox()
+        let finished = DispatchSemaphore(value: 0)
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) {
+            box.store(self.output(3, "boom"))
+            finished.signal()
+        }
+
+        let waited = settled(.serverGone, finished: finished, grace: 5, read: box.read)
+
+        guard case let .failed(detail) = outcome(.serverGone, waited) else {
+            return XCTFail("expected a failure")
+        }
+        XCTAssertTrue(detail.contains("boom"), detail)
+        XCTAssertFalse(detail.contains("did not finish in time"), detail)
+    }
+
+    /// The other half: a status that genuinely never lands is still reported, and
+    /// only after the wait actually happened. The elapsed assertion is what gives
+    /// this teeth — the wording alone is what a nil produced *without* waiting
+    /// yields too, so deleting the wait would leave the message untouched.
+    func test_serverGone_withACaptureThatNeverArrivesReportsAfterWaiting() {
+        let finished = DispatchSemaphore(value: 0)
+        let grace: TimeInterval = 0.2
+
+        let start = Date()
+        let waited = settled(.serverGone, finished: finished, grace: grace, read: { nil })
+        let elapsed = Date().timeIntervalSince(start)
+
+        XCTAssertNil(waited)
+        XCTAssertGreaterThanOrEqual(elapsed, grace)
+        guard case let .failed(detail) = outcome(.serverGone, waited) else {
+            return XCTFail("expected a failure")
+        }
+        XCTAssertTrue(detail.contains("did not finish in time"), detail)
+    }
+
+    /// The read comes before the `.serverGone` guard, and it has to: the common
+    /// way to reach `.serverGone` is `up` exiting before it ever listened, where
+    /// the capture stored before it signalled and the result is already there.
+    /// The semaphore here is never signalled, so a guard-first version would sit
+    /// out the whole grace and turn the fastest failure there is into the slowest.
+    func test_serverGone_withACaptureAlreadyStoredDoesNotWait() {
+        let finished = DispatchSemaphore(value: 0)
+
+        let start = Date()
+        let waited = settled(.serverGone, finished: finished, grace: 5, read: { self.output(1, "invalid config") })
+        let elapsed = Date().timeIntervalSince(start)
+
+        XCTAssertLessThan(elapsed, 1)
+        guard case let .failed(detail) = outcome(.serverGone, waited) else {
+            return XCTFail("expected a failure")
+        }
+        XCTAssertTrue(detail.contains("invalid config"), detail)
+    }
+
+    /// `.finished` keeps its nil-tolerance untouched, and pays nothing for it: the
+    /// poll watched every process end, so there is no status worth waiting for.
+    func test_finished_doesNotWaitForAStatusItDoesNotNeed() {
+        let finished = DispatchSemaphore(value: 0)
+
+        let start = Date()
+        let waited = settled(.finished([]), finished: finished, grace: 5, read: { nil })
+        let elapsed = Date().timeIntervalSince(start)
+
+        XCTAssertLessThan(elapsed, 1)
+        XCTAssertNil(waited)
+        XCTAssertEqual(outcome(.finished([]), waited), .succeeded)
+    }
+
+    /// And `.finished` still sees a status that *did* land, so a clean poll with a
+    /// refused config is a failure as before. A version that guarded on
+    /// `.serverGone` before reading would drop this and report success.
+    func test_finished_stillSeesALandedFailingStatus() {
+        let finished = DispatchSemaphore(value: 0)
+
+        let waited = settled(.finished([]), finished: finished, grace: 5, read: { self.output(1, "invalid config") })
+
+        guard case let .failed(detail) = outcome(.finished([]), waited) else {
+            return XCTFail("expected a failure")
+        }
+        XCTAssertTrue(detail.contains("invalid config"), detail)
+    }
+
     func testEmptyNamespaceIsSkipped() {
         XCTAssertEqual(outcome(.namespaceEmpty, output(0)), .skipped)
     }

@@ -162,6 +162,7 @@ extension ProcessCompose {
                 upFinished: finished
             )
 
+            let output: ProcessRunner.Output?
             if shutDownWhenDone {
                 shutDown(binary: binary, socketPath: socketPath, workingDirectory: workingDirectory)
                 // Best effort. If the child ignores `down`, `capture`'s own deadline
@@ -169,9 +170,80 @@ extension ProcessCompose {
                 if finished.wait(timeout: .now() + shutdownGrace) == .timedOut {
                     logger.warning("\(phase.namespace, privacy: .public) did not exit after down; it will be killed at its deadline")
                 }
+                output = captured.read()
+            } else {
+                // Nothing above has waited for the spawned command on this path:
+                // `verify` holds the control server open and the run loop owns the
+                // teardown, so `run` returns the moment the poll concludes. That is
+                // fine for every poll result except `.serverGone`, where a missing
+                // status is the *only* thing reported — see `settledOutput`.
+                //
+                // Deliberately not merged with the branch above into one call. That
+                // branch has already spent `shutdownGrace` waiting on the same
+                // semaphore, and routing it through here would let a `.serverGone`
+                // bootstrap wait a second one — 15s added to the wall-clock worst
+                // case this function's own doc comment states.
+                output = settledOutput(
+                    poll: poll,
+                    phase: phase,
+                    finished: finished,
+                    grace: shutdownGrace,
+                    read: captured.read
+                )
             }
 
-            return outcome(for: phase, poll: poll, output: captured.read())
+            return outcome(for: phase, poll: poll, output: output)
+        }
+
+        /// The spawned command's result, waited for when its absence would be read
+        /// as evidence rather than as a race.
+        ///
+        /// `outcome` treats a nil `output` in two opposite ways, and that difference
+        /// is the whole reason this exists. After `.finished` the poll has already
+        /// watched every process reach a terminal state, so a missing status is
+        /// ignored. After `.serverGone` the command's own status is the *whole* of
+        /// what is known, so a nil is reported as "did not finish in time" — and
+        /// with `shutDownWhenDone: false` nobody had waited for the capture thread
+        /// at all, so that nil was routinely just "it has not stored yet". A verify
+        /// namespace that shut itself down — `restart: exit_on_failure` does exactly
+        /// that, even with `--keep-project` — was therefore persisted as a timeout
+        /// that never happened, on the self-shutdown, purge and quit paths.
+        ///
+        /// **The read comes before the `.serverGone` guard on purpose.** The common
+        /// way to reach `.serverGone` is `up` exiting before it ever listened (a
+        /// config error), and the capture thread stores *before* it signals, so the
+        /// result is already sitting there. Guarding first would make the fastest
+        /// failure there is pay the full grace — the hazard `pollToCompletion`'s own
+        /// early `upFinished` check exists to avoid.
+        ///
+        /// **`grace` is `shutdownGrace`, and that is the right size** for the same
+        /// reason it is right there: it is how long a spawned `up` may take to exit
+        /// and have its output drained. Here it is an upper bound that normally does
+        /// not bind at all, because a project that shut itself down has its capture
+        /// stored within milliseconds. It binds only when `up` is alive but no
+        /// longer answering — where the run genuinely is not over, so the verify run
+        /// loop polling on through that window is correct rather than a stall. When
+        /// it does expire, the nil handed back has been *waited* for, and reporting
+        /// "did not finish in time" after a real bounded wait is honest.
+        static func settledOutput(
+            poll: PollResult,
+            phase: ProcessCompose.Phase,
+            finished: DispatchSemaphore,
+            grace: TimeInterval,
+            read: () -> ProcessRunner.Output?
+        ) -> ProcessRunner.Output? {
+            if let output = read() {
+                return output
+            }
+            guard poll == .serverGone else { return nil }
+            if finished.wait(timeout: .now() + grace) == .timedOut {
+                logger.warning("\(phase.namespace, privacy: .public) went away without reporting a status; it will be killed at its deadline")
+            }
+            // Read again rather than assuming the wait produced something.
+            // `ProcessRunner.capture` returns an optional, so a capture killed at
+            // its own deadline signals with nothing stored — and a status that
+            // landed just after the grace expired is still better than none.
+            return read()
         }
 
         // MARK: - Environment
@@ -350,6 +422,11 @@ extension ProcessCompose {
         /// the server went away before it could be asked. Where the poll saw the
         /// processes finish, it outranks this.
         private static func spawnFailure(phase: ProcessCompose.Phase, output: ProcessRunner.Output?) -> Outcome? {
+            // A nil here has been waited for: `run` puts every `.serverGone` through
+            // `settledOutput` before this is reached, so the status is absent
+            // because it never came, not because the capture thread had not stored
+            // yet. That is what makes the timeout wording below a report rather than
+            // a guess — do not reintroduce a path that reaches it without waiting.
             guard let output else {
                 return .failed(String(
                     format: NSLocalizedString("The %@ phase did not finish in time.", comment: ""),
