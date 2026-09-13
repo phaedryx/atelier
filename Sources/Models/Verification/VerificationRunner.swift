@@ -136,11 +136,38 @@ extension Verification {
         /// truncating — so an oversized completion notice is lost silently while
         /// an agent waits for it — and sized its own caps around this number.
         /// Changing one side alone breaks the other.
-        private static let logTailLines = 200
+        ///
+        /// Not private: `VerificationTabView`'s live log window asks for the
+        /// same number of lines through `liveLog`, so what a user watches
+        /// scroll past while a check runs is exactly what `captureFailedOutput`
+        /// keeps if it fails. Two numbers would make the window silently
+        /// shorten or lengthen at the moment the run sealed.
+        static let logTailLines = 200
 
         /// Gap between live-row polls. Matches `ProcessCompose.TableModel`'s
         /// cadence, which the Execution tab already runs beside a terminal.
         private static let defaultPollInterval = Duration.seconds(1)
+
+        /// The live run's control client, per workstream. Set at the top of
+        /// `execute` and cleared only after `spawner.shutDown` has returned.
+        ///
+        /// **This is a second *reader* of the one-shot log window, and it owns
+        /// none of it.** The window — the stretch between the namespace
+        /// finishing and the teardown, held open by `shutDownWhenDone: false`
+        /// — exists so `captureFailedOutput` can keep a failed check's tail
+        /// before the output stops existing. Nothing here changes that: this
+        /// map never calls `shutDown`, never touches `sealedRunIDs`,
+        /// `tearingDown` or `stopRequested`, and grants no way to reach
+        /// `execute`. The teardown still has exactly one owner, and it is still
+        /// the run loop.
+        ///
+        /// Cleared beside `stopRequested` and `tearingDown`, after the teardown,
+        /// for the same reason they are: `isLive` is true for the whole
+        /// teardown, so a reader may still arrive during it and must get the
+        /// client whose server is going away — which answers `.notRunning` and
+        /// becomes nil — rather than nothing at all, which would be
+        /// indistinguishable from a run that was never live.
+        private var liveClients: [UUID: ProcessCompose.Controlling] = [:]
 
         private let spawner: Spawning
         private let pollInterval: Duration
@@ -349,6 +376,44 @@ extension Verification {
             }
             guard let run = runs[workstreamID] else { return false }
             return !sealedRunIDs.contains(run.id)
+        }
+
+        /// The tail of one live check's log, or nil when there is none to read.
+        ///
+        /// **Read-only, and deliberately the weakest possible handle on the log
+        /// window.** Per-check output lives in the control server and nowhere
+        /// else, and `execute` is the one thing that ends that server; this
+        /// borrows the same client for the length of a single `GET` and can
+        /// neither extend the window nor close it. Every failure — no live run,
+        /// a server that has already gone, a check the run does not own — is one
+        /// nil, because a caller can do nothing different with any of them: the
+        /// honest answer in all three cases is "there is no live output for
+        /// this", and the run's own sealed result is the report on why.
+        ///
+        /// The check is scoped to this workstream's current run, for the reason
+        /// `check_verification`'s scope check exists rather than as a security
+        /// boundary — every process here runs as the user. A name that is not
+        /// this run's would otherwise fetch whatever the control server happens
+        /// to hold under it, which for a `verify` socket is another namespace's
+        /// process.
+        ///
+        /// - Returns: the last `tail` lines, newest last; nil when nothing can
+        ///   be read. An empty array means the check has genuinely produced no
+        ///   output yet, which is a different fact and is rendered as one.
+        func liveLog(workstreamID: UUID, check: String, tail: Int = logTailLines) async -> [String]? {
+            guard isLive(workstreamID), let client = liveClients[workstreamID],
+                  runs[workstreamID]?.checks.contains(where: { $0.name == check }) == true
+            else { return nil }
+            do {
+                return try await client.logs(name: check, tail: tail)
+            } catch {
+                // Swallowed for the reason `verifyProcesses` swallows its own:
+                // before the namespace binds every read throws `.notRunning`,
+                // and after the teardown every read throws again. Neither is
+                // this function's to report, and a live view polling once a
+                // second would otherwise log at 1Hz for the whole run.
+                return nil
+            }
         }
 
         /// Test seam: the in-flight refusal is otherwise only reachable by
@@ -731,6 +796,11 @@ extension Verification {
         func execute(_ request: SpawnRequest, runID: String) async {
             let workstreamID = request.workstreamID
             let client = spawner.controlClient(for: request)
+            // Published for the tab's live log windows before anything else
+            // happens, so a check expanded the instant Run is pressed has a
+            // client to poll rather than having to wait out the git hop below.
+            // Reads through it are bounded by `isLive`; see `liveClients`.
+            liveClients[workstreamID] = client
             let state = RunLoopState()
 
             // The staleness baseline, taken here rather than in `start`: it is
@@ -830,6 +900,13 @@ extension Verification {
             // reads `stopRequested` between here and the final snapshot above.
             stopRequested.remove(workstreamID)
             tearingDown.remove(workstreamID)
+            // After the teardown, with the two flags above, because `isLive`
+            // is true for its whole length and a reader arriving during it
+            // should meet the dying server rather than an absent client. By
+            // here the server is gone, so every later `liveLog` is nil — which
+            // is what makes a sealed run's groups fall back to what was
+            // captured.
+            liveClients[workstreamID] = nil
 
             // Only now, and only to log it: on the stop path the spawn is still
             // in flight until the teardown above ends its project, and leaving

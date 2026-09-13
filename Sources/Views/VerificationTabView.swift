@@ -76,6 +76,72 @@ func verificationShowsChecklist(isLive: Bool, declaredProcesses: [String]) -> Bo
     !isLive && !declaredProcesses.isEmpty
 }
 
+/// What one check's disclosure group has to show.
+///
+/// A separate question from what state the check is in, and the reason it is
+/// a value rather than a chain of `if`s in the row body: the same `.failed`
+/// check shows live output mid-run, a captured tail once the run is sealed,
+/// and — if the log fetch failed — nothing at all, and only the last of those
+/// is visible in `CheckResult.State`. The row polls **iff** this is `.live`,
+/// so it is also the gate that keeps a collapsed or sealed group off the wire.
+enum VerificationOutputContent: Equatable {
+    /// The control server is up and holds this check's output. Poll it.
+    case live
+    /// The run is sealed and a tail of this check's output was kept.
+    case captured
+    /// The check produced output and none of it survives.
+    ///
+    /// Not a failure to look: the log lived in the control server, which the
+    /// run loop tears down once the run is sealed, and only a *failed* check's
+    /// tail is captured on the way past — see `Runner.captureFailedOutput`.
+    /// Re-running the check is the only way to see it, and the copy for this
+    /// case has to say so rather than imply a fetch could still be made.
+    case notKept
+    /// The check has produced no output, and not because any was lost.
+    case notStarted
+}
+
+/// Whether a check in this state has produced output at all.
+///
+/// `.skipped` is the one worth stating: process-compose reports it for a check
+/// whose `depends_on` failed, so it never ran and has nothing to show — which
+/// is `.notStarted` and emphatically not `.notKept`, since nothing was lost.
+private func verificationStateProducedOutput(_ state: Verification.CheckResult.State) -> Bool {
+    switch state {
+    case .running, .passed, .failed, .stopped:
+        true
+    case .notRun, .pending, .skipped:
+        false
+    }
+}
+
+/// What a check's group shows, given the run's liveness and what it kept.
+///
+/// **Live wins over captured, and the order is the point.** A failed check
+/// acquires its captured tail from `Runner.captureFailedOutput` in the window
+/// before teardown, while `isLive` is still true — so for the last moments of
+/// a run both sources exist, and the live one is the fuller of the two: the
+/// capture is a tail taken once, and the server still has whatever arrived
+/// after it.
+///
+/// A pure lookup for the reason the rest of this file's decisions are:
+/// `Tests/VerificationTabViewTests.swift` can pin every state against both
+/// liveness values without a view tree, a socket or a run.
+func verificationOutputContent(
+    state: Verification.CheckResult.State,
+    hasCapturedOutput: Bool,
+    isLive: Bool
+) -> VerificationOutputContent {
+    let produced = verificationStateProducedOutput(state)
+    if isLive, produced {
+        return .live
+    }
+    if hasCapturedOutput {
+        return .captured
+    }
+    return produced ? .notKept : .notStarted
+}
+
 /// Whether `run`'s result no longer reflects the worktree's current content.
 ///
 /// Compares `run.stamp` — `Git.Operations.diffFingerprint` at the moment the
@@ -367,6 +433,23 @@ struct VerificationTabView: View {
     /// standing. One pending bit rather than a queue, because every waiting
     /// request wants the same thing: one more read, after this one.
     @State private var stalenessRefreshPending = false
+    /// Which checks have their output group open, by name.
+    ///
+    /// Held here rather than in the row for two reasons, and the second is the
+    /// one that matters. `runner` republishes on every poll, so the rows are
+    /// rebuilt once a second for the length of a run and a `@State` inside one
+    /// would depend on SwiftUI keeping its identity across a value whose
+    /// `state`, `duration` and `output` all change — recoverable, but not
+    /// something to stake a scroll position on. And expansion is what gates
+    /// `VerificationCheckRow`'s live polling, so it is the one decision that
+    /// determines how many sockets this tab opens per second; a set of names
+    /// in one place is inspectable, a bag of child states is not.
+    ///
+    /// Deliberately **not** cleared when a new run starts: the names are the
+    /// same checks, and a user who opened `rspec` to watch it wants it open
+    /// for the next run too.
+    @State private var expandedChecks: Set<String> = []
+
     /// Watches the worktree itself for the edits `.worktreeGitActivity` cannot
     /// see — an ordinary save touches nothing inside `.git`, so a result on a
     /// tab the user is sitting on kept reading fresh. `@State` so it lives as
@@ -445,7 +528,7 @@ struct VerificationTabView: View {
 
     /// The run is passed in rather than read here, so `body` reads it once for
     /// the whole evaluation — see the note there. Each of
-    /// `failureDetailBanner`/`actionRow`/`resultRows` would otherwise re-read
+    /// `detailBanner`/`actionRow`/`resultRows` would otherwise re-read
     /// `currentRun`, and with no live run that getter goes to UserDefaults.
     private func content(run: Verification.Run?) -> some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -552,60 +635,31 @@ struct VerificationTabView: View {
                     .padding(.bottom, 6)
             }
             ForEach(run.checks) { check in
-                resultRow(check)
+                VerificationCheckRow(
+                    check: check,
+                    workstreamID: workstreamID,
+                    runID: run.id,
+                    isLive: isLive,
+                    // The expansion set lives in this view, not in the row.
+                    // `runner` republishes at the poll cadence, so every row is
+                    // rebuilt once a second for the length of a run; a `@State`
+                    // in the row would survive that only for as long as SwiftUI
+                    // kept its identity, which `ForEach` over a value whose
+                    // `state` and `duration` both change is not a safe bet.
+                    // Here it is a set of names, which nothing rebuilds.
+                    isExpanded: expandedChecks.contains(check.name),
+                    setExpanded: { expanded in
+                        if expanded {
+                            expandedChecks.insert(check.name)
+                        } else {
+                            expandedChecks.remove(check.name)
+                        }
+                    },
+                    runner: runner
+                )
                 Divider()
             }
         }
-    }
-
-    private func resultRow(_ check: Verification.CheckResult) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                Image(systemName: verificationRowGlyph(check.state))
-                    .foregroundStyle(color(for: check.state))
-                    .frame(width: 16)
-                    // The glyph alone is a thin signal: `.notRun`
-                    // (`circle.dashed`) and `.running` (`circle.dotted`)
-                    // differ by a few pixels at this size, with color as the
-                    // practical differentiator, and nowhere else in the row
-                    // does the state appear as text. VoiceOver gets the word
-                    // a sighted user reads from a glance at shape and hue.
-                    .accessibilityLabel(stateWord(check.state))
-                Text(check.name)
-                    .font(.system(size: 11, design: .monospaced))
-                Spacer()
-                if let duration = check.duration {
-                    Text(formattedDuration(duration))
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.tertiary)
-                }
-            }
-
-            if case .failed = check.state, let output = check.output {
-                DisclosureGroup(NSLocalizedString("Output", comment: "Verification tab: failed check's captured output")) {
-                    ScrollView {
-                        Text(output)
-                            .font(.system(size: 10, design: .monospaced))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled)
-                    }
-                    // Fixed, not `.infinity`: an unbounded block here would
-                    // walk the action row off the pane — the same failure
-                    // `processChecklistHeight` exists to prevent for the
-                    // checklist above.
-                    .frame(maxHeight: 200)
-                    if check.outputTruncated {
-                        Text(
-                            "Showing the last lines captured. There is nothing more to fetch: the run's own output no longer exists anywhere."
-                        )
-                        .font(.system(size: 9))
-                        .foregroundStyle(.tertiary)
-                    }
-                }
-                .font(.system(size: 10))
-            }
-        }
-        .padding(.vertical, 4)
     }
 
     /// One banner shape, two headlines — see the call site for why the headline
@@ -654,46 +708,6 @@ struct VerificationTabView: View {
                 .frame(maxWidth: 380)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func color(for state: Verification.CheckResult.State) -> Color {
-        switch state {
-        case .passed:
-            .green
-        case .failed:
-            .red
-        case .running:
-            .blue
-        case .skipped, .stopped:
-            .orange
-        case .notRun, .pending:
-            .secondary
-        }
-    }
-
-    /// The word VoiceOver reads for a check's glyph — see `resultRow`'s
-    /// accessibility label for why the glyph cannot carry this alone.
-    private func stateWord(_ state: Verification.CheckResult.State) -> String {
-        switch state {
-        case .notRun:
-            NSLocalizedString("Not run", comment: "Verification tab: check state, accessibility label")
-        case .pending:
-            NSLocalizedString("Pending", comment: "Verification tab: check state, accessibility label")
-        case .running:
-            NSLocalizedString("Running", comment: "Verification tab: check state, accessibility label")
-        case .passed:
-            NSLocalizedString("Passed", comment: "Verification tab: check state, accessibility label")
-        case .failed:
-            NSLocalizedString("Failed", comment: "Verification tab: check state, accessibility label")
-        case .skipped:
-            NSLocalizedString("Skipped", comment: "Verification tab: check state, accessibility label")
-        case .stopped:
-            NSLocalizedString("Stopped", comment: "Verification tab: check state, accessibility label")
-        }
-    }
-
-    private func formattedDuration(_ duration: TimeInterval) -> String {
-        String(format: "%.1fs", duration)
     }
 
     // MARK: - Actions
@@ -819,5 +833,306 @@ struct VerificationTabView: View {
                 }
             }
         }
+    }
+}
+
+private func verificationStateColor(_ state: Verification.CheckResult.State) -> Color {
+    switch state {
+    case .passed:
+        .green
+    case .failed:
+        .red
+    case .running:
+        .blue
+    case .skipped, .stopped:
+        .orange
+    case .notRun, .pending:
+        .secondary
+    }
+}
+
+/// The word VoiceOver reads for a check's glyph — see `VerificationCheckRow`'s
+/// accessibility label for why the glyph cannot carry this alone.
+private func verificationStateWord(_ state: Verification.CheckResult.State) -> String {
+    switch state {
+    case .notRun:
+        NSLocalizedString("Not run", comment: "Verification tab: check state, accessibility label")
+    case .pending:
+        NSLocalizedString("Pending", comment: "Verification tab: check state, accessibility label")
+    case .running:
+        NSLocalizedString("Running", comment: "Verification tab: check state, accessibility label")
+    case .passed:
+        NSLocalizedString("Passed", comment: "Verification tab: check state, accessibility label")
+    case .failed:
+        NSLocalizedString("Failed", comment: "Verification tab: check state, accessibility label")
+    case .skipped:
+        NSLocalizedString("Skipped", comment: "Verification tab: check state, accessibility label")
+    case .stopped:
+        NSLocalizedString("Stopped", comment: "Verification tab: check state, accessibility label")
+    }
+}
+
+private func verificationFormattedDuration(_ duration: TimeInterval) -> String {
+    String(format: "%.1fs", duration)
+}
+
+/// One check's row: its state, its name, its duration, and a disclosure group
+/// holding its output.
+///
+/// A `View` rather than a method on `VerificationTabView` because it has to
+/// hold state — the lines read from the live control server, and the poll task
+/// that reads them. Its own `@State` is only ever a cache of what the server
+/// said; the decision of *whether* it may poll is `isExpanded` and
+/// `verificationOutputContent`, both passed in.
+struct VerificationCheckRow: View {
+    let check: Verification.CheckResult
+    let workstreamID: UUID
+    /// The run these lines belong to. Part of the poll task's identity, so a
+    /// second run discards the first one's output rather than appearing to
+    /// resume it.
+    let runID: String
+    let isLive: Bool
+    let isExpanded: Bool
+    let setExpanded: (Bool) -> Void
+    @ObservedObject var runner: Verification.Runner
+
+    /// The last tail read from the live control server, newest last.
+    ///
+    /// **Kept after the run ends, and that is deliberate.** The server is torn
+    /// down once the run seals, so these lines stop being refreshable — but
+    /// they are real output that was really read, and clearing them would empty
+    /// a window the user is in the middle of reading at the exact moment the
+    /// run finishes. They are labelled as the last read rather than as live.
+    ///
+    /// The rule is "an open group keeps what it read while it was open": a new
+    /// run replaces them, and closing the group ends the session that owned
+    /// them — so a group opened for the first time after a run shows the honest
+    /// `.notKept` note rather than a cache nothing told the user about.
+    ///
+    /// **The run id is stored beside the lines rather than used to clear them,
+    /// and that is what makes the first half of that rule true without
+    /// depending on SwiftUI.** Clearing on an `.onChange(of: runID)` would
+    /// require this row to keep its view identity across two runs — `ForEach`
+    /// keys on `CheckResult.id`, which is the check's *name*, so the same name
+    /// in run 2 may or may not be the same view as in run 1, and only one of
+    /// the three possible answers ("identity kept, change observed") clears
+    /// anything. Carrying the id makes every answer correct: `displayedLines`
+    /// hands back nothing for a read belonging to a run this row is no longer
+    /// showing, whether or not any `onChange` ever fired.
+    @State private var liveRead: LiveRead?
+
+    /// A tail, and the run it was read from.
+    private struct LiveRead: Equatable {
+        let runID: String
+        var lines: [String]
+    }
+
+    /// The live lines this row may show: the ones read from *this* run, and
+    /// never a previous one's.
+    private var displayedLines: [String] {
+        guard let liveRead, liveRead.runID == runID else { return [] }
+        return liveRead.lines
+    }
+
+    /// Gap between live reads. Matches `Verification.Runner`'s own poll and
+    /// `ProcessCompose.TableModel`'s, which is the cadence this tab's rows are
+    /// already republished at — a faster log poll would render into frames that
+    /// do not exist.
+    private static let pollInterval = Duration.seconds(1)
+
+    /// Bound on the output window, for the reason the failed-check group has
+    /// always had one: an unbounded block here walks the action row off the
+    /// pane, the same failure `processChecklistHeight` prevents for the
+    /// checklist.
+    private static let outputHeight: CGFloat = 200
+
+    private var content: VerificationOutputContent {
+        verificationOutputContent(
+            state: check.state, hasCapturedOutput: check.output != nil, isLive: isLive
+        )
+    }
+
+    /// What restarts the poll task. Every input that can turn polling on or
+    /// off, and nothing that merely changes with each poll — a `duration` or a
+    /// line count in here would cancel and respawn the task it belongs to.
+    private var pollKey: String {
+        "\(runID)|\(check.name)|\(isExpanded)|\(content == .live)"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            header
+            DisclosureGroup(
+                isExpanded: Binding(get: { isExpanded }, set: setExpanded)
+            ) {
+                outputBody
+            } label: {
+                Text("Output")
+            }
+            .font(.system(size: 10))
+        }
+        .padding(.vertical, 4)
+        .task(id: pollKey) {
+            guard isExpanded, content == .live else { return }
+            while !Task.isCancelled {
+                // Nil is every reason there is nothing to read — the run
+                // ended, the server went away, the check is not this run's.
+                // `content` flips away from `.live` on the next republish and
+                // cancels this task; until then, keep what was last read.
+                if let lines = await runner.liveLog(workstreamID: workstreamID, check: check.name) {
+                    let read = LiveRead(runID: runID, lines: lines)
+                    if liveRead != read {
+                        liveRead = read
+                    }
+                }
+                // Awaited before sleeping rather than fired on a timer, for the
+                // reason `TableModel.startPolling` gives: one request can block
+                // for longer than the interval, and a timer would stack reads
+                // on a server that is already slow.
+                try? await Task.sleep(for: Self.pollInterval)
+            }
+        }
+        // **Not cleared in the task above, and that is the point.** `pollKey`
+        // carries liveness, so the task restarts the moment the run seals — a
+        // reset there would empty the window at exactly the instant the user is
+        // reading the end of it, which is what these lines are kept past the
+        // run to avoid.
+        //
+        // Closing the group ends the session that owned the lines. A new run is
+        // handled by `displayedLines` instead of by a second `onChange` here,
+        // so it does not depend on this row keeping its identity across runs —
+        // see `liveRead`.
+        .onChange(of: isExpanded) { _, expanded in
+            if !expanded {
+                liveRead = nil
+            }
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Image(systemName: verificationRowGlyph(check.state))
+                .foregroundStyle(verificationStateColor(check.state))
+                .frame(width: 16)
+                // The glyph alone is a thin signal: `.notRun`
+                // (`circle.dashed`) and `.running` (`circle.dotted`)
+                // differ by a few pixels at this size, with color as the
+                // practical differentiator, and nowhere else in the row
+                // does the state appear as text. VoiceOver gets the word
+                // a sighted user reads from a glance at shape and hue.
+                .accessibilityLabel(verificationStateWord(check.state))
+            Text(check.name)
+                .font(.system(size: 11, design: .monospaced))
+            Spacer()
+            if let duration = check.duration {
+                Text(verificationFormattedDuration(duration))
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    /// What the open group shows, in priority order: the live server, then the
+    /// last thing read from it, then what the run captured, then why there is
+    /// nothing.
+    ///
+    /// The middle branch is why this is not simply a switch over `content`:
+    /// lines read live outlive the run that produced them for as long as the
+    /// group stays open, and they are at least as fresh as the captured tail —
+    /// `Runner.captureFailedOutput` takes its copy in the same window this was
+    /// polling.
+    @ViewBuilder
+    private var outputBody: some View {
+        let live = displayedLines
+        if content == .live {
+            if live.isEmpty {
+                note(NSLocalizedString(
+                    "No output yet.",
+                    comment: "Verification tab: a live check that has printed nothing so far"
+                ))
+            } else {
+                logWindow(live.joined(separator: "\n"))
+            }
+        } else if !live.isEmpty {
+            logWindow(live.joined(separator: "\n"))
+            note(NSLocalizedString(
+                "The run has ended. This is the last output read from it.",
+                comment: "Verification tab: live output kept on screen after its run finished"
+            ))
+        } else if let output = check.output {
+            logWindow(output)
+            if check.outputTruncated {
+                note(NSLocalizedString(
+                    "Showing the last lines captured. There is nothing more to fetch: the run's own output no longer exists anywhere.",
+                    comment: ""
+                ))
+            }
+        } else if content == .notKept {
+            // Must not read as "we failed to fetch it" or imply a fetch could
+            // still be made: the output lived in the control server, the run
+            // loop tore that server down, and only a failed check's tail is
+            // kept on the way past. Re-running is the honest pointer.
+            //
+            // A stopped check gets its own sentence because the general one is
+            // wrong for it: "output is only kept for a check that failed" reads
+            // as an explanation to someone who did not choose this, and a user
+            // who pressed Stop did. Same fact, told to the person who caused it.
+            note(check.state == .stopped
+                ? NSLocalizedString(
+                    "This check was stopped before its output could be kept. Re-run it to see the output.",
+                    comment: "Verification tab: a check the user stopped, whose output was not kept"
+                )
+                : NSLocalizedString(
+                    "Output is only kept for a check that failed. Re-run this check to see its output.",
+                    comment: "Verification tab: a check whose output was not kept past its run"
+                ))
+        } else {
+            note(NSLocalizedString(
+                "This check has not produced any output.",
+                comment: "Verification tab: a check that has not run, is waiting, or was skipped"
+            ))
+        }
+    }
+
+    /// The scrolling window itself, pinned to the newest line.
+    ///
+    /// One `Text` over joined lines rather than a `ForEach` of them: the tail
+    /// is `Verification.Runner.logTailLines` long and this redraws once a
+    /// second per open group, which is a few hundred view identities per second
+    /// for nothing. The anchor below it is what `scrollTo` addresses, since a
+    /// single `Text` has no per-line ids to aim at.
+    private func logWindow(_ text: String) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(text)
+                        .font(.system(size: 10, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                    Color.clear
+                        .frame(height: 1)
+                        .id(Self.bottomAnchor)
+                }
+            }
+            .frame(maxHeight: Self.outputHeight)
+            // Follows the newest line, which is the whole point of watching a
+            // check run. Keyed on the text rather than on a line count so a
+            // rewritten last line — a progress bar, a spinner — still scrolls.
+            .onChange(of: text) {
+                proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
+            }
+            .onAppear {
+                proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
+            }
+        }
+    }
+
+    private static let bottomAnchor = "verification-log-bottom"
+
+    private func note(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 9))
+            .foregroundStyle(.tertiary)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

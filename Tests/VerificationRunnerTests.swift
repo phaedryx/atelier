@@ -374,6 +374,101 @@ final class VerificationRunnerTests: XCTestCase {
         XCTAssertTrue(done.value, "the run loop did not return")
     }
 
+    // MARK: - The live log window
+
+    /// The feature's whole point, and the one thing a stub can prove about it:
+    /// while the run is live the tab can read a *running* check's output, which
+    /// `captureFailedOutput` never fetches — it only takes failed checks, and
+    /// only once, at the end.
+    func test_liveLog_readsARunningCheckWhileTheRunIsLive() async {
+        let id = UUID()
+        addTeardownBlock { Verification.Store.clear(for: id) }
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: [.list([entry("rspec", status: "Running", isRunning: true, exitCode: 0)])],
+            latency: .zero,
+            logsByName: ["rspec": ["compiling", "running examples"]]
+        )
+        let spawner = StubSpawner(client: client, finishAfter: nil)
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
+
+        var live: [String]?
+        await drive(runner, request(workstreamID: id, checks: ["rspec"]), runID: "abcd1234") {
+            // Once the loop has published a row, the client is registered and
+            // the server is up — the window this reads through.
+            let deadline = Date().addingTimeInterval(2)
+            while runner.runs[id]?.checks.first?.state != .running, Date() < deadline {
+                try? await Task.sleep(for: .milliseconds(5))
+            }
+            live = await runner.liveLog(workstreamID: id, check: "rspec")
+            runner.stop(workstreamID: id)
+        }
+
+        XCTAssertEqual(live, ["compiling", "running examples"])
+    }
+
+    /// Nil once the run is over, because the server that held the log is gone —
+    /// which is what makes a sealed group fall back to what was captured
+    /// instead of showing a stale window that will never update again.
+    func test_liveLog_isNilOnceTheRunIsOver() async {
+        let id = UUID()
+        addTeardownBlock { Verification.Store.clear(for: id) }
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: [.list([entry("rspec", status: "Completed", isRunning: false, exitCode: 0)])],
+            latency: .zero,
+            logsByName: ["rspec": ["all good"]]
+        )
+        let spawner = StubSpawner(client: client, finishAfter: .milliseconds(10))
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
+
+        await drive(runner, request(workstreamID: id, checks: ["rspec"]), runID: "abcd1234")
+
+        let after = await runner.liveLog(workstreamID: id, check: "rspec")
+        XCTAssertNil(after, "the control server is torn down with the run; there is nothing left to read")
+    }
+
+    /// Nil for a workstream with no run at all, rather than a stray read
+    /// against whatever happens to be listening on that socket.
+    func test_liveLog_isNilWithNoRun() async {
+        let runner = Verification.Runner()
+        let read = await runner.liveLog(workstreamID: UUID(), check: "rspec")
+        XCTAssertNil(read)
+    }
+
+    /// Scoped to the run's own checks. A `verify` socket's control server also
+    /// answers about processes in other namespaces, so an unscoped read would
+    /// hand back output belonging to something this run never started.
+    func test_liveLog_refusesACheckThisRunDoesNotOwn() async {
+        let id = UUID()
+        addTeardownBlock { Verification.Store.clear(for: id) }
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: [.list([entry("rspec", status: "Running", isRunning: true, exitCode: 0)])],
+            latency: .zero,
+            logsByName: ["web": ["listening on 3000"]]
+        )
+        let spawner = StubSpawner(client: client, finishAfter: nil)
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
+
+        var read: [String]? = ["not asked"]
+        await drive(runner, request(workstreamID: id, checks: ["rspec"]), runID: "abcd1234") {
+            let deadline = Date().addingTimeInterval(2)
+            while runner.runs[id]?.checks.first?.state != .running, Date() < deadline {
+                try? await Task.sleep(for: .milliseconds(5))
+            }
+            read = await runner.liveLog(workstreamID: id, check: "web")
+            runner.stop(workstreamID: id)
+        }
+
+        XCTAssertNil(read)
+        let requested = await client.logRequests
+        XCTAssertFalse(requested.contains("web"), "a check the run does not own must never reach the wire")
+    }
+
     /// The invariant, in the one place a test can reach it: at the moment
     /// teardown runs, the run must already be sealed **and** the failed check's
     /// output must already be attached.

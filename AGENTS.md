@@ -628,6 +628,27 @@ later reader would plausibly "simplify" away without knowing why:
    (`IPCStore.swift:62`), which *throws rather than truncating* (`IPCStore.swift:176` and `:196`),
    so an oversized completion notice would be lost silently while an agent waits for it.
    `outputTruncated` means "there was more at capture time", never "more is retrievable".
+
+   **There is now a second *reader* of that window, and it owns none of it.** The Verification
+   tab gives every check a disclosure group, and an expanded group polls
+   `Verification.Runner.liveLog` once a second while the run is live —
+   `client.logs` through the same control client `execute` registered in `liveClients`. It is
+   read-only by construction: it never calls `shutDown`, never touches `sealedRunIDs`,
+   `tearingDown` or `stopRequested`, and cannot reach `execute`. The window is still one-shot and
+   the teardown still has one owner; what changed is that a user can watch a check run instead of
+   only reading a failed one's tail afterwards. `liveClients` is cleared *after* `shutDown`
+   returns, beside the two flags, because `isLive` is true for the whole teardown — so a read
+   arriving then meets the dying server and gets nil rather than meeting nothing, which would be
+   indistinguishable from a run that was never live.
+
+   **What is *persisted* did not change, and must not.** `captureFailedOutput` still takes failed
+   checks only; a passing check's group after the run says its output is not kept and points at
+   re-running it (`verificationOutputContent`'s `.notKept`). Widening the capture to every check
+   is the tempting "fix" and it is the one this decision refuses: `Verification.Store` is
+   UserDefaults, `VerificationTabView.currentRun` decodes it on the main actor, and the tail size
+   is sized against `IPC.Store`'s throwing 64KB cap. Lines already read live are kept on screen
+   after the run ends — labelled as the last read, not as live — because clearing them would empty
+   a window mid-read; they are `@State` in the row and go when a new run starts.
 2. **Teardown has exactly one owner.** `spawner.shutDown` is called once, from the run loop, only
    after `seal` returns (`VerificationRunner.swift:484-490`). Not from a `defer` — that can run
    before the log fetch, and the output is gone by the time `seal` wants it. Not from
