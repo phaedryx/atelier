@@ -128,12 +128,20 @@ extension Workstream {
         /// stack, a bootstrap, a verify run — then running its `dispose` phase, removing the git
         /// worktree from disk, deleting the local branch, updating the default branch to latest,
         /// killing tmux sessions, and evicting terminal surfaces from the cache.
+        ///
+        /// `verificationRunner` is required rather than optional: it is how the
+        /// verify run is stopped *through its owner* instead of behind its back
+        /// — see `quiesceVerification` — and an optional would make forgetting
+        /// to pass it a silent return to the bug that API exists to close. Both
+        /// call sites are views `ContentView` builds, and it holds the one
+        /// runner the app has.
         @MainActor
         static func purge(
             _ workstreamID: UUID,
             in project: inout Project,
             surfaceCache: TerminalSurfaceCache,
-            tmuxPath: String?
+            tmuxPath: String?,
+            verificationRunner: Verification.Runner
         ) {
             if let ws = project.workstreams.first(where: { $0.id == workstreamID }) {
                 let projectDir = project.directory
@@ -182,6 +190,36 @@ extension Workstream {
                         binary: composeBinary,
                         worktreePath: worktreePath ?? projectDir
                     )
+                    // A verify run is the same shape as the dev stack and as a
+                    // bootstrap: repository-provided processes executing in this
+                    // worktree, holding this worktree's ports, behind a control
+                    // server that `--keep-project` deliberately outlives them. So
+                    // it needs the same treatment — stopped before `dispose` runs
+                    // beside it and long before `git worktree remove --force`
+                    // deletes the tree under a running rspec.
+                    //
+                    // Through the runner, and awaited. This is what a direct
+                    // `PhaseExecutor.shutDown` could not do: that call no-ops
+                    // when the socket file does not exist yet, so a purge landing
+                    // in the binding window reported success and deleted the tree
+                    // under a suite that was still coming up.
+                    let verifyQuiet = await quiesceVerification(
+                        workstreamID: workstreamID, runner: verificationRunner
+                    )
+                    if !verifyQuiet {
+                        // Reported rather than acted on: nothing here can stop
+                        // the archive, and the user has already said to remove
+                        // it. See `quiesceVerification`.
+                        logger.warning(
+                            "Verify run in \(wsName, privacy: .public) was still live at its stop deadline; purging anyway"
+                        )
+                    }
+                    // Before anything below writes, and before the wait's other
+                    // outcome matters. On the ordinary path the run is already
+                    // sealed and torn down; on an expired wait this is what stops
+                    // the still-running loop persisting a run, or announcing one,
+                    // for a workstream that is being deleted. See `Runner.forget`.
+                    await verificationRunner.forget(workstreamID: workstreamID)
                     // Everything below blocks: dispose is a whole process-compose
                     // phase at up to `Timeout.userCommand`, and each git call waits
                     // on a child. On the cooperative pool that pins a thread for
@@ -190,32 +228,28 @@ extension Workstream {
                     // reason.
                     await withCheckedContinuation { continuation in
                         DispatchQueue.global(qos: .utility).async {
-                            // A verify run is the same shape as the dev stack and
-                            // as a bootstrap: repository-provided processes
-                            // executing in this worktree, holding this worktree's
-                            // ports, behind a control server that `--keep-project`
-                            // deliberately outlives them. So it needs the same
-                            // treatment — stopped before `dispose` runs beside it
-                            // and long before `git worktree remove --force`
-                            // deletes the tree under a running rspec. Here rather
-                            // than beside `cancelBootstrap` because `shutDown`
-                            // blocks for up to `Timeout.local`, and this queue is
+                            // The residue of the verify teardown, after
+                            // `quiesceVerification` above has done the part that
+                            // belongs to the runner. Two cases reach a socket
+                            // here, and neither is one the runner owns:
+                            //
+                            // - a socket file left by a session that crashed
+                            //   before `applicationWillTerminate` could sweep it,
+                            //   which no in-memory run knows about, so the wait
+                            //   above returned true immediately;
+                            // - a wait that expired, where stopping what is still
+                            //   running is worth one more attempt before the tree
+                            //   is force-removed.
+                            //
+                            // Still not the second racing teardown the
+                            // single-owner rule forbids: nothing will rebind this
+                            // socket, because the workstream is being destroyed,
+                            // and whichever of the two teardowns lands second
+                            // finds the socket file gone and returns. Here rather
+                            // than beside `quiesceVerification` because `shutDown`
+                            // blocks for up to `Timeout.local` and this queue is
                             // where the blocking work belongs; still before
                             // `runDispose`, which is the ordering that matters.
-                            //
-                            // `PhaseExecutor.shutDown` directly, not
-                            // `Verification.Runner.stop`: the runner is
-                            // view-held state neither `purge` call site would
-                            // have to hand over, `stop` only sets a flag its run
-                            // loop acts on once the control server has answered
-                            // — so a run still spawning would not be stopped at
-                            // all — and it returns before the teardown lands.
-                            // This is `cancelBootstrap`'s own shape, one call
-                            // above. It is not the second racing teardown the
-                            // runner's single-owner rule forbids: nothing will
-                            // rebind this socket, because the workstream is being
-                            // destroyed, and whichever of the two teardowns runs
-                            // second finds the socket file gone and returns.
                             if let composeBinary {
                                 ProcessCompose.PhaseExecutor.shutDown(
                                     binary: composeBinary,
@@ -257,17 +291,66 @@ extension Workstream {
                     // Same reason, and last on purpose: the verify teardown above
                     // makes the run loop seal, and `seal` writes the run to this
                     // very key. Clearing it beside that teardown would be
-                    // overwritten a moment later. A seal that lands after even
-                    // this — dispose plus `worktree remove` is a long way for it
-                    // to be behind — would still leave the key, which is a
-                    // stranded UserDefaults entry for a workstream that no longer
-                    // exists and nothing else.
-                    Verification.Store.clear(for: workstreamID)
+                    // overwritten a moment later. A late seal can no longer
+                    // reach the key at all — `forget` above drops the in-memory
+                    // run, and `seal` writes nothing for a workstream it cannot
+                    // find — so this is now only about what was already stored.
+                    clearWorkstreamState(for: workstreamID)
                 }
             }
             surfaceCache.removeWorkstreamSurfaces(for: workstreamID)
             LaunchLogger.removeLog(for: workstreamID)
             project.workstreams.removeAll { $0.id == workstreamID }
+        }
+
+        /// Stop this workstream's verify run and wait until nothing of it is
+        /// live, before anything below deletes the tree it is running in.
+        ///
+        /// Returns whether the runner reports it gone. **False does not stop the
+        /// purge**, and that is the same rule `runDispose` states: a workstream
+        /// stranded half-archived is worse than cleanup that did not happen, and
+        /// the user has already said to remove it. What false buys is that the
+        /// caller knows, can log it, and can still make its own best-effort
+        /// teardown attempt afterwards.
+        ///
+        /// Split out and internal for the reason `disposePlan` is: `purge`
+        /// proper destroys a worktree, so the wiring is only observable if there
+        /// is a seam beside it. A test can drive a runner whose control server
+        /// never answers and watch this refuse to report it quiet — which is the
+        /// binding window a direct `ProcessCompose.PhaseExecutor.shutDown` used
+        /// to sail straight through.
+        @MainActor
+        @discardableResult
+        static func quiesceVerification(
+            workstreamID: UUID,
+            runner: Verification.Runner,
+            timeout: Duration = Verification.Runner.stopWaitTimeout
+        ) async -> Bool {
+            await runner.stopAndWait(workstreamID: workstreamID, timeout: timeout)
+        }
+
+        /// Drop every per-workstream UserDefaults key a purge must not leave
+        /// behind.
+        ///
+        /// Three keys, and the two selections are the reason this is a function
+        /// rather than three lines inline: `atelier.verifySelection.<id>` and
+        /// `atelier.processSelection.<id>` are two checklists over two
+        /// namespaces, stored apart on purpose (one key for both would make
+        /// checking a verify check uncheck an execute process) — so they also
+        /// have to be *dropped* apart, and a purge that remembered one and
+        /// forgot the other is exactly what happened. Named together here so a
+        /// third checklist has one place to join.
+        ///
+        /// Nonisolated: `purge` calls it from a detached task, and none of the
+        /// three reads touches the main actor.
+        ///
+        /// Purge only. `remove` keeps the worktree on disk and destroys nothing,
+        /// so a selection it left behind is the shape that has always been there
+        /// and is not this function's to change.
+        static func clearWorkstreamState(for workstreamID: UUID) {
+            ProcessCompose.TableModel.clearSelection(for: workstreamID)
+            Verification.clearSelection(for: workstreamID)
+            Verification.Store.clear(for: workstreamID)
         }
 
         /// Run the project's `dispose` namespace before the worktree goes away.
@@ -297,7 +380,6 @@ extension Workstream {
         static func disposePlan(worktreePath: String, projectDirectory: String) -> PhasePolicy.Plan {
             PhasePolicy.plan(
                 phase: .dispose,
-                isEnabled: ProcessCompose.Settings.isEnabled,
                 config: ProcessCompose.Config.locate(
                     worktree: worktreePath, projectDirectory: projectDirectory
                 ),

@@ -61,8 +61,10 @@ extension ProcessCompose {
         /// to approve is not approval, and `WorkstreamInfoView` renders the
         /// difference.
         var isApproved = false
-        /// Whether this workstream's run is a process-compose run, which is what
-        /// decides whether there is a control socket worth polling.
+        /// Whether this workstream's run is a process-compose run — i.e. the
+        /// dev command came from a config rather than the user's own override —
+        /// which is what decides whether there is a control socket worth
+        /// polling.
         var usesProcessCompose = false
     }
 
@@ -96,6 +98,7 @@ extension ProcessCompose {
         /// nil as "keep what you had" would silently keep resolving against an
         /// override the user had just deleted.
         private var override: String?
+        private let searchPaths: [String]
         /// Bumped by every refresh, synchronous or not. A completion whose token
         /// no longer matches belongs to a pass this model has already
         /// superseded — the same guard `ChangesView.fullLoad` uses against its
@@ -109,12 +112,25 @@ extension ProcessCompose {
         ///     renders it once the workstream's `worktreePath` exists on disk —
         ///     so the path cannot change under an instance, and another
         ///     workstream gets another instance.
-        init(worktree: String, projectDirectory: String, override: String?) {
+        ///   - searchPaths: where to look for the process-compose binary.
+        ///     Defaulted, and injected only by tests, for the reason
+        ///     `ProcessCompose.Settings.resolveBinary` takes the same parameter:
+        ///     the path stopped being configurable, so without a seam every
+        ///     assertion about a resolved plan would depend on what the host
+        ///     happens to have installed.
+        init(
+            worktree: String,
+            projectDirectory: String,
+            override: String?,
+            searchPaths: [String] = ProcessCompose.Settings.searchPaths
+        ) {
             self.worktree = worktree
             self.projectDirectory = projectDirectory
             self.override = override
+            self.searchPaths = searchPaths
             resolution = Self.resolve(
-                worktree: worktree, projectDirectory: projectDirectory, override: override
+                worktree: worktree, projectDirectory: projectDirectory, override: override,
+                searchPaths: searchPaths
             )
         }
 
@@ -132,9 +148,11 @@ extension ProcessCompose {
             let worktree = worktree
             let projectDirectory = projectDirectory
             let override = self.override
+            let searchPaths = searchPaths
             DispatchQueue.global(qos: .userInitiated).async {
                 let resolved = Self.resolve(
-                    worktree: worktree, projectDirectory: projectDirectory, override: override
+                    worktree: worktree, projectDirectory: projectDirectory, override: override,
+                    searchPaths: searchPaths
                 )
                 DispatchQueue.main.async { [weak self] in
                     guard let self, token == generation else { return }
@@ -157,25 +175,34 @@ extension ProcessCompose {
             self.override = override
             generation += 1
             resolution = Self.resolve(
-                worktree: worktree, projectDirectory: projectDirectory, override: override
+                worktree: worktree, projectDirectory: projectDirectory, override: override,
+                searchPaths: searchPaths
             )
             return resolution
         }
 
         /// The whole resolution, as a pure function of the worktree, the project
-        /// directory, the override and the two process-compose settings.
+        /// directory, the override and what is on disk.
         ///
         /// `nonisolated` because it is the half that must not run on the main
         /// actor. It touches UserDefaults (thread-safe), the file system and
         /// Yams, and nothing that is actor-bound.
+        ///
+        /// `verificationAvailability` lives in `Views/` and is called from here,
+        /// which reads as a layering inversion and is deliberate: it is a pure
+        /// function, it is the *one* copy of the verify availability decision —
+        /// shared with `Verification.Runner.start` through `PhasePolicy.plan` —
+        /// and a second copy on this side is exactly what its own doc forbids.
         nonisolated static func resolve(
-            worktree: String, projectDirectory: String, override: String?
+            worktree: String,
+            projectDirectory: String,
+            override: String?,
+            searchPaths: [String] = ProcessCompose.Settings.searchPaths
         ) -> Resolution {
             let devCommand = DevCommand.Resolver.resolve(
                 workingDirectory: worktree, projectDirectory: projectDirectory, override: override
             )
-            let isEnabled = ProcessCompose.Settings.isEnabled
-            let binary = ProcessCompose.Settings.resolveBinary()
+            let binary = ProcessCompose.Settings.resolveBinary(searchPaths: searchPaths)
             // **One locate, two questions.** The run's config is this same
             // config narrowed to the *run* — it disappears behind a
             // per-workstream override, which is right for Start and wrong for
@@ -185,7 +212,7 @@ extension ProcessCompose {
             let located = ProcessCompose.Config.locate(
                 worktree: worktree, projectDirectory: projectDirectory
             )
-            let runConfig = isEnabled && devCommand?.source == .processCompose ? located : nil
+            let runConfig = devCommand?.source == .processCompose ? located : nil
 
             let plan = ProcessCompose.RunCommandPlan.plan(
                 devCommand: devCommand, config: runConfig, binary: binary
@@ -209,7 +236,7 @@ extension ProcessCompose {
                 ? false
                 : ScriptTrust.isApproved(configFiles: approvalFiles, for: projectDirectory)
             let availability = verificationAvailability(
-                isEnabled: isEnabled, config: located, binary: binary,
+                config: located, binary: binary,
                 // `verificationAvailability` folds `requiresApproval` in itself,
                 // so a config the user placed in the project directory — which
                 // is never asked about — is not refused by the `false` this
@@ -222,17 +249,14 @@ extension ProcessCompose {
                 plan: plan,
                 loadedFiles: runConfig?.loadedFiles ?? [],
                 startUnavailableReason: ProcessCompose.RunCommandPlan.unavailableReason(
-                    devCommand: devCommand, config: runConfig, binary: binary, isEnabled: isEnabled
+                    devCommand: devCommand, config: runConfig, binary: binary
                 ),
                 declaredExecuteProcesses: declaredExecute,
                 declaredVerifyChecks: availability.declared,
                 verifyUnavailableReason: availability.reason,
-                // Only what the user can be asked to approve: the integration
-                // being off means nothing will run these files, so there is
-                // nothing to ask about.
-                repositoryConfigFiles: isEnabled ? approvalFiles : [],
-                isApproved: isEnabled && isApproved,
-                usesProcessCompose: isEnabled && devCommand?.source == .processCompose
+                repositoryConfigFiles: approvalFiles,
+                isApproved: isApproved,
+                usesProcessCompose: devCommand?.source == .processCompose
             )
         }
     }

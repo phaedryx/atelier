@@ -26,7 +26,7 @@ enum PhasePolicy {
     ///
     /// Shared by `bootstrap` at worktree creation and `dispose` at archive.
     /// Both run repository-authored processes with nobody watching, so both
-    /// answer to the same four preconditions and there is deliberately only one
+    /// answer to the same three preconditions and there is deliberately only one
     /// copy of them: a second, inlined set in `Workstream.Archiver` could not be
     /// tested and would not follow a change made here.
     ///
@@ -40,17 +40,11 @@ enum PhasePolicy {
     ///   one that runs a repository's YAML unattended.
     static func plan(
         phase: ProcessCompose.Phase,
-        isEnabled: Bool,
         config: ProcessCompose.Config?,
         binary: String?,
         isApproved: (ProcessCompose.Config) -> Bool
     ) -> Plan {
         let name = phase.namespace
-        guard isEnabled else {
-            return .nothingToDo(String(format: NSLocalizedString(
-                "The process-compose integration is turned off, so no %@ ran.", comment: ""
-            ), name))
-        }
         guard let config else {
             return .nothingToDo(String(format: NSLocalizedString(
                 "This project has no process-compose config, so no %@ ran.", comment: ""

@@ -48,14 +48,14 @@ final class WorkstreamInfoViewTests: XCTestCase {
         XCTAssertFalse(canRerunBootstrap(.inProgress(step: "Running bootstrap", progress: 0.5)))
     }
 
-    /// Including after a note. "The integration is turned off, so no bootstrap
+    /// Including after a note. "process-compose was not found, so no bootstrap
     /// ran" is a thing the user can go and fix, and the press is how they find
     /// out whether they did — refusing it would trade the explanation for
     /// silence.
     func testRerunIsAvailableFromEveryRestingState() {
         XCTAssertTrue(canRerunBootstrap(.idle))
         XCTAssertTrue(canRerunBootstrap(.completed))
-        XCTAssertTrue(canRerunBootstrap(.completedWithNote("The process-compose integration is turned off, so no bootstrap ran.")))
+        XCTAssertTrue(canRerunBootstrap(.completedWithNote("process-compose was not found, so no bootstrap ran.")))
         XCTAssertTrue(canRerunBootstrap(.failed("Bootstrap failed: exit 1")))
     }
 }

@@ -6,25 +6,20 @@ import XCTest
 
 @MainActor
 final class ProcessComposeResolutionTests: XCTestCase {
-    /// These keys live in the app's own defaults domain and the test host *is*
-    /// the app, so they are saved and put back — the same care
-    /// `ProcessComposeSettingsTests` takes.
-    private var savedSettings: [String: Any?] = [:]
     private var projectDirectory: URL!
     private var worktree: URL!
 
-    /// Stands in for a real install: what matters is that `resolveBinary()`
-    /// returns something, not what it is.
+    /// Stands in for a real install. The binary path stopped being
+    /// configurable, so a resolution's search paths are injected instead —
+    /// without that seam every assertion here would depend on whether the host
+    /// running the suite happens to have process-compose installed.
     private let binary = "/bin/ls"
+    private var searchPaths: [String] {
+        [binary]
+    }
 
     override func setUp() async throws {
         try await super.setUp()
-        for key in [ProcessCompose.Settings.enabledKey, ProcessCompose.Settings.binaryPathKey] {
-            savedSettings[key] = UserDefaults.standard.object(forKey: key)
-        }
-        ProcessCompose.Settings.isEnabled = true
-        ProcessCompose.Settings.binaryPath = binary
-
         let base = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("resolution-" + UUID().uuidString)
         projectDirectory = base.appendingPathComponent("project")
@@ -34,15 +29,6 @@ final class ProcessComposeResolutionTests: XCTestCase {
 
     override func tearDown() async throws {
         try? FileManager.default.removeItem(at: projectDirectory.deletingLastPathComponent())
-        for key in [ProcessCompose.Settings.enabledKey, ProcessCompose.Settings.binaryPathKey] {
-            UserDefaults.standard.removeObject(forKey: key)
-        }
-        for (key, value) in savedSettings {
-            if let value {
-                UserDefaults.standard.set(value, forKey: key)
-            }
-        }
-        savedSettings.removeAll()
         try await super.tearDown()
     }
 
@@ -68,7 +54,15 @@ final class ProcessComposeResolutionTests: XCTestCase {
 
     private func resolve() -> ProcessCompose.Resolution {
         ProcessCompose.ResolutionModel.resolve(
-            worktree: worktree.path, projectDirectory: projectDirectory.path, override: nil
+            worktree: worktree.path, projectDirectory: projectDirectory.path, override: nil,
+            searchPaths: searchPaths
+        )
+    }
+
+    private func makeModel() -> ProcessCompose.ResolutionModel {
+        ProcessCompose.ResolutionModel(
+            worktree: worktree.path, projectDirectory: projectDirectory.path, override: nil,
+            searchPaths: searchPaths
         )
     }
 
@@ -104,7 +98,7 @@ final class ProcessComposeResolutionTests: XCTestCase {
             worktree: worktree.path, projectDirectory: projectDirectory.path
         ))
         let direct = verificationAvailability(
-            isEnabled: true, config: located, binary: binary,
+            config: located, binary: binary,
             isApproved: { ScriptTrust.isApproved(
                 configFiles: $0.repositoryProvidedFiles, for: self.projectDirectory.path
             ) }
@@ -135,22 +129,23 @@ final class ProcessComposeResolutionTests: XCTestCase {
         XCTAssertEqual(resolve().declaredExecuteProcesses, ["web"])
     }
 
-    /// With the integration off nothing may run, nothing is offered, and — the
-    /// part that is easy to lose — nothing is asked for approval either, since
-    /// no phase will load those files.
-    func test_resolve_refusesEverythingWhileTheIntegrationIsOff() throws {
+    /// With no process-compose on the machine nothing may run, and the pane has
+    /// to say so rather than offer checks it cannot start. The integration
+    /// switch this case used to test is gone — process-compose is a
+    /// requirement — so detection is the precondition that survived it.
+    func test_resolve_refusesEverythingWithNoBinary() throws {
         try writeProjectConfig()
-        ProcessCompose.Settings.isEnabled = false
 
-        let resolution = resolve()
+        let resolution = ProcessCompose.ResolutionModel.resolve(
+            worktree: worktree.path, projectDirectory: projectDirectory.path, override: nil,
+            searchPaths: ["/nonexistent/process-compose"]
+        )
 
         XCTAssertFalse(resolution.plan.canRun)
-        XCTAssertFalse(resolution.usesProcessCompose)
         XCTAssertEqual(resolution.declaredExecuteProcesses, [])
         XCTAssertEqual(resolution.declaredVerifyChecks, [])
         XCTAssertNotNil(resolution.verifyUnavailableReason)
-        XCTAssertEqual(resolution.repositoryConfigFiles, [])
-        XCTAssertFalse(resolution.isApproved)
+        XCTAssertNotNil(resolution.startUnavailableReason)
     }
 
     /// A config that arrived with the repository is the one the user is asked
@@ -177,9 +172,7 @@ final class ProcessComposeResolutionTests: XCTestCase {
     func test_init_resolvesSynchronously() throws {
         try writeProjectConfig()
 
-        let model = ProcessCompose.ResolutionModel(
-            worktree: worktree.path, projectDirectory: projectDirectory.path, override: nil
-        )
+        let model = makeModel()
 
         XCTAssertTrue(model.resolution.plan.canRun)
         XCTAssertEqual(model.resolution.declaredVerifyChecks, ["rspec"])
@@ -189,9 +182,7 @@ final class ProcessComposeResolutionTests: XCTestCase {
     /// picked up by a refresh, which is the trigger every tab switch now uses.
     func test_refresh_publishesTheNewAnswer() async throws {
         try writeProjectConfig()
-        let model = ProcessCompose.ResolutionModel(
-            worktree: worktree.path, projectDirectory: projectDirectory.path, override: nil
-        )
+        let model = makeModel()
         XCTAssertEqual(model.resolution.declaredVerifyChecks, ["rspec"])
 
         try writeProjectConfig("""
@@ -216,9 +207,7 @@ final class ProcessComposeResolutionTests: XCTestCase {
     /// than being overwritten by one that started earlier.
     func test_refreshNow_winsOverARefreshAlreadyInFlight() async throws {
         try writeProjectConfig()
-        let model = ProcessCompose.ResolutionModel(
-            worktree: worktree.path, projectDirectory: projectDirectory.path, override: nil
-        )
+        let model = makeModel()
 
         model.refresh(override: nil)
         try writeProjectConfig("""

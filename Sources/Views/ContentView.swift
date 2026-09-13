@@ -485,6 +485,7 @@ struct ContentView: View {
             ProjectSidebar(
                 projects: $projectList.items,
                 selection: $selection,
+                verificationRunner: verificationRunner,
                 onProjectsChanged: {
                     ProjectStore.save(projects)
                     syncHeadWatcher(projects: projects)
@@ -1064,7 +1065,11 @@ struct ContentView: View {
         guard let wsID = workstreamToPurge,
               let projectIndex = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
         let projectID = projects[projectIndex].id
-        Workstream.Archiver.purge(wsID, in: &projects[projectIndex], surfaceCache: surfaceCache, tmuxPath: appEnvironment.toolStatus.tmux.path)
+        Workstream.Archiver.purge(
+            wsID, in: &projects[projectIndex], surfaceCache: surfaceCache,
+            tmuxPath: appEnvironment.toolStatus.tmux.path,
+            verificationRunner: verificationRunner
+        )
         agentStateTracker.clear(workstreamID: wsID)
         ProjectStore.save(projects)
         // Before anything else touches the deleted worktree: purge removes the

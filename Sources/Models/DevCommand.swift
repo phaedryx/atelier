@@ -168,11 +168,13 @@ extension DevCommand {
         /// `ProcessCompose.PhaseRunner.startCommand`, which is `-n`-scoped. The string below
         /// survives only as the text the Execution pane displays.
         ///
-        /// So the `isEnabled` guard is **not** the execution-side boundary any
-        /// more, and previous versions of this comment saying it was were wrong.
-        /// What it does now is decide whether a config is detected at all, which
-        /// is what makes Start unavailable — with a reason — while the integration
-        /// is off. That is worth keeping, but it is availability, not security.
+        /// This function used to open with an `ProcessCompose.Settings.isEnabled`
+        /// guard, and previous versions of this comment called that guard the
+        /// execution-side boundary. They were wrong, and the guard is gone
+        /// besides: process-compose is a requirement rather than an integration,
+        /// so there is no switch left to consult. Nothing about the invariant
+        /// changed with it, because the invariant has not lived here since
+        /// `ProcessCompose.RunCommandPlan` took it.
         ///
         /// It was the boundary once, and the hole reopened five times: an unhashed
         /// override file, `compose.yaml` winning discovery, the toggle being off,
@@ -189,7 +191,6 @@ extension DevCommand {
         /// `.processCompose` source, or that pre-fills the override field with it,
         /// reopens the hole for the sixth time.
         static func detectProcessCompose(in directory: String, projectDirectory: String) -> DevCommand? {
-            guard ProcessCompose.Settings.isEnabled else { return nil }
             guard let config = ProcessCompose.Config.locate(
                 worktree: directory, projectDirectory: projectDirectory
             ) else { return nil }

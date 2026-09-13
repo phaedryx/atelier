@@ -276,17 +276,6 @@ struct TerminalContainerView: View {
     @AppStorage("atelier.autoRenameBranch") private var autoRenameBranch: Bool = false
     @AppStorage("atelier.allowOutsideWorktree") private var allowOutsideWorktree: Bool = false
     @AppStorage(IPC.AgentSettings.enabledKey) private var agentIPC: Bool = false
-    /// Both process-compose settings, observed rather than read.
-    ///
-    /// They are inputs to `ProcessCompose.ResolutionModel`, and they are changed
-    /// in the Settings window, which never touches this view — so without an
-    /// observer the pane would keep a resolution built before the change. That matters most in the state
-    /// the plan's own message describes: "process-compose was not found, set its
-    /// path in Settings" is advice the user follows, and Start has to become
-    /// enabled when they do. `@AppStorage` watches UserDefaults process-wide, so
-    /// a write from the other window lands here.
-    @AppStorage(ProcessCompose.Settings.enabledKey) private var processComposeEnabled: Bool = false
-    @AppStorage(ProcessCompose.Settings.binaryPathKey) private var processComposeBinaryPath: String = ""
     @AppStorage("atelier.editorTabActive") private var editorTabActive: Bool = false
     @AppStorage("atelier.editorFileDirty") private var editorFileDirty: Bool = false
     @State private var fileTree: [FileNode] = []
@@ -321,14 +310,16 @@ struct TerminalContainerView: View {
     /// `RunCommandPlan.plan` locates the config and stats the binary, so
     /// deriving one in a render pass would put filesystem work there too.
     ///
-    /// What invalidates it: the per-workstream override, and **both
-    /// process-compose settings** — the integration switch and the binary path,
-    /// observed via `@AppStorage` below because they are changed in a different
-    /// window that never touches this view. Those two are not optional. The
-    /// plan's own message tells the user to go and change them, so a resolution
-    /// that did not notice would leave Start disabled after they had done
-    /// exactly what it asked. The config itself is the third, and is why the tab
-    /// switch refreshes as well.
+    /// What invalidates it: the per-workstream override, **whether
+    /// process-compose was detected** — observed off `appEnv.toolStatus`,
+    /// because installing it is something the user does elsewhere and the
+    /// plan's own message is what told them to — and the config itself, which
+    /// is why the tab switch refreshes too. Do not drop any of them when adding
+    /// another input here.
+    ///
+    /// There were two process-compose *settings* once, an integration switch
+    /// and a binary path, both `@AppStorage` and both gone: process-compose is
+    /// a requirement and is auto-detected.
     @StateObject private var processComposeResolver: ProcessCompose.ResolutionModel
     /// The current resolution, read through one property so every consumer is
     /// looking at the same value from the same pass.
@@ -1196,14 +1187,26 @@ struct TerminalContainerView: View {
                 // copy: clearing Customize is a change like any other.
                 processComposeResolver.refresh(override: newValue)
             }
-            // The two Settings-window inputs to the resolution. Approval is
-            // guarded on the same switch, and rides along in the same pass: with
-            // the integration turned on mid-session, a repository-provided
-            // config has to start asking for approval too.
-            .onChange(of: processComposeEnabled) { _, _ in
-                processComposeResolver.refresh(override: devCommandOverride)
-            }
-            .onChange(of: processComposeBinaryPath) { _, _ in
+            // Whether process-compose exists is an input to the resolution, and it
+            // can change while this pane is open — the plan's own message tells
+            // the user to go and install it, so a resolution that did not notice
+            // would leave Start disabled after they had done exactly what it
+            // asked.
+            //
+            // This replaces an `@AppStorage` observer on the binary-path
+            // setting, which was that trigger until the path stopped being
+            // configurable. `appEnv.toolStatus` is the successor because it is
+            // where detection now lands: `ToolStatus.detect` resolves this entry
+            // through `ProcessCompose.Settings.resolveBinary()`, so Settings →
+            // Environment's refresh button is the "I installed it, re-check"
+            // action and this is how it reaches Start. Do not delete it without
+            // putting another trigger in its place.
+            //
+            // Approval rides along in the same pass, which costs nothing here:
+            // one resolution answers both questions, and what needs approving is
+            // decided by a config's *location*, which installing a binary cannot
+            // change.
+            .onChange(of: appEnv.toolStatus.processCompose.path) { _, _ in
                 processComposeResolver.refresh(override: devCommandOverride)
             }
             .onChange(of: model.runStarted) { _, started in
@@ -1527,13 +1530,10 @@ struct TerminalContainerView: View {
     /// `ProcessCompose.RunCommandPlan` now holds the invariant structurally; this property is
     /// only about whether there is a socket worth polling.
     ///
-    /// The `isEnabled` half is belt-and-braces rather than the load-bearing
-    /// check: `DevCommand.Resolver.detectProcessCompose` refuses to detect
-    /// anything while the setting is off, so a `.processCompose` source already
-    /// implies it. Kept anyway, because the two are read from different places
-    /// and a reader here should not have to go and confirm that the resolver
-    /// still guards. It cannot *disagree* with the resolver — only be redundant
-    /// with it.
+    /// It used to `&&` a `ProcessCompose.Settings.isEnabled` read onto this,
+    /// belt-and-braces over the source check rather than load-bearing. There is
+    /// no switch to read any more: process-compose is a requirement, so the
+    /// source is the whole question.
     private var usesProcessCompose: Bool {
         resolved.usesProcessCompose
     }
