@@ -58,6 +58,46 @@ func verificationCanRunSelection(isLive: Bool, hasChecks: Bool) -> Bool {
     verificationCanRun(isLive: isLive) && hasChecks
 }
 
+/// What one `refreshStaleness` call should do.
+///
+/// A free function for the reason `verificationAvailability` is one — "Pure,
+/// so the branch order can be tested without an actor or a subprocess" — and
+/// here the branch *order* is the whole of it, which is not a thing a
+/// compiler can see.
+///
+/// **The in-flight guard comes first.** `hasRun` is an `@autoclosure` because
+/// that ordering is a promise about what is *not* evaluated: the caller
+/// passes `currentRun != nil`, and `currentRun` falls through to
+/// `Verification.Store.latest` — a UserDefaults read plus a JSON decode of a
+/// run that may carry several 200-line outputs — on the main actor.
+/// Evaluating it first meant the guard that exists to absorb a ~5Hz burst of
+/// `.worktreeGitActivity` was paid for by the very decode it was meant to
+/// avoid. Taking a plain `Bool` here would put that cost back at every call
+/// site and leave nothing for a test to fail on.
+///
+/// `.markPending` for a call with no run *and* a refresh in flight is
+/// deliberate and costs at most one redundant refresh: the re-entrant call at
+/// completion returns `.skip` without clearing the bit, so it stays set until
+/// some later call gets past both guards. `currentRun` falls through to the
+/// store, so it barely ever goes nil once a run has existed at all.
+enum VerificationStalenessRefresh: Equatable {
+    /// A hop is already in flight; record that another was asked for and let
+    /// that hop's completion re-run this.
+    case markPending
+    /// No run to compare a stamp against, so there is nothing to compute.
+    case skip
+    /// Start a `diffFingerprint` hop.
+    case start
+}
+
+func verificationStalenessRefresh(
+    isRefreshing: Bool, hasRun: @autoclosure () -> Bool
+) -> VerificationStalenessRefresh {
+    guard !isRefreshing else { return .markPending }
+    guard hasRun() else { return .skip }
+    return .start
+}
+
 /// Whether the process checklist should render.
 ///
 /// Hidden while live, not merely disabled: `Verification.Runner.start` reads
@@ -753,22 +793,6 @@ struct VerificationTabView: View {
 
     // MARK: - Refresh
 
-    /// Recomputes `currentStamp` off the main actor, the same way
-    /// `ChangesView.fullLoad` computes its own fingerprint: `diffFingerprint`
-    /// spawns `git hash-object` in batches over the dirty tree, and this is
-    /// called from `.onAppear` and from a notification that fires on every
-    /// git-activity event in the worktree — running that on the main actor
-    /// would stall the tab's own redraw on every keystroke-adjacent save.
-    ///
-    /// Two guards keep that notification cheap rather than merely
-    /// off-actor: nothing here is rendered without a run to compare against
-    /// (`currentStamp` is only read by `resultRows`, which only exists when
-    /// `currentRun` does), and `HeadWatcher` can fire at up to ~5Hz during
-    /// ordinary agent activity — its own doc says the watched directory is
-    /// noisy — so a computation already in flight absorbs a burst instead of
-    /// queuing a matching burst of `git` spawns behind it. Absorbed, not
-    /// discarded: see `stalenessRefreshPending` for why the run-completion
-    /// trigger cannot afford to have its request dropped.
     /// Arm the worktree watcher while there is a result to go stale, and not
     /// otherwise.
     ///
@@ -786,27 +810,38 @@ struct VerificationTabView: View {
         worktreeWatcher?.arm(path: worktreePath)
     }
 
+    /// Recomputes `currentStamp` off the main actor, the same way
+    /// `ChangesView.fullLoad` computes its own fingerprint: `diffFingerprint`
+    /// spawns `git hash-object` in batches over the dirty tree, and this is
+    /// called from `.onAppear` and from a notification that fires on every
+    /// git-activity event in the worktree — running that on the main actor
+    /// would stall the tab's own redraw on every keystroke-adjacent save.
+    ///
+    /// Two guards keep that notification cheap rather than merely
+    /// off-actor: nothing here is rendered without a run to compare against
+    /// (`currentStamp` is only read by `resultRows`, which only exists when
+    /// `currentRun` does), and `HeadWatcher` can fire at up to ~5Hz during
+    /// ordinary agent activity — its own doc says the watched directory is
+    /// noisy — so a computation already in flight absorbs a burst instead of
+    /// queuing a matching burst of `git` spawns behind it. Absorbed, not
+    /// discarded: see `stalenessRefreshPending` for why the run-completion
+    /// trigger cannot afford to have its request dropped.
+    ///
+    /// Those two guards, and the order they have to be asked in, are
+    /// `verificationStalenessRefresh` — extracted so a test can fail on the
+    /// order rather than only on the answer.
     private func refreshStaleness() {
-        // **The in-flight guard comes first, and the order is the whole point.**
-        // `currentRun` falls through to `Verification.Store.latest` — a
-        // UserDefaults read plus a JSON decode of a run that may carry several
-        // 200-line outputs — on the main actor. Evaluating it first meant the
-        // guard that exists to absorb a ~5Hz burst of `.worktreeGitActivity`
-        // was paid for by the very decode it was meant to avoid.
-        //
-        // Semantics are unchanged: the pending re-run re-evaluates
-        // `currentRun` for itself. The one difference is that a call arriving
-        // with no run *and* a refresh in flight now sets the pending bit, and
-        // the re-entrant call at completion returns on the nil guard without
-        // clearing it — so the bit stays set until some later call gets past
-        // both guards and clears it, costing at most one redundant refresh at
-        // the tail of a future hop. `currentRun` falls through to the store, so
-        // it barely ever goes nil once a run has existed at all.
-        guard !isRefreshingStaleness else {
+        switch verificationStalenessRefresh(
+            isRefreshing: isRefreshingStaleness, hasRun: currentRun != nil
+        ) {
+        case .markPending:
             stalenessRefreshPending = true
             return
+        case .skip:
+            return
+        case .start:
+            break
         }
-        guard currentRun != nil else { return }
         isRefreshingStaleness = true
         stalenessRefreshPending = false
         stalenessGeneration += 1

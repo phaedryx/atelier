@@ -172,6 +172,15 @@ extension Verification {
         private let spawner: Spawning
         private let pollInterval: Duration
 
+        /// The staleness baseline, as a function, so `captureStamp` can be held
+        /// to running it off the main actor.
+        ///
+        /// Injected the same way `IPC.VerificationRunnerBridge` injects its own
+        /// `currentStamp`, and for a reason that is not about stubbing out git:
+        /// a fingerprint computed on the actor and one computed off it return
+        /// the same string, so *where* it ran is only observable from inside.
+        private let fingerprint: @Sendable (_ worktreePath: String, _ projectDirectory: String) -> String
+
         /// The spawner is injected for the same reason `TableModel`'s client is:
         /// the ordering this loop exists to guarantee — logs fetched before the
         /// server goes away, one teardown, after sealing — is not observable
@@ -181,10 +190,16 @@ extension Verification {
         /// be exercised in milliseconds; production always takes the default.
         init(
             spawner: Spawning = Verification.PhaseSpawner(),
-            pollInterval: Duration = Runner.defaultPollInterval
+            pollInterval: Duration = Runner.defaultPollInterval,
+            fingerprint: @escaping @Sendable (String, String) -> String = { worktreePath, projectDirectory in
+                Git.Operations.diffFingerprint(
+                    worktreePath: worktreePath, projectPath: projectDirectory, mode: "uncommitted"
+                )
+            }
         ) {
             self.spawner = spawner
             self.pollInterval = pollInterval
+            self.fingerprint = fingerprint
         }
 
         enum Failure: Error, Equatable, LocalizedError {
@@ -229,14 +244,29 @@ extension Verification {
         /// meant to confine a caller to its own workstream, not this type.
         func makeRunID() -> String {
             while true {
-                let candidate = String(
-                    UUID().uuidString.replacingOccurrences(of: "-", with: "")
-                        .prefix(8).lowercased()
-                )
+                let candidate = runIDCandidate()
                 if issuedRunIDs.insert(candidate).inserted {
                     return candidate
                 }
             }
+        }
+
+        /// Where a candidate id comes from, before `issuedRunIDs` has had its
+        /// say. A test seam, the same kind as `seedRunForTesting`.
+        ///
+        /// The redraw above is otherwise unreachable: eight hex characters is
+        /// 2^32 candidates, so a natural collision does not happen inside a
+        /// test, and drawing ids until two match tests `UUID`'s randomness
+        /// rather than this type's promise not to reissue one. Driving the
+        /// source is the only way the dedup set is observable.
+        ///
+        /// Not `@Sendable`: a test's generator is a queue it mutates, and this
+        /// is only ever called on the actor.
+        var runIDCandidate: () -> String = {
+            String(
+                UUID().uuidString.replacingOccurrences(of: "-", with: "")
+                    .prefix(8).lowercased()
+            )
         }
 
         /// Which checks a request resolves to, or why it cannot.
@@ -811,7 +841,7 @@ extension Verification {
             // and it lands before `seal`, so the persisted run carries the
             // stamp rather than racing it. Milliseconds after the press, which
             // is still "the moment the run started" for staleness.
-            let stamp = await Self.captureStamp(
+            let stamp = await captureStamp(
                 worktreePath: request.worktreePath, projectDirectory: request.projectDirectory
             )
             if runs[workstreamID]?.id == runID {
@@ -917,21 +947,23 @@ extension Verification {
             }
         }
 
-        /// `Git.Operations.diffFingerprint`, off the main actor.
+        /// `fingerprint` — `Git.Operations.diffFingerprint` unless a test said
+        /// otherwise — off the main actor.
         ///
         /// The same hop `PhaseSpawner.run` uses, and for the same reason: this
         /// is `git rev-parse`, `git diff --stat`, `git ls-files` and batched
         /// `git hash-object`, which `VerificationTabView.refreshStaleness`
-        /// already refuses to run on the actor.
-        private static func captureStamp(
+        /// already refuses to run on the actor. See `fingerprint` for why that
+        /// placement is injectable rather than merely written down here.
+        private func captureStamp(
             worktreePath: String, projectDirectory: String
         ) async -> String {
-            await withCheckedContinuation { continuation in
+            let compute = fingerprint
+            return await withCheckedContinuation { continuation in
                 DispatchQueue.global(qos: .userInitiated).async {
-                    continuation.resume(returning: Git.Operations.diffFingerprint(
-                        worktreePath: worktreePath, projectPath: projectDirectory,
-                        mode: "uncommitted"
-                    ))
+                    continuation.resume(
+                        returning: compute(worktreePath, projectDirectory)
+                    )
                 }
             }
         }

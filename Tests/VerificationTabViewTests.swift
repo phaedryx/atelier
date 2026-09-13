@@ -527,4 +527,53 @@ final class VerificationTabViewTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - The staleness refresh gate
+
+    /// **The in-flight guard comes first, and the order is the whole point.**
+    ///
+    /// `refreshStaleness` passes `currentRun != nil`, and `currentRun` falls
+    /// through to `Verification.Store.latest` — a UserDefaults read plus a
+    /// JSON decode of a run that may carry several 200-line outputs — on the
+    /// main actor. Asking it first meant the guard that exists to absorb a
+    /// ~5Hz burst of `.worktreeGitActivity` was paid for by the very decode it
+    /// was meant to avoid, so the property is what is *not* evaluated rather
+    /// than which case comes back. Flipping the two guards fails here.
+    func test_stalenessRefresh_doesNotAskWhetherThereIsARunWhileOneIsInFlight() {
+        var asked = 0
+        let decision = verificationStalenessRefresh(
+            isRefreshing: true,
+            hasRun: { asked += 1; return true }()
+        )
+        XCTAssertEqual(decision, .markPending)
+        XCTAssertEqual(asked, 0, "the run was looked up behind the in-flight guard")
+    }
+
+    /// The pending bit is set even with no run, which is the one semantic
+    /// consequence of asking the guards in this order.
+    func test_stalenessRefresh_marksPendingWithNoRunWhileOneIsInFlight() {
+        XCTAssertEqual(
+            verificationStalenessRefresh(isRefreshing: true, hasRun: false),
+            .markPending
+        )
+    }
+
+    /// Nothing renders `currentStamp` without a run to compare it against, so
+    /// a refresh with no run is a git spawn for nobody.
+    func test_stalenessRefresh_skipsWhenThereIsNoRun() {
+        XCTAssertEqual(
+            verificationStalenessRefresh(isRefreshing: false, hasRun: false),
+            .skip
+        )
+    }
+
+    func test_stalenessRefresh_startsWhenNothingIsInFlightAndARunExists() {
+        var asked = 0
+        let decision = verificationStalenessRefresh(
+            isRefreshing: false,
+            hasRun: { asked += 1; return true }()
+        )
+        XCTAssertEqual(decision, .start)
+        XCTAssertEqual(asked, 1, "past the in-flight guard, the run has to be looked up")
+    }
 }
