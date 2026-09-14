@@ -324,9 +324,10 @@ let toolDefinitions: [ToolDefinition] = [
         workstream — starting a second while one is live is refused rather than
         allowed to kill it.
 
-        You will also receive these notices for runs the USER started from the
-        Verification tab, which you did not ask for. That is deliberate: it is
-        how you find out what your human just ran.
+        If you are this workstream's Coding Agent, you will also receive these
+        notices for runs the USER started from the Verification tab, which you
+        did not ask for — that is deliberate, it is how you find out what your
+        human just ran. An agent in another tab of this workstream will not.
         """,
         properties: [
             "checks": ["type": "string", "description": "Comma-separated names of the checks to run, e.g. \"rspec,rubocop\". Omit to run all of them. A name the project does not declare is an error naming what it does."],
@@ -370,7 +371,7 @@ open_agent_tab opens a terminal tab in your workstream, and with a prompt it sta
 
 create_workstream is the exception to that: it makes a NEW workstream, with its own worktree and its own branch, and with a prompt it starts an agent in that workstream's Coding Agent tab. Reach for it when the work needs a branch of its own, and for open_agent_tab when it belongs on yours.
 
-start_verification runs the project's checks against your worktree and answers with a run id rather than a result — a real suite outlives a tool call. Each check's verdict arrives in your inbox from atelier/verification as that check finishes; that is a reserved sender inside Atelier and not a peer you can reply to, and you will get these for runs the user starts in the Verification tab too. check_verification(run_id) reads the whole run whenever you want, so you are never stuck waiting for a message that has not arrived.
+start_verification runs the project's checks against your worktree and answers with a run id rather than a result — a real suite outlives a tool call. Each check's verdict arrives in your inbox from atelier/verification as that check finishes; that is a reserved sender inside Atelier and not a peer you can reply to. If you are this workstream's Coding Agent, you will also get these for runs the user starts in the Verification tab. check_verification(run_id) reads the whole run whenever you want, so you are never stuck waiting for a message that has not arrived.
 
 The rest of these tools act on your own workstream and no other. There is no way to reach another agent's tabs — to coordinate with an agent elsewhere, send it a message.
 """
