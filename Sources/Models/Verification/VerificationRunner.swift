@@ -754,7 +754,36 @@ extension Verification {
                 return sealed
             }
             run.wasStopped = stopped
+            // Published before the record loop, because `recordCompletion` reads
+            // `runs[workstreamID]` to mirror output onto the row. A loop that ran against
+            // the pre-seal dictionary would mirror onto rows this function is about to
+            // overwrite.
             runs[workstreamID] = run
+
+            // Every check the mid-run edges did not cover: a `.stopped` row, which is never
+            // terminal until the relabel above, and one whose server died between polls so
+            // no edge ever saw it finish. `recordCompletion` is idempotent per
+            // (runID, name), so a check already recorded mid-run is untouched — decision
+            // 7's "seal never overwrites what the live rows established", one layer out.
+            //
+            // `.notRun` is excluded by `isTerminal`: a check that never started has no
+            // result to report, and Task 8's surviving run-level notice is discriminated on
+            // exactly this producing no records.
+            for check in run.checks where Self.isTerminal(check.state) {
+                recordCompletion(
+                    workstreamID: workstreamID, runID: runID, name: check.name,
+                    state: check.state, duration: check.duration, output: check.output,
+                    outputTruncated: check.outputTruncated, stamp: run.stamp
+                )
+            }
+
+            // **Re-read, because `recordCompletion` mutated the dictionary.** The local
+            // `run` above is a value copy taken before the loop; persisting it would store
+            // rows without the output the record writer just attached, and nothing would
+            // catch it — `sealedRunIDs` is inserted below, so `recordCompletion`'s own
+            // guards see an unsealed run throughout.
+            run = runs[workstreamID] ?? run
+
             sealedRunIDs.insert(runID)
             Verification.Store.save(run)
             onFinish?(run)
