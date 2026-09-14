@@ -427,7 +427,7 @@ func verificationAvailability(
     )
     // `runnableChecks` is `Verification.Runner`'s own filter, and calling it
     // here rather than repeating it is the point: `Runner.start` resolves the
-    // user's selection against the same filtered list, so the checklist cannot
+    // user's selection against the same filtered list, so the rows cannot
     // offer a check the runner would refuse or silently drop. A process named
     // like a flag — `-n` is legal YAML — is dropped by `PhaseRunner.command`
     // before it reaches the shell, and offering it made the *only*-selected

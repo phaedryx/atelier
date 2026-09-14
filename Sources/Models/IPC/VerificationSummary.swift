@@ -88,6 +88,19 @@ extension IPC {
         /// first, since one line per check is what the agent needs to act, then
         /// as much failing output as the remaining room allows, then a pointer at
         /// `check_verification` for the rest.
+        ///
+        /// **Its one production caller is `IPC.Service.startVerification`'s
+        /// `onFinish`, and that closure only calls it when `info.state != .stopped
+        /// && info.checks.allSatisfy { $0.state == .notRun }`** — every check
+        /// that reaches a terminal state posts its own per-check notice instead,
+        /// so a normal run's result has already arrived by the time a run
+        /// finishes. So in production this function only ever runs over a
+        /// non-stopped run whose rows are all `.notRun`, and its pass/fail
+        /// verdict branch below is dead there. Keep it that way on purpose: this
+        /// line is what stops a future caller from re-broadening who invokes
+        /// this and reviving the bug it was narrowed to prevent — an all-`.skipped`
+        /// suite (`up -n` on an empty namespace, or a config that declares no
+        /// processes) rendering here as "0 of 0 failed", which reads as a pass.
         static func message(for run: VerificationRunInfo) -> String {
             let header = headerLine(for: run)
             let pointer = run.checks.isEmpty ? nil : pointerLine(runID: run.runID)

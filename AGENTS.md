@@ -621,17 +621,17 @@ comment gives: captured output means nobody is watching a TTY, so the reasoning 
 `execute` ungated does not apply — to a user press or to an agent call. See below.
 
 ### The verify namespace
-Eight decisions from writing `verify` cost a review round each, and each is the kind of thing a
+Nine decisions from writing `verify` cost a review round each, and each is the kind of thing a
 later reader would plausibly "simplify" away without knowing why:
 
 1. **The log window is one-shot.** Per-check output lives in the control server that ran the
-   namespace, and the run loop (`Verification.Runner.execute`, `VerificationRunner.swift:832-954`)
+   namespace, and the run loop (`Verification.Runner.execute`, `VerificationRunner.swift:956-1081`)
    tears that server down only after `seal` has returned — so the 200-line tail
-   `captureFailedOutput` fetches first (`VerificationRunner.swift:1118-1169`) is all that exists
-   anywhere afterward. No UI or agent-facing copy may imply a fuller log can be fetched later; the
-   tab's own truncation notice says as much ("There is nothing more to fetch: the run's own output
-   no longer exists anywhere", `VerificationTabView.swift:1101`). 200 lines is not an arbitrary
-   round number — it was sized against `IPC.Store`'s 65,536-byte-per-message cap
+   `recordCompletions` fetches at each check's own completion edge (`VerificationRunner.swift:1253-1304`)
+   is all that exists anywhere afterward. No UI or agent-facing copy may imply a fuller log can be
+   fetched later; the tab's own truncation notice says as much ("There is nothing more to fetch: the
+   run's own output no longer exists anywhere", `VerificationTabView.swift:1192`). 200 lines is not
+   an arbitrary round number — it was sized against `IPC.Store`'s 65,536-byte-per-message cap
    (`IPCStore.swift:89`), which *throws rather than truncating* (`IPCStore.swift:203`, `:223` and `:259`),
    so an oversized completion notice would be lost silently while an agent waits for it.
    `outputTruncated` means "there was more at capture time", never "more is retrievable".
@@ -658,10 +658,22 @@ later reader would plausibly "simplify" away without knowing why:
    the control server, that server is still torn down once the run seals, and
    `outputTruncated` still means "there was more at capture time" and never "more is
    retrievable". Sizing per check is unchanged — 200 lines, against `IPC.Store`'s throwing
-   64KB cap on the mailbox notice a check's completion also sends. Lines already read live
-   are kept on screen after the run ends — labelled as the last read, not as live —
-   because clearing them would empty a window mid-read; they are `@State` in the row and
-   go when a new run starts.
+   64KB cap on the mailbox notice a check's completion also sends. **Lines already read live
+   do *not* survive the run ending** — that was tried and reversed. `runID` itself goes nil
+   at seal (`runID: isLive ? run?.id : nil`, where the row is built), `displayedLines`
+   requires a non-nil `runID` matching what was stored, and the string this used to show
+   ("This is the last output read from it.") is gone from `Localizable.strings`. The instant
+   a run stops being live, `liveRead`'s lines stop being shown and the row falls straight
+   through to the captured tail instead. That is an acceptable loss rather than a
+   regression, because the paragraph above is the replacement: `recordCompletions` now
+   captures every check's tail at its own completion edge, not only a failing one's, so
+   sealing costs a few seconds of "freshest possible" text, not the output itself — the one
+   case with no replacement is `.notKept`, where the log fetch itself threw and no tail was
+   ever captured to fall through to. `liveRead` is still `@State` in the row and still keyed
+   by run id rather than cleared on `.onChange(of: runID)`, for the reason given at its own
+   declaration: `ForEach` keys rows on the check's name, so the same name in run 2 may or may
+   not be the same view as in run 1, and carrying the id is what makes `displayedLines`
+   correct under either answer.
 
    **The two objections that 64KB figure did not answer are now real, and are accepted
    rather than mitigated.** `recordCompletion` persists every check's tail twice: once
