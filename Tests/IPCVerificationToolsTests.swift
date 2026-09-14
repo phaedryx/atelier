@@ -11,6 +11,14 @@ import XCTest
 private actor StubVerificationRunner: IPC.VerificationControlling {
     var startedWorkstreams: [UUID] = []
     var startedChecks: [[String]] = []
+    /// Recorded so a test can pin that `IPC.Service.startVerification` threads
+    /// the caller's own surface id all the way through, rather than trusting
+    /// it by inspection. Nothing else here exercised this parameter — both
+    /// conformances ignored it and the bridge's own routing test builds its
+    /// notice by hand — so a nil crossing this seam silently misrouted every
+    /// agent-started run's per-check notices to the Coding Agent tab instead
+    /// of the requesting pane.
+    var startedRequesterSurfaceIDs: [String?] = []
     var refusal: Error?
     var runs: [String: IPC.VerificationRunInfo] = [:]
 
@@ -44,11 +52,12 @@ private actor StubVerificationRunner: IPC.VerificationControlling {
     func startVerification(
         workstreamID: UUID,
         checks: [String],
-        requesterSurfaceID _: String?,
+        requesterSurfaceID: String?,
         onFinish: @escaping @Sendable (IPC.VerificationRunInfo) -> Void
     ) async throws -> IPC.VerificationStart {
         startedWorkstreams.append(workstreamID)
         startedChecks.append(checks)
+        startedRequesterSurfaceIDs.append(requesterSurfaceID)
         if let refusal {
             throw refusal
         }
@@ -188,6 +197,29 @@ final class IPCVerificationToolsTests: XCTestCase {
         let startedWorkstreams = await runner.startedWorkstreams
         XCTAssertEqual(startedChecks, [["rspec", "rubocop"]])
         XCTAssertEqual(startedWorkstreams, [workstreamID], "a run belongs to the caller's own workstream")
+    }
+
+    /// `IPC.Service.startVerification` parses `request.client.surfaceID` into
+    /// `surfaceID` and passes `surfaceID?.uuidString` to the runner as
+    /// `requesterSurfaceID` — that is how `IPC.VerificationRunnerBridge`
+    /// later addresses the per-check notices back to the pane that asked,
+    /// rather than to the workstream's Coding Agent tab by default. Nothing
+    /// pinned that thread end to end: both `StubVerificationRunner`
+    /// conformances discarded the parameter, and
+    /// `IPCVerificationBridgeTests` builds its notice with a hand-written
+    /// `requesterSurfaceID` rather than one that arrived through a real
+    /// `start_verification` call. A nil crossing this seam would silently
+    /// misroute every agent-started run's notices and nothing here would
+    /// notice.
+    func test_startVerification_passesTheCallersSurfaceIDToTheRunner() async throws {
+        await service.setVerificationRunner(runner)
+        let surfaceID = UUID()
+        let caller = try await register(surfaceID: surfaceID, name: "builder")
+
+        _ = await call(.startVerification, ["checks": "rspec, rubocop"], as: caller)
+
+        let startedRequesterSurfaceIDs = await runner.startedRequesterSurfaceIDs
+        XCTAssertEqual(startedRequesterSurfaceIDs, [surfaceID.uuidString])
     }
 
     func test_startVerification_withNoChecks_startsTheWholeNamespace() async throws {
