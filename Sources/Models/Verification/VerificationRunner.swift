@@ -19,6 +19,23 @@ extension Verification {
     final class Runner: ObservableObject {
         @Published private(set) var runs: [UUID: Verification.Run] = [:]
 
+        /// Every workstream's per-check results, as the tab renders them.
+        ///
+        /// **The tab reads this; it is not a subscriber to `onCheckFinished`.** A callback
+        /// into the view would be a second thing to keep in step with `CheckStore`, and
+        /// `runs` already establishes that the view observes this object rather than being
+        /// called by it.
+        @Published private(set) var checkRecords: [UUID: [String: Verification.CheckRecord]] = [:]
+
+        /// Fired once per *check* that reaches a terminal state, on the main actor.
+        ///
+        /// **One slot, and `IPC.VerificationRunnerBridge` holds it** — the same constraint
+        /// `onFinish` carries and for the same reason: constructing a second subscriber
+        /// silently unsubscribes the first, so `ContentView` builds exactly one bridge.
+        /// Fires for the user's own presses too; routing a notice to the right inbox is the
+        /// bridge's job, not this one's.
+        var onCheckFinished: ((UUID, Verification.CheckRecord) -> Void)?
+
         /// Issued ids, so "unique for the app's lifetime" is enforced rather
         /// than hoped for. Eight hex characters is short enough that a
         /// collision is a real if unlikely event, and a reissued id would make
@@ -588,6 +605,83 @@ extension Verification {
             stopRequested.remove(workstreamID)
         }
 
+        // MARK: - Per-check records
+
+        /// Record one check's completion: persist it, publish it, mirror it onto the run's
+        /// own row, and announce it. **The sole writer of a `CheckRecord`, and the only
+        /// caller of `onCheckFinished`.**
+        ///
+        /// Both producers go through here — the poll loop's completion-edge detector, and
+        /// `seal` for the checks no edge covered (`.stopped`, and a check whose server died
+        /// between polls). One writer is what makes "exactly once per check per run"
+        /// structural rather than a property two call sites have to maintain: the guard
+        /// below is keyed on `(runID, name)`, so a check reported terminal on three
+        /// consecutive polls, and then again by `seal`, still writes and announces once.
+        ///
+        /// Keyed on the pair rather than the name, because a *later* run of the same check
+        /// must replace the record and fire again — the ordinary case every time a row's
+        /// Re-run is pressed.
+        ///
+        /// **It mutates `runs[workstreamID]`.** Any caller holding a local copy of the run
+        /// must re-read it afterwards or it will persist a row without the output this just
+        /// attached — see `seal`, which does exactly that.
+        func recordCompletion(
+            workstreamID: UUID,
+            runID: String,
+            name: String,
+            state: Verification.CheckResult.State,
+            duration: TimeInterval?,
+            output: String?,
+            outputTruncated: Bool,
+            stamp: String
+        ) {
+            var records = checkRecords[workstreamID] ?? Verification.CheckStore.records(for: workstreamID)
+            if records[name]?.runID == runID {
+                return
+            }
+            let record = Verification.CheckRecord(
+                name: name, state: state, duration: duration, output: output,
+                outputTruncated: outputTruncated, stamp: stamp, runID: runID, completedAt: Date()
+            )
+            records[name] = record
+            checkRecords[workstreamID] = records
+            Verification.CheckStore.save(records, for: workstreamID)
+
+            // Mirrored onto the run's own row as well as stored per check.
+            // `Verification.Run` is still what `check_verification` projects from and what
+            // survives a restart, so dropping `output` here would take an agent's only view
+            // of a failure with it — this is what `captureFailedOutput` used to do, narrowed
+            // to one check and moved to the moment it completed.
+            if var run = runs[workstreamID], run.id == runID {
+                run.checks = run.checks.map { check in
+                    guard check.name == name else { return check }
+                    var updated = check
+                    updated.output = output
+                    updated.outputTruncated = outputTruncated
+                    return updated
+                }
+                runs[workstreamID] = run
+            }
+
+            onCheckFinished?(workstreamID, record)
+        }
+
+        /// Hydrate a workstream's records from the store.
+        ///
+        /// Called by the tab on appear, so a row drawn before this session has run anything
+        /// still shows the last session's verdict. A no-op once the workstream has an
+        /// in-memory entry, so it cannot overwrite a live run's records with the store's
+        /// older copy.
+        func loadCheckRecords(for workstreamID: UUID) {
+            guard checkRecords[workstreamID] == nil else { return }
+            checkRecords[workstreamID] = Verification.CheckStore.records(for: workstreamID)
+        }
+
+        /// Drop a workstream's in-memory records. Called by `forget`, beside the run.
+        func forgetCheckRecords(for workstreamID: UUID) {
+            checkRecords[workstreamID] = nil
+        }
+
         // MARK: - Sealing
 
         /// Turn a final `processes()` read into the run's authoritative result.
@@ -875,7 +969,10 @@ extension Verification {
             // not stop the processes itself.
             let entries = await verifyProcesses(client: client) ?? []
             apply(entries, runID: runID, state: state)
-            await captureFailedOutput(from: entries, runID: runID, client: client)
+            // Replaces `captureFailedOutput`. Same window — the server is held open until
+            // after `seal` — but every check, not only the failures, and through the one
+            // writer so a check already recorded mid-run is not fetched or announced twice.
+            await recordCompletions(from: entries, runID: runID, client: client, state: state)
             // Set on the stored run *before* `seal`, so `seal`'s own copy —
             // `var run = runs[workstreamID]` — carries it into both the
             // published run and `Verification.Store.save`. Only when the server was
@@ -1057,6 +1154,9 @@ extension Verification {
             guard let entries = await verifyProcesses(client: client) else { return }
             state.sawServer = true
             apply(entries, runID: runID, state: state)
+            // After `apply`, so the duration the record carries is the one the poll just
+            // computed rather than the previous poll's.
+            await recordCompletions(from: entries, runID: runID, client: client, state: state)
         }
 
         /// The `verify` namespace's rows, or **nil when the server did not
@@ -1108,64 +1208,76 @@ extension Verification {
             }
         }
 
-        /// Fetch and attach the tail of every failed check's log.
+        /// Fetch and record every check that has just reached a terminal state.
         ///
-        /// **Failed checks only.** A skipped check never ran, and a passing one
-        /// would put a 200-line tail per check into UserDefaults through
-        /// `Verification.Store` for output nobody asked for. The consequence is
-        /// deliberate and worth stating plainly: a passing check's warnings are
-        /// not kept, and re-running that check is the only way to see them.
-        private func captureFailedOutput(
-            from entries: [ProcessCompose.ProcessEntry],
-            runID: String,
-            client: ProcessCompose.Controlling
+        /// **Mid-run, and read-only.** The tail comes through the control client this loop
+        /// already holds — the same borrow `liveLog` makes — while the server is still up.
+        /// It neither extends nor ends the log window, so the single-owner teardown rule is
+        /// untouched: `execute` still calls `shutDown` exactly once, after `seal`.
+        ///
+        /// Every check's output is captured, pass or fail, which is the retirement of
+        /// `captureFailedOutput`'s failures-only rule. The fetch happens anyway for the
+        /// mailbox notice, so keeping the result costs a dictionary entry rather than a
+        /// round trip — and it is what lets a passing row's Output group show anything at
+        /// all.
+        private func recordCompletions(
+            from entries: [ProcessCompose.ProcessEntry], runID: String,
+            client: ProcessCompose.Controlling, state: RunLoopState
         ) async {
             guard let workstreamID = runs.first(where: { $0.value.id == runID })?.key,
                   let run = runs[workstreamID], !sealedRunIDs.contains(runID)
             else { return }
 
-            let ours = Set(run.checks.map(\.name))
-            let failed = entries.filter { entry in
-                guard ours.contains(entry.name) else { return false }
-                if case .failed = Verification.CheckResult.State(entry: entry) {
-                    return true
-                }
-                return false
-            }.map(\.name)
-            guard !failed.isEmpty else { return }
+            let ours = Dictionary(
+                run.checks.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first }
+            )
+            for entry in entries {
+                guard let check = ours[entry.name], !state.recorded.contains(entry.name) else { continue }
+                let entryState = Verification.CheckResult.State(entry: entry)
+                guard Self.isTerminal(entryState) else { continue }
+                state.recorded.insert(entry.name)
 
-            var captured: [String: (text: String, truncated: Bool)] = [:]
-            for name in failed {
+                var output: String?
+                var truncated = false
                 do {
-                    let lines = try await client.logs(name: name, tail: Self.logTailLines)
-                    // At the limit the honest answer is "possibly truncated": a
-                    // tail cannot reveal whether anything preceded it. The flag
-                    // means there was more *at capture time*, never that a fuller
-                    // copy can be fetched — by the time anything reads it the
-                    // server that held the log is gone.
-                    captured[name] = (
-                        lines.joined(separator: "\n"), lines.count >= Self.logTailLines
-                    )
+                    let lines = try await client.logs(name: entry.name, tail: Self.logTailLines)
+                    output = lines.joined(separator: "\n")
+                    // At the limit the honest answer is "possibly truncated": a tail cannot
+                    // reveal whether anything preceded it. The flag means there was more at
+                    // capture time, never that a fuller copy can be fetched.
+                    truncated = lines.count >= Self.logTailLines
                 } catch {
-                    // A warning, not a debug line: unlike the poll's swallowed
-                    // `.notRunning`, this loss is permanent by design — the
-                    // window is one-shot and the output stops existing a few
-                    // lines below, so a failed check ends up with no explanation
-                    // anywhere.
+                    // A warning, not a debug line: this loss is permanent by design — the
+                    // window is one-shot and the server goes away when the run seals, so
+                    // this check ends up with no explanation anywhere.
                     logger.warning(
-                        "verify logs for \(name, privacy: .public) failed: \(error.localizedDescription, privacy: .public)"
+                        "verify logs for \(entry.name, privacy: .public) failed: \(error.localizedDescription, privacy: .public)"
                     )
                 }
+
+                recordCompletion(
+                    workstreamID: workstreamID, runID: runID, name: entry.name,
+                    state: entryState, duration: check.duration, output: output,
+                    outputTruncated: truncated, stamp: run.stamp
+                )
             }
-            guard !captured.isEmpty, var updated = runs[workstreamID], updated.id == runID else { return }
-            updated.checks = updated.checks.map { check in
-                guard let output = captured[check.name] else { return check }
-                var withOutput = check
-                withOutput.output = output.text
-                withOutput.outputTruncated = output.truncated
-                return withOutput
+        }
+
+        /// Whether a state means the check is done for this run.
+        ///
+        /// `.stopped` is terminal but is never reached mid-run — `Runner.stop` deliberately
+        /// does not stop individual checks, so a stopped row is still `.running` until
+        /// `seal` relabels it. It is listed here because `seal` asks the same question of
+        /// its already-relabelled rows.
+        ///
+        /// `.notRun` is deliberately **not** terminal: a check that never started has no
+        /// result to report, its row must offer Run rather than Re-run, and the surviving
+        /// run-level mailbox notice is discriminated on exactly this producing no records.
+        static func isTerminal(_ state: Verification.CheckResult.State) -> Bool {
+            switch state {
+            case .passed, .failed, .skipped, .stopped: true
+            case .notRun, .pending, .running: false
             }
-            runs[workstreamID] = updated
         }
 
         /// One run loop's own scratch state.
@@ -1182,6 +1294,14 @@ extension Verification {
             /// Whether the control server has answered a poll yet. What gates
             /// acting on a Stop; see `shouldStop`.
             var sawServer = false
+
+            /// Checks already fetched this run, so a terminal state seen on several
+            /// consecutive polls is fetched from the server once rather than once a second.
+            ///
+            /// `recordCompletion` is the real idempotence guard; this is the cheaper one in
+            /// front of it, and it is what stops a 200-line `logs` request per poll for a
+            /// check that finished thirty seconds ago.
+            var recorded: Set<String> = []
 
             /// When each check was first *seen* running.
             private var startedAt: [String: Date] = [:]
