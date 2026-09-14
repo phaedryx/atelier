@@ -379,11 +379,11 @@ extension Workstream {
         /// should clean up in the same file it uses for everything else.
         ///
         /// The preconditions are not restated here. `PhasePolicy.plan` owns
-        /// them — integration on, a config located, a binary to run it with, and
-        /// approval of every repository-provided file process-compose will load —
-        /// and dispose is unattended in exactly the way bootstrap is, so a second
-        /// inline copy would be a second security policy with no tests and no way to
-        /// follow a change made to the first.
+        /// them — a config located, a binary to run it with, and approval of every
+        /// repository-provided file process-compose will load — and dispose is
+        /// unattended in exactly the way bootstrap is, so a second inline copy
+        /// would be a second security policy with no tests and no way to follow a
+        /// change made to the first.
         ///
         /// Nothing here can stop the archive. Every refusal returns quietly and a
         /// failure is logged and swallowed: a workstream stranded half-archived is

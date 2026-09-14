@@ -783,10 +783,10 @@ extension Verification {
         /// repository-provided process-compose commands with captured output
         /// and no TTY, and the only thing standing between that and
         /// `PhasePolicy.plan` is that `start` is its sole production caller:
-        /// `start` answers the four preconditions — integration enabled, a
-        /// located config, a resolvable binary, approval of every
-        /// repository-provided file — and hands the results here in a
-        /// `SpawnRequest`. Any future caller, the parked IPC adapter included,
+        /// `start` answers the three preconditions — a located config, a
+        /// resolvable binary, and approval of every repository-provided file — and
+        /// hands the results here in a `SpawnRequest`. Any future caller, the
+        /// parked IPC adapter included,
         /// **must enter through `start`**; calling this directly runs a
         /// repository's YAML unattended and ungated, which is exactly what that
         /// one gate exists to prevent.

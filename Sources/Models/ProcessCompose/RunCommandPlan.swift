@@ -102,7 +102,7 @@ extension ProcessCompose {
                         comment: ""
                     )
                 }
-                // Mirrors `plan`'s fifth precondition, in the same order, and
+                // Mirrors `plan`'s fourth precondition, in the same order, and
                 // nothing but a test enforces the agreement — see
                 // `RunCommandPlanTests`, which asserts `canRun` and this function
                 // answer the same question for this case.
@@ -142,7 +142,7 @@ extension ProcessCompose {
                 return .literal(devCommand.command)
             case .processCompose:
                 guard let config, let binary else { return .nothing }
-                // The fifth precondition, and the only one about the config's
+                // The fourth precondition, and the only one about the config's
                 // *contents*. `up -n execute` against a namespace nobody declared
                 // does not fail and does not exit — measured against v1.122.0, it
                 // idles indefinitely with no output — so Start would open a TUI
