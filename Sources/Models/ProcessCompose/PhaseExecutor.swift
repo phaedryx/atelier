@@ -85,14 +85,17 @@ extension ProcessCompose {
             environment: [String: String],
             timeout: TimeInterval,
             selectedProcesses: [String] = [],
-            // `verify` passes false to hold the control server open after the
-            // namespace finishes, so the runner can read final states and per-check
-            // logs before the server goes away. It then tears down itself, and is the
-            // only caller that does — see the spec's "one owner for teardown".
-            //
-            // Not a leak risk if that teardown is missed: `run` calls `shutDown` at
-            // the *top*, before spawning, precisely to clear a server a killed run
-            // left behind.
+            // Held open after the namespace finishes, so a caller can read final
+            // states and per-check logs before the server goes away — in which case
+            // that caller owns the teardown. **No production caller passes false
+            // today.** The `verify` namespace did, and verification no longer runs
+            // through process-compose at all; the parameter and `settledOutput`
+            // behind it stay because they are the only thing standing between
+            // `--keep-project` and a report, and re-deriving them for the next
+            // caller that needs a server to outlive its namespace is the expensive
+            // half. Not a leak risk when a teardown is missed: `run` calls
+            // `shutDown` at the *top*, before spawning, precisely to clear a server
+            // a killed run left behind.
             shutDownWhenDone: Bool = true
         ) -> Outcome {
             let presence = config.namespacePresence(phase.namespace)
@@ -173,10 +176,10 @@ extension ProcessCompose {
                 output = captured.read()
             } else {
                 // Nothing above has waited for the spawned command on this path:
-                // `verify` holds the control server open and the run loop owns the
-                // teardown, so `run` returns the moment the poll concludes. That is
-                // fine for every poll result except `.serverGone`, where a missing
-                // status is the *only* thing reported — see `settledOutput`.
+                // the control server is held open and the caller owns the teardown,
+                // so `run` returns the moment the poll concludes. That is fine for
+                // every poll result except `.serverGone`, where a missing status is
+                // the *only* thing reported — see `settledOutput`.
                 //
                 // Deliberately not merged with the branch above into one call. That
                 // branch has already spent `shutdownGrace` waiting on the same
@@ -204,10 +207,10 @@ extension ProcessCompose {
         /// ignored. After `.serverGone` the command's own status is the *whole* of
         /// what is known, so a nil is reported as "did not finish in time" — and
         /// with `shutDownWhenDone: false` nobody had waited for the capture thread
-        /// at all, so that nil was routinely just "it has not stored yet". A verify
+        /// at all, so that nil was routinely just "it has not stored yet". A
         /// namespace that shut itself down — `restart: exit_on_failure` does exactly
-        /// that, even with `--keep-project` — was therefore persisted as a timeout
-        /// that never happened, on the self-shutdown, purge and quit paths.
+        /// that, even with `--keep-project` — was therefore reported as a timeout
+        /// that never happened.
         ///
         /// **The read comes before the `.serverGone` guard on purpose.** The common
         /// way to reach `.serverGone` is `up` exiting before it ever listened (a
@@ -221,8 +224,8 @@ extension ProcessCompose {
         /// and have its output drained. Here it is an upper bound that normally does
         /// not bind at all, because a project that shut itself down has its capture
         /// stored within milliseconds. It binds only when `up` is alive but no
-        /// longer answering — where the run genuinely is not over, so the verify run
-        /// loop polling on through that window is correct rather than a stall. When
+        /// longer answering — where the run genuinely is not over, so a caller
+        /// polling on through that window is correct rather than a stall. When
         /// it does expire, the nil handed back has been *waited* for, and reporting
         /// "did not finish in time" after a real bounded wait is honest.
         static func settledOutput(

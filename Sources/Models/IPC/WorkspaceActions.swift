@@ -241,6 +241,10 @@ final class WorkspaceActions {
         let projectName: String
         let projectDirectory: String
         let worktreePath: String
+        /// `ATELIER_DEFAULT_BRANCH` for the check's environment. Resolved here so
+        /// an agent-started check and a user-started one export the same value —
+        /// `Git.Operations.defaultBranch` caches per directory, so asking is cheap.
+        let defaultBranch: String
     }
 
     /// Resolved through `resolve` rather than `context(workstreamID:)`, which
@@ -256,7 +260,8 @@ final class WorkspaceActions {
             workstreamName: found.workstream.name,
             projectName: found.project.name,
             projectDirectory: found.project.directory,
-            worktreePath: found.workstream.workingDirectory(checkout: found.project.checkout)
+            worktreePath: found.workstream.workingDirectory(checkout: found.project.checkout),
+            defaultBranch: Git.Operations.defaultBranch(at: found.project.checkout)
         )
     }
 

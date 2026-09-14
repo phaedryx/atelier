@@ -9,9 +9,8 @@ extension IPC {
     /// agent drive one.
     ///
     /// It exists because neither side should know the other's types. The runner
-    /// deals in `Verification.Run`, which carries a `Date`, a git fingerprint
-    /// and a whole suite's captured output; the tools deal in
-    /// `IPC.VerificationRunInfo`, which is bounded and describes seconds rather
+    /// deals in `Verification.Run`, which carries a `Date` and a git fingerprint;
+    /// the tools deal in `IPC.VerificationRunInfo`, which describes seconds rather
     /// than instants. One mapping, in one place, is the whole job — plus two
     /// things that are not mapping and are the reason this is a type rather
     /// than a function.
@@ -22,11 +21,13 @@ extension IPC {
     /// this holds the callback `start_verification` was given, keyed by run id,
     /// and a run nobody asked about finishes silently.
     ///
-    /// **It never calls `Runner.execute` directly.** `start` is the sole
-    /// production entrance, and it is where `ProcessCompose.PhasePolicy.plan`
-    /// runs — the one gate for repository-provided commands with no TTY. Its
-    /// refusals are `LocalizedError`, and `IPC.Service` passes them to the agent
-    /// verbatim rather than paraphrasing them.
+    /// **`Runner.start` is the sole production entrance.** Its refusals are
+    /// `LocalizedError`, and `IPC.Service` passes them to the agent verbatim
+    /// rather than paraphrasing them. There is no approval gate to re-check here
+    /// or anywhere: `verification.yaml` lives in the project directory, outside
+    /// every work tree, so it cannot have arrived with the repository — the same
+    /// location rule that leaves a project-directory process-compose config
+    /// unasked-about.
     @MainActor
     final class VerificationRunnerBridge: VerificationControlling {
         private let runner: Verification.Runner
@@ -47,9 +48,9 @@ extension IPC {
         /// `Verification.Run` records `startedAt` and nothing else, so this is
         /// the only source of a run's *duration* — and it is deliberately not
         /// "now minus `startedAt`" computed at read time, which would have a
-        /// finished run's duration grow every time an agent looked at it. A run
-        /// restored from `Verification.Store` after a restart has no entry, and
-        /// reports no duration rather than an invented one.
+        /// finished run's duration grow every time an agent looked at it. Runs do
+        /// not survive a relaunch, so every run this can be asked about has an entry
+        /// once it has finished.
         private var finishedAt: [String: Date] = [:]
 
         /// Which surface asked for each run, by run id. A run the user pressed has no
@@ -76,7 +77,7 @@ extension IPC {
             runner.onFinish = { [weak self] run in
                 self?.runFinished(run)
             }
-            runner.onCheckFinished = { [weak self] workstreamID, record in
+            runner.onCheckFinished = { [weak self] workstreamID, record, _ in
                 self?.checkFinished(workstreamID: workstreamID, record: record)
             }
         }
@@ -104,12 +105,13 @@ extension IPC {
                 workstreamName: target.workstreamName,
                 worktreePath: target.worktreePath,
                 projectDirectory: target.projectDirectory,
-                checks: checks
+                defaultBranch: target.defaultBranch,
+                checks: checks.isEmpty ? nil : checks
             )
-            register(runID: started.runID, onFinish: onFinish)
-            register(runID: started.runID, requesterSurfaceID: requesterSurfaceID)
+            register(runID: started.id, onFinish: onFinish)
+            register(runID: started.id, requesterSurfaceID: requesterSurfaceID)
 
-            return VerificationStart(runID: started.runID, started: started.started)
+            return VerificationStart(runID: started.id, started: started.checks.map(\.name))
         }
 
         func observeCheckCompletions(_ handler: @escaping @MainActor @Sendable (VerificationCheckNotice) -> Void) {
@@ -117,17 +119,14 @@ extension IPC {
         }
 
         func verificationRun(id: String, in workstreamID: UUID) async -> VerificationRunInfo? {
-            // In memory first: a live run is only there, and it is the one an
-            // agent polls. The store holds the workstream's most recent run and
-            // is how an id stays resolvable across a restart — but it is a
-            // *stale copy* while a run is live, because it is written at seal.
-            if let live = runner.run(id: id) {
-                return await projection(of: live)
-            }
-            guard let stored = Verification.Store.latest(for: workstreamID), stored.id == id else {
+            // Every run of this session resolves, and none of an earlier one:
+            // runs live in the runner's memory and are not persisted, because
+            // what they used to carry across a restart — a check's output — now
+            // lives in a terminal surface that does not survive one either.
+            guard let run = runner.run(id: id), run.workstreamID == workstreamID else {
                 return nil
             }
-            return await projection(of: stored)
+            return await projection(of: run)
         }
 
         // MARK: - Completion routing
@@ -135,7 +134,7 @@ extension IPC {
         /// Registers the callback for a run an agent started.
         ///
         /// Internal rather than private so a test can drive the routing without
-        /// a process-compose binary; `startVerification` is its only production
+        /// starting a real check; `startVerification` is its only production
         /// caller.
         func register(runID: String, onFinish: @escaping @Sendable (VerificationRunInfo) -> Void) {
             completions[runID] = onFinish
@@ -143,8 +142,8 @@ extension IPC {
 
         /// Registers which surface, if any, asked for a run.
         ///
-        /// Internal rather than private so a test can drive the routing without a
-        /// process-compose binary; `startVerification` is its only production caller.
+        /// Internal rather than private so a test can drive the routing without
+        /// starting a real check; `startVerification` is its only production caller.
         func register(runID: String, requesterSurfaceID: String?) {
             requesters[runID] = requesterSurfaceID
         }
@@ -167,15 +166,15 @@ extension IPC {
             // no completion entry and takes that return immediately, and a requester
             // entry dropped after it would leak forever for every such run.
             requesters.removeValue(forKey: run.id)
-            // Removed as it fires: `Runner.seal` promises once per run, and this
+            // Removed as it fires: the runner promises once per run, and this
             // makes a second call inert on this side too. A run the user started
             // has no entry and finishes silently, which is the point of keying
             // this per run rather than subscribing wholesale.
             guard let completion = completions.removeValue(forKey: run.id) else { return }
 
             // The projection needs the staleness read, which is git work, so it
-            // cannot happen inside this synchronous callback — `Runner.seal`
-            // calls it on the main actor with a teardown still to run.
+            // cannot happen inside this synchronous callback — the runner calls
+            // it on the main actor from its completion pass.
             Task { [weak self] in
                 guard let self else { return }
                 await completion(projection(of: run))
@@ -196,19 +195,16 @@ extension IPC {
                 startedSecondsAgo: Int(now.timeIntervalSince(run.startedAt)),
                 durationSeconds: finished.map { $0.timeIntervalSince(run.startedAt) },
                 checks: run.checks.map(Self.projection(of:)),
-                isStale: isStale(run),
-                failureDetail: run.failureDetail,
-                unstartedChecksDetail: run.unstartedChecksDetail
+                isStale: isStale(run)
             )
         }
 
         /// Whether this run's results still describe the worktree.
         ///
         /// **Four-plus git spawns, so it is skipped where it cannot say
-        /// anything.** An empty stamp means the run's own baseline has not been
-        /// captured yet — `Runner.start` leaves it empty and `Runner.execute`
-        /// fills it milliseconds later — and there is then nothing to compare
-        /// against, which is the same branch `verificationIsStale` takes.
+        /// anything.** An empty stamp means the run's baseline was not captured,
+        /// and there is then nothing to compare against — the same branch
+        /// `verificationIsStale` takes.
         private func isStale(_ run: Verification.Run) async -> Bool {
             guard !run.stamp.isEmpty else { return false }
             guard let target = try? WorkspaceActions.shared.verificationTarget(workstreamID: run.workstreamID) else {
@@ -228,11 +224,10 @@ extension IPC {
 
         /// **Read from the run's own rows, never from `Runner.isLive`.**
         ///
-        /// They answer different questions and the difference bites exactly
-        /// here: `isLive` means "may a new run start on this workstream's
-        /// socket", and it stays true through sealing and teardown — so the
-        /// completion notice, which is built from inside `seal`, would report
-        /// the run it is announcing as still running.
+        /// They answer different questions: `isLive` means "is anything running
+        /// in this workstream", which stays true while another check keeps going
+        /// — so a notice about the run that just finished would report it as
+        /// still running whenever a sibling check outlived it.
         private static func state(of run: Verification.Run) -> VerificationRunState {
             if run.wasStopped {
                 return .stopped
@@ -264,9 +259,7 @@ extension IPC {
                 name: record.name,
                 state: state,
                 exitCode: exitCode,
-                durationSeconds: record.duration,
-                outputTail: record.output,
-                outputTruncated: record.outputTruncated
+                durationSeconds: record.duration
             )
         }
 
@@ -288,9 +281,7 @@ extension IPC {
                 name: check.name,
                 state: state,
                 exitCode: exitCode,
-                durationSeconds: check.duration,
-                outputTail: check.output,
-                outputTruncated: check.outputTruncated
+                durationSeconds: check.duration
             )
         }
     }

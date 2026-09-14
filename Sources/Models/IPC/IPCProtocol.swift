@@ -353,8 +353,15 @@ extension IPC {
     /// `TabInfo`/`ReviewCommentInfo` to what `WorkspaceActions` reads. Every
     /// model that crosses this boundary gets one, and this one has to differ —
     /// seconds-ago rather than a `Date` that would need a shared encoding
-    /// strategy on both ends, a bounded output tail rather than a whole suite's
-    /// log, and `isStale` rather than the stamp it is computed from.
+    /// strategy on both ends, and `isStale` rather than the stamp it is computed
+    /// from.
+    ///
+    /// **No output crosses this boundary, and that is a deliberate narrowing.**
+    /// A check runs in its own terminal surface, so its output lives in that
+    /// terminal and dies with it; Atelier never holds a copy to send. An agent
+    /// gets verdicts, exit codes and durations, and the honest pointer for
+    /// anything more is asking the user to look at the tab — or re-running the
+    /// one check.
     ///
     /// Declared here rather than beside the seam because `renderText` in
     /// `Sources/MCPHelper/main.swift` renders it, and `AtelierMCP` compiles
@@ -375,27 +382,6 @@ extension IPC {
         /// Whether the worktree has changed since the run started, so a pass no
         /// longer describes the code on disk.
         let isStale: Bool
-        /// Why the **run itself** produced no per-check answer, when that is
-        /// what happened.
-        ///
-        /// Distinct from a check failing, and deliberately not set for one: a
-        /// suite where `rspec` failed is explained by that check's own state and
-        /// output. This is for a spawn that never got far enough to report on
-        /// anything, which otherwise reaches an agent as a list of checks that
-        /// all say "not run" and no reason anywhere. It is the only place that
-        /// reason exists.
-        let failureDetail: String?
-        /// The executor's own error text for a run that reported on some checks
-        /// and left others never started.
-        ///
-        /// Separate from `failureDetail` because the two need different
-        /// sentences: that one means the run produced no per-check answer at
-        /// all, and rendering this under the same words would tell an agent its
-        /// suite never started when most of it did. It rides along for the
-        /// reason `failureDetail` exists at all — without it, the checks that say
-        /// "not run" reach the agent with the reason dropped, which is the same
-        /// loss one layer out.
-        let unstartedChecksDetail: String?
     }
 
     /// Whether a verification run is still going, finished on its own, or was
@@ -412,41 +398,28 @@ extension IPC {
         let name: String
         let state: VerificationCheckState
         /// The process's exit code. Only meaningful for `.failed`, and nil
-        /// otherwise — a `Pending` check and a passing one both report 0 from
-        /// process-compose, so an exit code alone cannot tell them apart.
+        /// otherwise.
         let exitCode: Int?
         let durationSeconds: Double?
-        /// The tail of this check's output as captured while the run was live,
-        /// bounded again before it is sent. Nil when there is none to show — a
-        /// passing check usually has none stored.
-        let outputTail: String?
-        /// Whether there was more output than this **at capture time**.
-        ///
-        /// Not a promise that more can be fetched. The log lives in
-        /// process-compose's control server, which the runner shuts down once
-        /// the run is sealed, so the tail captured in that window is the only
-        /// copy that exists afterwards — in the Verification tab, here, or on
-        /// disk. An agent that reads "truncated" as "retrievable" goes looking
-        /// for a fuller log that is not anywhere, which is why every string this
-        /// flag drives says so.
-        let outputTruncated: Bool
     }
 
     /// A check's state, as an agent sees it.
     ///
-    /// Mapped from `Verification.CheckResult.State` **by the runner**, which is
-    /// where the two measured traps live: a `Pending` check reads as a pass if
-    /// you look at `exitCode` alone, and a `Skipped` one carries exit 1 and so
-    /// renders as a failure it never had.
+    /// Mapped from `Verification.CheckResult.State` by the bridge.
+    ///
+    /// `pending` and `skipped` have no producer: they described a
+    /// process-compose dependency graph that checks no longer have. They stay in
+    /// the wire enum so a helper built against an older Atelier still decodes,
+    /// and so a queued check has a name waiting for it.
     enum VerificationCheckState: String, Codable, CaseIterable {
         case notRun = "not_run"
         case pending
         case running
         case passed
         case failed
-        /// A dependency failed, so this check never ran.
+        /// No producer; see the note above.
         case skipped
-        /// The run was stopped while this check was running.
+        /// Stopped by hand while it was running.
         case stopped
     }
 

@@ -9,7 +9,7 @@ final class VerificationCheckStoreTests: XCTestCase {
         _ name: String, state: Verification.CheckResult.State, runID: String = "abcd1234"
     ) -> Verification.CheckRecord {
         Verification.CheckRecord(
-            name: name, state: state, duration: 1.5, output: "line", outputTruncated: false,
+            name: name, state: state, duration: 1.5,
             stamp: "head|1|digest", runID: runID, completedAt: Date(timeIntervalSince1970: 100)
         )
     }

@@ -38,10 +38,21 @@ final class ProcessComposeResolutionTests: XCTestCase {
       web:
         namespace: execute
         command: echo web
-      rspec:
-        namespace: verify
-        command: echo rspec
     """
+
+    /// Verification's own config, and a different file entirely: checks come
+    /// from `verification.yaml` in the project directory, never from
+    /// process-compose. Written here beside the other one because this
+    /// resolution answers both panes in one pass.
+    @discardableResult
+    private func writeVerificationConfig(_ yaml: String = """
+    rspec:
+      command: echo rspec
+    """) throws -> String {
+        let path = projectDirectory.appendingPathComponent("verification.yaml").path
+        try yaml.write(toFile: path, atomically: true, encoding: .utf8)
+        return path
+    }
 
     /// In the *project directory*, which is the tier that needs no approval:
     /// a config placed there was put there by hand, outside git.
@@ -68,8 +79,9 @@ final class ProcessComposeResolutionTests: XCTestCase {
 
     // MARK: - One pass, the same answers
 
-    func test_resolve_answersEveryPaneFromOneConfig() throws {
+    func test_resolve_answersEveryPaneInOnePass() throws {
         let path = try writeProjectConfig()
+        try writeVerificationConfig()
 
         let resolution = resolve()
 
@@ -86,28 +98,56 @@ final class ProcessComposeResolutionTests: XCTestCase {
         XCTAssertFalse(resolution.isApproved)
     }
 
-    /// **The regression guard for moving this out of the view.** The decision
-    /// is still `verificationAvailability`'s — which asks the same
-    /// `PhasePolicy.plan` that `Verification.Runner.start` calls — so resolving
-    /// it here must produce exactly what asking it directly does. A resolution
-    /// that quietly answered a different question would put an enabled Run in
-    /// front of a project `start` refuses.
-    func test_resolve_verifyHalfAgreesWithVerificationAvailability() throws {
-        try writeProjectConfig()
-        let located = try XCTUnwrap(ProcessCompose.Config.locate(
-            worktree: worktree.path, projectDirectory: projectDirectory.path
-        ))
-        let direct = verificationAvailability(
-            config: located, binary: binary,
-            isApproved: { ScriptTrust.isApproved(
-                configFiles: $0.repositoryProvidedFiles, for: self.projectDirectory.path
-            ) }
-        )
+    /// **Verification's half does not depend on process-compose at all.** Checks
+    /// come from `verification.yaml` in the project directory, so a project with
+    /// no process-compose config, or no binary to run one with, still offers every
+    /// check it declares. The two halves ride in one resolution because they share
+    /// a refresh trigger, not because they share an input.
+    func test_resolve_offersChecksWithNoProcessComposeConfigAtAll() throws {
+        try writeVerificationConfig("""
+        rspec:
+          command: bundle exec rspec
+        rubocop:
+          shell: fish
+          command: bundle exec rubocop
+        """)
 
         let resolution = resolve()
 
-        XCTAssertEqual(resolution.declaredVerifyChecks, direct.declared)
-        XCTAssertEqual(resolution.verifyUnavailableReason, direct.reason)
+        XCTAssertEqual(resolution.declaredVerifyChecks, ["rspec", "rubocop"])
+        XCTAssertNil(resolution.verifyUnavailableReason)
+        // And the Execution half is correctly unavailable, which is what proves
+        // the two were resolved independently rather than together.
+        XCTAssertFalse(resolution.plan.canRun)
+    }
+
+    /// File order, not alphabetical and not a dictionary's arbitrary order: the
+    /// rows are drawn in the order the user wrote them.
+    func test_resolve_keepsTheChecksInFileOrder() throws {
+        try writeVerificationConfig("""
+        zebra:
+          command: echo z
+        alpha:
+          command: echo a
+        middle:
+          command: echo m
+        """)
+
+        XCTAssertEqual(resolve().declaredVerifyChecks, ["zebra", "alpha", "middle"])
+    }
+
+    /// A broken `verification.yaml` must not read as "this project declares no
+    /// checks" — that is the same sentence a project with none gets, and it is the
+    /// only diagnostic either one has.
+    func test_resolve_distinguishesABrokenConfigFromAnEmptyOne() throws {
+        try writeVerificationConfig("rspec: [not, a, mapping]")
+
+        let broken = try XCTUnwrap(resolve().verifyUnavailableReason)
+        XCTAssertTrue(broken.contains("rspec"), broken)
+
+        try writeVerificationConfig("# nothing here")
+        let empty = try XCTUnwrap(resolve().verifyUnavailableReason)
+        XCTAssertNotEqual(broken, empty)
     }
 
     /// `PhaseRunner.runnableProcesses` is a flag-injection guard, and the
@@ -143,13 +183,12 @@ final class ProcessComposeResolutionTests: XCTestCase {
 
         XCTAssertFalse(resolution.plan.canRun)
         XCTAssertEqual(resolution.declaredExecuteProcesses, [])
-        XCTAssertEqual(resolution.declaredVerifyChecks, [])
-        XCTAssertNotNil(resolution.verifyUnavailableReason)
         XCTAssertNotNil(resolution.startUnavailableReason)
     }
 
     /// A config that arrived with the repository is the one the user is asked
-    /// about, and until they answer, verify says so rather than offering checks.
+    /// about. Verification has no such tier — `verification.yaml` is read from the
+    /// project directory only — so this is about Execution alone.
     func test_resolve_asksForApprovalOfARepositoryProvidedConfig() throws {
         let path = worktree.appendingPathComponent("process-compose.yaml").path
         try Self.config.write(toFile: path, atomically: true, encoding: .utf8)
@@ -158,8 +197,6 @@ final class ProcessComposeResolutionTests: XCTestCase {
 
         XCTAssertEqual(resolution.repositoryConfigFiles, [path])
         XCTAssertFalse(resolution.isApproved)
-        XCTAssertEqual(resolution.declaredVerifyChecks, [])
-        XCTAssertNotNil(resolution.verifyUnavailableReason)
     }
 
     // MARK: - The model around it
@@ -171,6 +208,7 @@ final class ProcessComposeResolutionTests: XCTestCase {
     /// it with nothing awaited.
     func test_init_resolvesSynchronously() throws {
         try writeProjectConfig()
+        try writeVerificationConfig()
 
         let model = makeModel()
 
@@ -182,18 +220,13 @@ final class ProcessComposeResolutionTests: XCTestCase {
     /// picked up by a refresh, which is the trigger every tab switch now uses.
     func test_refresh_publishesTheNewAnswer() async throws {
         try writeProjectConfig()
+        try writeVerificationConfig()
         let model = makeModel()
         XCTAssertEqual(model.resolution.declaredVerifyChecks, ["rspec"])
 
-        try writeProjectConfig("""
-        version: "0.5"
-        processes:
-          web:
-            namespace: execute
-            command: echo web
-          rubocop:
-            namespace: verify
-            command: echo rubocop
+        try writeVerificationConfig("""
+        rubocop:
+          command: echo rubocop
         """)
         model.refresh(override: nil)
 
@@ -207,15 +240,13 @@ final class ProcessComposeResolutionTests: XCTestCase {
     /// than being overwritten by one that started earlier.
     func test_refreshNow_winsOverARefreshAlreadyInFlight() async throws {
         try writeProjectConfig()
+        try writeVerificationConfig()
         let model = makeModel()
 
         model.refresh(override: nil)
-        try writeProjectConfig("""
-        version: "0.5"
-        processes:
-          rubocop:
-            namespace: verify
-            command: echo rubocop
+        try writeVerificationConfig("""
+        rubocop:
+          command: echo rubocop
         """)
         let now = model.refreshNow(override: nil)
 

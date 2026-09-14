@@ -24,7 +24,8 @@ extension Workstream {
             _ workstreamID: UUID,
             in project: inout Project,
             surfaceCache: TerminalSurfaceCache,
-            tmuxPath: String?
+            tmuxPath: String?,
+            verificationRunner: Verification.Runner? = nil
         ) {
             if let ws = project.workstreams.first(where: { $0.id == workstreamID }) {
                 let projName = project.name
@@ -40,6 +41,14 @@ extension Workstream {
             // to stop existing. Releasing hands it back to Claude Code instead
             // of leaving it to wait out a hold nothing will service.
             PermissionApprovalStore.shared.releaseAll(workstreamID: workstreamID)
+            // Before the sweep below, which cannot reach a check's terminal: that
+            // sweep enumerates ids derived from `WorkspaceModel`'s counters, and a
+            // check surface is keyed by `Verification.Spawn.surfaceID`. Without
+            // this, removing a workstream with rspec running leaves that terminal
+            // and its process alive for the session with nothing able to reach
+            // either. Optional only so the two call sites can adopt it without a
+            // third having to invent a runner; both pass one.
+            verificationRunner?.forget(workstreamID: workstreamID)
             surfaceCache.removeWorkstreamSurfaces(for: workstreamID)
             IPC.Config.remove(for: workstreamID)
             StatusLine.Config.remove(for: workstreamID)
@@ -190,19 +199,16 @@ extension Workstream {
                         binary: composeBinary,
                         worktreePath: worktreePath ?? projectDir
                     )
-                    // A verify run is the same shape as the dev stack and as a
-                    // bootstrap: repository-provided processes executing in this
-                    // worktree, holding this worktree's ports, behind a control
-                    // server that `--keep-project` deliberately outlives them. So
-                    // it needs the same treatment — stopped before `dispose` runs
-                    // beside it and long before `git worktree remove --force`
-                    // deletes the tree under a running rspec.
+                    // A running check is the project's own command executing in
+                    // this worktree, so it is stopped before `dispose` runs beside
+                    // it and long before `git worktree remove --force` deletes the
+                    // tree under a running rspec.
                     //
-                    // Through the runner, and awaited. This is what a direct
-                    // `PhaseExecutor.shutDown` could not do: that call no-ops
-                    // when the socket file does not exist yet, so a purge landing
-                    // in the binding window reported success and deleted the tree
-                    // under a suite that was still coming up.
+                    // Through the runner, and awaited, rather than by killing the
+                    // process group here: `stop` only asks, and `stopAndWait` is
+                    // what watches the process actually go. A purge that signalled
+                    // and moved on would delete the tree under a check that had not
+                    // died yet.
                     let verifyQuiet = await quiesceVerification(
                         workstreamID: workstreamID, runner: verificationRunner
                     )
@@ -211,14 +217,15 @@ extension Workstream {
                         // the archive, and the user has already said to remove
                         // it. See `quiesceVerification`.
                         logger.warning(
-                            "Verify run in \(wsName, privacy: .public) was still live at its stop deadline; purging anyway"
+                            "Verification checks in \(wsName, privacy: .public) were still live at their stop deadline; purging anyway"
                         )
                     }
                     // Before anything below writes, and before the wait's other
-                    // outcome matters. On the ordinary path the run is already
-                    // sealed and torn down; on an expired wait this is what stops
-                    // the still-running loop persisting a run, or announcing one,
-                    // for a workstream that is being deleted. See `Runner.forget`.
+                    // outcome matters. On the ordinary path every check is already
+                    // finished and recorded; on an expired wait this is what stops
+                    // the completion pass recording a result, or announcing one, for
+                    // a workstream that is being deleted. It also drops the check
+                    // surfaces. See `Runner.forget`.
                     await verificationRunner.forget(workstreamID: workstreamID)
                     // Everything below blocks: dispose is a whole process-compose
                     // phase at up to `Timeout.userCommand`, and each git call waits
@@ -228,37 +235,6 @@ extension Workstream {
                     // reason.
                     await withCheckedContinuation { continuation in
                         DispatchQueue.global(qos: .utility).async {
-                            // The residue of the verify teardown, after
-                            // `quiesceVerification` above has done the part that
-                            // belongs to the runner. Two cases reach a socket
-                            // here, and neither is one the runner owns:
-                            //
-                            // - a socket file left by a session that crashed
-                            //   before `applicationWillTerminate` could sweep it,
-                            //   which no in-memory run knows about, so the wait
-                            //   above returned true immediately;
-                            // - a wait that expired, where stopping what is still
-                            //   running is worth one more attempt before the tree
-                            //   is force-removed.
-                            //
-                            // Still not the second racing teardown the
-                            // single-owner rule forbids: nothing will rebind this
-                            // socket, because the workstream is being destroyed,
-                            // and whichever of the two teardowns lands second
-                            // finds the socket file gone and returns. Here rather
-                            // than beside `quiesceVerification` because `shutDown`
-                            // blocks for up to `Timeout.local` and this queue is
-                            // where the blocking work belongs; still before
-                            // `runDispose`, which is the ordering that matters.
-                            if let composeBinary {
-                                ProcessCompose.PhaseExecutor.shutDown(
-                                    binary: composeBinary,
-                                    socketPath: ProcessCompose.PhaseRunner.socketPath(
-                                        for: workstreamID, phase: .verify
-                                    ),
-                                    workingDirectory: worktreePath ?? projectDir
-                                )
-                            }
                             if let worktreePath {
                                 // Before the worktree is removed:
                                 // `ProcessCompose.Config.locate` reads the worktree, and
@@ -303,8 +279,8 @@ extension Workstream {
             project.workstreams.removeAll { $0.id == workstreamID }
         }
 
-        /// Stop this workstream's verify run and wait until nothing of it is
-        /// live, before anything below deletes the tree it is running in.
+        /// Stop this workstream's verification checks and wait until none of them
+        /// is live, before anything below deletes the tree they are running in.
         ///
         /// Returns whether the runner reports it gone. **False does not stop the
         /// purge**, and that is the same rule `runDispose` states: a workstream
@@ -324,7 +300,7 @@ extension Workstream {
         static func quiesceVerification(
             workstreamID: UUID,
             runner: Verification.Runner,
-            timeout: Duration = Verification.Runner.stopWaitTimeout
+            timeout: TimeInterval = ProcessRunner.Timeout.userCommand
         ) async -> Bool {
             await runner.stopAndWait(workstreamID: workstreamID, timeout: timeout)
         }
@@ -332,13 +308,12 @@ extension Workstream {
         /// Drop every per-workstream UserDefaults key a purge must not leave
         /// behind.
         ///
-        /// Three keys, and that is the reason this is a function rather than
-        /// three lines inline: `atelier.processSelection.<id>` is Execution's
-        /// checklist selection, `atelier.verifyChecks.<id>` is Verification's
-        /// per-check results — it has no checklist or selection of its own any
-        /// more, only results a check can be re-run to replace — and
-        /// `atelier.verifyRun.<id>` is the last run. Named together here so a
-        /// fourth key has one place to join.
+        /// Two keys, and that is the reason this is a function rather than two
+        /// lines inline: `atelier.processSelection.<id>` is Execution's checklist
+        /// selection, and `atelier.verifyChecks.<id>` is Verification's per-check
+        /// results — it has no checklist or selection of its own, only results a
+        /// check can be re-run to replace. Named together here so a third key has
+        /// one place to join.
         ///
         /// Nonisolated: `purge` calls it from a detached task, and none of the
         /// three reads touches the main actor.
@@ -348,11 +323,11 @@ extension Workstream {
         /// been there and is not this function's to change.
         static func clearWorkstreamState(for workstreamID: UUID) {
             ProcessCompose.TableModel.clearSelection(for: workstreamID)
-            // Was `Verification.clearSelection`. The Verification tab has no checklist and
-            // no selection key any more; what outlives a purged workstream now is its
-            // per-check results.
+            // The Verification tab has no checklist and no selection key; what outlives
+            // a purged workstream is its per-check results, and only those. The run
+            // store that used to be cleared here is gone — runs live in memory for the
+            // session and `Runner.forget` drops them.
             Verification.CheckStore.clear(for: workstreamID)
-            Verification.Store.clear(for: workstreamID)
         }
 
         /// What archiving would run, and why it would not.

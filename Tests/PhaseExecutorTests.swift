@@ -25,13 +25,16 @@ final class PhaseExecutorTests: XCTestCase {
     }
 
     override func tearDown() {
-        // A `verify` run deliberately leaves its control server up, so any test
-        // that spawns one has to be sure it is gone even if it failed early.
-        ProcessCompose.PhaseExecutor.shutDown(
-            binary: binary,
-            socketPath: ProcessCompose.PhaseRunner.socketPath(for: workstreamID, phase: .verify),
-            workingDirectory: FileManager.default.temporaryDirectory.path
-        )
+        // `shutDownWhenDone: false` deliberately leaves the control server up, so
+        // any test that spawns one has to be sure it is gone even if it failed
+        // early.
+        for phase in [ProcessCompose.Phase.bootstrap, .dispose] {
+            ProcessCompose.PhaseExecutor.shutDown(
+                binary: binary,
+                socketPath: ProcessCompose.PhaseRunner.socketPath(for: workstreamID, phase: phase),
+                workingDirectory: FileManager.default.temporaryDirectory.path
+            )
+        }
         try? FileManager.default.removeItem(at: dir)
         try? FileManager.default.removeItem(at: projectDir)
         try? FileManager.default.removeItem(atPath: ProcessCompose.PhaseRunner.socketPath(for: workstreamID, phase: .bootstrap))
@@ -301,25 +304,29 @@ final class PhaseExecutorTests: XCTestCase {
         XCTAssertEqual(outcome, .skipped)
     }
 
-    // MARK: - The verify phase's two parameters
+    // MARK: - Holding the server open, and scoping a run to named processes
 
     /// `shutDownWhenDone: false` must genuinely hold the control server open
-    /// after the namespace has finished — that window is the only place a
-    /// verification run can read per-check exit codes and logs, and nothing
-    /// covered it while the parameter was only a defaulted argument.
+    /// after the namespace has finished — that window is the only place a caller
+    /// can read per-process exit codes and logs.
+    ///
+    /// **No production caller passes false today.** The `verify` namespace did,
+    /// and verification no longer runs through process-compose; this is kept as
+    /// the only coverage of a parameter that is one `--keep-project` away from
+    /// silently not working for whoever needs it next.
     func test_run_holdingTheServerOpenLeavesTheLogsAndExitCodesReadable() throws {
         let config = try writeConfig("""
         version: "0.5"
         processes:
           rspec:
-            namespace: verify
+            namespace: bootstrap
             command: sh -c 'echo "1 example, 1 failure"; exit 4'
             availability: { restart: "no" }
         """)
-        let socketPath = ProcessCompose.PhaseRunner.socketPath(for: workstreamID, phase: .verify)
+        let socketPath = ProcessCompose.PhaseRunner.socketPath(for: workstreamID, phase: .bootstrap)
 
         let outcome = ProcessCompose.PhaseExecutor.run(
-            phase: .verify, config: config, binary: binary, workstreamID: workstreamID,
+            phase: .bootstrap, config: config, binary: binary, workstreamID: workstreamID,
             workingDirectory: dir.path, environment: [:], timeout: 60,
             selectedProcesses: [], shutDownWhenDone: false
         )
@@ -336,8 +343,7 @@ final class PhaseExecutorTests: XCTestCase {
         let entry = try XCTUnwrap(client.processesSync().first { $0.name == "rspec" })
         XCTAssertEqual(entry.status, "Completed")
         XCTAssertEqual(entry.exitCode, 4)
-        XCTAssertEqual(Verification.CheckResult.State(entry: entry), .failed(4))
-        // And the per-check log, which is the half that has no other source.
+        // And the per-process log, which is the half that has no other source.
         let logs = try awaitLogs(client: client, name: "rspec")
         XCTAssertTrue(logs.contains { $0.contains("1 example, 1 failure") }, "\(logs)")
 
@@ -347,35 +353,14 @@ final class PhaseExecutorTests: XCTestCase {
         XCTAssertFalse(ProcessCompose.Client.isServerListening(atSocketPath: socketPath))
     }
 
-    /// The other half of the same gap: `selectedProcesses` must actually reach
-    /// the spawned command, so a run of one check does not run the whole suite.
-    func test_run_selectedProcessesRunsOnlyTheNamedChecks() throws {
-        let config = try writeConfig("""
-        version: "0.5"
-        processes:
-          rubocop:
-            namespace: verify
-            command: sh -c 'touch rubocop-ran'
-            availability: { restart: "no" }
-          rspec:
-            namespace: verify
-            command: sh -c 'touch rspec-ran'
-            availability: { restart: "no" }
-        """)
-
-        let outcome = ProcessCompose.PhaseExecutor.run(
-            phase: .verify, config: config, binary: binary, workstreamID: workstreamID,
-            workingDirectory: dir.path, environment: [:], timeout: 60,
-            selectedProcesses: ["rubocop"], shutDownWhenDone: true
-        )
-
-        XCTAssertEqual(outcome, .succeeded)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: dir.appendingPathComponent("rubocop-ran").path))
-        XCTAssertFalse(
-            FileManager.default.fileExists(atPath: dir.appendingPathComponent("rspec-ran").path),
-            "a check that was not selected must not run"
-        )
-    }
+    // `selectedProcesses` has no `PhaseExecutor` test any more, and should not get
+    // one back. It now applies to `execute` alone — `PhaseRunner.command` narrowed
+    // to that phase when `verify` was removed — and `execute` is the interactive
+    // phase, which runs through `PhaseRunner.startCommand` in a terminal surface
+    // rather than through this type at all. A test here can therefore only ask a
+    // headless phase to honour a selection it deliberately ignores.
+    // `Tests/PhaseRunnerTests.swift` covers the plumbing at the level that has it:
+    // `testSelectedProcessesAreAppended` and `testSelectionIsIgnoredForOtherPhases`.
 
     /// `logs` is async and the tests around it are not, and the log is written
     /// by the process rather than by the manager, so it can lag the exit code by
@@ -498,7 +483,7 @@ final class PhaseOutcomeReportingTests: XCTestCase {
         read: () -> ProcessRunner.Output?
     ) -> ProcessRunner.Output? {
         ProcessCompose.PhaseExecutor.settledOutput(
-            poll: poll, phase: .verify, finished: finished, grace: grace, read: read
+            poll: poll, phase: .bootstrap, finished: finished, grace: grace, read: read
         )
     }
 

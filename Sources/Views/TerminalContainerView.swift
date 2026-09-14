@@ -2901,6 +2901,17 @@ final class TerminalSurfaceCache: ObservableObject {
         webViews.removeValue(forKey: id)
     }
 
+    /// The surface for `id` if one exists, without creating one.
+    ///
+    /// `surface(for:app:…)` creates on a miss, which is wrong for a reader: the
+    /// Verification tab attaches to a surface the runner made when a check was
+    /// started, and a row rendered for a check that has not run must show its
+    /// "nothing to show" line rather than spawn a terminal running the wrapper
+    /// again.
+    func existingSurface(for id: UUID) -> TerminalView? {
+        surfaces[id]
+    }
+
     func removeSurface(for id: UUID) {
         if let view = surfaces.removeValue(forKey: id) {
             view.destroy()

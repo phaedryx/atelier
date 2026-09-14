@@ -49,9 +49,9 @@ extension ProcessCompose {
         /// `PhaseRunner.runnableProcesses` — the flag-injection filter — so the
         /// checklist cannot offer a name the command would drop.
         var declaredExecuteProcesses: [String] = []
-        /// The `verify` checks to offer, and why none can run. One decision,
-        /// `verificationAvailability`'s, which asks the same `PhasePolicy.plan`
-        /// that `Verification.Runner.start` calls.
+        /// The checks to offer, and why none can run. One decision,
+        /// `Verification.Config.Load`'s, which is the same load
+        /// `Verification.Runner.start` performs and refuses on.
         var declaredVerifyChecks: [String] = []
         var verifyUnavailableReason: String?
         /// Every repository-provided file process-compose would load here, or
@@ -188,11 +188,12 @@ extension ProcessCompose {
         /// actor. It touches UserDefaults (thread-safe), the file system and
         /// Yams, and nothing that is actor-bound.
         ///
-        /// `verificationAvailability` lives in `Views/` and is called from here,
-        /// which reads as a layering inversion and is deliberate: it is a pure
-        /// function, it is the *one* copy of the verify availability decision —
-        /// shared with `Verification.Runner.start` through `PhasePolicy.plan` —
-        /// and a second copy on this side is exactly what its own doc forbids.
+        /// Verification is resolved here too, though it has nothing to do with
+        /// process-compose any more: its checks come from the project's own
+        /// `verification.yaml`. It rides along because this is the pass that
+        /// already runs off the main actor on the triggers a config change
+        /// arrives on, and splitting it out would mean a second resolver with the
+        /// same lifecycle.
         nonisolated static func resolve(
             worktree: String,
             projectDirectory: String,
@@ -235,14 +236,9 @@ extension ProcessCompose {
             let isApproved = approvalFiles.isEmpty
                 ? false
                 : ScriptTrust.isApproved(configFiles: approvalFiles, for: projectDirectory)
-            let availability = verificationAvailability(
-                config: located, binary: binary,
-                // `verificationAvailability` folds `requiresApproval` in itself,
-                // so a config the user placed in the project directory — which
-                // is never asked about — is not refused by the `false` this
-                // returns for it.
-                isApproved: { _ in isApproved }
-            )
+            // The project's own checks, from the project directory and nowhere
+            // else — never the worktree. See `Verification.Config`.
+            let verification = Verification.Config.load(projectDirectory: projectDirectory)
 
             return Resolution(
                 devCommand: devCommand,
@@ -252,8 +248,8 @@ extension ProcessCompose {
                     devCommand: devCommand, config: runConfig, binary: binary
                 ),
                 declaredExecuteProcesses: declaredExecute,
-                declaredVerifyChecks: availability.declared,
-                verifyUnavailableReason: availability.reason,
+                declaredVerifyChecks: verification.checkNames,
+                verifyUnavailableReason: verification.unavailableReason,
                 repositoryConfigFiles: approvalFiles,
                 isApproved: isApproved,
                 usesProcessCompose: devCommand?.source == .processCompose
