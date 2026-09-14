@@ -687,10 +687,6 @@ struct ContentView: View {
         }
     }
 
-    /// Rebuilds the projectDir → workstream-UUID lookup used by the agent
-    /// state tracker. Paths are normalized via `Workstream.AgentStateTracker.normalize`
-    /// (resolves symlinks) so hook payloads match regardless of how Claude
-    /// reports the path on macOS.
     /// Writes a resolved worktree path onto a workstream, and runs everything that
     /// has to happen the moment a workstream first has one — **except**
     /// `bootstrap`.
@@ -830,6 +826,10 @@ struct ContentView: View {
         logger.warning("[Atelier] reconcile: no worktree for \(name, privacy: .public); forgetting the record")
     }
 
+    /// Rebuilds the projectDir → workstream-UUID lookup used by the agent
+    /// state tracker. Paths are normalized via `Workstream.AgentStateTracker.normalize`
+    /// (resolves symlinks) so hook payloads match regardless of how Claude
+    /// reports the path on macOS.
     private func refreshAgentStateLookup(projects: [Project]) {
         var index: [String: UUID] = [:]
         for project in projects {
@@ -963,8 +963,6 @@ struct ContentView: View {
         appEnvironment.pruneShortcutStories(keeping: livePaths)
     }
 
-    /// Update workstream names to match their branch name.
-    /// Called periodically so that when the agent renames a branch, the sidebar reflects it.
     /// Selects the project a `.focusProject` notification names, ignoring one
     /// that names a project no longer in the list — the go-to command family is
     /// rebuilt from that list, but a stale command could still be in flight from
@@ -989,6 +987,8 @@ struct ContentView: View {
         )
     }
 
+    /// Update workstream names to match their branch name.
+    /// Called periodically so that when the agent renames a branch, the sidebar reflects it.
     private func syncWorkstreamNamesFromBranches() {
         var changed = false
         for pi in projects.indices {

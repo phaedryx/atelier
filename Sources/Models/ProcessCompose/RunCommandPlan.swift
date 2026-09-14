@@ -51,17 +51,6 @@ extension ProcessCompose {
         /// back to anything.
         case nothing
 
-        /// - Parameter devCommand: what `DevCommand.Resolver` resolved, or nil when it
-        ///   found nothing.
-        /// - Parameter config: the config located for the *run*, or nil when the run
-        ///   is not a process-compose run.
-        /// - Parameter binary: the resolved process-compose binary, or nil when there
-        ///   isn't one. Nil here is not a licence to run the command by another
-        ///   route: `scriptCommand` would wrap the fallback in `$SHELL -lic`, so PATH
-        ///   would resolve the very binary `resolveBinary` just failed to find —
-        ///   defeating that function's own documented promise that a
-        ///   configured-but-missing path fails rather than letting something else
-        ///   stand in for it.
         /// Whether Start may run anything at all.
         ///
         /// The Execution pane's Start button is enabled on exactly this, and
@@ -127,6 +116,17 @@ extension ProcessCompose {
             }
         }
 
+        /// - Parameter devCommand: what `DevCommand.Resolver` resolved, or nil when it
+        ///   found nothing.
+        /// - Parameter config: the config located for the *run*, or nil when the run
+        ///   is not a process-compose run.
+        /// - Parameter binary: the resolved process-compose binary, or nil when there
+        ///   isn't one. Nil here is not a licence to run the command by another
+        ///   route: `scriptCommand` would wrap the fallback in `$SHELL -lic`, so PATH
+        ///   would resolve the very binary `resolveBinary` just failed to find —
+        ///   defeating that function's own documented promise that a
+        ///   configured-but-missing path fails rather than letting something else
+        ///   stand in for it.
         static func plan(
             devCommand: DevCommand?,
             config: ProcessCompose.Config?,

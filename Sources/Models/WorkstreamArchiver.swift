@@ -353,23 +353,6 @@ extension Workstream {
             Verification.Store.clear(for: workstreamID)
         }
 
-        /// Run the project's `dispose` namespace before the worktree goes away.
-        ///
-        /// This replaces the `teardown` script: a project now says what archiving
-        /// should clean up in the same file it uses for everything else.
-        ///
-        /// The preconditions are not restated here. `PhasePolicy.plan` owns
-        /// them — integration on, a config located, a binary to run it with, and
-        /// approval of every repository-provided file process-compose will load —
-        /// and dispose is unattended in exactly the way bootstrap is, so a second
-        /// inline copy would be a second security policy with no tests and no way to
-        /// follow a change made to the first.
-        ///
-        /// Nothing here can stop the archive. Every refusal returns quietly and a
-        /// failure is logged and swallowed: a workstream stranded half-archived is
-        /// worse than cleanup that did not happen, and the user has already said to
-        /// remove it. `ProcessCompose.PhaseExecutor` bounds the run at `Timeout.userCommand`, so a
-        /// wedged dispose delays the archive rather than blocking it forever.
         /// What archiving would run, and why it would not.
         ///
         /// Split out from `runDispose` and left internal so the wiring is
@@ -390,6 +373,23 @@ extension Workstream {
             )
         }
 
+        /// Run the project's `dispose` namespace before the worktree goes away.
+        ///
+        /// This replaces the `teardown` script: a project now says what archiving
+        /// should clean up in the same file it uses for everything else.
+        ///
+        /// The preconditions are not restated here. `PhasePolicy.plan` owns
+        /// them — integration on, a config located, a binary to run it with, and
+        /// approval of every repository-provided file process-compose will load —
+        /// and dispose is unattended in exactly the way bootstrap is, so a second
+        /// inline copy would be a second security policy with no tests and no way to
+        /// follow a change made to the first.
+        ///
+        /// Nothing here can stop the archive. Every refusal returns quietly and a
+        /// failure is logged and swallowed: a workstream stranded half-archived is
+        /// worse than cleanup that did not happen, and the user has already said to
+        /// remove it. `ProcessCompose.PhaseExecutor` bounds the run at `Timeout.userCommand`, so a
+        /// wedged dispose delays the archive rather than blocking it forever.
         private static func runDispose(
             workstreamID: UUID,
             projectName: String,
