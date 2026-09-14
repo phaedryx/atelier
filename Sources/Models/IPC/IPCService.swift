@@ -974,18 +974,27 @@ extension IPC {
             }
         }
 
-        /// What an agent is told when a run starts. Says where the result will
-        /// appear, because the one thing it must not do is wait here.
+        /// What an agent is told when a run starts. Says where the results will appear,
+        /// because the one thing it must not do is wait here.
+        ///
+        /// **`deliverable` distinguishes whose inbox, not whether anything is posted.**
+        /// `onFinish` and `postCheckNotice` both fall back to the workstream's Coding Agent
+        /// surface when the caller's own surface id is unknown, so a notice always has a
+        /// target — but for a caller Atelier did not launch, that target is not this
+        /// caller's own pane. Telling such a caller to check its inbox would be a claim
+        /// about a pane it may not be sitting in, so the honest answer names the fallback
+        /// instead and points at `check_verification`.
         private nonisolated func startAnswer(for start: VerificationStart, deliverable: Bool) -> String {
             let names = start.started.isEmpty ? "the whole verify namespace" : start.started.joined(separator: ", ")
             let delivery = deliverable
-                ? "As each check finishes, a notice lands in your inbox from \(VerificationSummary.sender) — "
+                ? "Each check posts its own verdict to your inbox from \(VerificationSummary.sender) as it finishes — "
                 + "receive_messages to read them, and remember delivery is a pull, so check at your next natural boundary."
-                : "Nothing will be posted to your inbox: Atelier does not know which terminal you are running in, "
-                + "so poll check_verification instead."
+                : "Nothing will be posted to your inbox: Atelier does not know which terminal you are running in. "
+                + "check_verification is how you read this run."
             return "Started verification run \(start.runID): \(names). It runs in the background — do not wait on it. "
                 + delivery
-                + " check_verification(run_id: \"\(start.runID)\") reads it at any point, including while it is still running."
+                + " check_verification(run_id: \"\(start.runID)\") reads the whole run at any point, "
+                + "including while it is still running."
         }
 
         /// Reads one run, scoped to the caller's own workstream.
