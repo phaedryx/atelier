@@ -417,7 +417,11 @@ actor StubComposeClient: ProcessCompose.Controlling {
 
     func logs(name: String, tail: Int) async throws -> [String] {
         guard !serverEnded else { throw ProcessCompose.Client.ClientError.notRunning }
+        // Recorded before the sleep, not after: a test that wants to land something
+        // *inside* this call's suspension polls `logRequests` rather than guessing a
+        // delay, the same reentrancy `processesCalls`/`inFlight` give `processes()`.
         logRequests.append(name)
+        try? await Task.sleep(for: latency)
         return Array((logsByName[name] ?? []).suffix(tail))
     }
 }

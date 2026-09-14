@@ -588,7 +588,7 @@ extension Verification {
         /// Called after `stopAndWait`, so on the ordinary path the loop has
         /// already sealed and torn down and there is nothing in flight. On the
         /// expired-wait path the loop is still running, and forgetting *first*
-        /// is what makes that safe: `seal`, `apply` and `captureFailedOutput`
+        /// is what makes that safe: `seal`, `apply` and `recordCompletions`
         /// all guard on finding the run, so each becomes a no-op — no
         /// `Store.save` for a workstream being deleted, and no `onFinish`, which
         /// would otherwise post an `atelier/verification` completion notice
@@ -1254,6 +1254,16 @@ extension Verification {
                         "verify logs for \(entry.name, privacy: .public) failed: \(error.localizedDescription, privacy: .public)"
                     )
                 }
+
+                // Re-checked after the await: `client.logs` is a socket round trip, and
+                // `forget` can land while it is in flight — the expired-wait path in
+                // `purge`, which forgets the workstream before the destructive work runs
+                // while this loop is still live. The guard at this function's entry only
+                // proves the workstream existed *before* the fetch; without this one a
+                // late `forget` here still reaches `recordCompletion`, which persists to
+                // `CheckStore` and fires `onCheckFinished` unconditionally — a record and
+                // a completion notice for a workstream being destroyed as it is written.
+                guard runs[workstreamID]?.id == runID, !sealedRunIDs.contains(runID) else { return }
 
                 recordCompletion(
                     workstreamID: workstreamID, runID: runID, name: entry.name,

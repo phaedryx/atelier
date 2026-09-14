@@ -1345,6 +1345,58 @@ final class VerificationRunnerTests: XCTestCase {
         XCTAssertFalse(announced.value, "nor announce one to an agent")
     }
 
+    /// The non-vacuous sibling of the test above. There the check never leaves
+    /// `.running`, so `recordCompletions` never reaches its `client.logs` await and
+    /// the guard *after* that await is never exercised — only the guard at the
+    /// function's own entry is. Here the check is `.passed` from the very first
+    /// poll, so the loop enters the log fetch, and `forget` is timed to land
+    /// *during* that fetch's suspension: `client.logRequests` records the name
+    /// before the stub's simulated latency, so polling it is a deterministic way
+    /// to catch the await mid-flight rather than guessing a sleep duration.
+    ///
+    /// `recordCompletion` — the writer `recordCompletions` calls — has no
+    /// run-existence check of its own by design (Task 3 needs it bare for
+    /// `seal`'s post-sealing records), so the only thing standing between a late
+    /// completion and a write-back for a purged workstream is the re-check this
+    /// test pins.
+    func test_forget_stopsALateCompletionDuringTheLogFetchFromWritingBackAPurgedWorkstream() async {
+        let id = UUID()
+        addTeardownBlock {
+            Verification.Store.clear(for: id)
+            Verification.CheckStore.clear(for: id)
+        }
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: [.list([entry("rspec", status: "Completed", isRunning: false, exitCode: 0)])],
+            latency: .milliseconds(150),
+            logsByName: ["rspec": ["ok"]]
+        )
+        // Long enough that the loop is still polling, well past the log fetch,
+        // when `drive` gives up waiting on `meanwhile` and moves on.
+        let spawner = StubSpawner(client: client, finishAfter: .milliseconds(500))
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
+        let runAnnounced = Flag()
+        let checkAnnounced = Flag()
+        runner.onFinish = { _ in runAnnounced.value = true }
+        runner.onCheckFinished = { _, _ in checkAnnounced.value = true }
+
+        await drive(runner, request(workstreamID: id, checks: ["rspec"]), runID: "abcd1234") {
+            let deadline = Date().addingTimeInterval(2)
+            while await !client.logRequests.contains("rspec"), Date() < deadline {
+                try? await Task.sleep(for: .milliseconds(2))
+            }
+            runner.forget(workstreamID: id)
+        }
+
+        XCTAssertTrue(
+            Verification.CheckStore.records(for: id).isEmpty,
+            "no record must be written for a workstream forgotten mid-fetch"
+        )
+        XCTAssertFalse(checkAnnounced.value, "nor a per-check completion notice")
+        XCTAssertFalse(runAnnounced.value, "nor a run-level finish notice")
+    }
+
     // MARK: - Per-check records
 
     /// The idempotence point. `seal` calls the same writer the poll-loop edge detector
