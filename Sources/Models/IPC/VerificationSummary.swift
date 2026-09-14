@@ -43,6 +43,14 @@ extension IPC {
         /// Cap on one check's output in a `check_verification` answer.
         static let maxReadTailBytesPerCheck = 4_000
 
+        /// Cap on one check's completion notice.
+        ///
+        /// Below `maxMessageBytes` because there are now N of these per run where there
+        /// was one summary, and an agent reads them all. `IPC.Store` refuses content over
+        /// 64KB outright — it throws rather than trimming — so overshooting loses the
+        /// notice silently at the moment the agent is waiting for it.
+        static let maxCheckMessageBytes = 4_000
+
         /// The label an app-originated completion notice arrives from.
         ///
         /// Not a peer id, and deliberately not one: there is nothing inside
@@ -140,6 +148,43 @@ extension IPC {
                 lines.append(pointer)
             }
             return lines.joined(separator: "\n")
+        }
+
+        /// The notice an agent finds in its inbox when one check finishes.
+        ///
+        /// Verdict first, output second, and the output is what gets trimmed: an agent that
+        /// reads only the first line still learns whether the check passed.
+        ///
+        /// **The tail is all that exists.** The log lives in process-compose's control
+        /// server and the runner tears that down when the run seals, so nothing here may
+        /// read as though a fuller copy can be fetched — not from `check_verification`, not
+        /// from the Verification tab, not from disk. Re-running the one check is the honest
+        /// pointer, and it is the one this gives.
+        static func checkMessage(for notice: VerificationCheckNotice) -> String {
+            let verdict = switch notice.check.state {
+            case .passed: "passed"
+            case .failed: notice.check.exitCode.map { "failed (exit \($0))" } ?? "failed"
+            case .skipped: "was skipped"
+            case .stopped: "was stopped"
+            case .notRun: "did not run"
+            case .pending, .running: "is still going"
+            }
+            let duration = notice.check.durationSeconds.map { String(format: " in %.1fs", $0) } ?? ""
+            var head = "Verification check \(notice.check.name) \(verdict)\(duration). "
+                + "Run \(notice.runID); check_verification(run_id: \"\(notice.runID)\") reads the whole run."
+            guard let tail = notice.check.outputTail, !tail.isEmpty else { return head }
+
+            let trailer = notice.check.outputTruncated
+                ? "\n\n(Output above is the tail captured while the check ran. There is no fuller copy "
+                + "anywhere — re-run this one check to see more.)"
+                : ""
+            let budget = maxCheckMessageBytes - head.utf8.count - trailer.utf8.count - 2
+            guard budget >= minTailBytes else {
+                return head + "\n\n(Output omitted: it did not fit in one message. "
+                    + "Re-run this one check to see it.)"
+            }
+            head += "\n\n" + clamped(tail, to: budget).text + trailer
+            return head
         }
 
         /// As many verdict lines as `budget` holds, and how many were left out.

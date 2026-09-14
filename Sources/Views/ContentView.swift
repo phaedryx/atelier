@@ -516,7 +516,19 @@ struct ContentView: View {
             // which is a single slot: constructing a second one would silently
             // unsubscribe the first.
             let verificationBridge = IPC.VerificationRunnerBridge(runner: verificationRunner)
-            Task { await IPC.Service.shared.setVerificationRunner(verificationBridge) }
+            // One `Task`, sequenced rather than two: `observeVerificationChecks` reads
+            // `verification` through the same actor, and a separate `Task` racing ahead of
+            // `setVerificationRunner` would find it still nil and install nothing — silently,
+            // since this call happens exactly once.
+            //
+            // The observer itself is installed once, beside the one bridge:
+            // `observeCheckCompletions` replaces its handler rather than adding one, so a
+            // second call here would silently take over from the first — the same
+            // single-slot rule `Runner.onFinish` carries.
+            Task {
+                await IPC.Service.shared.setVerificationRunner(verificationBridge)
+                await IPC.Service.shared.observeVerificationChecks()
+            }
             // Creating a workstream needs the same list, and stays out of
             // `WorkspaceActions` on purpose: it is a workstream-lifecycle
             // operation the sidebar could route through too, and an IPC-named
