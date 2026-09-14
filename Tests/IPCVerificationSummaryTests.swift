@@ -117,6 +117,24 @@ final class IPCVerificationSummaryTests: XCTestCase {
         XCTAssertTrue(message.contains("no checks"), message)
     }
 
+    /// The same trap, the other shape: a spawn that dies before binding leaves every
+    /// *declared* check present as a row, sealed `.notRun` — rows exist, `total > 0`, so
+    /// the empty-`checks` guard above never fires. "0 of 3 failed" is exactly as true and
+    /// exactly as green as "0 of 0 failed".
+    func test_message_neverRendersARunWhoseRowsAreAllNotRunAsAPass() {
+        let message = IPC.VerificationSummary.message(for: run(checks: [
+            check("rspec", .notRun),
+            check("rubocop", .notRun),
+            check("tsc", .notRun),
+        ]))
+
+        XCTAssertFalse(message.lowercased().contains("passed"), "nothing ran, so nothing passed: \(message)")
+        XCTAssertEqual(
+            message.split(separator: "\n").first,
+            "run v7f3a11 finished in 50.0s — declared 3 checks but none of them ran"
+        )
+    }
+
     func test_message_reportsAStoppedRunAsStoppedRatherThanFailed() {
         let message = IPC.VerificationSummary.message(for: run(state: .stopped, duration: 12, checks: [
             check("rspec", .stopped, duration: 12),

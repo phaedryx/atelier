@@ -350,6 +350,15 @@ extension IPC {
                 guard total > 0 else {
                     return "run \(run.runID) finished\(elapsed) — no checks ran; the verify namespace declared none"
                 }
+                // The same trap under a different shape: a spawn that dies before
+                // binding leaves every *declared* check present as a row, sealed
+                // `.notRun`, rather than an empty `checks` array. "0 of N failed"
+                // is exactly as true and exactly as green as "0 of 0 failed" — and
+                // this is the case the run-level notice was retained to catch, so
+                // it must not be the one case it renders as a pass.
+                guard !run.checks.allSatisfy({ $0.state == .notRun }) else {
+                    return "run \(run.runID) finished\(elapsed) — declared \(total) checks but none of them ran"
+                }
                 return failed == 0
                     ? "run \(run.runID) finished\(elapsed) — all \(total) checks passed"
                     : "run \(run.runID) finished\(elapsed) — \(failed) of \(total) checks failed"

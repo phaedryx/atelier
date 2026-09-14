@@ -276,6 +276,31 @@ final class IPCVerificationToolsTests: XCTestCase {
         XCTAssertTrue(messages.first?.content.contains("no checks ran") == true, messages.first?.content ?? "")
     }
 
+    /// The other shape of "completed nothing": a spawn that died before binding leaves
+    /// every *declared* check present as a row, sealed `.notRun` (`VerificationRunner.swift`,
+    /// `case .pending: sealed.state = .notRun`) — rather than an empty `checks` array. With
+    /// `total == 3` and `failed == 0`, "all 3 checks passed" is both true and a lie: nothing
+    /// ran. This is the case the run-level notice exists to catch and the empty-array case
+    /// does not exercise.
+    func test_aRunThatCompletedNothingButLeftRowsBehind_isNotReportedAsAPass() async throws {
+        await service.setVerificationRunner(runner)
+        let caller = try await register(surfaceID: UUID(), name: "builder")
+        _ = await call(.startVerification, [:], as: caller)
+
+        await runner.finish(with: run(workstreamID: workstreamID, checks: [
+            IPC.VerificationCheckInfo(name: "rspec", state: .notRun, exitCode: nil, durationSeconds: nil, outputTail: nil, outputTruncated: false),
+            IPC.VerificationCheckInfo(name: "rubocop", state: .notRun, exitCode: nil, durationSeconds: nil, outputTail: nil, outputTruncated: false),
+            IPC.VerificationCheckInfo(name: "tsc", state: .notRun, exitCode: nil, durationSeconds: nil, outputTail: nil, outputTruncated: false),
+        ]))
+
+        let messages = await waitForInbox(caller)
+        XCTAssertEqual(messages.count, 1)
+        XCTAssertFalse(
+            messages.first?.content.lowercased().contains("passed") == true,
+            "a run that ran nothing must never read as a green suite: \(messages.first?.content ?? "")"
+        )
+    }
+
     /// A run the user stopped before any check started also seals every row
     /// `.notRun`, but the user caused that deliberately and knows it happened — the
     /// notice exists to break a silence, not to report an action back to the person
