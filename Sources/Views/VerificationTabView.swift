@@ -981,27 +981,32 @@ struct VerificationCheckRow: View {
 
     /// The last tail read from the live control server, newest last.
     ///
-    /// **Kept after the run ends, and that is deliberate.** The server is torn
-    /// down once the run seals, so these lines stop being refreshable — but
-    /// they are real output that was really read, and clearing them would empty
-    /// a window the user is in the middle of reading at the exact moment the
-    /// run finishes. They are labelled as the last read rather than as live.
+    /// **Does not survive the run ending, and that is a consequence of
+    /// `runID` itself going nil at seal** (`runID: isLive ? run?.id : nil`,
+    /// where this row is built) rather than a separate decision made here.
+    /// `displayedLines` requires a non-nil `runID` that matches what was
+    /// stored, so the instant the run stops being live these lines stop being
+    /// shown — nothing is labelled "the last output read from it"; the row
+    /// falls straight through to the captured tail.
     ///
-    /// The rule is "an open group keeps what it read while it was open": a new
-    /// run replaces them, and closing the group ends the session that owned
-    /// them — so a group opened for the first time after a run shows the honest
-    /// `.notKept` note rather than a cache nothing told the user about.
+    /// That is an acceptable loss rather than a regression, because a
+    /// replacement exists on the other side of the fall-through:
+    /// `Runner.recordCompletions` now takes the captured tail for **every**
+    /// check at its own completion edge, not only for failures the way it did
+    /// before this tab read from `checkRecords`. So sealing loses a few
+    /// seconds of "freshest possible" text, not the output itself — the one
+    /// case with no replacement is `.notKept`, where the log fetch itself
+    /// threw and no tail was ever captured to fall through to.
     ///
-    /// **The run id is stored beside the lines rather than used to clear them,
-    /// and that is what makes the first half of that rule true without
-    /// depending on SwiftUI.** Clearing on an `.onChange(of: runID)` would
-    /// require this row to keep its view identity across two runs — `ForEach`
-    /// keys on `CheckResult.id`, which is the check's *name*, so the same name
-    /// in run 2 may or may not be the same view as in run 1, and only one of
-    /// the three possible answers ("identity kept, change observed") clears
-    /// anything. Carrying the id makes every answer correct: `displayedLines`
-    /// hands back nothing for a read belonging to a run this row is no longer
-    /// showing, whether or not any `onChange` ever fired.
+    /// The run id is still stored beside the lines rather than cleared on
+    /// `.onChange(of: runID)`, because `ForEach` keys on `CheckResult.id`
+    /// (the check's name), so the same name in run 2 may or may not be the
+    /// same view as in run 1 — only one of the three possible answers
+    /// ("identity kept, change observed") would clear anything. Carrying the
+    /// id makes every answer correct: `displayedLines` hands back nothing for
+    /// a read belonging to a run this row is no longer showing, whether or
+    /// not any `onChange` ever fired — including the seal itself, which is
+    /// just another case of "no longer showing that run".
     @State private var liveRead: LiveRead?
 
     /// A tail, and the run it was read from.
@@ -1082,11 +1087,13 @@ struct VerificationCheckRow: View {
                 try? await Task.sleep(for: Self.pollInterval)
             }
         }
-        // **Not cleared in the task above, and that is the point.** `pollKey`
-        // carries liveness, so the task restarts the moment the run seals — a
-        // reset there would empty the window at exactly the instant the user is
-        // reading the end of it, which is what these lines are kept past the
-        // run to avoid.
+        // **Not cleared here on seal, and that is deliberate — but it does
+        // not need to be, because `displayedLines` already stops showing
+        // these lines the instant `runID` goes nil.** `pollKey` carries
+        // liveness, so the task restarts the moment the run seals; clearing
+        // `liveRead` here too would be redundant with that, not protective of
+        // anything the user is reading — see `liveRead`'s own comment for why
+        // sealing already ends the window.
         //
         // Closing the group ends the session that owned the lines. A new run is
         // handled by `displayedLines` instead of by a second `onChange` here,
@@ -1149,15 +1156,15 @@ struct VerificationCheckRow: View {
         }
     }
 
-    /// What the open group shows, in priority order: the live server, then the
-    /// last thing read from it, then what the run captured, then why there is
-    /// nothing.
+    /// What the open group shows, in priority order: the live server, then
+    /// what the run captured, then why there is nothing.
     ///
-    /// The middle branch is why this is not simply a switch over `content`:
-    /// lines read live outlive the run that produced them for as long as the
-    /// group stays open, and they are at least as fresh as the captured tail —
-    /// `Runner.recordCompletions` takes its copy in the same window this was
-    /// polling.
+    /// This is not simply a switch over `content` because the first branch
+    /// also has to say something for a live check with nothing printed yet —
+    /// `content == .live` covers both. There is no separate "just sealed"
+    /// branch: `displayedLines` already goes empty the instant `runID` does
+    /// (see `liveRead`), so a row falls straight from `.live` to `.captured`
+    /// or `.notKept` with nothing shown in between.
     @ViewBuilder
     private var outputBody: some View {
         let live = displayedLines
@@ -1170,12 +1177,6 @@ struct VerificationCheckRow: View {
             } else {
                 logWindow(live.joined(separator: "\n"))
             }
-        } else if !live.isEmpty {
-            logWindow(live.joined(separator: "\n"))
-            note(NSLocalizedString(
-                "The run has ended. This is the last output read from it.",
-                comment: "Verification tab: live output kept on screen after its run finished"
-            ))
         } else if let output, !output.isEmpty {
             // **`!isEmpty`, and the guard is not decoration.** A check whose log
             // came back empty is recorded with `output: ""` rather than nil —

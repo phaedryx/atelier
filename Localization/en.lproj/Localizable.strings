@@ -594,7 +594,6 @@
 
 /* Verification tab - a check's output group */
 "No output yet." = "No output yet.";
-"The run has ended. This is the last output read from it." = "The run has ended. This is the last output read from it.";
 "This check was stopped before its output could be kept. Re-run it to see the output." = "This check was stopped before its output could be kept. Re-run it to see the output.";
 "This check's output was not kept. Re-run it to see the output." = "This check's output was not kept. Re-run it to see the output.";
 "This check has not run yet. Run it to see its output." = "This check has not run yet. Run it to see its output.";
