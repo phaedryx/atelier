@@ -398,48 +398,6 @@ final class PhaseRunnerTests: XCTestCase {
         XCTAssertFalse(command.contains("--keep-project"), command)
     }
 
-    func test_verifyPhase_isHeadlessAndNamespaceScoped() {
-        XCTAssertEqual(ProcessCompose.Phase.verify.namespace, "verify")
-        XCTAssertFalse(ProcessCompose.Phase.verify.isInteractive)
-    }
-
-    func test_socketPath_verifyIsSuffixed() {
-        let path = ProcessCompose.PhaseRunner.socketPath(for: UUID(), phase: .verify)
-        XCTAssertTrue(path.hasSuffix("-verify.sock"), path)
-    }
-
-    func test_command_verifyPassesSelectedProcessesAsTrailingArguments() {
-        let config = ProcessCompose.Config(
-            path: "/tmp/process-compose.yaml", isRepositoryProvided: false
-        )
-        let command = ProcessCompose.PhaseRunner.command(
-            phase: .verify, config: config, binary: "/usr/bin/process-compose",
-            workstreamID: UUID(), selectedProcesses: ["rspec", "rubocop"], keepProject: true
-        )
-        XCTAssertTrue(command.contains("-n verify"), command)
-        XCTAssertTrue(command.contains("-t=false"), command)
-        XCTAssertTrue(command.contains("--keep-project"), command)
-        XCTAssertTrue(command.hasSuffix("rspec rubocop"), command)
-    }
-
-    func test_command_verifyDropsNamesThatWouldParseAsFlags() {
-        let config = ProcessCompose.Config(
-            path: "/tmp/process-compose.yaml", isRepositoryProvided: false
-        )
-        let command = ProcessCompose.PhaseRunner.command(
-            phase: .verify, config: config, binary: "/usr/bin/process-compose",
-            workstreamID: UUID(), selectedProcesses: ["-n", "rspec"], keepProject: false
-        )
-        // Exactly one `-n`, which is the hazard: a check genuinely named `-n`
-        // reaching the shell as a trailing argument makes this
-        // `up -n verify -n rspec`, re-selecting the namespace the command
-        // exists to scope. The assertion this replaces — that " -n dispose"
-        // is absent — could not fail: no input to a `.verify` command can put
-        // that string in it.
-        XCTAssertEqual(command.components(separatedBy: "-n ").count - 1, 1, "exactly one -n: \(command)")
-        XCTAssertTrue(command.hasSuffix("rspec"), command)
-    }
-
     // MARK: - The shared flag-shaped filter
 
     func test_runnableProcesses_dropsFlagShapedNamesAndKeepsTheRest() {

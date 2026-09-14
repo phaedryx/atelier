@@ -1021,7 +1021,7 @@ extension IPC {
             guard info.workstreamID.caseInsensitiveCompare(workstreamID.uuidString) == .orderedSame else {
                 return .failure(id: request.id, VerificationFailure.runBelongsElsewhere.localizedDescription)
             }
-            return .success(id: request.id, .verificationRun(VerificationSummary.bounded(info)))
+            return .success(id: request.id, .verificationRun(info))
         }
 
         /// Posts a finished run's summary into the inbox of whatever agent now

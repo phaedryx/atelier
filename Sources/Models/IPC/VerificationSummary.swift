@@ -26,29 +26,23 @@ extension IPC {
         /// is worth having only if an agent can afford to read it, and the
         /// failing output it points at is served by `check_verification`.
         static let maxMessageBytes = 6_000
-        /// Lines of a failing check's output carried in the notice. A test
-        /// runner puts the useful part last, so this is a tail.
-        static let maxFailureTailLines = 20
-        /// Bytes of one failing check's output in the notice.
-        static let maxFailureTailBytes = 1_200
-        /// Below this there is no room for output worth reading, so the notice
-        /// carries verdicts alone and says the output was trimmed.
-        static let minTailBytes = 200
-        /// Bytes of a run-level failure reason. It is a process's stderr in the
-        /// case that matters, so its length is not this side's to assume.
-        static let maxFailureDetailBytes = 600
-
-        /// Cap on all the output in one `check_verification` answer.
-        static let maxReadOutputBytes = 16_000
-        /// Cap on one check's output in a `check_verification` answer.
-        static let maxReadTailBytesPerCheck = 4_000
 
         /// Cap on one check's completion notice.
         ///
-        /// Below `maxMessageBytes` because there are now N of these per run where there
+        /// Below `maxMessageBytes` because there are N of these per run where there
         /// was one summary, and an agent reads them all. `IPC.Store` refuses content over
         /// 64KB outright — it throws rather than trimming — so overshooting loses the
         /// notice silently at the moment the agent is waiting for it.
+        ///
+        /// **No output is carried by either one.** A check runs in its own terminal
+        /// surface and Atelier keeps no copy of what it printed, so these budgets are
+        /// spent entirely on verdicts. That is what retired the tail-splitting this
+        /// type used to do — an even share of a byte budget across the failing checks,
+        /// with a floor — along with the caps on a `check_verification` read.
+        ///
+        /// It still binds, because a **check name is the user's** and nothing bounds
+        /// one: a 200KB name in `verification.yaml` is legal YAML and would lose the
+        /// notice the same way a suite's log used to.
         static let maxCheckMessageBytes = 4_000
 
         /// The label an app-originated completion notice arrives from.
@@ -84,10 +78,9 @@ extension IPC {
 
         /// The notice posted into the calling agent's inbox when a run ends.
         ///
-        /// Assembled against a byte budget rather than assumed to fit: verdicts
-        /// first, since one line per check is what the agent needs to act, then
-        /// as much failing output as the remaining room allows, then a pointer at
-        /// `check_verification` for the rest.
+        /// Assembled against a byte budget rather than assumed to fit: one line
+        /// per check, then a pointer at `check_verification` for a run too long to
+        /// list.
         ///
         /// **Its one production caller is `IPC.Service.startVerification`'s
         /// `onFinish`, and that closure only calls it when `info.state != .stopped
@@ -97,28 +90,14 @@ extension IPC {
         /// finishes. So in production this function only ever runs over a
         /// non-stopped run whose rows are all `.notRun`, and its pass/fail
         /// verdict branch below is dead there. Keep it that way on purpose: this
-        /// line is what stops a future caller from re-broadening who invokes
-        /// this and reviving the bug it was narrowed to prevent — an all-`.skipped`
-        /// suite (`up -n` on an empty namespace, or a config that declares no
-        /// processes) rendering here as "0 of 0 failed", which reads as a pass.
+        /// line is what stops a future caller from re-broadening who invokes this
+        /// and reviving the bug it was narrowed to prevent — a run that started
+        /// nothing rendering here as "0 of 0 failed", which reads as a pass.
         static func message(for run: VerificationRunInfo) -> String {
             let header = headerLine(for: run)
             let pointer = run.checks.isEmpty ? nil : pointerLine(runID: run.runID)
 
-            let failure = run.failureDetail.map(failureLine)
-            // Its own line and its own sentence: this run *did* report on some
-            // checks, so the failure wording above would be false for it. Both
-            // are charged to the budget, though `Runner.execute` sets at most
-            // one of them.
-            let unstarted = run.unstartedChecksDetail.map(unstartedLine)
-
             var budget = maxMessageBytes - header.utf8.count
-            if let failure {
-                budget -= failure.utf8.count + 1
-            }
-            if let unstarted {
-                budget -= unstarted.utf8.count + 1
-            }
             if run.isStale {
                 budget -= staleNotice.utf8.count + 1
             }
@@ -127,32 +106,17 @@ extension IPC {
             }
 
             let (included, omitted) = fitVerdicts(run.checks, budget: budget)
-            var spent = included.reduce(0) { $0 + $1.text.utf8.count + 1 }
             var overflow: String?
             if omitted > 0 {
                 overflow = overflowNote(count: omitted, runID: run.runID)
-                spent += (overflow?.utf8.count ?? 0) + 1
             }
-
-            let tails = failureTails(for: included.map(\.check), budget: budget - spent)
 
             var lines = [header]
-            // Before the verdicts: it explains why they all say "not run".
-            if let failure {
-                lines.append(failure)
-            }
-            // Likewise, for the ones that say it while others ran.
-            if let unstarted {
-                lines.append(unstarted)
-            }
             if run.isStale {
                 lines.append(staleNotice)
             }
             for entry in included {
                 lines.append(entry.text)
-                if let tail = tails[entry.check.name] {
-                    lines.append(tail)
-                }
             }
             if let overflow {
                 lines.append(overflow)
@@ -165,14 +129,11 @@ extension IPC {
 
         /// The notice an agent finds in its inbox when one check finishes.
         ///
-        /// Verdict first, output second, and the output is what gets trimmed: an agent that
-        /// reads only the first line still learns whether the check passed.
-        ///
-        /// **The tail is all that exists.** The log lives in process-compose's control
-        /// server and the runner tears that down when the run seals, so nothing here may
-        /// read as though a fuller copy can be fetched — not from `check_verification`, not
-        /// from the Verification tab, not from disk. Re-running the one check is the honest
-        /// pointer, and it is the one this gives.
+        /// A verdict and nothing else. The check ran in a terminal surface, so its
+        /// output is on screen in the Verification tab and nowhere Atelier can read
+        /// — there is no tail to carry and nothing here may imply one can be
+        /// fetched. Re-running the one check is the honest pointer, and asking the
+        /// user to look at the tab is the other.
         static func checkMessage(for notice: VerificationCheckNotice) -> String {
             let verdict = switch notice.check.state {
             case .passed: "passed"
@@ -183,21 +144,33 @@ extension IPC {
             case .pending, .running: "is still going"
             }
             let duration = notice.check.durationSeconds.map { String(format: " in %.1fs", $0) } ?? ""
-            var head = "Verification check \(notice.check.name) \(verdict)\(duration). "
+            let trailer = "\(verdict)\(duration). "
+                + "Its output is in the Verification tab for as long as Atelier is running; "
+                + "nothing else keeps a copy. "
                 + "Run \(notice.runID); check_verification(run_id: \"\(notice.runID)\") reads the whole run."
-            guard let tail = notice.check.outputTail, !tail.isEmpty else { return head }
-
-            let trailer = notice.check.outputTruncated
-                ? "\n\n(Output above is the tail captured while the check ran. There is no fuller copy "
-                + "anywhere — re-run this one check to see more.)"
-                : ""
-            let budget = maxCheckMessageBytes - head.utf8.count - trailer.utf8.count - 2
-            guard budget >= minTailBytes else {
-                return head + "\n\n(Output omitted: it did not fit in one message. "
-                    + "Re-run this one check to see it.)"
+            // The name is the only unbounded part, so it is the part that is cut —
+            // and cut from its *end*, unlike output, since a name is read from the
+            // front. `IPC.Store` throws rather than trimming, so an overshoot here
+            // loses the notice entirely.
+            // The ellipsis is charged too — it is three bytes in UTF-8, and
+            // forgetting it overshot the cap by exactly that much.
+            let ellipsis = "…"
+            let room = maxCheckMessageBytes
+                - trailer.utf8.count
+                - "Verification check  ".utf8.count
+                - ellipsis.utf8.count
+            var name = notice.check.name
+            if name.utf8.count > room, room > 0 {
+                // Cut on a UTF-8 boundary: `String(decoding:)` would replace a
+                // half-scalar with U+FFFD, which is 3 bytes where the truncated
+                // scalar may have been 2 — an overshoot in the other direction.
+                var bytes = Array(name.utf8.prefix(room))
+                while let last = bytes.last, last & 0xC0 == 0x80 {
+                    bytes.removeLast()
+                }
+                name = String(decoding: bytes, as: UTF8.self) + ellipsis
             }
-            head += "\n\n" + clamped(tail, to: budget).text + trailer
-            return head
+            return "Verification check \(name) \(trailer)"
         }
 
         /// As many verdict lines as `budget` holds, and how many were left out.
@@ -230,114 +203,6 @@ extension IPC {
             return (included, all.count - included.count)
         }
 
-        /// An indented output tail per failing check, sharing `budget` evenly.
-        ///
-        /// Evenly rather than first-come: a suite where the third linter is the
-        /// one that failed should not lose its output to the first two, and an
-        /// even split is the only division that is predictable enough to pin.
-        private static func failureTails(
-            for checks: [VerificationCheckInfo],
-            budget: Int
-        ) -> [String: String] {
-            let failing = checks.filter { $0.state == .failed && !($0.outputTail ?? "").isEmpty }
-            guard !failing.isEmpty, budget > 0 else { return [:] }
-
-            // The newline that joins each block to the line above it comes out of
-            // the same budget, so it is charged here rather than discovered as a
-            // few bytes of overshoot per failing check.
-            let even = budget / failing.count - 1
-            // An even split below the floor is not worth reading, so past that
-            // point the budget goes to as many failures as the floor allows,
-            // in order, rather than to none of them. Thirty failing checks
-            // would otherwise take the notice from "some output" to "no output"
-            // in one step.
-            let allowance = min(maxFailureTailBytes, max(even, minTailBytes))
-
-            var result: [String: String] = [:]
-            var remaining = budget
-            for check in failing {
-                guard remaining >= allowance + 1 else { break }
-                guard let output = check.outputTail,
-                      let block = indentedTail(of: output, allowance: allowance)
-                else { continue }
-                result[check.name] = block
-                remaining -= block.utf8.count + 1
-            }
-            return result
-        }
-
-        /// The last lines of `output`, indented, fitting in `allowance` bytes —
-        /// or nil when nothing worth reading fits.
-        private static func indentedTail(of output: String, allowance: Int) -> String? {
-            let indent = "    "
-            var lines = output.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-            while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
-                lines.removeLast()
-            }
-            guard !lines.isEmpty else { return nil }
-            if lines.count > maxFailureTailLines {
-                lines.removeFirst(lines.count - maxFailureTailLines)
-            }
-
-            var block = lines.map { indent + $0 }.joined(separator: "\n")
-            while block.utf8.count > allowance, lines.count > 1 {
-                lines.removeFirst()
-                block = lines.map { indent + $0 }.joined(separator: "\n")
-            }
-            if block.utf8.count > allowance {
-                // One line, still too long: keep its end, which is where a
-                // stack trace or a failure count sits.
-                let room = allowance - indent.utf8.count
-                guard room >= 24 else { return nil }
-                block = indent + clamped(lines[0], to: room).text
-            }
-            return block
-        }
-
-        // MARK: - Bounding a read
-
-        /// The same run with every check's output bounded, so one answer cannot
-        /// hand an agent a whole suite's log.
-        ///
-        /// `check_verification` is where the output an agent actually needs
-        /// lives, so the caps here are far looser than the notice's — but they
-        /// are caps: a run with twenty chatty failures would otherwise answer
-        /// with more text than an agent can afford to read.
-        static func bounded(_ run: VerificationRunInfo) -> VerificationRunInfo {
-            let withOutput = run.checks.filter { !($0.outputTail ?? "").isEmpty }.count
-            guard withOutput > 0 else { return run }
-            let share = min(maxReadTailBytesPerCheck, maxReadOutputBytes / withOutput)
-
-            let checks = run.checks.map { check -> VerificationCheckInfo in
-                guard let output = check.outputTail, !output.isEmpty else { return check }
-                let clamped = clamped(output, to: share)
-                return VerificationCheckInfo(
-                    name: check.name,
-                    state: check.state,
-                    exitCode: check.exitCode,
-                    durationSeconds: check.durationSeconds,
-                    outputTail: clamped.text,
-                    // The runner fetched a bounded tail from the control API to
-                    // begin with. If it already trimmed, this answer is not whole
-                    // whatever happened here.
-                    outputTruncated: check.outputTruncated || clamped.truncated
-                )
-            }
-
-            return VerificationRunInfo(
-                runID: run.runID,
-                workstreamID: run.workstreamID,
-                workstreamName: run.workstreamName,
-                state: run.state,
-                startedSecondsAgo: run.startedSecondsAgo,
-                durationSeconds: run.durationSeconds,
-                checks: checks,
-                isStale: run.isStale,
-                failureDetail: run.failureDetail,
-                unstartedChecksDetail: run.unstartedChecksDetail
-            )
-        }
-
         // MARK: - Lines
 
         private static func headerLine(for run: VerificationRunInfo) -> String {
@@ -357,18 +222,13 @@ extension IPC {
             case .finished:
                 let elapsed = run.durationSeconds.map { " in \(IPC.durationText($0))" } ?? ""
                 // Not "0 of 0 failed", which is true and reads as a green suite.
-                // `up -n` on an empty namespace never exits, so `PhaseExecutor`
-                // returns `.skipped` without spawning, and a config Yams cannot
-                // decode declares no processes at all — both land here.
                 guard total > 0 else {
-                    return "run \(run.runID) finished\(elapsed) — no checks ran; the verify namespace declared none"
+                    return "run \(run.runID) finished\(elapsed) — no checks ran; this project declares none"
                 }
-                // The same trap under a different shape: a spawn that dies before
-                // binding leaves every *declared* check present as a row, sealed
-                // `.notRun`, rather than an empty `checks` array. "0 of N failed"
-                // is exactly as true and exactly as green as "0 of 0 failed" — and
-                // this is the case the run-level notice was retained to catch, so
-                // it must not be the one case it renders as a pass.
+                // The same trap under a different shape: a press where every check
+                // failed to get a terminal leaves rows present and `.notRun` rather
+                // than an empty `checks` array. "0 of N failed" is exactly as true
+                // and exactly as green as "0 of 0 failed".
                 guard !run.checks.allSatisfy({ $0.state == .notRun }) else {
                     return "run \(run.runID) finished\(elapsed) — declared \(total) checks but none of them ran"
                 }
@@ -381,9 +241,8 @@ extension IPC {
         /// One check's verdict.
         ///
         /// The three states that are not a result — `skipped`, `notRun`,
-        /// `pending` — share a mark and each say what they are, because a
-        /// `Skipped` check carries exit 1 from process-compose and must never
-        /// render as a failure it never had.
+        /// `pending` — share a mark and each say what they are, so none of them
+        /// can read as a verdict it never had.
         private static func line(for check: VerificationCheckInfo) -> String {
             let elapsed = check.durationSeconds.map { "  \(IPC.durationText($0))" } ?? ""
             switch check.state {
@@ -392,11 +251,11 @@ extension IPC {
             case .failed:
                 return "✗ \(check.name)\(elapsed)" + (check.exitCode.map { "  exit \($0)" } ?? "")
             case .skipped:
-                return "· \(check.name)  skipped (a check it depends on failed)"
+                return "· \(check.name)  skipped"
             case .notRun:
                 return "· \(check.name)  not run"
             case .pending:
-                return "· \(check.name)  waiting on a dependency"
+                return "· \(check.name)  waiting to start"
             case .stopped:
                 return "· \(check.name)\(elapsed)  stopped"
             case .running:
@@ -404,66 +263,15 @@ extension IPC {
             }
         }
 
-        /// A run-level failure, bounded like everything else here — it comes
-        /// from a process's stderr in the spawn-failure case, so its length is
-        /// not something this side chose.
-        private static func failureLine(_ detail: String) -> String {
-            let trimmed = detail.trimmingCharacters(in: .whitespacesAndNewlines)
-            return "The run itself failed: " + clamped(trimmed, to: maxFailureDetailBytes).text
-        }
-
-        /// The same text under honest wording for the mixed case: the run
-        /// reported on some checks and never started the rest.
-        private static func unstartedLine(_ detail: String) -> String {
-            let trimmed = detail.trimmingCharacters(in: .whitespacesAndNewlines)
-            return "Some checks never started: " + clamped(trimmed, to: maxFailureDetailBytes).text
-        }
-
         private static let staleNotice =
             "The worktree has changed since this run started, so these results no longer describe the code on disk."
 
         private static func pointerLine(runID: String) -> String {
-            "check_verification(run_id: \"\(runID)\") has more of each check's captured output."
+            "check_verification(run_id: \"\(runID)\") lists every check in this run."
         }
 
         private static func overflowNote(count: Int, runID: String) -> String {
             "… and \(count) more checks — check_verification(run_id: \"\(runID)\") lists all of them."
-        }
-
-        /// `text` cut to `limit` bytes, **keeping its end**, without splitting a
-        /// UTF-8 scalar. Whole lines go first so what is left still parses as
-        /// output.
-        ///
-        /// Measured backwards from the end rather than by dropping leading lines
-        /// and re-measuring: a failing suite's log is the input here, and
-        /// re-joining a 200k-line one per line dropped is quadratic — 90 seconds
-        /// for what this now does in milliseconds.
-        private static func clamped(_ text: String, to limit: Int) -> (text: String, truncated: Bool) {
-            guard text.utf8.count > limit else { return (text, false) }
-
-            let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-            var kept: [Substring] = []
-            var size = 0
-            for line in lines.reversed() {
-                let cost = line.utf8.count + (kept.isEmpty ? 0 : 1)
-                guard size + cost <= limit else { break }
-                size += cost
-                kept.append(line)
-            }
-            if !kept.isEmpty {
-                return (kept.reversed().joined(separator: "\n"), true)
-            }
-
-            // Not even the last line fits — a minified stack trace, or a runner
-            // that never wrapped. Cut inside it, keeping its end.
-            let bytes = Array((lines.last ?? "").utf8)
-            var start = max(0, bytes.count - limit)
-            // 0b10xxxxxx is a continuation byte: starting on one would cut a
-            // scalar in half and lose the whole tail to a decode failure.
-            while start < bytes.count, bytes[start] & 0xC0 == 0x80 {
-                start += 1
-            }
-            return (String(decoding: bytes[start...], as: UTF8.self), true)
         }
     }
 }

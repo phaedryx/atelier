@@ -571,40 +571,42 @@
 "Approval covers this repository until any of these files changes. Start is never gated by it." = "Approval covers this repository until any of these files changes. Start is never gated by it.";
 
 /* Verification runner */
-"Verification run %@ is already running in this workstream." = "Verification run %@ is already running in this workstream.";
-"This project declares no verify processes." = "This project declares no verify processes.";
-"No such check: %@. This project declares: %@." = "No such check: %@. This project declares: %@.";
-"process-compose cannot start a check whose name begins with \"-\": %@. Rename it in process-compose.yaml." = "process-compose cannot start a check whose name begins with \"-\": %@. Rename it in process-compose.yaml.";
-"This project's process-compose files could not be parsed, so its verify checks are unknown." = "This project's process-compose files could not be parsed, so its verify checks are unknown.";
-"This project's verify namespace declared no processes to run." = "This project's verify namespace declared no processes to run.";
+"“%@” is already running." = "“%@” is already running.";
+"No such check: %1$@. This project declares: %2$@." = "No such check: %1$@. This project declares: %2$@.";
+"nothing" = "nothing";
+"“%@” could not be given a terminal to run in." = "“%@” could not be given a terminal to run in.";
+"This project has no verification.yaml." = "This project has no verification.yaml.";
+"This project declares no checks." = "This project declares no checks.";
+
+/* verification.yaml parsing */
+"The file could not be read." = "The file could not be read.";
+"The file is not valid YAML: %@" = "The file is not valid YAML: %@";
+"The file must be a mapping of check names to their commands." = "The file must be a mapping of check names to their commands.";
+"Every check needs a name." = "Every check needs a name.";
+"“%@” must be a mapping with a command:." = "“%@” must be a mapping with a command:.";
+"“%@” needs a command: to run." = "“%@” needs a command: to run.";
+"“%@” has a shell: that is not a shell name." = "“%@” has a shell: that is not a shell name.";
+"Add a verification.yaml to this project's directory to declare checks." = "Add a verification.yaml to this project's directory to declare checks.";
+"This project's verification.yaml could not be read: %@" = "This project's verification.yaml could not be read: %@";
+"This project's verification.yaml declares no checks." = "This project's verification.yaml declares no checks.";
 
 /* Verification tab */
-"Run all" = "Run all";
+"Run" = "Run";
 "Re-run" = "Re-run";
+"Stop" = "Stop";
 "stale" = "stale";
 "Show output" = "Show output";
 "Hide output" = "Hide output";
-"Shows this check's output." = "Shows this check's output.";
-"Hides this check's output." = "Hides this check's output.";
-"Nothing to verify yet" = "Nothing to verify yet";
+"Show this check's output" = "Show this check's output";
+"Hide this check's output" = "Hide this check's output";
+"Nothing to verify" = "Nothing to verify";
 "This result no longer reflects the worktree's current content." = "This result no longer reflects the worktree's current content.";
-"The run itself failed to start its checks" = "The run itself failed to start its checks";
-"Some checks never started" = "Some checks never started";
-"Showing the last lines captured. There is nothing more to fetch: the run's own output no longer exists anywhere." = "Showing the last lines captured. There is nothing more to fetch: the run's own output no longer exists anywhere.";
-"Add an atelier.process-compose.yaml to this worktree or the project directory to declare checks." = "Add an atelier.process-compose.yaml to this worktree or the project directory to declare checks.";
-"This project's process-compose files came with the repository and need your approval before checks can run." = "This project's process-compose files came with the repository and need your approval before checks can run.";
-"This project declares no verify checks." = "This project declares no verify checks.";
-
-/* Verification tab - a check's output group */
-"No output yet." = "No output yet.";
-"This check was stopped before its output could be kept. Re-run it to see the output." = "This check was stopped before its output could be kept. Re-run it to see the output.";
-"This check's output was not kept. Re-run it to see the output." = "This check's output was not kept. Re-run it to see the output.";
-"This check has not run yet. Run it to see its output." = "This check has not run yet. Run it to see its output.";
-"This check has not produced any output." = "This check has not produced any output.";
+"This check has not run since Atelier started, so there is no output to show. Run it to see one." = "This check has not run since Atelier started, so there is no output to show. Run it to see one.";
 
 /* Verification tab - per-check state, accessibility label */
 "Not run" = "Not run";
 "Pending" = "Pending";
+"Running" = "Running";
 "Passed" = "Passed";
 "Failed" = "Failed";
 "Skipped" = "Skipped";

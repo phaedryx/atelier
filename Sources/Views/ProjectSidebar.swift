@@ -1112,7 +1112,8 @@ struct ProjectSidebar: View {
         guard let wsID = workstreamToRemove,
               let pi = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
         let projectID = projects[pi].id
-        Workstream.Archiver.remove(wsID, in: &projects[pi], surfaceCache: surfaceCache, tmuxPath: appEnv.toolStatus.tmux.path)
+        Workstream.Archiver.remove(wsID, in: &projects[pi], surfaceCache: surfaceCache, tmuxPath: appEnv.toolStatus.tmux.path,
+                                   verificationRunner: verificationRunner)
         agentStateTracker.clear(workstreamID: wsID)
         rebuildIndices()
         if case let .workstream(id) = selection, id == wsID {

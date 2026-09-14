@@ -515,6 +515,10 @@ struct ContentView: View {
             // enforcement point. Built here because the bridge takes `onFinish`,
             // which is a single slot: constructing a second one would silently
             // unsubscribe the first.
+            // Where a check's terminal comes from. Installed before anything can
+            // press Run: `Runner.start` refuses outright with no host, since a
+            // check with no terminal never runs.
+            verificationRunner.attach(surfaces: VerificationSurfaceHost(cache: surfaceCache))
             let verificationBridge = IPC.VerificationRunnerBridge(runner: verificationRunner)
             // One `Task`, sequenced rather than two: `observeVerificationChecks` reads
             // `verification` through the same actor, and a separate `Task` racing ahead of
@@ -1066,7 +1070,8 @@ struct ContentView: View {
     private func performRemove() {
         guard let wsID = workstreamToRemove,
               let projectIndex = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
-        Workstream.Archiver.remove(wsID, in: &projects[projectIndex], surfaceCache: surfaceCache, tmuxPath: appEnvironment.toolStatus.tmux.path)
+        Workstream.Archiver.remove(wsID, in: &projects[projectIndex], surfaceCache: surfaceCache, tmuxPath: appEnvironment.toolStatus.tmux.path,
+                                   verificationRunner: verificationRunner)
         agentStateTracker.clear(workstreamID: wsID)
         ProjectStore.save(projects)
         syncHeadWatcher(projects: projects)

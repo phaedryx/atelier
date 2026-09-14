@@ -196,19 +196,17 @@ it receives only the `X.Y.Z` core; the suffix naming the commit rides on
 - **Tool detection** runs at startup in `AppEnvironment.refresh()`
 - **Sidebar state** (selection, expanded sections) stored in UserDefaults (`atelier.selection`, `atelier.expandedProjects`)
 - **Process-compose approval** stored in UserDefaults (`atelier.approvedConfigFiles`), keyed by project directory against a SHA-256 of every repository-provided file the config will load
-- **Verification** keeps two per-workstream keys, both in `Verification`'s own stores.
-  `atelier.verifyRun.<workstreamID>` holds the most recent run, stamp included —
-  only the latest, deliberately: history needs a retention policy and would be
-  read by nothing, since `check_verification` resolving an older id is worth less
-  than a store that cannot grow without bound.
-  `atelier.verifyChecks.<workstreamID>` holds **one blob keyed by check name**,
-  carrying each check's latest result, whichever run produced it. The two are not
-  redundant: a run is what executed, a record is what a row renders. A run started
-  for one check contains only that check, so rows read off `run.checks` lost every
-  other check's verdict the moment a single row's Run was pressed — which is the
-  whole reason the second key exists.
-  `atelier.verifySelection.<workstreamID>` is **gone**, with the checklist it
-  served. Do not reintroduce it, and do not read a stale copy as meaning anything.
+- **Verification** keeps **one** per-workstream key, `atelier.verifyChecks.<workstreamID>`:
+  one blob keyed by check name, carrying each check's latest verdict, duration, stamp and
+  run id. A run started for one check contains only that check, so rows read off a run's
+  own list lost every other check's verdict the moment a single row's Run was pressed —
+  which is why the record, not the run, is what a row renders.
+  `atelier.verifyRun.<workstreamID>` is **gone**, with `Verification.Store`. Runs live in
+  the runner's memory for the session: what persisting one bought was resolving a run id
+  across a restart, and a check's *output* — the thing that made that worth doing — now
+  lives in a terminal surface that does not survive a restart either.
+  `atelier.verifySelection.<workstreamID>` is **gone** too, with the checklist it served.
+  Do not reintroduce either, and do not read a stale copy as meaning anything.
 - **`atelier.processSelection.<id>` carries three states, not two**, and the encoding is
   `ProcessSelection`: **key absent** means all, **key present holding an empty
   array** means *nothing selected*, and names mean that subset. Two were not
@@ -219,10 +217,9 @@ it receives only the `X.Y.Z` core; the suffix naming the commit rides on
   the click, disabling the last checked box, which left a checkbox dimmed for a
   reason nothing on the pane gave. Now the box can be unchecked and the
   **button** is what goes quiet — Start is disabled, with a line beside it
-  saying why. Verification's checklist is gone, and with it the selection-driven Run
-  button; the tab now has a top-bar Run all and a per-row run/re-run button
-  (`VerificationTabView.swift:691-700`, `:45-51`), gated on `verificationCanRun(isLive:)`
-  rather than on a selection. `ProcessSelection.namesToRun` is where
+  saying why. Verification has no checklist, no selection, no Run all and no top-bar
+  Stop: every row carries its own run/re-run/stop button, gated on whether *that check*
+  is running. `ProcessSelection.namesToRun` is where
   the distinction stops being losable: `.all` gives `[]` and `.nothing` gives
   **nil**, so a caller cannot flatten them without the compiler objecting. No
   migration was needed, because the empty case used to *remove* the key.
@@ -280,7 +277,7 @@ a decision spelled inline in a row body is one nothing can pin.
 | Reached by | ⌘⇧W, the menu's "Archive Workstream", the palette, the sidebar context menu's "Remove" | the sidebar context menu's "Purge", and the Purge button on `WorkstreamInfoView`'s merged-PR banner |
 | Runs `dispose`? | no | yes, before the worktree goes |
 | Files on disk | **kept** | `git worktree remove`, local branch deleted, default branch re-fetched |
-| Also | kills tmux sessions, evicts surfaces, drops `IPC.Config` and the launch log | same, plus cancels a running `bootstrap`, stops the dev stack, waits out a live verify run through `Verification.Runner.stopAndWait`, then `forget`s that workstream in the runner and drops the Execution checklist's selection key, the workstream's last verify run, and its per-check verification records |
+| Also | kills tmux sessions, evicts surfaces (including check terminals, via `Verification.Runner.forget` — nothing else can reach them), drops `IPC.Config` and the launch log | same, plus cancels a running `bootstrap`, stops the dev stack, waits out running verification checks through `Verification.Runner.stopAndWait`, then `forget`s that workstream in the runner and drops the Execution checklist's selection key and the per-check verification records |
 | Guarded by | nothing — it destroys nothing | `purgeWarning` / `destroyableWorktreePath` |
 
 The naming is not self-consistent and reading it as such is the trap: the *menu*
@@ -351,7 +348,8 @@ the count.
 `defaultBranch(at:)` is also read to export `ATELIER_DEFAULT_BRANCH` (`TerminalContainerView`,
 and `ProcessCompose.PhaseEnvironment`'s four callers — `AsyncSetupService` for `bootstrap`,
 `WorkstreamArchiver` for `dispose`, `WorkspaceActions` for `open_agent_tab`'s spawned terminal, and
-`Verification.Runner` for `verify`). Those are *not* part of that follow-up: the variable means
+`WorkspaceActions.verificationTarget` for a check's environment). Those are *not* part of that
+follow-up: the variable means
 "what git thinks this repository's default branch is", and all five deliberately agree with each
 other rather than with the setting.
 
@@ -472,14 +470,14 @@ pane's Start button, and `doStartRun` refuses on the same stored plan, so the tw
 disagree — they did, for a round: the button was enabled on `devCommand?.command != nil` while
 the run guarded the resolved command, and an unresolvable binary rendered an enabled Start that
 did nothing in silence. `ProcessCompose.ResolutionModel` resolves the dev command, the plan, the
-reason, the execute checklist, the verify availability and the approval together and publishes
+reason, the execute checklist, the declared verification checks and the approval together and publishes
 them as **one `Resolution` value**, because *agreement* is the invariant here rather than
 freshness — one struct assigned in one statement holds by construction what eight separate
 `@State`s in `TerminalContainerView.refreshDevCommand` held by convention. That is also what
 makes it safe for the resolution to run off the main actor, which it now does: a consumer reading
 mid-flight reads the previous pass whole rather than a half-updated one. The **first** resolution
 is synchronous, in the model's `init`, because a pane with nothing resolved is not neutral — a nil
-verify reason reads as "everything is fine" and put an enabled Run over an empty check list. The
+verification reason reads as "everything is fine" and put an enabled Run over an empty check list. The
 approval paths re-resolve synchronously too (`refreshNow`), because they read the result of the
 write they just made. `ProcessCompose.RunCommandPlan.unavailableReason` explains a `.nothing`, and
 `ExecutionTabView.scriptInstructions` — the surface that already drew for "nothing to run" —
@@ -502,7 +500,9 @@ tick one again — and `canRun` removes the Start button rather than disabling i
 answer "nothing to run" where the honest answer is "nothing selected". The two gates dim different
 things on purpose.
 
-**Five namespaces**, driven by `ProcessCompose.PhaseRunner` and `ProcessCompose.PhaseExecutor`:
+**Four namespaces**, driven by `ProcessCompose.PhaseRunner` and `ProcessCompose.PhaseExecutor`.
+There was a fifth, `verify`; verification no longer runs through process-compose at all — see
+**verification.yaml** below:
 
 | Namespace | When | Interactive? |
 |-----------|------|--------------|
@@ -510,7 +510,6 @@ things on purpose.
 | `prepare` | to completion before each Start, chained `&&` ahead of `execute` | no |
 | `execute` | the long-lived stack, attached to a terminal surface and a process table | yes |
 | `dispose` | once, at archive (`Workstream.Archiver.runDispose`) | no |
-| `verify` | on demand, from the Verification tab | no |
 
 `prepare` is chained only when `namespacePresence` says `.present` — never on `.unknown`.
 process-compose does not exit when told to run an empty namespace, it idles forever, so
@@ -615,243 +614,169 @@ two hand-written mirrors below (`RunCommandPlan.unavailableReason` and
 fails to compile when they disagree with this. It is deliberately the *only* copy: a second, inlined set in
 `Workstream.Archiver` could not be tested and would not follow a change made here. Any new
 unattended execution path for repository-provided commands must go through it.
-`Verification.Runner.start` calls it too (`VerificationRunner.swift:704-715`), not because `verify`
-runs automatically the way `bootstrap` and `dispose` do, but on the same underlying argument its own
-comment gives: captured output means nobody is watching a TTY, so the reasoning that leaves
-`execute` ungated does not apply — to a user press or to an agent call. See below.
+**Verification does not go through it**, and that is not an omission: a check's commands come
+from `verification.yaml` in the *project directory*, which is outside every work tree, so the
+location rule this gate implements already answers the question. See **verification.yaml** below.
 
-### The verify namespace
-Nine decisions from writing `verify` cost a review round each, and each is the kind of thing a
-later reader would plausibly "simplify" away without knowing why:
+### verification.yaml
+Verification does **not** go through process-compose. A project declares its checks in a
+`verification.yaml` and each one runs as a single command in its own Ghostty terminal surface.
 
-1. **The log window is one-shot.** Per-check output lives in the control server that ran the
-   namespace, and the run loop (`Verification.Runner.execute`, `VerificationRunner.swift:956-1081`)
-   tears that server down only after `seal` has returned — so the 200-line tail
-   `recordCompletions` fetches at each check's own completion edge (`VerificationRunner.swift:1253-1304`)
-   is all that exists anywhere afterward. No UI or agent-facing copy may imply a fuller log can be
-   fetched later; the tab's own truncation notice says as much ("There is nothing more to fetch: the
-   run's own output no longer exists anywhere", `VerificationTabView.swift:1305`). 200 lines is not
-   an arbitrary round number — it was sized against `IPC.Store`'s 65,536-byte-per-message cap
-   (`IPCStore.swift:89`), which *throws rather than truncating* (`IPCStore.swift:203`, `:223` and `:259`),
-   so an oversized completion notice would be lost silently while an agent waits for it.
-   `outputTruncated` means "there was more at capture time", never "more is retrievable".
+```yaml
+rubocop:
+  shell: fish
+  command: bundle exec rubocop
+rspec:
+  command: bundle exec rspec
+```
 
-   **There is now a second *reader* of that window, and it owns none of it.** The Verification
-   tab gives every check an expandable row, and an expanded row polls
-   `Verification.Runner.liveLog` once a second while the run is live —
-   `client.logs` through the same control client `execute` registered in `liveClients`. It is
-   read-only by construction: it never calls `shutDown`, never touches `sealedRunIDs`,
-   `tearingDown` or `stopRequested`, and cannot reach `execute`. The window is still one-shot and
-   the teardown still has one owner; what changed is that a user can watch a check run instead of
-   only reading a failed one's tail afterwards. `liveClients` is cleared *after* `shutDown`
-   returns, beside the two flags, because `isLive` is true for the whole teardown — so a read
-   arriving then meets the dying server and gets nil rather than meeting nothing, which would be
-   indistinguishable from a run that was never live.
+**The file lives in the project directory and nowhere else** — beside `.bare`,
+`process-compose.yaml` and `ports.yml` — and that is a trust decision rather than a
+convenience. `Project.directory` is the repository's *home*, so a file there sits outside every
+work tree and cannot have arrived with the repository. The existing rule therefore settles it:
+approval is gated by a config's **location**, not its content, and a config in the project
+directory "was placed there by hand, outside git, and is never asked about". So there is **no
+`ScriptTrust` fingerprint and no `PhasePolicy` gate** on this path, and adding one would be
+answering a question that cannot arise. Two consequences, both wanted: one set of checks serves
+every worktree, and an agent confined to its worktree by the "Restrict to worktree" prompt
+cannot edit the file that decides whether its own work passes. There is deliberately **no
+worktree tier** mirroring `ProcessCompose.Config.locate`'s — adding one would hand it exactly
+that. The known hole, stated rather than papered over: for an ordinary clone `Project.directory`
+*is* the checkout, so the file can be committed. That hole already exists for process-compose's
+project-directory tier and the rule is applied here unchanged rather than half-tightened.
 
-   **The row *is* that control, and there is no disclosure triangle.** One line per check —
-   status glyph, name, a `stale` marker, the duration, and a single icon button — where
-   everything left of the button is one `Button` that toggles the output — its label takes
-   `.frame(maxWidth: .infinity)` *and* `.contentShape(Rectangle())`, because the width has to be
-   claimed before there is a full-width rectangle to shape, and neither step fails to compile
-   when it is missing. A plain `.onTapGesture` on the `HStack` would
-   have been shorter and is wrong: with the triangle gone this is the *only* way to open a
-   check's output, and a tap gesture is invisible to VoiceOver and unreachable from the
-   keyboard. The button is `play.fill` for both `.run` and `.rerun`, because the distinction
-   between them — has this check a result already — is exactly what the status glyph at the
-   other end of the row draws; the words survive as its accessibility label and tooltip, and
-   `verificationRowAction` still decides which act is offered. `.none` draws the *same button,
-   hidden*, rather than an `EmptyView` or a spacer: every row loses its button for the length of
-   a run and the duration is right-aligned against it, so nothing there would slide every row's
-   timing sideways when a run starts and back when it seals — and a `Color.clear` sized to the
-   image's own frame would not hold the column either, since `.borderless` adds insets of its
-   own. The whole row is one accessibility element, deliberately: the glyph's state word, the
-   name, the stale marker and the duration merge into one label because the row is now one
-   control.
+`Verification.Config.load` returns **three** cases and never two: `.missing`, `.invalid(reason:)`
+and `.loaded`. A file Atelier cannot read must never render as "this project declares no checks",
+which is the same sentence a project with genuinely none gets and the only diagnostic either one
+has — the same rule `ProcessCompose.Config.declaredProcesses` follows by returning nil rather
+than `[]`. `Load.unavailableReason` **is** the availability decision rather than a mirror of one:
+there is no binary to resolve and no approval to check, so "can a check run" is exactly "did this
+file parse and does it declare anything", and `Runner.start` performs the same load and refuses on
+the same three cases. That retires the hand-mirrored `verificationUnavailableReason` that nothing
+made agree with `PhasePolicy.plan`.
 
-   **Every check's tail is now captured, at its own completion edge.** The fetch happens
-   mid-run through the control client the run loop already holds — the same read-only
-   borrow `liveLog` makes — because the per-check mailbox notice needs it anyway, so
-   keeping the result costs a dictionary entry rather than a round trip. That retires
-   `captureFailedOutput`'s failures-only rule and with it the "Output is only kept for a
-   check that failed" note, which under one-row-per-check read as a broken pane rather
-   than as a policy. What did **not** change is the window itself: it still lives only in
-   the control server, that server is still torn down once the run seals, and
-   `outputTruncated` still means "there was more at capture time" and never "more is
-   retrievable". Sizing per check is unchanged — 200 lines, against `IPC.Store`'s throwing
-   64KB cap on the mailbox notice a check's completion also sends. **Lines already read live
-   do *not* survive the run ending** — that was tried and reversed. `runID` itself goes nil
-   at seal (`runID: isLive ? run?.id : nil`, where the row is built), `displayedLines`
-   requires a non-nil `runID` matching what was stored, and the string this used to show
-   ("This is the last output read from it.") is gone from `Localizable.strings`. The instant
-   a run stops being live, `liveRead`'s lines stop being shown and the row falls straight
-   through to the captured tail instead. That is an acceptable loss rather than a
-   regression, because the paragraph above is the replacement: `recordCompletions` now
-   captures every check's tail at its own completion edge, not only a failing one's, so
-   sealing costs a few seconds of "freshest possible" text, not the output itself — the one
-   case with no replacement is `.notKept`, where the log fetch itself threw and no tail was
-   ever captured to fall through to. `liveRead` is still `@State` in the row and still keyed
-   by run id rather than cleared on `.onChange(of: runID)`, for the reason given at its own
-   declaration: `ForEach` keys rows on the check's name, so the same name in run 2 may or may
-   not be the same view as in run 1, and carrying the id is what makes `displayedLines`
-   correct under either answer.
+**Parsed as YAML nodes, not decoded as a dictionary**, so rows appear in **file order**. A Swift
+dictionary has no order and rows would shuffle between launches. Yams refuses a duplicated key
+itself, as a parse error — a hand-written duplicate guard was written here first and never fired.
 
-   **The two objections that 64KB figure did not answer are now real, and are accepted
-   rather than mitigated.** `recordCompletion` persists every check's tail twice: once
-   into `Verification.CheckStore`'s per-workstream blob (`VerificationCheckStore.swift:70-77`),
-   and again by mirroring `output` onto `run.checks`, which `seal` re-reads and hands to
-   `Verification.Store.save` (`VerificationRunner.swift:655-665`, `:788`). Both are
-   UserDefaults, and neither has a size cap of its own. So a suite of N checks, most of
-   them passing, now writes up to N × 200 lines into each of two UserDefaults blobs,
-   where before the run blob carried only the failing subset's output and the per-check
-   blob did not exist. `VerificationTabView.currentRun` decodes the run blob on the main
-   actor whenever there is no live run to read instead (`VerificationTabView.swift:619-621`).
-   No cap was added, because capturing every check's output rather than only failures is
-   the point of the change above, and a cap would have reintroduced a version of the rule
-   it retires. If UserDefaults growth or the main-actor decode cost becomes a real
-   problem, the fix belongs here, not in a re-narrowed capture.
-2. **Teardown has exactly one owner.** `spawner.shutDown` is called once, from the run loop, only
-   after `seal` returns (`VerificationRunner.swift:922-929`). Not from a `defer` — that can run
-   before the log fetch, and the output is gone by the time `seal` wants it. Not from
-   `stop(workstreamID:)` (`VerificationRunner.swift:488-491`) — Stop and the run loop would then
-   race two teardowns on one socket, the hazard `shutDownWhenDone: false` exists to avoid; `stop`
-   only sets a flag. A missed trailing teardown is recoverable because `ProcessCompose.PhaseExecutor.run`
-   shuts the socket down again at its own top, before spawning, the next time `start` is called.
-3. **A Stop is not acted on until the control server has answered.** `shouldStop` withholds a
-   pending Stop until `state.sawServer` is true (`VerificationRunner.swift:1031-1051`), because
-   `PhaseExecutor.shutDown` returns immediately when the socket file does not exist yet
-   (`PhaseExecutor.swift:529-530`) — a Stop observed before `up` binds would make that teardown a
-   no-op while the suite kept running: `isLive` would clear while the suite was still live, and a
-   second `start` would be admitted onto the same socket.
-4. **Liveness is `Verification.Runner.isLive(_:)`, never `Run.isFinished`.** The run loop publishes
-   each check's state as the poll sees it, so a run's rows can all read terminal while the spawn is
-   still winding down and nothing has been sealed or persisted — `isFinished` goes true at that
-   moment; `isLive` does not (`VerificationRunner.swift:391-414`). `verificationCanRun`
-   (`VerificationTabView.swift:32-43`) gates the Run button on `isLive` for the same reason.
-   `Run.isFinished` is a row-state property, not a liveness signal: using it here would let a second
-   `start` rebind `<id>-verify.sock` while the first run's spawn is still winding down and its
-   server is still there — the reason `isLive` is keyed on `sealedRunIDs` instead.
-5. **The Verification tab's availability decision is `PhasePolicy.plan`'s; only the wording is
-   separate.** `verificationAvailability` calls `plan(phase: .verify, …)` for the decision and
-   `verificationUnavailableReason` only to phrase it in the present tense
-   (`VerificationTabView.swift:412-454` and `:311-363`), because `Plan.nothingToDo` carries a
-   past-tense string and
-   no discriminated case. **Nothing enforces the agreement** —
-   `verificationUnavailableReason` hand-mirrors `plan`'s three preconditions in the same order; a
-   fourth precondition added to `plan` has to be added here too, by hand, and nothing will fail to
-   compile if that step is missed — which is exactly what happened in the other direction when the
-   process-compose switch was removed and this mirror had to lose its first guard by hand. `.run`
-   is not by itself availability, either: `plan` knows nothing about namespace *contents*, so an
-   empty or unparseable `verify` namespace still returns `.run` — `verificationAvailability` reads
-   the declared list off `plan`'s own returned config as a fourth fact, so Run cannot be enabled
-   for a project `start` would refuse.
-6. **A parse failure is not "declares nothing".** `declaredProcesses(in:)` returns nil, not `[]`,
-   when a file cannot be parsed (`ProcessComposeConfig.swift:173-198`). `Verification.Runner.start`
-   throws `Failure.unavailable` on that nil rather than letting `resolveChecks` see an empty list
-   (`VerificationRunner.swift:739-746`), and `verificationUnavailableReason` keeps `declared` as an
-   `Optional` through its own guard chain for the same reason (`VerificationTabView.swift:311-363`).
-   Coalescing either one to `[]` early would report a broken config to the user as "this project
-   declares no verify checks" — the same message a project with genuinely no verify checks gets,
-   and the only diagnostic either path gives.
-7. **`seal` never overwrites a state the live rows established.** A check missing from the final
-   `processes()` read keeps what the polls saw; only a row still `.pending` (or `.running`) is
-   relabelled, by the switch below the mapping. The `else { .notRun }` that used to stand there was
-   false whenever the read *failed*, because `execute` passes `verifyProcesses(...) ?? []` — and it
-   fails routinely: `PhaseExecutor.PollResult.serverGone` records that a project may shut itself
-   down, and `restart: exit_on_failure` does exactly that **even with `--keep-project`**. A
-   fail-fast verify suite therefore published `.failed(1)`, self-terminated, and sealed every check
-   `.notRun`, discarding the failure the user had just watched. For the same reason the
-   `failureDetail` banner is gated on the *rows* — `Runner.serverReportedAnyCheck`, i.e. some row is
-   no longer `.pending` — and not on `entries.isEmpty`, which was the same question only while an
-   empty read also meant empty rows. **That predicate is "was any check ever reported", never "did
-   any check finish"**: `PhaseExecutor.run` returns `.failed` with the checks still executing when
-   its own deadline ends a run, so a terminal-states test would fire "the run itself failed to start
-   its checks" over a suite that ran for its whole `Timeout.suite`. Cost, accepted and unfixable
-   here: when the server is genuinely gone the completion-edge fetch gets nothing, so the preserved
-   `.failed` row carries no log.
+**Each check runs `<shell> -lic '<command>'`** with the worktree as cwd and
+`ProcessCompose.PhaseEnvironment`'s variables, so `ATELIER_*` and every `ports.yaml` name reach a
+check exactly as they reach the other phases. `-lic` and not `-lc`: zsh users put PATH in
+`.zshrc`, which only an interactive shell reads, and a check that cannot find `bundle` fails for
+a reason nothing on the row could explain. `shell:` defaults to `$SHELL`; a bare name is resolved
+against four common prefixes, because the wrapper inherits a GUI app's minimal PATH.
 
-   **It now governs the record writer as well as the rows.**
-   `Verification.Runner.recordCompletion` is the single writer of a `CheckRecord` and is
-   idempotent per `(runID, name)`, so `seal`'s pass over the terminal rows cannot replace
-   a record the live loop wrote mid-run — the same guarantee this decision already made
-   for `state`, one layer out. That idempotence is also what makes "one mailbox notice per
-   check per run" structural rather than a property two call sites have to maintain:
-   `recordCompletion` is the only caller of `onCheckFinished`. It also **mutates**
-   `runs[workstreamID]` to mirror output onto the row, so `seal` re-reads the dictionary
-   before `Store.save` — persisting its own pre-record local copy would store rows with no
-   output while the records have it, and nothing would catch it, since `sealedRunIDs` is
-   inserted afterwards.
-8. **A check named like a flag is filtered out at the verify layer, not at `PhaseRunner.command`.**
-   That filter — trailing process names beginning with `-` are dropped — is a load-bearing
-   flag-injection guard shared with `execute` and must not be weakened. But it did not compose with
-   `resolveChecks`, which refused only names that were *not declared*: a process genuinely named
-   `-n` is legal YAML, so it was declared, offered in the (then-existing) checklist, resolved, and
-   then silently dropped on the way to the shell. As the *only* selection it was worse than a
-   missing row — `selectedProcesses` became empty and `up -n verify` ran the **whole namespace**,
-   inverting the user's selection through a security guard. `Verification.Runner.runnableChecks` is
-   the one copy of the filter and both `start` and `verificationAvailability` call it, so the tab's
-   rows and the runner cannot disagree about what exists; `resolveChecks` applies it to its own `declared`
-   argument too, so the guarantee does not depend on a caller remembering, and additionally refuses
-   such a name asked for explicitly, with `Failure.unrunnableChecks` rather than "No such check",
-   which would be a lie about a name the YAML really declares.
+**The wrapper, and why it has three layers** (`Verification.Spawn.build`):
 
-9. **A purge stops a verify run *through the runner*, and the wait is bounded.**
-   `Workstream.Archiver.purge` used to call `ProcessCompose.PhaseExecutor.shutDown` for the
-   verify socket directly. That call returns immediately when the socket file does not exist
-   yet (`PhaseExecutor.swift:529-530`), so a purge landing in the binding window reported the
-   run dealt with and went on to `dispose` and `git worktree remove --force` while a suite was
-   still coming up in that tree — the same hazard `shouldStop` defends at the *other* end of a
-   run's life, and it composes with it rather than working around it.
-   `Verification.Runner.stopAndWait` is the replacement, reached through
-   `Archiver.quiesceVerification`: it calls `stop`, which only sets a flag, then polls `isLive`
-   — so **the run loop is still the single owner of `shutDown`**, and every ordering it
-   guarantees happens once, in order. The bound is `ProcessRunner.Timeout.userCommand`, which
-   has to be at least that tier: the wait covers a binding window this layer cannot bound plus
-   the loop's teardown, itself already `Timeout.local`, and `userCommand` is the same bound
-   `runDispose` uses for the very next step. **Not `Timeout.suite`** — purge waits for a suite
-   to be *stopped*, not to *finish*. On expiry `purge` logs and proceeds, because a workstream
-   stranded half-archived is worse than cleanup that did not happen; the direct `shutDown` is
-   still there afterwards, now only for a socket no live run owns (a crashed session's leftover)
-   or a wait that expired. Two consequences follow from going through `stop`:
-   `Verification.Runner.forget` drops the in-memory entry that otherwise held a sealed run for a
-   destroyed workstream for the session, and it is called **before** the destructive work, so a
-   loop still running after an expired wait seals into nothing — no `Store.save` and no
-   `onFinish`, which would otherwise post an `atelier/verification` notice about a worktree being
-   deleted as it is written. And the run seals `wasStopped: true` in step with its `.stopped`
-   rows, where tearing the socket down behind the runner's back sealed `wasStopped: false` over
-   the same rows.
+```sh
+sh -c 'ps -o pgid= -p $$ | tr -d " " > <pid>; <shell> -lic "<command>"; echo $? > <status>'
+```
 
-**`execute` has the same hole, and it is closed the same way.** The checklist and the run there
-had no filter at all: `declaredExecuteProcesses` offered a process named `-web` verbatim, the user
-checked it, and `resolvedRunCommand` handed it to `PhaseRunner.command`, which dropped it *after*
-the `!selectedProcesses.isEmpty` guard — so `up -n execute` ran with no names, which is the whole
-namespace. `ProcessCompose.PhaseRunner.runnableProcesses` is the one copy of the filter, kept
-beside the guard it must match rather than as a third spelling of it, and `command` itself is one
-of its callers. `declaredExecuteProcesses` calls it so the checkbox cannot be offered, and
-`processesToStart` (`ProcessTableView.swift`, beside `processSelectionOnLoad`) calls it on its own
-`declared` argument so the run does not depend on the checklist having rendered — Start is
-reachable from the palette and Cmd+Shift+Return with the Execution tab never opened, and
-`ProcessSelectionView.onAppear` is what would otherwise have cleaned the stored value.
-`Verification.Runner.runnableChecks` could now delegate to it; it is left alone deliberately, since
-its doc already declares itself a mirror and the verify side was not this change's target.
-Unlike verify there is **no refusal** for a flag-shaped name: a stored selection whose members are
-all flag-shaped resolves to the canonical "all" instead — which is what the checklist renders for
-it too, so the two agree. Nothing runnable is withheld, and the precise claim is narrower than it
-looks: such a process still *starts*, on the empty selection that runs the namespace; what it
-cannot be is started **by name**, which process-compose could not do either. (An empty selection
-*is* refused, but that is the user having unchecked every box, and the Start button is disabled
-on the same fact — see "The checklist's own gate" above. A refusal only the run knows about is the
-thing to avoid, not a refusal.)
+1. **`sh -c` outside**, because the wrapper needs `$?` and redirection and the user's shell may be
+   fish, where `$?` is `$status`.
+2. **The process *group* id, recorded before anything runs.** Ghostty exposes no pid for a
+   surface's child, so this is the only handle on a running check, and the group is what `stop`
+   signals. **`ps -o pgid=`, never `$$`** — measured: a backgrounded `sh -c` reported `$$` as
+   56980 while its real pgid was 56974, and `kill(-56980, 0)` answered ESRCH. Under `$$` both
+   halves fail together and both fail *silently*: `stop` signals a group that does not exist so
+   nothing dies, and `isAlive` reads the same ESRCH as "gone" so every check is recorded finished
+   the moment the completion pass first looks. Production is the case where they most likely
+   coincide, which is exactly what would make it pass in testing and break elsewhere.
+3. **The exit code goes to a file**, not to Ghostty's `GHOSTTY_ACTION_SHOW_CHILD_EXITED`. That
+   action does fire, but its code cannot be trusted here — Ghostty's own source says so where it
+   builds the message: "On macOS, our exit code detection doesn't work, possibly because of our
+   `login` wrapper" (`ghostty/src/Surface.zig:1208`).
 
-**An agent can start a verify run, and that is what the type is app-level for.** A run an agent
-started through `start_verification` has to appear in the user's tab, and `<id>-verify.sock` admits
-exactly one server — so "one run per workstream" needs a single enforcement point rather than one in
-the tab and another in the IPC handler (`VerificationRunner.swift:12-17`). The adapter that was
-anticipated here is `IPC.VerificationRunnerBridge`, which attaches to `runs` and `onFinish` without
-owning either; `IPC.Tool` (`IPCProtocol.swift`) carries `startVerification` and `checkVerification`,
-and `Sources/MCPHelper/main.swift` advertises both. So `Verification.Runner.start` now has **two**
-callers — the Verification tab and that bridge — and they are the only legal entrances, because
-`start` is where `PhasePolicy.plan` is consulted. See "The verification tools, and the first message
-Atelier sends itself" for the rest of the contract.
+The outermost token is **POSIX-quoted, never fish-quoted**: Ghostty runs a surface command through
+`/usr/bin/login -flp <user> /bin/bash --noprofile --norc -c` on macOS, so bash reads it before any
+shell of ours does — the same rule `CommandBuilder.inLoginShell` states at its own quoting.
+
+**Checks are independent.** No control server, no socket, no suite. Any number run at once, each
+with its own surface and its own stop, and starting or stopping one says nothing about any other.
+So `Runner.isLive(workstreamID)` means "is *anything* running here" — what a purge waits on — and
+`isRunning(_:check:)` is what gates a start. A `Run` survives only as the unit one press started,
+which is what `start_verification` answers with.
+
+**A check with no pid file yet is starting, never finished.** The completion pass reads the
+wrapper's two files: a status file is a verdict, and a process group that is gone *with a pid file
+present* is a check that died or was killed. Reading a **missing** pid as "gone" would record every
+check as finished before it had run anything, silently. `stopRequested` is the only thing that
+distinguishes a killed check from one that died on its own, because killing the group takes the
+wrapper with it before it can write a status.
+
+**Output lives in the surface and nowhere else.** It is never captured, never persisted, and does
+not survive the app — which is the whole bargain this design makes, and it retired
+`outputTruncated`, the 200-line tail, the one-shot log window, and the "there is nothing more to
+fetch" copy along with it. `Verification.CheckRecord` carries a verdict, a duration, a stamp and a
+run id, and that is all that outlives a session. **No output crosses the IPC boundary either**:
+`IPC.VerificationCheckInfo` has no `outputTail`, and every string an agent sees points at the
+Verification tab or at re-running the one check. A re-run **destroys the previous surface**, so
+the last run's output is gone the moment the next one starts.
+
+**`Runner.forget` is called by both archive paths, not just `purge`.** A check's surface id comes
+from `Verification.Spawn.surfaceID` — derived from the workstream id *and* the check's name, so it
+cannot collide with the workstream's own id, which is the Coding Agent's surface — and
+`TerminalSurfaceCache.removeWorkstreamSurfaces` sweeps only ids derived from `WorkspaceModel`'s
+counters. So nothing else can reach a check's terminal: a workstream *removed* with rspec running
+would otherwise leave that terminal and its process alive for the session.
+
+**A purge stops checks through the runner and the wait is bounded.**
+`Archiver.quiesceVerification` calls `Runner.stopAndWait`, because `stop` only *asks* — it signals
+the group and returns. A purge that signalled and moved on would reach `git worktree remove
+--force` with the command still running in that tree. The bound is
+`ProcessRunner.Timeout.userCommand`, the same tier the next step uses; on expiry the purge logs and
+proceeds, because a workstream stranded half-archived is worse than cleanup that did not happen.
+`forget` runs **before** the destructive work, so a check outliving an expired wait finishes into
+nothing rather than announcing a result for a worktree being deleted.
+
+**The `verify` namespace is gone** from `ProcessCompose.Phase`, and with it the socket, the
+control server, `liveClients`, `sealedRunIDs`, `tearingDown`, the `sawServer` guard, the
+one-owner-of-`shutDown` rule, the `restart: exit_on_failure` trap that sealed watched failures as
+`.notRun`, and the empty-namespace idle gate. `shutDownWhenDone: false` survives on
+`PhaseExecutor.run` with **no production caller**: it is the only thing standing between
+`--keep-project` and a report, and `Tests/PhaseExecutorTests.swift` keeps it covered for whoever
+needs a server to outlive its namespace next.
+
+**`CheckResult.State` keeps seven cases, two of which have no producer.** `.pending` and
+`.skipped` described a process-compose dependency graph that checks no longer have. They stay
+because the glyph table, the state words and the row's accessibility labels are a fixed set the UI
+is specified against, and because a queued check is the obvious next thing this could grow.
+Nothing may start *reading* them as reachable.
+
+**The Verification tab is one row per declared check**, and the row is:
+
+```
+▸  ◯ rspec ▶                                        stale   12.4s
+```
+
+The **triangle is the only toggle** — clicking the glyph or the name does nothing, which is a
+deliberate reversal of the shape this replaced, where the whole row was an invisible button and
+there was no triangle at all. The **run button follows the name** rather than the trailing edge,
+so it is unmistakably *this check's* button, and the column it forms is ragged by design; the
+trailing edge belongs to the stale marker and the duration, which are what a user scans down.
+Expanding shows that check's terminal at a fixed height, read-only and scrolling inside itself —
+fixed rather than grown to fit, because a terminal has its own scrollback and the rows live in a
+`ScrollView`.
+
+**Three glyphs for three offers**, and `verificationRowAction` is the pure function that picks:
+green `play.fill` for a check with no result, `arrow.clockwise` for one that produced a verdict,
+`stop.fill` while it runs. **A stopped check offers Run, not Re-run** — a stop is the user
+deciding this check should not have run, so the honest next offer is the one an untouched check
+gets. Green is only ever for starting.
+
+**There is no Run all and no top-bar Stop.** Every row has its own button, and the action row went
+with them.
+
+`VerificationSurfaceView` attaches an **existing** surface and never creates one — deliberately
+not `SingleTerminalView`, which creates on a miss: a row for a check that has never run would
+otherwise spawn a terminal running the wrapper the moment its group was opened. A missing surface
+is an ordinary state the row draws a sentence for, and the runner is the only thing that starts
+one. `TerminalView.isReadOnly` swallows `keyDown`, `insertText` and drops while leaving selection,
+copy and scrollback working — it is a flag on the write paths rather than
+`acceptsFirstResponder` returning false, because a surface that cannot be focused cannot be
+selected from the keyboard either. It is set at creation *and* on every attach, since the runner
+makes the surface and has no opinion about who renders it.
+
 
 ### ports.yaml
 A **`ports.yaml`** in the project directory declares the port variables Atelier supplies, so
@@ -883,10 +808,10 @@ terminal tab. Declarations merge *over* Atelier's own variables, so a project th
 `ATELIER_PORT` to mean something specific may say so, and the legacy `FF_*` mirror is built
 last so it never lags behind.
 
-**And every declared name reaches all five namespaces.** `prepare` and `execute` run in a
-Ghostty surface, which is handed those variables when it is created; `bootstrap`, `dispose` and
-`verify` spawn through `ProcessCompose.PhaseExecutor`, and until `ProcessCompose.PhaseEnvironment` existed their children inherited
-only the app's own environment. One `process-compose.yaml` therefore ran under two different
+**And every declared name reaches all four namespaces, and the verification checks too.**
+`prepare` and `execute` run in a Ghostty surface, which is handed those variables when it is
+created; `bootstrap` and `dispose` spawn through `ProcessCompose.PhaseExecutor`, and until
+`ProcessCompose.PhaseEnvironment` existed their children inherited only the app's own environment. One `process-compose.yaml` therefore ran under two different
 environments depending on which namespace was asked for: the documented replacement for the
 seeding this integration removed, `rsync -rlpt --copy-links "$$ATELIER_PROJECT_DIR/seed-files/" .`,
 rsynced from `/seed-files/`. `ProcessCompose.PhaseEnvironment.variables` assembles the same set for the
@@ -997,8 +922,8 @@ is signalling a stranger:
 Pick a deadline from `ProcessRunner.Timeout` rather than inlining a number:
 `local` for reads and ref-level writes, `network` for anything reaching a remote,
 `userCommand` for work whose size the user controls, `install` for package
-managers, `suite` for a project's own test or lint suite run through the `verify`
-namespace. `suite` is 1800s, the same bound as `install`, because `userCommand`'s
+managers, `suite` for a project's own test or lint suite. `suite` is 1800s, the
+same bound as `install`, because `userCommand`'s
 300s is too short for a real suite — the bound exists to break a wedge rather
 than to enforce a pace, and Stop is the real escape for a run that is merely
 slow. The distinction that matters is not local-versus-remote but whether the
@@ -1374,7 +1299,7 @@ Two further things about it that are not guesses:
 
 ### The verification tools, and the first message Atelier sends itself
 
-`start_verification` runs the project's `verify` namespace against the caller's own
+`start_verification` runs the project's `verification.yaml` checks against the caller's own
 worktree and answers with a **run id**, never a result: a real suite outlives an MCP tool
 call. The results reach the agent two ways — **one notice per check, posted as that check
 finishes** — and `check_verification(run_id)`, which exists because delivery is a pull and
@@ -1386,21 +1311,21 @@ out.
 mirroring `ProcessCompose.Controlling`. It carries `IPC.VerificationRunInfo` rather
 than the runner's `Verification.Run` — the projection `PeerInfo` is to the store's
 `Peer`, and for the same reasons: seconds-ago instead of a `Date` needing a shared
-encoding strategy on both ends, a bounded output tail instead of a suite's whole log,
-`isStale` instead of the stamp. The `CheckResult.State` → `VerificationCheckState`
-mapping is therefore the runner's, which is where the two measured process-compose
-traps already live. Its doc comment carries the rest of the contract, and two clauses
-there are load-bearing: a start must **refuse while a run is in flight** for that
-workstream, because `PhaseExecutor.run` calls `shutDown` at the *top* and a second
-start would kill the first mid-suite; and `onFinish` must fire on every terminal path,
-because a path that does not is a completion notice that never arrives.
+encoding strategy on both ends, and `isStale` instead of the stamp. **No output crosses
+this boundary at all** — a check's output lives in its terminal surface and Atelier keeps
+no copy, so an agent gets verdicts, exit codes and durations, and every string points at
+the Verification tab or at re-running the one check. Its doc comment carries the rest of
+the contract, and two clauses there are load-bearing: a start must **refuse a check that
+is already running**, per check rather than per workstream, since two *different* checks
+at once is the design; and `onFinish` must fire on every terminal path, because a path
+that does not is a completion notice that never arrives.
 
-**Approval is not rechecked here.** `ProcessCompose.PhasePolicy.plan` is the gate and
-it lives behind the seam — `Verification.Runner.start` calls it, and that function is the
-only legal entrance to the runner. `IPC.VerificationRunnerBridge` therefore never touches
-`Runner.execute`, which spawns repository-provided commands with captured output and no
-TTY and performs no gate of its own. The handler passes the runner's refusal through
-verbatim; adding a check in `IPC.Service` is the inlined second copy that section forbids.
+**There is no approval gate to recheck.** `verification.yaml` lives in the project
+directory, outside every work tree, so it cannot have arrived with the repository — the
+same location rule that leaves a project-directory process-compose config unasked-about.
+`Verification.Runner.start` is the only legal entrance to the runner and the handler passes
+its refusals through verbatim; adding a check in `IPC.Service` is the inlined second copy
+that section forbids.
 
 **The bridge routes completions per run, because `Runner.onFinish` is one slot that fires
 for every run the app performs** — including the ones the user pressed Run for.
@@ -1411,8 +1336,8 @@ one; and nothing may `await` between `Runner.start` returning and the callback b
 registered, or a fast failure fires into a slot that is not there yet.
 
 **A run's state is read from its own rows, never from `Runner.isLive`.** They answer
-different questions: `isLive` means "may a new run start on this workstream's socket" and
-stays true through sealing *and* teardown, so a state read from it would report a run as
+different questions: `isLive` means "is anything running in this workstream", which stays
+true while a *sibling* check keeps going — so a state read from it would report this run as
 still running in the very notice announcing it finished. `wasStopped` then `isFinished` is
 the projection, and `isLive` is left to the thing it is for.
 
@@ -1427,10 +1352,11 @@ assumed a sender peer existed. The store's inbox scan is what keeps a queued not
 from being orphaned by its recipient's TTL — the same guarantee peer messages already
 had.
 
-**A run id outlives a restart only for the newest run in a workstream.** The runner
-keeps that one because the staleness stamp needs it anyway; every older id resolves to
-nil and `check_verification` says so. The scope check on a read is not a security
-boundary — every process in this feature runs as the user — it is there because a run
+**A run id resolves for the whole session and never past it.** Runs live in the runner's
+memory and are not persisted: what they used to carry across a restart — a check's output —
+now lives in a terminal surface that does not survive one either, and the verdicts are in
+`CheckStore` regardless. So every run of this session resolves, rather than only the
+newest. The scope check on a read is not a security boundary — every process in this feature runs as the user — it is there because a run
 id is the tool's only argument and ids are short, so a stale one should be told it is
 not this caller's run rather than handed somebody else's results.
 
@@ -1449,31 +1375,25 @@ different pane, not this caller's — which is why `startAnswer` still tells suc
 "nothing will be posted to your inbox" rather than claiming a delivery that is not to it.
 
 **One run-level notice survives, for a run that completed nothing and was not stopped.**
-`up -n` on an empty namespace never exits so `PhaseExecutor` returns `.skipped` without
-spawning; an undecodable config declares no processes at all; and a spawn that dies before
-binding leaves every row `.notRun`. In all three no check reaches a terminal edge, so there
-are no per-check notices — and "0 of 0 failed" is both true and a green suite. The
-discriminator is exactly that: every check sealed `.notRun`, which is also exactly when
-`recordCompletion` wrote nothing (`isTerminal` excludes `.notRun` on purpose — see verify
-decision 7). A run the user *stopped* before anything started seals the same way and is
-excluded, because the notice exists to break a silence rather than to report an action back
-to the person who took it.
+A press where every check failed to get a terminal leaves rows present and `.notRun`, so no
+check reaches a terminal edge and there are no per-check notices — and "0 of 0 failed" is
+both true and a green suite. The discriminator is exactly that: every check `.notRun`, which
+is also exactly when `recordCompletion` wrote nothing. A run the user *stopped* before
+anything started looks the same way and is excluded, because the notice exists to break a
+silence rather than to report an action back to the person who took it.
 
-**The captured tail is still the only copy of a check's output that survives its run**, and
-that is unchanged by the capture widening to every check. The log lives in process-compose's
-control server, the runner shuts that down once the run is sealed, and `outputTruncated`
-means "there was more at capture time" rather than "more can be fetched". Every string that
-flag drives has to say so; the honest pointer is re-running that one check. (The tab spec's
-original "on demand for a passed check" was impossible for the same reason and has been
-withdrawn.)
+**A check's output reaches no agent, ever.** It lives in that check's terminal surface and
+Atelier keeps no copy at all, so there is nothing to send and nothing that could be fetched
+later. Every string here says so: the tab, for as long as Atelier is running, and re-running
+the one check are the two honest pointers.
 
-**Two bounds that are not tuning.** `IPC.Store` refuses content over 64KB outright, so
-an oversized notice is not trimmed on delivery — it is lost, silently, exactly when the
-agent is waiting for it; `VerificationSummary` assembles against a 6KB budget, verdicts
-before output, and points at `check_verification` for the rest. And a run that finished
-having run **nothing** must never render as a pass: `up -n` on an empty namespace never
-exits so `PhaseExecutor` returns `.skipped` without spawning, and an undecodable config
-declares no processes at all, which makes "0 of 0 failed" both true and a green suite.
+**Two bounds that are not tuning.** `IPC.Store` refuses content over 64KB outright, so an
+oversized notice is not trimmed on delivery — it is lost, silently, exactly when the agent is
+waiting for it. With no output to carry, the two things that can still overshoot are the list
+of verdicts (`VerificationSummary` assembles against a 6KB budget and says when it cut the
+list) and a **check's name**, which is the user's and unbounded — a 200KB name in
+`verification.yaml` is legal YAML. And a run that finished having run **nothing** must never
+render as a pass, which is what the run-level notice above is for.
 
 Two agents in one worktree is a supported shape, not a mistake — `/ping-pong`-style pairing
 wants it. They are distinguishable because every Atelier-launched terminal exports its own

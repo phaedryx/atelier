@@ -143,17 +143,14 @@ final class IPCVerificationToolsTests: XCTestCase {
             startedSecondsAgo: 50,
             durationSeconds: 50,
             checks: checks,
-            isStale: false,
-            failureDetail: nil,
-            unstartedChecksDetail: nil
+            isStale: false
         )
     }
 
     private func failingRun(id: String = "v7f3a11", workstreamID: UUID) -> IPC.VerificationRunInfo {
         run(id: id, workstreamID: workstreamID, checks: [
             IPC.VerificationCheckInfo(
-                name: "rspec", state: .failed, exitCode: 1, durationSeconds: 48.1,
-                outputTail: "3 examples, 1 failure", outputTruncated: false
+                name: "rspec", state: .failed, exitCode: 1, durationSeconds: 48.1
             ),
         ])
     }
@@ -320,9 +317,9 @@ final class IPCVerificationToolsTests: XCTestCase {
         _ = await call(.startVerification, [:], as: caller)
 
         await runner.finish(with: run(workstreamID: workstreamID, checks: [
-            IPC.VerificationCheckInfo(name: "rspec", state: .notRun, exitCode: nil, durationSeconds: nil, outputTail: nil, outputTruncated: false),
-            IPC.VerificationCheckInfo(name: "rubocop", state: .notRun, exitCode: nil, durationSeconds: nil, outputTail: nil, outputTruncated: false),
-            IPC.VerificationCheckInfo(name: "tsc", state: .notRun, exitCode: nil, durationSeconds: nil, outputTail: nil, outputTruncated: false),
+            IPC.VerificationCheckInfo(name: "rspec", state: .notRun, exitCode: nil, durationSeconds: nil),
+            IPC.VerificationCheckInfo(name: "rubocop", state: .notRun, exitCode: nil, durationSeconds: nil),
+            IPC.VerificationCheckInfo(name: "tsc", state: .notRun, exitCode: nil, durationSeconds: nil),
         ]))
 
         let messages = await waitForInbox(caller)
@@ -428,7 +425,7 @@ final class IPCVerificationToolsTests: XCTestCase {
         IPC.VerificationCheckNotice(
             runID: "v7f3a11", workstreamID: workstreamID.uuidString, requesterSurfaceID: requesterSurfaceID,
             check: IPC.VerificationCheckInfo(
-                name: "rspec", state: state, exitCode: nil, durationSeconds: 12, outputTail: nil, outputTruncated: false
+                name: "rspec", state: state, exitCode: nil, durationSeconds: 12
             )
         )
     }
@@ -486,26 +483,6 @@ final class IPCVerificationToolsTests: XCTestCase {
         XCTAssertEqual(info.state, .finished)
         XCTAssertEqual(info.checks.map(\.name), ["rspec"])
         XCTAssertEqual(info.checks.first?.state, .failed)
-    }
-
-    func test_checkVerification_boundsTheOutputItAnswersWith() async throws {
-        await service.setVerificationRunner(runner)
-        await runner.store(run(workstreamID: workstreamID, checks: [
-            IPC.VerificationCheckInfo(
-                name: "rspec", state: .failed, exitCode: 1, durationSeconds: 48,
-                outputTail: String(repeating: "chatter\n", count: 100_000), outputTruncated: false
-            ),
-        ]))
-        let caller = try await register(surfaceID: UUID(), name: "builder")
-
-        let response = await call(.checkVerification, ["run_id": "v7f3a11"], as: caller)
-
-        guard case let .verificationRun(info) = response.payload else {
-            return XCTFail("expected a run, got \(String(describing: response.error))")
-        }
-        let tail = try XCTUnwrap(info.checks.first?.outputTail)
-        XCTAssertLessThanOrEqual(tail.utf8.count, IPC.VerificationSummary.maxReadTailBytesPerCheck)
-        XCTAssertEqual(info.checks.first?.outputTruncated, true)
     }
 
     func test_checkVerification_withoutARunID_saysWhichArgumentIsMissing() async throws {

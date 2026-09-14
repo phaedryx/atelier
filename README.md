@@ -62,16 +62,20 @@ Atelier runs a project's commands through
 [process-compose](https://f1bonacc1.github.io/process-compose/), so it needs
 that binary on the machine. It is a requirement rather than an option: there is
 no switch to turn it on, and nothing below works without it, including the
-Execution tab's Start button and the Verification tab's Run button. Settings →
-Environment lists it under **Detected Tools** beside `git` and `claude`, with a
-path field for an install the usual locations do not cover.
+Execution tab's Start button. Settings → Environment lists it under **Detected
+Tools** beside `git` and `claude`, with a path field for an install the usual
+locations do not cover.
+
+The Verification tab is the exception: its checks are plain commands, declared in
+their own file and run without process-compose. See **Verification** below.
 
 ### What Atelier reads
 
 | File | Where Atelier looks | What it holds |
 |------|---------------------|---------------|
-| `atelier.process-compose.yaml` | the worktree, then the project directory | the commands, in five namespaces |
+| `atelier.process-compose.yaml` | the worktree, then the project directory | the commands, in four namespaces |
 | `process-compose.yaml` | the worktree, then the project directory | the same, under the generic name |
+| `verification.yaml` | the project directory only | the checks the Verification tab runs |
 | `ports.yml` (or `ports.yaml`) | the project directory only | the port variables Atelier supplies |
 
 **"The project directory" is the repository's home — in the bare-repo layout the
@@ -125,7 +129,6 @@ process-compose up -f ../atelier.process-compose.yaml    # from inside a worktre
 | `prepare` | Before every Start, to completion; a failure stops `execute` |
 | `execute` | The long-lived stack, shown in the Execution tab's process table |
 | `dispose` | Once, when a workstream is archived |
-| `verify` | On demand, from the Verification tab; never chained into Start |
 
 ### A worked example
 
@@ -341,9 +344,9 @@ Atelier looks — a symlink into `~/.local/bin` does it.
 
 ### Approval, and when there is no config
 
-`bootstrap`, `dispose` and `verify` all run with their output captured rather
-than shown in a terminal, so a config that came with the repository has to be
-approved first, and again whenever it changes. A config you placed in the
+`bootstrap` and `dispose` both run with their output captured rather than shown
+in a terminal, so a config that came with the repository has to be approved
+first, and again whenever it changes. A config you placed in the
 project directory by hand is never asked about — approval is gated by *where
 the file is*, not what is in it. `execute` is never gated because it is
 *attended*: you press Start, the stack's output lands in a terminal surface in
@@ -359,6 +362,46 @@ tab reports what background setup did or did not do. That last one is a refusal
 rather than a dead button on purpose: `process-compose up -n execute` against a
 namespace nothing declares neither fails nor exits, so starting it would give you
 an empty TUI and no explanation.
+
+### Verification
+
+Checks live in a **`verification.yaml`** in the project directory — beside
+`.bare` and the worktrees, not inside one:
+
+```yaml
+rubocop:
+  shell: fish
+  command: bundle exec rubocop
+rspec:
+  command: bundle exec rspec
+```
+
+A name, a command, and optionally the shell to run it in (`$SHELL` by default).
+Each check runs as a login shell command with the worktree as its working
+directory, and gets the same `ATELIER_*` and `ports.yaml` variables every other
+Atelier-launched command does. Rows appear in the order the file declares them.
+
+The file is deliberately **not** read from the worktree. It sits outside git, so
+one set of checks serves every worktree, nothing asks you to approve it, and an
+agent working inside a worktree cannot edit the checks that decide whether its
+own work passes.
+
+Each check gets a row with its own run button, and its own terminal:
+
+```
+▸  ◯ rspec ▶                                        stale   12.4s
+```
+
+Press ▶ and expand the triangle to watch it run — a real terminal, so colour and
+progress output look exactly as they do when you run the command yourself. Checks
+are independent: start as many as you like at once, and stop any one of them
+without touching the others. `stale` means the worktree has changed since that
+result was produced.
+
+**A check's output lives in its terminal and nowhere else.** It is not written to
+a file and does not survive quitting Atelier or re-running the check — a verdict
+and a duration are what persist. Agents that start checks over MCP get verdicts
+too, never output.
 
 ### Base branch
 

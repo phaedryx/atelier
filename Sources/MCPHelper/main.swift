@@ -453,12 +453,6 @@ func renderText(_ payload: IPC.Payload?) -> String {
         if let duration = run.durationSeconds {
             lines[0] += " in \(IPC.durationText(duration))"
         }
-        if let failureDetail = run.failureDetail {
-            lines.append("The run itself failed: \(failureDetail)")
-        }
-        if let unstarted = run.unstartedChecksDetail {
-            lines.append("Some checks never started: \(unstarted)")
-        }
         if run.isStale {
             lines.append("STALE: the worktree has changed since this run started, so these results no longer describe the code on disk.")
         }
@@ -474,13 +468,9 @@ func renderText(_ payload: IPC.Payload?) -> String {
                 line += " \(IPC.durationText(duration))"
             }
             lines.append(line)
-            if let output = check.outputTail, !output.isEmpty {
-                lines.append(output.split(separator: "\n", omittingEmptySubsequences: false).map { "    \($0)" }.joined(separator: "\n"))
-                if check.outputTruncated {
-                    lines.append("    … output trimmed — the tail captured while the run was live; no fuller copy was kept.")
-                }
-            }
         }
+        // No output: a check runs in its own terminal surface in the Verification
+        // tab, and Atelier keeps no copy of what it printed.
         return lines.joined(separator: "\n")
     case let .text(text):
         return text

@@ -14,17 +14,16 @@ extension Verification {
     /// latest answer for one name, and the run it came from is a field rather than its
     /// container. Rows in the Verification tab come from the project's declared checks and
     /// are filled from these, so running `rspec` alone no longer erases `rubocop`'s result
-    /// — which is exactly what it did while `Verification.Store`'s single latest `Run` was
-    /// the only thing a row could read.
+    /// — which is exactly what it did while a single latest `Run` was the only thing a
+    /// row could read.
+    ///
+    /// **This is the only thing about a check that survives the app.** Its output lives
+    /// in a terminal surface and dies with the process that drew it, so a record carries
+    /// a verdict, how long it took, and which run produced it — and nothing else.
     struct CheckRecord: Equatable, Codable {
         let name: String
         var state: CheckResult.State
         var duration: TimeInterval?
-        var output: String?
-        /// Whether `output` is only the tail of a longer log. Means "there was more at
-        /// capture time", never "more can be fetched": the control server holding the
-        /// full log is torn down when the run seals.
-        var outputTruncated: Bool
         /// `Git.Operations.diffFingerprint` of the run that produced this record.
         ///
         /// Per record rather than per run, because checks now complete at different
@@ -39,7 +38,7 @@ extension Verification {
         var completedAt: Date
     }
 
-    /// Every check's latest result for one workstream, in UserDefaults beside the run.
+    /// Every check's latest result for one workstream, in UserDefaults.
     ///
     /// **One key per workstream holding a `[String: CheckRecord]`, not one key per
     /// check.** A key per check would put a user-authored process name into a defaults

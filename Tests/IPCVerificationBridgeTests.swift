@@ -1,5 +1,5 @@
 // ABOUTME: Tests the adapter between Verification.Runner and the agent tools.
-// ABOUTME: Covers the projection, per-run completion routing, and the persisted-run fallback.
+// ABOUTME: Covers the projection and the per-run completion routing.
 
 @testable import Atelier
 import XCTest
@@ -23,7 +23,7 @@ final class IPCVerificationBridgeTests: XCTestCase {
     }
 
     override func tearDown() {
-        Verification.Store.clear(for: workstreamID)
+        Verification.CheckStore.clear(for: workstreamID)
         WorkspaceActions.shared.projectList = nil
         projectList = nil
         super.tearDown()
@@ -37,18 +37,6 @@ final class IPCVerificationBridgeTests: XCTestCase {
         stamp: @escaping @Sendable (String, String) -> String = { _, _ in "head|0|empty" }
     ) -> IPC.VerificationRunnerBridge {
         IPC.VerificationRunnerBridge(runner: runner, currentStamp: stamp)
-    }
-
-    private func entry(
-        _ name: String,
-        status: String,
-        isRunning: Bool,
-        exitCode: Int
-    ) -> ProcessCompose.ProcessEntry {
-        ProcessCompose.ProcessEntry(
-            name: name, namespace: "verify", status: status, isReady: "", hasReadyProbe: false,
-            restarts: 0, exitCode: exitCode, pid: 0, isRunning: isRunning
-        )
     }
 
     /// Waits for a completion the bridge delivers through a `Task`, since the
@@ -87,22 +75,31 @@ final class IPCVerificationBridgeTests: XCTestCase {
 
     // MARK: - Completion routing
 
-    func test_sealingARunAnAgentStarted_deliversItsProjection() async {
+    /// Finishes every check of a seeded run, which is what drives `onFinish`.
+    private func finish(
+        _ runner: Verification.Runner,
+        runID: String,
+        _ results: [(String, Verification.CheckResult.State)]
+    ) {
+        for (name, state) in results {
+            runner.recordCompletion(
+                workstreamID: workstreamID, runID: runID, name: name, state: state, duration: 1.0
+            )
+        }
+    }
+
+    func test_finishingARunAnAgentStarted_deliversItsProjection() async {
         let runner = Verification.Runner()
         let bridge = makeBridge(runner: runner)
         let box = CompletionBox()
-        runner.seedRunForTesting(workstreamID: workstreamID, runID: "abcd1234", checks: ["rubocop", "rspec", "vitest"])
+        runner.seedRunForTesting(
+            workstreamID: workstreamID, runID: "abcd1234", checks: ["rubocop", "rspec", "vitest"]
+        )
         bridge.register(runID: "abcd1234") { box.record($0) }
 
-        runner.seal(
-            runID: "abcd1234",
-            from: [
-                entry("rubocop", status: "Completed", isRunning: false, exitCode: 0),
-                entry("rspec", status: "Completed", isRunning: false, exitCode: 1),
-                entry("vitest", status: "Skipped", isRunning: false, exitCode: 1),
-            ],
-            stopped: false
-        )
+        finish(runner, runID: "abcd1234", [
+            ("rubocop", .passed), ("rspec", .failed(1)), ("vitest", .skipped),
+        ])
 
         let info = await waitForCompletion(box)
         let delivered = try? XCTUnwrap(info)
@@ -111,10 +108,9 @@ final class IPCVerificationBridgeTests: XCTestCase {
         XCTAssertEqual(delivered?.workstreamID, workstreamID.uuidString)
         XCTAssertEqual(delivered?.workstreamName, "wry-amber-lexer")
         XCTAssertEqual(delivered?.checks.map(\.state), [.passed, .failed, .skipped])
-        // A `Skipped` check carries exit 1 from process-compose; only a real
-        // failure may report an exit code.
+        // Only a real failure may report an exit code.
         XCTAssertEqual(delivered?.checks.map(\.exitCode), [nil, 1, nil])
-        XCTAssertNotNil(delivered?.durationSeconds, "a sealed run knows how long it took")
+        XCTAssertNotNil(delivered?.durationSeconds, "a finished run knows how long it took")
     }
 
     /// `Runner.onFinish` is one slot and fires for every run the app performs,
@@ -127,11 +123,7 @@ final class IPCVerificationBridgeTests: XCTestCase {
         bridge.register(runID: "someoneelse") { box.record($0) }
         runner.seedRunForTesting(workstreamID: workstreamID, runID: "abcd1234", checks: ["rubocop"])
 
-        runner.seal(
-            runID: "abcd1234",
-            from: [entry("rubocop", status: "Completed", isRunning: false, exitCode: 0)],
-            stopped: false
-        )
+        finish(runner, runID: "abcd1234", [("rubocop", .passed)])
 
         _ = await waitForCompletion(box, timeout: 0.4)
         XCTAssertEqual(box.deliveries, 0, "the user's own run must not reach an agent's inbox")
@@ -141,14 +133,10 @@ final class IPCVerificationBridgeTests: XCTestCase {
         let runner = Verification.Runner()
         let bridge = makeBridge(runner: runner)
         let box = CompletionBox()
-        runner.seedRunForTesting(workstreamID: workstreamID, runID: "abcd1234", checks: ["rspec", "vitest"])
+        runner.seedRunForTesting(workstreamID: workstreamID, runID: "abcd1234", checks: ["rspec"])
         bridge.register(runID: "abcd1234") { box.record($0) }
 
-        runner.seal(
-            runID: "abcd1234",
-            from: [entry("rspec", status: "Running", isRunning: true, exitCode: 0)],
-            stopped: true
-        )
+        finish(runner, runID: "abcd1234", [("rspec", .stopped)])
 
         let info = await waitForCompletion(box)
         XCTAssertEqual(info?.state, .stopped)
@@ -157,98 +145,76 @@ final class IPCVerificationBridgeTests: XCTestCase {
 
     // MARK: - Reading
 
-    /// The trap this projection exists to avoid. `Runner.isLive` means "may a
-    /// new run start on this socket" and stays true through sealing and
-    /// teardown — a state read from it would report a run as still running in
-    /// the very notice announcing that it finished.
-    func test_aRunWhoseRowsAreAllTerminalReadsAsFinishedWhileTheRunnerStillCallsItLive() async {
+    /// The trap this projection exists to avoid. `Runner.isLive` answers "is
+    /// anything running in this workstream", which stays true while a sibling
+    /// check keeps going — so a state read from it would report this run as still
+    /// running in the very notice announcing that it finished.
+    func test_aFinishedRunReadsAsFinishedWhileAnotherCheckKeepsTheWorkstreamLive() async {
         let runner = Verification.Runner()
         let bridge = makeBridge(runner: runner)
-        runner.seedInFlightForTesting(workstreamID: workstreamID, runID: "abcd1234")
-        XCTAssertTrue(runner.isLive(workstreamID), "precondition: unsealed, so the socket is still taken")
+        runner.seedRunForTesting(workstreamID: workstreamID, runID: "abcd1234", checks: ["rspec"])
+        runner.seedRunForTesting(workstreamID: workstreamID, runID: "efgh5678", checks: ["vitest"])
 
         let running = await bridge.verificationRun(id: "abcd1234", in: workstreamID)
-        XCTAssertEqual(running?.state, .running, "its one check is still running")
+        XCTAssertEqual(running?.state, .running, "its check has not finished")
 
-        runner.seal(
-            runID: "abcd1234",
-            from: [entry("x", status: "Completed", isRunning: false, exitCode: 0)],
-            stopped: false
-        )
-        let sealed = await bridge.verificationRun(id: "abcd1234", in: workstreamID)
-        XCTAssertEqual(sealed?.state, .finished)
-    }
+        finish(runner, runID: "abcd1234", [("rspec", .passed)])
 
-    func test_readingARunCarriesOutputAndItsTruncationFlag() async {
-        let runner = Verification.Runner()
-        let bridge = makeBridge(runner: runner)
-        var run = Verification.Run(
-            id: "abcd1234", workstreamID: workstreamID, startedAt: Date(), stamp: "",
-            checks: [.init(
-                name: "rspec", state: .failed(1), duration: 48.1,
-                output: "3 examples, 1 failure", outputTruncated: true
-            )],
-            wasStopped: false
-        )
-        run.stamp = ""
-        Verification.Store.save(run)
-
-        let info = await bridge.verificationRun(id: "abcd1234", in: workstreamID)
-        XCTAssertEqual(info?.checks.first?.outputTail, "3 examples, 1 failure")
+        let finished = await bridge.verificationRun(id: "abcd1234", in: workstreamID)
         XCTAssertEqual(
-            info?.checks.first?.outputTruncated,
-            true,
-            "the fetch hit its line limit; the answer must not claim to be whole"
+            finished?.state, .finished,
+            "read from this run's own rows, not from whether the workstream has anything live"
         )
     }
 
-    /// A workstream's most recent run outlives a restart because the staleness
-    /// stamp needs it. Nothing else does, and an older id is simply gone.
-    func test_aPersistedRunResolvesWhenNothingIsInMemory() async {
+    /// Every run of this session resolves, not only the newest: runs are small
+    /// now — no output rides on them — so there is nothing to bound.
+    func test_everyRunOfTheSessionResolves() async {
         let runner = Verification.Runner()
         let bridge = makeBridge(runner: runner)
-        Verification.Store.save(Verification.Run(
-            id: "abcd1234", workstreamID: workstreamID, startedAt: Date(), stamp: "",
-            checks: [.init(name: "rubocop", state: .passed, duration: 1.9, output: nil)],
-            wasStopped: false
-        ))
+        runner.seedRunForTesting(workstreamID: workstreamID, runID: "older123", checks: ["rubocop"])
+        runner.seedRunForTesting(workstreamID: workstreamID, runID: "newer456", checks: ["rspec"])
+        finish(runner, runID: "older123", [("rubocop", .passed)])
 
-        let found = await bridge.verificationRun(id: "abcd1234", in: workstreamID)
-        XCTAssertEqual(found?.runID, "abcd1234")
-        XCTAssertEqual(found?.checks.first?.state, .passed)
-        XCTAssertNil(
-            found?.durationSeconds,
-            "a run restored from the store has no finish time, and must not invent one that grows as it is read"
-        )
+        let older = await bridge.verificationRun(id: "older123", in: workstreamID)
+        XCTAssertEqual(older?.checks.first?.state, .passed, "an earlier run of this session is still readable")
+        let newer = await bridge.verificationRun(id: "newer456", in: workstreamID)
+        XCTAssertNotNil(newer)
+    }
 
-        let older = await bridge.verificationRun(id: "00000000", in: workstreamID)
-        XCTAssertNil(older, "only the most recent run is kept")
+    /// A run id is the tool's only argument and ids are short, so a read scoped
+    /// to another workstream is refused rather than answered with someone else's
+    /// results.
+    func test_aRunBelongingToAnotherWorkstreamIsNil() async {
+        let runner = Verification.Runner()
+        let bridge = makeBridge(runner: runner)
+        runner.seedRunForTesting(workstreamID: UUID(), runID: "abcd1234", checks: ["rspec"])
+
+        let foreign = await bridge.verificationRun(id: "abcd1234", in: workstreamID)
+        XCTAssertNil(foreign)
     }
 
     func test_aRunIsStaleWhenTheWorktreeNoLongerMatchesItsStamp() async {
         let runner = Verification.Runner()
         let bridge = makeBridge(runner: runner, stamp: { _, _ in "head|2|changed" })
-        Verification.Store.save(Verification.Run(
-            id: "abcd1234", workstreamID: workstreamID, startedAt: Date(), stamp: "head|1|original",
-            checks: [.init(name: "rubocop", state: .passed, duration: 1.9, output: nil)],
-            wasStopped: false
-        ))
+        runner.seedRunForTesting(
+            workstreamID: workstreamID, runID: "abcd1234", checks: ["rubocop"], stamp: "head|1|original"
+        )
+        finish(runner, runID: "abcd1234", [("rubocop", .passed)])
 
         let info = await bridge.verificationRun(id: "abcd1234", in: workstreamID)
         XCTAssertEqual(info?.isStale, true, "a pass from before the last edit is a lie")
     }
 
-    /// An empty stamp is the run's own baseline not being captured yet, not a
+    /// An empty stamp is the run's own baseline never having been captured, not a
     /// mismatch — and skipping the comparison also skips four git spawns.
-    func test_aRunWhoseStampIsNotYetCaptured_isNotStaleAndAsksGitNothing() async {
+    func test_aRunWhoseStampIsNotCaptured_isNotStaleAndAsksGitNothing() async {
         let runner = Verification.Runner()
-        let asked = CompletionBox()
         let bridge = makeBridge(runner: runner, stamp: { _, _ in
             XCTFail("the staleness read must not run when there is nothing to compare against")
             return ""
         })
-        _ = asked
-        runner.seedInFlightForTesting(workstreamID: workstreamID, runID: "abcd1234")
+        runner.seedRunForTesting(workstreamID: workstreamID, runID: "abcd1234", checks: ["rspec"])
 
         let info = await bridge.verificationRun(id: "abcd1234", in: workstreamID)
         XCTAssertEqual(info?.isStale, false)
@@ -260,50 +226,41 @@ final class IPCVerificationBridgeTests: XCTestCase {
         XCTAssertNil(info)
     }
 
+    // MARK: - Per-check notices
+
     /// A check completing in a run an agent started carries that agent's surface, so the
     /// notice reaches the pane that asked rather than the workstream's main tab.
     func test_bridge_routesACheckNoticeToTheRequestingSurface() {
         let runner = Verification.Runner()
-        let bridge = IPC.VerificationRunnerBridge(runner: runner, currentStamp: { _, _ in "s" })
-        let id = UUID()
+        let bridge = makeBridge(runner: runner)
         let surface = UUID()
-        addTeardownBlock { Verification.CheckStore.clear(for: id) }
+        runner.seedRunForTesting(workstreamID: workstreamID, runID: "abcd1234", checks: ["rspec"])
 
         var notices: [IPC.VerificationCheckNotice] = []
         bridge.observeCheckCompletions { notices.append($0) }
         bridge.register(runID: "abcd1234", requesterSurfaceID: surface.uuidString)
 
-        runner.recordCompletion(
-            workstreamID: id, runID: "abcd1234", name: "rspec", state: .failed(2),
-            duration: 3.0, output: "boom", outputTruncated: true, stamp: "s"
-        )
+        finish(runner, runID: "abcd1234", [("rspec", .failed(2))])
 
         XCTAssertEqual(notices.count, 1)
         XCTAssertEqual(notices.first?.requesterSurfaceID, surface.uuidString)
         XCTAssertEqual(notices.first?.check.name, "rspec")
         XCTAssertEqual(notices.first?.check.state, .failed)
         XCTAssertEqual(notices.first?.check.exitCode, 2)
-        XCTAssertEqual(notices.first?.check.outputTail, "boom")
-        XCTAssertEqual(notices.first?.check.outputTruncated, true)
-        XCTAssertEqual(notices.first?.workstreamID, id.uuidString)
+        XCTAssertEqual(notices.first?.workstreamID, workstreamID.uuidString)
     }
 
-    /// A run the *user* pressed has no requester. It still produces a notice — that is the
-    /// behaviour change — and the service resolves the Coding Agent surface from the
-    /// workstream id.
+    /// A run the *user* pressed has no requester. It still produces a notice, and
+    /// the service resolves the Coding Agent surface from the workstream id.
     func test_bridge_stillEmitsANoticeForARunNobodyAskedFor() {
         let runner = Verification.Runner()
-        let bridge = IPC.VerificationRunnerBridge(runner: runner, currentStamp: { _, _ in "s" })
-        let id = UUID()
-        addTeardownBlock { Verification.CheckStore.clear(for: id) }
+        let bridge = makeBridge(runner: runner)
+        runner.seedRunForTesting(workstreamID: workstreamID, runID: "abcd1234", checks: ["rubocop"])
 
         var notices: [IPC.VerificationCheckNotice] = []
         bridge.observeCheckCompletions { notices.append($0) }
 
-        runner.recordCompletion(
-            workstreamID: id, runID: "abcd1234", name: "rubocop", state: .passed,
-            duration: 1.0, output: "clean", outputTruncated: false, stamp: "s"
-        )
+        finish(runner, runID: "abcd1234", [("rubocop", .passed)])
 
         XCTAssertEqual(notices.count, 1)
         XCTAssertNil(notices.first?.requesterSurfaceID)
@@ -314,12 +271,11 @@ final class IPCVerificationBridgeTests: XCTestCase {
     /// has to run *before* the early return that a run with no registered completion
     /// takes, or that run's requester entry is never dropped. A run the user pressed
     /// (only a requester registered, no `onFinish`) takes that early return on every
-    /// seal — so if the drop happened after it, the entry would leak forever and a
+    /// finish — so if the drop happened after it, the entry would leak forever and a
     /// later check notice for the same run id would still carry the stale surface.
     func test_bridge_dropsTheRequesterEntryEvenWhenTheRunHasNoRegisteredCompletion() {
         let runner = Verification.Runner()
-        let bridge = IPC.VerificationRunnerBridge(runner: runner, currentStamp: { _, _ in "s" })
-        addTeardownBlock { Verification.CheckStore.clear(for: self.workstreamID) }
+        let bridge = makeBridge(runner: runner)
 
         var notices: [IPC.VerificationCheckNotice] = []
         bridge.observeCheckCompletions { notices.append($0) }
@@ -328,27 +284,15 @@ final class IPCVerificationBridgeTests: XCTestCase {
         bridge.register(runID: "abcd1234", requesterSurfaceID: "leaked-surface")
         runner.seedRunForTesting(workstreamID: workstreamID, runID: "abcd1234", checks: ["rubocop"])
 
-        // Fires `Runner.onFinish` → `runFinished`, which takes the early return
-        // because no completion was registered for this run id.
-        runner.seal(
-            runID: "abcd1234",
-            from: [entry("rubocop", status: "Completed", isRunning: false, exitCode: 0)],
-            stopped: false
-        )
+        // Finishes the run's only check, so `onFinish` fires and takes the early
+        // return because no completion was registered for this run id.
+        finish(runner, runID: "abcd1234", [("rubocop", .passed)])
 
-        // A different check completing under the same run id afterwards must not see
-        // the requester the leaked entry would have kept alive. A different name than
-        // the one `seal` already recorded, so `recordCompletion`'s own per-(run, name)
-        // idempotence guard cannot be what silences this — a genuinely fresh
-        // completion is what proves the requester lookup, not a suppressed repeat.
-        runner.recordCompletion(
-            workstreamID: workstreamID, runID: "abcd1234", name: "vitest", state: .passed,
-            duration: 1.0, output: "clean", outputTruncated: false, stamp: "s"
-        )
+        // A check completing under the same run id afterwards must not see the
+        // requester the leaked entry would have kept alive. A name the run does not
+        // carry, so this is a genuinely fresh completion rather than a repeat.
+        finish(runner, runID: "abcd1234", [("vitest", .passed)])
 
-        // `seal` itself records "rubocop" as a terminal check before it calls
-        // `onFinish`, so that notice legitimately carries the requester the run
-        // still had at that moment.
         XCTAssertEqual(notices.map(\.check.name), ["rubocop", "vitest"])
         XCTAssertEqual(notices.first?.requesterSurfaceID, "leaked-surface")
         XCTAssertNil(notices.last?.requesterSurfaceID, "the requester entry must not outlive the run it belonged to")

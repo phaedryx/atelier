@@ -207,22 +207,18 @@ final class WorkstreamArchiverPurgeTests: XCTestCase {
 
     // MARK: - What a purge must not leave behind
 
-    /// The execute checklist's stored selection, and the stored run, gone together.
+    /// The execute checklist's stored selection, gone.
     ///
-    /// Verification has no checklist or selection key of its own any more — see
-    /// `test_clearWorkstreamState_dropsThePerCheckRecords` below for what
-    /// outlives a purged workstream on that side now. `purge` proper destroys a
+    /// Verification has no checklist or selection key of its own — see
+    /// `test_clearWorkstreamState_dropsThePerCheckRecords` below for what does
+    /// outlive a purged workstream on that side. `purge` proper destroys a
     /// worktree, so the seam is what is tested.
-    func test_clearWorkstreamState_dropsTheExecuteSelectionKeyAndTheStoredRun() {
+    func test_clearWorkstreamState_dropsTheExecuteSelectionKey() {
         let id = UUID()
         addTeardownBlock {
             Workstream.Archiver.clearWorkstreamState(for: id)
         }
         ProcessCompose.TableModel.setSelection(.only(["web"]), for: id)
-        Verification.Store.save(Verification.Run(
-            id: "abcd1234", workstreamID: id, startedAt: Date(), stamp: "s",
-            checks: [], wasStopped: false
-        ))
 
         Workstream.Archiver.clearWorkstreamState(for: id)
 
@@ -230,94 +226,71 @@ final class WorkstreamArchiverPurgeTests: XCTestCase {
             UserDefaults.standard.object(forKey: ProcessCompose.TableModel.selectionKey(for: id)),
             "the execution checklist's key outlived the workstream"
         )
-        XCTAssertNil(Verification.Store.latest(for: id))
     }
 
-    // MARK: - Waiting for a verify run before the tree goes
+    // MARK: - Waiting for a running check before the tree goes
 
-    /// **A purge issued while a verify spawn is still binding must wait.**
-    /// `ProcessCompose.PhaseExecutor.shutDown` no-ops when the socket file does
-    /// not exist yet, so reaching for it directly let `purge` go straight on to
-    /// `dispose` and `git worktree remove --force` under a suite that was still
-    /// coming up. Going through the runner's own stop-and-wait is what closes
-    /// that, and the control server here never answers within the deadline — so
-    /// the honest answer is that the run is still live.
-    ///
-    /// The wait is bounded and the purge proceeds past it; what is pinned here
-    /// is that it waits first and reports the truth, not that it blocks
-    /// forever.
+    /// A check whose wrapper has not written its pid yet, for the window a purge
+    /// must not sail through: `stop` has nothing to signal, and the check is
+    /// nonetheless live.
     @MainActor
-    func test_quiesceVerification_waitsWhileTheVerifySpawnIsStillBinding() async {
-        let id = UUID()
-        addTeardownBlock { Verification.Store.clear(for: id) }
-        // Forty polls of `.notRunning` at a 5ms cadence — `up` asked for, not
-        // yet bound — then a server that answers, which is what lets the
-        // withheld Stop finally land and the loop end.
-        let client = StubComposeClient(
-            socketPath: "/nonexistent",
-            replies: Array(repeating: .failure(.notRunning), count: 40)
-                + [.list([verifyEntry("rspec", status: "Running", isRunning: true, exitCode: 0)])],
-            latency: .zero
+    private func spawn(named name: String) -> Verification.Spawn {
+        Verification.Spawn.ensureStateDirectory()
+        let spawn = Verification.Spawn.build(
+            check: Verification.Config.Check(name: name, command: "true", shell: nil),
+            workstreamID: UUID()
         )
-        let spawner = ParkedVerifySpawner(client: client)
-        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        spawn.clearState()
+        return spawn
+    }
+
+    /// **A purge issued while a check is still starting must wait.** Killing the
+    /// process group and moving on was the shape that let `purge` reach
+    /// `git worktree remove --force` with the command still running in that tree —
+    /// `stop` only *asks*, so the wait is what makes the tree safe to delete.
+    ///
+    /// Here the check never finishes, so the wait expires and the honest answer is
+    /// that it is still live. The wait is bounded and the purge proceeds past it;
+    /// what is pinned is that it waits first and reports the truth.
+    @MainActor
+    func test_quiesceVerification_waitsWhileACheckIsStillRunning() async {
+        let id = UUID()
+        let runner = Verification.Runner(pollInterval: .milliseconds(5))
+        let spawn = spawn(named: "rspec")
+        addTeardownBlock { spawn.clearState() }
         runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
-        let loop = Task { await runner.execute(verifyRequest(workstreamID: id), runID: "abcd1234") }
+        runner.seedRunningForTesting(
+            workstreamID: id, runID: "abcd1234", check: "rspec", spawn: spawn
+        )
 
         let began = ContinuousClock.now
         let early = await Workstream.Archiver.quiesceVerification(
-            workstreamID: id, runner: runner, timeout: .milliseconds(50)
+            workstreamID: id, runner: runner, timeout: 0.05
         )
         let waited = ContinuousClock.now - began
 
-        XCTAssertFalse(early, "a run that has not bound yet must not be reported gone")
+        XCTAssertFalse(early, "a check that has not started yet must not be reported gone")
         XCTAssertGreaterThanOrEqual(waited, .milliseconds(50), "purge must wait, not sail through")
         XCTAssertTrue(runner.isLive(id))
 
+        // The wrapper's status file is what production's completion pass reads, so
+        // writing one is the check exiting.
+        try? "0\n".write(toFile: spawn.statusPath, atomically: true, encoding: .utf8)
+
         let quiet = await Workstream.Archiver.quiesceVerification(
-            workstreamID: id, runner: runner, timeout: .seconds(4)
+            workstreamID: id, runner: runner, timeout: 4
         )
-        XCTAssertTrue(quiet, "once the server answers, the withheld Stop lands and the run ends")
+        XCTAssertTrue(quiet, "once the check is gone, the wait ends")
         XCTAssertFalse(runner.isLive(id))
-        await loop.value
-        let shutDowns = await spawner.shutDowns
-        XCTAssertEqual(shutDowns, 1, "the run loop stays the only owner of the teardown")
     }
 
-    /// The ordinary case: no run, no wait. This is also what a socket left by a
-    /// crashed session looks like from here — the runner knows nothing about it,
-    /// and `purge`'s own best-effort `shutDown` is what deals with that.
+    /// The ordinary case: nothing running, no wait.
     @MainActor
-    func test_quiesceVerification_returnsAtOnceWhenNoRunIsLive() async {
+    func test_quiesceVerification_returnsAtOnceWhenNothingIsLive() async {
         let quiet = await Workstream.Archiver.quiesceVerification(
-            workstreamID: UUID(), runner: Verification.Runner(), timeout: .milliseconds(50)
+            workstreamID: UUID(), runner: Verification.Runner(), timeout: 0.05
         )
         XCTAssertTrue(quiet)
-    }
-
-    private func verifyEntry(
-        _ name: String, status: String, isRunning: Bool, exitCode: Int
-    ) -> ProcessCompose.ProcessEntry {
-        ProcessCompose.ProcessEntry(
-            name: name, namespace: "verify", status: status, isReady: "",
-            hasReadyProbe: false, restarts: 0, exitCode: exitCode,
-            pid: 0, isRunning: isRunning
-        )
-    }
-
-    private func verifyRequest(workstreamID: UUID) -> Verification.Runner.SpawnRequest {
-        Verification.Runner.SpawnRequest(
-            workstreamID: workstreamID,
-            config: ProcessCompose.Config(
-                path: "/tmp/process-compose.yaml", isRepositoryProvided: false
-            ),
-            binary: "/usr/bin/true",
-            projectName: "app",
-            workstreamName: "wisp",
-            projectDirectory: "/tmp",
-            worktreePath: "/tmp",
-            checks: ["rspec"]
-        )
     }
 
     /// The per-check results outlive a purged workstream otherwise, and they are keyed by
@@ -326,8 +299,8 @@ final class WorkstreamArchiverPurgeTests: XCTestCase {
         let id = UUID()
         Verification.CheckStore.save(
             ["rspec": Verification.CheckRecord(
-                name: "rspec", state: .passed, duration: 1, output: nil,
-                outputTruncated: false, stamp: "s", runID: "abcd1234", completedAt: Date()
+                name: "rspec", state: .passed, duration: 1,
+                stamp: "s", runID: "abcd1234", completedAt: Date()
             )],
             for: id
         )
@@ -335,37 +308,5 @@ final class WorkstreamArchiverPurgeTests: XCTestCase {
         Workstream.Archiver.clearWorkstreamState(for: id)
 
         XCTAssertTrue(Verification.CheckStore.records(for: id).isEmpty)
-    }
-}
-
-/// A verify spawn that never ends on its own, so the namespace is still running
-/// when a purge arrives — the only shape in which "purge waited" is a question.
-///
-/// A local, smaller cousin of `VerificationRunnerTests`' own stub rather than a
-/// share of it: that one is private to the file whose orderings it exists to
-/// expose, and this needs two of its four behaviours.
-private actor ParkedVerifySpawner: Verification.Runner.Spawning {
-    nonisolated let client: StubComposeClient
-    private(set) var shutDowns = 0
-    private var parked: CheckedContinuation<Void, Never>?
-
-    init(client: StubComposeClient) {
-        self.client = client
-    }
-
-    func run(_: Verification.Runner.SpawnRequest) async -> ProcessCompose.PhaseExecutor.Outcome {
-        await withCheckedContinuation { parked = $0 }
-        return .succeeded
-    }
-
-    nonisolated func controlClient(for _: Verification.Runner.SpawnRequest) -> ProcessCompose.Controlling {
-        client
-    }
-
-    func shutDown(_: Verification.Runner.SpawnRequest) async {
-        shutDowns += 1
-        await client.endServer()
-        parked?.resume()
-        parked = nil
     }
 }

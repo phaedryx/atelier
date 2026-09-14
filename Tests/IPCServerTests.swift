@@ -584,14 +584,10 @@ final class IPCServerTests: XCTestCase {
             durationSeconds: 48.1,
             checks: [
                 IPC.VerificationCheckInfo(
-                    name: "rspec", state: .failed, exitCode: 1, durationSeconds: 48.1,
-                    outputTail: "3 examples, 1 failure\n./spec/models/contact_spec.rb:42",
-                    outputTruncated: true
+                    name: "rspec", state: .failed, exitCode: 1, durationSeconds: 48.1
                 ),
             ],
-            isStale: false,
-            failureDetail: nil,
-            unstartedChecksDetail: nil
+            isStale: false
         )))
         _ = try waitForEndpoint()
 
@@ -692,15 +688,10 @@ final class IPCServerTests: XCTestCase {
         )
         XCTAssertTrue(rendered.contains("run v7f3a11c — finished in 48.1s"), rendered)
         XCTAssertTrue(rendered.contains("failed rspec exit=1 48.1s"), rendered)
-        XCTAssertTrue(rendered.contains("    3 examples, 1 failure"), rendered)
-        XCTAssertTrue(rendered.contains("    ./spec/models/contact_spec.rb:42"), rendered)
-        XCTAssertTrue(rendered.contains("output trimmed"), "the runner already trimmed this tail: \(rendered)")
-        // The log server is gone by the time an agent reads this, so the copy
-        // must not send it looking for a fuller one.
-        XCTAssertFalse(
-            rendered.contains("Verification tab has all"),
-            "there is no fuller copy anywhere after a run: \(rendered)"
-        )
+        // No output crosses this boundary: a check runs in its own terminal
+        // surface and Atelier keeps no copy of what it printed, so a render that
+        // carried any would be inventing it.
+        XCTAssertFalse(rendered.contains("    "), "no output may be rendered here: \(rendered)")
     }
 }
 

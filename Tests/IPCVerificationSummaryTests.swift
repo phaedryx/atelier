@@ -1,5 +1,5 @@
-// ABOUTME: Tests for the pure parts of the verification IPC tools — argument parsing, the
-// ABOUTME: completion notice, and the bounding that keeps a suite's output deliverable.
+// ABOUTME: Tests for the pure parts of the verification IPC tools — argument parsing and
+// ABOUTME: the completion notices, which carry verdicts and no output at all.
 
 @testable import Atelier
 import XCTest
@@ -11,17 +11,13 @@ final class IPCVerificationSummaryTests: XCTestCase {
         _ name: String,
         _ state: IPC.VerificationCheckState,
         exitCode: Int? = nil,
-        duration: Double? = nil,
-        output: String? = nil,
-        truncated: Bool = false
+        duration: Double? = nil
     ) -> IPC.VerificationCheckInfo {
         IPC.VerificationCheckInfo(
             name: name,
             state: state,
             exitCode: exitCode,
-            durationSeconds: duration,
-            outputTail: output,
-            outputTruncated: truncated
+            durationSeconds: duration
         )
     }
 
@@ -30,9 +26,7 @@ final class IPCVerificationSummaryTests: XCTestCase {
         state: IPC.VerificationRunState = .finished,
         duration: Double? = 50,
         checks: [IPC.VerificationCheckInfo],
-        isStale: Bool = false,
-        failureDetail: String? = nil,
-        unstartedChecksDetail: String? = nil
+        isStale: Bool = false
     ) -> IPC.VerificationRunInfo {
         IPC.VerificationRunInfo(
             runID: id,
@@ -42,9 +36,7 @@ final class IPCVerificationSummaryTests: XCTestCase {
             startedSecondsAgo: 51,
             durationSeconds: duration,
             checks: checks,
-            isStale: isStale,
-            failureDetail: failureDetail,
-            unstartedChecksDetail: unstartedChecksDetail
+            isStale: isStale
         )
     }
 
@@ -83,14 +75,13 @@ final class IPCVerificationSummaryTests: XCTestCase {
     func test_message_leadsWithHowManyFailed() {
         let message = IPC.VerificationSummary.message(for: run(checks: [
             check("rubocop", .passed, duration: 1.9),
-            check("rspec", .failed, exitCode: 1, duration: 48.1, output: "3 examples, 1 failure\n./spec/models/contact_spec.rb:42"),
+            check("rspec", .failed, exitCode: 1, duration: 48.1),
         ]))
 
         let lines = message.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         XCTAssertEqual(lines.first, "run v7f3a11 finished in 50.0s — 1 of 2 checks failed")
         XCTAssertTrue(message.contains("✓ rubocop  1.9s"), message)
         XCTAssertTrue(message.contains("✗ rspec  48.1s  exit 1"), message)
-        XCTAssertTrue(message.contains("    ./spec/models/contact_spec.rb:42"), message)
         XCTAssertTrue(
             message.contains(#"check_verification(run_id: "v7f3a11")"#),
             "a failing run must point at where the rest of the output is: \(message)"
@@ -159,62 +150,11 @@ final class IPCVerificationSummaryTests: XCTestCase {
         ]))
 
         XCTAssertTrue(message.contains("✗ build-packages  3.0s  exit 2"), message)
-        XCTAssertTrue(message.contains("· tsc  skipped (a check it depends on failed)"), message)
+        XCTAssertTrue(message.contains("· tsc  skipped"), message)
         XCTAssertTrue(
             message.split(separator: "\n").first?.contains("1 of 2 checks failed") == true,
             "the skipped check is not a failure: \(message)"
         )
-    }
-
-    /// A spawn that never got far enough to report leaves every check
-    /// `.notRun`, and the reason exists in exactly one place. Without it an
-    /// agent gets a list of checks that all say "not run" and nothing to act on.
-    func test_message_leadsWithARunLevelFailureAheadOfTheVerdicts() {
-        let message = IPC.VerificationSummary.message(for: run(
-            duration: 0.4,
-            checks: [check("rspec", .notRun), check("rubocop", .notRun)],
-            failureDetail: "process-compose: error parsing process-compose.yaml: line 12"
-        ))
-
-        let lines = message.split(separator: "\n").map(String.init)
-        XCTAssertTrue(lines[1].hasPrefix("The run itself failed: "), message)
-        XCTAssertTrue(lines[1].contains("line 12"), message)
-        XCTAssertTrue(message.contains("· rspec  not run"), message)
-    }
-
-    /// The mixed case an agent has to be able to act on: some checks ran, the
-    /// rest never started, and the executor's own message is the only account of
-    /// why. It must not arrive under the run-level failure's wording — that
-    /// would tell an agent its suite never started when most of it did.
-    func test_message_reportsChecksThatNeverStartedUnderTheirOwnWording() {
-        let message = IPC.VerificationSummary.message(for: run(
-            duration: 3,
-            checks: [check("rspec", .passed, duration: 3), check("rubocop", .notRun)],
-            unstartedChecksDetail: "process-compose: process rubocop: working_dir does not exist"
-        ))
-
-        let lines = message.split(separator: "\n").map(String.init)
-        XCTAssertTrue(lines[1].hasPrefix("Some checks never started: "), message)
-        XCTAssertTrue(lines[1].contains("working_dir"), message)
-        XCTAssertFalse(message.contains("The run itself failed"), message)
-    }
-
-    func test_message_boundsChecksThatNeverStartedLikeEverythingElse() {
-        let message = IPC.VerificationSummary.message(for: run(
-            checks: [check("rspec", .passed), check("rubocop", .notRun)],
-            unstartedChecksDetail: String(repeating: "spew ", count: 50_000)
-        ))
-
-        XCTAssertLessThanOrEqual(message.utf8.count, IPC.VerificationSummary.maxMessageBytes)
-    }
-
-    func test_message_boundsARunLevelFailureLikeEverythingElse() {
-        let message = IPC.VerificationSummary.message(for: run(
-            checks: [check("rspec", .notRun)],
-            failureDetail: String(repeating: "spew ", count: 50_000)
-        ))
-
-        XCTAssertLessThanOrEqual(message.utf8.count, IPC.VerificationSummary.maxMessageBytes)
     }
 
     func test_message_saysWhenTheResultsNoLongerDescribeTheWorktree() {
@@ -234,84 +174,71 @@ final class IPCVerificationSummaryTests: XCTestCase {
     // MARK: - The per-check notice
 
     private func notice(
-        state: IPC.VerificationCheckState, exitCode: Int? = nil,
-        tail: String? = nil, truncated: Bool = false
+        state: IPC.VerificationCheckState, exitCode: Int? = nil
     ) -> IPC.VerificationCheckNotice {
         IPC.VerificationCheckNotice(
             runID: "abcd1234", workstreamID: UUID().uuidString, requesterSurfaceID: nil,
             check: IPC.VerificationCheckInfo(
-                name: "rspec", state: state, exitCode: exitCode, durationSeconds: 48.1,
-                outputTail: tail, outputTruncated: truncated
+                name: "rspec", state: state, exitCode: exitCode, durationSeconds: 48.1
             )
         )
     }
 
     func test_checkMessage_namesTheCheckTheVerdictAndTheRun() {
         let message = IPC.VerificationSummary.checkMessage(
-            for: notice(state: .failed, exitCode: 1, tail: "3 failures")
+            for: notice(state: .failed, exitCode: 1)
         )
 
         XCTAssertTrue(message.contains("rspec"))
         XCTAssertTrue(message.contains("failed"))
         XCTAssertTrue(message.contains("abcd1234"))
-        XCTAssertTrue(message.contains("3 failures"))
     }
 
     /// `IPC.Store` refuses content over 64KB **outright** — it throws rather than
     /// truncating — so an oversized notice is lost, silently, exactly when the agent is
-    /// waiting for it.
+    /// waiting for it. A check name is user-authored and unbounded, which is the only
+    /// thing here that can grow.
     func test_checkMessage_staysUnderTheCheckBudget() {
-        let message = IPC.VerificationSummary.checkMessage(
-            for: notice(
-                state: .failed, exitCode: 1,
-                tail: String(repeating: "x", count: 200_000), truncated: true
+        let long = IPC.VerificationCheckNotice(
+            runID: "abcd1234", workstreamID: UUID().uuidString, requesterSurfaceID: nil,
+            check: IPC.VerificationCheckInfo(
+                name: String(repeating: "x", count: 200_000),
+                state: .failed, exitCode: 1, durationSeconds: 1
             )
         )
+        let message = IPC.VerificationSummary.checkMessage(for: long)
 
         XCTAssertLessThanOrEqual(
             message.utf8.count, IPC.VerificationSummary.maxCheckMessageBytes
         )
     }
 
-    /// The truncation notice must never read as though a fuller log can be fetched. The
-    /// window lives in the control server and is gone once the run seals; re-running the
-    /// one check is the honest pointer.
-    func test_checkMessage_doesNotPromiseAFullerLog() {
-        let message = IPC.VerificationSummary.checkMessage(
-            for: notice(state: .failed, exitCode: 1, tail: "tail", truncated: true)
-        )
+    /// Nothing may read as though the output could be fetched. It lives in the
+    /// check's terminal surface and Atelier keeps no copy at all, so the tab and a
+    /// re-run are the only two honest pointers.
+    func test_checkMessage_pointsAtTheTabRatherThanPromisingALog() {
+        let message = IPC.VerificationSummary.checkMessage(for: notice(state: .failed, exitCode: 1))
 
-        XCTAssertTrue(message.contains("re-run"))
-        XCTAssertFalse(message.lowercased().contains("fetch the full"))
+        XCTAssertTrue(message.contains("Verification tab"), message)
+        XCTAssertFalse(message.lowercased().contains("fetch"), message)
     }
 
     /// A passing check gets a notice too — that is what makes an agent able to tell "the
     /// suite is green" from "the suite has not reported yet".
     func test_checkMessage_reportsAPassAsAPass() {
-        let message = IPC.VerificationSummary.checkMessage(for: notice(state: .passed, tail: "ok"))
+        let message = IPC.VerificationSummary.checkMessage(for: notice(state: .passed))
 
         XCTAssertTrue(message.contains("passed"))
     }
 
     // MARK: - Staying deliverable
 
-    /// `IPC.Store` refuses content over 64KB outright, so an assembled notice
-    /// that overshoots is not trimmed — it is *lost*, silently, exactly when the
-    /// agent is waiting for it. Bounding the per-check tails is not enough; the
-    /// assembled result is what has to fit.
-    func test_message_staysUnderTheStoresContentCapForOneEnormousFailure() {
-        let huge = (0 ..< 200_000).map { "line \($0) of a very chatty test runner" }.joined(separator: "\n")
-        let message = IPC.VerificationSummary.message(for: run(checks: [
-            check("rspec", .failed, exitCode: 1, duration: 48, output: huge),
-        ]))
-
-        XCTAssertLessThanOrEqual(message.utf8.count, IPC.VerificationSummary.maxMessageBytes)
-        XCTAssertTrue(message.contains("line 199999"), "a tail keeps the END of the output, which is where the failure is")
-        XCTAssertFalse(message.contains("line 0 of"), "the head of a 200k-line log is not the useful part")
-    }
-
+    /// `IPC.Store` refuses content over 64KB outright, so an assembled notice that
+    /// overshoots is not trimmed — it is *lost*, silently, exactly when the agent
+    /// is waiting for it. With no output to carry, the list of verdicts is the only
+    /// thing that can overshoot.
     func test_message_staysUnderTheCapForAnAbsurdNumberOfChecks() {
-        let many = (0 ..< 500).map { check("check-\($0)", .failed, exitCode: 1, duration: 1, output: "boom") }
+        let many = (0 ..< 500).map { check("check-\($0)", .failed, exitCode: 1, duration: 1) }
         let message = IPC.VerificationSummary.message(for: run(checks: many))
 
         XCTAssertLessThanOrEqual(message.utf8.count, IPC.VerificationSummary.maxMessageBytes)
@@ -319,73 +246,16 @@ final class IPCVerificationSummaryTests: XCTestCase {
         XCTAssertTrue(message.contains("more checks"), "the list was cut, so it has to say so: \(message)")
     }
 
-    func test_message_keepsEveryChecksVerdictWhenOnlyTheOutputIsTooBig() {
-        let checks = (0 ..< 10).map { index in
-            check("check-\(index)", .failed, exitCode: 1, duration: 1, output: String(repeating: "z", count: 50_000))
-        }
+    /// A cut list must say it was cut. "0 of 0 failed" over a truncated list reads
+    /// as a complete one.
+    func test_message_keepsEveryVerdictWhenTheyFit() {
+        let checks = (0 ..< 10).map { check("check-\($0)", .failed, exitCode: 1, duration: 1) }
         let message = IPC.VerificationSummary.message(for: run(checks: checks))
 
         XCTAssertLessThanOrEqual(message.utf8.count, IPC.VerificationSummary.maxMessageBytes)
         for index in 0 ..< 10 {
             XCTAssertTrue(message.contains("✗ check-\(index)"), "check-\(index) is missing from: \(message)")
         }
-    }
-
-    /// An even share below the floor used to mean nobody got output at all —
-    /// a cliff rather than a degradation, one failing check either side of it.
-    func test_message_givesOutputToAsManyFailuresAsTheBudgetAllows() {
-        let many = (0 ..< 31).map { index in
-            check("check-\(index)", .failed, exitCode: 1, duration: 1, output: "boom \(index)\nstack line for \(index)")
-        }
-        let message = IPC.VerificationSummary.message(for: run(checks: many))
-
-        XCTAssertLessThanOrEqual(message.utf8.count, IPC.VerificationSummary.maxMessageBytes)
-        XCTAssertTrue(message.contains("    boom 0"), "the first failure's output should still be there: \(message)")
-        for index in 0 ..< 31 {
-            XCTAssertTrue(message.contains("✗ check-\(index)"), "check-\(index)'s verdict is missing")
-        }
-    }
-
-    // MARK: - Bounding the read
-
-    func test_bounded_trimsEachChecksOutputAndSaysThatItDid() {
-        let bounded = IPC.VerificationSummary.bounded(run(checks: [
-            check("rspec", .failed, exitCode: 1, duration: 48, output: String(repeating: "a\n", count: 100_000)),
-        ]))
-
-        let tail = try? XCTUnwrap(bounded.checks.first?.outputTail)
-        XCTAssertNotNil(tail)
-        XCTAssertLessThanOrEqual(tail?.utf8.count ?? .max, IPC.VerificationSummary.maxReadTailBytesPerCheck)
-        XCTAssertEqual(bounded.checks.first?.outputTruncated, true)
-    }
-
-    func test_bounded_leavesSmallOutputExactlyAsItWas() {
-        let bounded = IPC.VerificationSummary.bounded(run(checks: [
-            check("rspec", .failed, exitCode: 1, duration: 48, output: "3 examples, 1 failure"),
-        ]))
-
-        XCTAssertEqual(bounded.checks.first?.outputTail, "3 examples, 1 failure")
-        XCTAssertEqual(bounded.checks.first?.outputTruncated, false)
-    }
-
-    func test_bounded_keepsTheRunnersOwnTruncationFlag() {
-        // The runner fetches a bounded tail from the control API in the first
-        // place. If it already trimmed, this must not report the result as whole.
-        let bounded = IPC.VerificationSummary.bounded(run(checks: [
-            check("rspec", .failed, exitCode: 1, output: "tail", truncated: true),
-        ]))
-
-        XCTAssertEqual(bounded.checks.first?.outputTruncated, true)
-    }
-
-    func test_bounded_boundsTheWholeAnswerNotJustEachCheck() {
-        let checks = (0 ..< 20).map { index in
-            check("check-\(index)", .failed, exitCode: 1, duration: 1, output: String(repeating: "q", count: 40_000))
-        }
-        let bounded = IPC.VerificationSummary.bounded(run(checks: checks))
-
-        let total = bounded.checks.compactMap(\.outputTail).reduce(0) { $0 + $1.utf8.count }
-        XCTAssertLessThanOrEqual(total, IPC.VerificationSummary.maxReadOutputBytes)
-        XCTAssertEqual(bounded.checks.count, 20, "bounding output must not drop a check's verdict")
+        XCTAssertFalse(message.contains("more checks"), "nothing was cut, so nothing should claim it was")
     }
 }

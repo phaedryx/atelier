@@ -1,5 +1,5 @@
 // ABOUTME: Builds the process-compose command for each lifecycle phase.
-// ABOUTME: One config, five namespaces, one predictable control socket.
+// ABOUTME: One config, four namespaces, one predictable control socket.
 
 import Foundation
 
@@ -9,10 +9,6 @@ extension ProcessCompose {
         case prepare
         case execute
         case dispose
-        /// On demand, repeatedly, from the Verification tab. Unlike the
-        /// other four this is not a point in a workstream's life, which is why it is
-        /// the one headless phase that is ever asked to run a subset.
-        case verify
 
         var namespace: String {
             rawValue
@@ -119,7 +115,7 @@ extension ProcessCompose {
 
             parts += ["-n", phase.namespace]
 
-            if phase == .execute || phase == .verify, !selectedProcesses.isEmpty {
+            if phase == .execute, !selectedProcesses.isEmpty {
                 // Shell-quoting protects the shell; it does not protect
                 // process-compose's own flag parser, which reads these as trailing
                 // arguments. A repository YAML may name a process whatever it
@@ -178,9 +174,8 @@ extension ProcessCompose {
         /// list, `selectedProcesses.isEmpty` was already past, and `up -n execute`
         /// ran with no names — which starts the **whole namespace**. The user's
         /// selection came back as its exact opposite, through a guard that exists
-        /// for security. `Verification.Runner.runnableChecks` closed the same hole
-        /// on the `verify` side; this is that fix's other half, kept beside the
-        /// filter it has to match rather than as a third spelling of it.
+        /// for security. Kept beside the filter it has to match rather than as a
+        /// third spelling of it.
         ///
         /// Nothing runnable is withheld, but the precise claim is narrower than it
         /// looks: such a process still *starts*, because an empty selection runs the

@@ -195,6 +195,20 @@ final class TerminalView: NSView {
         }
     }
 
+    /// Whether this surface refuses input.
+    ///
+    /// A verification check's terminal is something to read, not to type into:
+    /// the command is Atelier's wrapper and a keystroke reaching it would at best
+    /// corrupt the check's own stdin and at worst answer the "Press any key to
+    /// close the terminal" prompt Ghostty prints under `wait_after_command`,
+    /// destroying the output the row exists to show.
+    ///
+    /// Input only. Selection, copy, scrollback and focus all still work, which is
+    /// why this is a flag on the write paths rather than `acceptsFirstResponder`
+    /// returning false — a surface that cannot be focused cannot be selected from
+    /// the keyboard either.
+    var isReadOnly = false
+
     // MARK: - View lifecycle
 
     override var acceptsFirstResponder: Bool {
@@ -321,6 +335,7 @@ final class TerminalView: NSView {
     // MARK: - Keyboard
 
     override func keyDown(with event: NSEvent) {
+        guard !isReadOnly else { return }
         guard let surface else {
             interpretKeyEvents([event])
             return
@@ -541,6 +556,7 @@ final class TerminalView: NSView {
     }
 
     func insertText(_ string: Any, replacementRange _: NSRange) {
+        guard !isReadOnly else { return }
         guard NSApp.currentEvent != nil else { return }
 
         let chars: String
@@ -651,6 +667,7 @@ final class TerminalView: NSView {
     }
 
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        guard !isReadOnly else { return false }
         let pb = sender.draggingPasteboard
 
         let content: String? = if let url = pb.string(forType: .URL) {
