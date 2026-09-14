@@ -219,9 +219,10 @@ it receives only the `X.Y.Z` core; the suffix naming the commit rides on
   the click, disabling the last checked box, which left a checkbox dimmed for a
   reason nothing on the pane gave. Now the box can be unchecked and the
   **button** is what goes quiet — Start is disabled, with a line beside it
-  saying why. Verification's checklist and its Run button are gone along with
-  it; its buttons are gated on `verificationCanRun(isLive:)` now, not on a
-  selection. `ProcessSelection.namesToRun` is where
+  saying why. Verification's checklist is gone, and with it the selection-driven Run
+  button; the tab now has a top-bar Run all and a per-row run/re-run button
+  (`VerificationTabView.swift:646-653`, `:45-51`), gated on `verificationCanRun(isLive:)`
+  rather than on a selection. `ProcessSelection.namesToRun` is where
   the distinction stops being losable: `.all` gives `[]` and `.nothing` gives
   **nil**, so a caller cannot flatten them without the compiler objecting. No
   migration was needed, because the empty case used to *remove* the key.
@@ -656,10 +657,26 @@ later reader would plausibly "simplify" away without knowing why:
    than as a policy. What did **not** change is the window itself: it still lives only in
    the control server, that server is still torn down once the run seals, and
    `outputTruncated` still means "there was more at capture time" and never "more is
-   retrievable". Sizing is unchanged too — 200 lines, against `IPC.Store`'s throwing
-   64KB cap. Lines already read live are kept on screen after the run ends — labelled as
-   the last read, not as live — because clearing them would empty a window mid-read; they
-   are `@State` in the row and go when a new run starts.
+   retrievable". Sizing per check is unchanged — 200 lines, against `IPC.Store`'s throwing
+   64KB cap on the mailbox notice a check's completion also sends. Lines already read live
+   are kept on screen after the run ends — labelled as the last read, not as live —
+   because clearing them would empty a window mid-read; they are `@State` in the row and
+   go when a new run starts.
+
+   **The two objections that 64KB figure did not answer are now real, and are accepted
+   rather than mitigated.** `recordCompletion` persists every check's tail twice: once
+   into `Verification.CheckStore`'s per-workstream blob (`VerificationCheckStore.swift:70-77`),
+   and again by mirroring `output` onto `run.checks`, which `seal` re-reads and hands to
+   `Verification.Store.save` (`VerificationRunner.swift:655-665`, `:788`). Both are
+   UserDefaults, and neither has a size cap of its own. So a suite of N checks, most of
+   them passing, now writes up to N × 200 lines into each of two UserDefaults blobs,
+   where before the run blob carried only the failing subset's output and the per-check
+   blob did not exist. `VerificationTabView.currentRun` decodes the run blob on the main
+   actor whenever there is no live run to read instead (`VerificationTabView.swift:588-590`).
+   No cap was added, because capturing every check's output rather than only failures is
+   the point of the change above, and a cap would have reintroduced a version of the rule
+   it retires. If UserDefaults growth or the main-actor decode cost becomes a real
+   problem, the fix belongs here, not in a re-narrowed capture.
 2. **Teardown has exactly one owner.** `spawner.shutDown` is called once, from the run loop, only
    after `seal` returns (`VerificationRunner.swift:922-929`). Not from a `defer` — that can run
    before the log fetch, and the output is gone by the time `seal` wants it. Not from
