@@ -196,9 +196,12 @@ func processesToStart(stored: ProcessSelection, declared: [String]) -> [String]?
 
 /// Where a checklist's selection is stored.
 ///
-/// Injected rather than reached for, because there are now two checklists over
-/// two namespaces: Execution's picks what `execute` starts, Verification's picks
-/// which checks run. One key for both would make checking `rspec` uncheck `bff`.
+/// Injected rather than reached for, which is what makes `ProcessSelectionView`
+/// testable and reusable. `.execute` is the only member now — Verification had
+/// its own key and its own constant here, keyed separately for a reason worth
+/// keeping: one key for both would have made checking a check in Verification
+/// uncheck a process in Execution. Verification's checklist was removed along
+/// with that key; Execution's is what is left.
 struct ProcessSelectionStore: Sendable {
     let read: @Sendable (UUID) -> ProcessSelection
     let write: @Sendable (ProcessSelection, UUID) -> Void
