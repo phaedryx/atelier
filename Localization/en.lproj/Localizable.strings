@@ -582,7 +582,10 @@
 "Run all" = "Run all";
 "Re-run" = "Re-run";
 "stale" = "stale";
-"Output" = "Output";
+"Show output" = "Show output";
+"Hide output" = "Hide output";
+"Shows this check's output." = "Shows this check's output.";
+"Hides this check's output." = "Hides this check's output.";
 "Nothing to verify yet" = "Nothing to verify yet";
 "This result no longer reflects the worktree's current content." = "This result no longer reflects the worktree's current content.";
 "The run itself failed to start its checks" = "The run itself failed to start its checks";

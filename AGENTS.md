@@ -221,7 +221,7 @@ it receives only the `X.Y.Z` core; the suffix naming the commit rides on
   **button** is what goes quiet — Start is disabled, with a line beside it
   saying why. Verification's checklist is gone, and with it the selection-driven Run
   button; the tab now has a top-bar Run all and a per-row run/re-run button
-  (`VerificationTabView.swift:646-653`, `:45-51`), gated on `verificationCanRun(isLive:)`
+  (`VerificationTabView.swift:691-700`, `:45-51`), gated on `verificationCanRun(isLive:)`
   rather than on a selection. `ProcessSelection.namesToRun` is where
   the distinction stops being losable: `.all` gives `[]` and `.nothing` gives
   **nil**, so a caller cannot flatten them without the compiler objecting. No
@@ -630,14 +630,14 @@ later reader would plausibly "simplify" away without knowing why:
    `recordCompletions` fetches at each check's own completion edge (`VerificationRunner.swift:1253-1304`)
    is all that exists anywhere afterward. No UI or agent-facing copy may imply a fuller log can be
    fetched later; the tab's own truncation notice says as much ("There is nothing more to fetch: the
-   run's own output no longer exists anywhere", `VerificationTabView.swift:1252`). 200 lines is not
+   run's own output no longer exists anywhere", `VerificationTabView.swift:1305`). 200 lines is not
    an arbitrary round number — it was sized against `IPC.Store`'s 65,536-byte-per-message cap
    (`IPCStore.swift:89`), which *throws rather than truncating* (`IPCStore.swift:203`, `:223` and `:259`),
    so an oversized completion notice would be lost silently while an agent waits for it.
    `outputTruncated` means "there was more at capture time", never "more is retrievable".
 
    **There is now a second *reader* of that window, and it owns none of it.** The Verification
-   tab gives every check a disclosure group, and an expanded group polls
+   tab gives every check an expandable row, and an expanded row polls
    `Verification.Runner.liveLog` once a second while the run is live —
    `client.logs` through the same control client `execute` registered in `liveClients`. It is
    read-only by construction: it never calls `shutDown`, never touches `sealedRunIDs`,
@@ -647,6 +647,26 @@ later reader would plausibly "simplify" away without knowing why:
    returns, beside the two flags, because `isLive` is true for the whole teardown — so a read
    arriving then meets the dying server and gets nil rather than meeting nothing, which would be
    indistinguishable from a run that was never live.
+
+   **The row *is* that control, and there is no disclosure triangle.** One line per check —
+   status glyph, name, a `stale` marker, the duration, and a single icon button — where
+   everything left of the button is one `Button` that toggles the output — its label takes
+   `.frame(maxWidth: .infinity)` *and* `.contentShape(Rectangle())`, because the width has to be
+   claimed before there is a full-width rectangle to shape, and neither step fails to compile
+   when it is missing. A plain `.onTapGesture` on the `HStack` would
+   have been shorter and is wrong: with the triangle gone this is the *only* way to open a
+   check's output, and a tap gesture is invisible to VoiceOver and unreachable from the
+   keyboard. The button is `play.fill` for both `.run` and `.rerun`, because the distinction
+   between them — has this check a result already — is exactly what the status glyph at the
+   other end of the row draws; the words survive as its accessibility label and tooltip, and
+   `verificationRowAction` still decides which act is offered. `.none` draws the *same button,
+   hidden*, rather than an `EmptyView` or a spacer: every row loses its button for the length of
+   a run and the duration is right-aligned against it, so nothing there would slide every row's
+   timing sideways when a run starts and back when it seals — and a `Color.clear` sized to the
+   image's own frame would not hold the column either, since `.borderless` adds insets of its
+   own. The whole row is one accessibility element, deliberately: the glyph's state word, the
+   name, the stale marker and the duration merge into one label because the row is now one
+   control.
 
    **Every check's tail is now captured, at its own completion edge.** The fetch happens
    mid-run through the control client the run loop already holds — the same read-only
@@ -684,7 +704,7 @@ later reader would plausibly "simplify" away without knowing why:
    them passing, now writes up to N × 200 lines into each of two UserDefaults blobs,
    where before the run blob carried only the failing subset's output and the per-check
    blob did not exist. `VerificationTabView.currentRun` decodes the run blob on the main
-   actor whenever there is no live run to read instead (`VerificationTabView.swift:588-590`).
+   actor whenever there is no live run to read instead (`VerificationTabView.swift:619-621`).
    No cap was added, because capturing every check's output rather than only failures is
    the point of the change above, and a cap would have reintroduced a version of the rule
    it retires. If UserDefaults growth or the main-actor decode cost becomes a real
@@ -713,7 +733,8 @@ later reader would plausibly "simplify" away without knowing why:
 5. **The Verification tab's availability decision is `PhasePolicy.plan`'s; only the wording is
    separate.** `verificationAvailability` calls `plan(phase: .verify, …)` for the decision and
    `verificationUnavailableReason` only to phrase it in the present tense
-   (`VerificationTabView.swift:207-399`), because `Plan.nothingToDo` carries a past-tense string and
+   (`VerificationTabView.swift:412-454` and `:311-363`), because `Plan.nothingToDo` carries a
+   past-tense string and
    no discriminated case. **Nothing enforces the agreement** —
    `verificationUnavailableReason` hand-mirrors `plan`'s three preconditions in the same order; a
    fourth precondition added to `plan` has to be added here too, by hand, and nothing will fail to
@@ -727,7 +748,7 @@ later reader would plausibly "simplify" away without knowing why:
    when a file cannot be parsed (`ProcessComposeConfig.swift:173-198`). `Verification.Runner.start`
    throws `Failure.unavailable` on that nil rather than letting `resolveChecks` see an empty list
    (`VerificationRunner.swift:739-746`), and `verificationUnavailableReason` keeps `declared` as an
-   `Optional` through its own guard chain for the same reason (`VerificationTabView.swift:207-308`).
+   `Optional` through its own guard chain for the same reason (`VerificationTabView.swift:311-363`).
    Coalescing either one to `[]` early would report a broken config to the user as "this project
    declares no verify checks" — the same message a project with genuinely no verify checks gets,
    and the only diagnostic either path gives.

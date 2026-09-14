@@ -1097,6 +1097,9 @@ struct VerificationCheckRow: View {
     /// checklist.
     private static let outputHeight: CGFloat = 200
 
+    /// Fixed, so the `.none` placeholder above can hold the column open.
+    private static let buttonWidth: CGFloat = 20
+
     private var content: VerificationOutputContent {
         // `isLive && liveCheck != nil`, not `isLive` alone: during a single-check
         // run every *other* row is live-adjacent but has nothing on the server to
@@ -1117,14 +1120,13 @@ struct VerificationCheckRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             header
-            DisclosureGroup(
-                isExpanded: Binding(get: { isExpanded }, set: setExpanded)
-            ) {
+            if isExpanded {
+                // Indented to the name above it, which is what a disclosure
+                // triangle used to do for free. There is no triangle now: the
+                // row *is* the control — see `header`.
                 outputBody
-            } label: {
-                Text("Output")
+                    .padding(.leading, 24)
             }
-            .font(.system(size: 10))
         }
         .padding(.vertical, 4)
         .task(id: pollKey) {
@@ -1168,52 +1170,121 @@ struct VerificationCheckRow: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: verificationRowGlyph(state))
-                .foregroundStyle(verificationStateColor(state))
-                .frame(width: 16)
-                // The glyph alone is a thin signal: `.notRun`
-                // (`circle.dashed`) and `.running` (`circle.dotted`)
-                // differ by a few pixels at this size, with color as the
-                // practical differentiator, and nowhere else in the row
-                // does the state appear as text. VoiceOver gets the word
-                // a sighted user reads from a glance at shape and hue.
-                .accessibilityLabel(verificationStateWord(state))
-            Text(name)
-                .font(.system(size: 11, design: .monospaced))
-            // Per row rather than per run, because the records behind the rows
-            // were written at different moments — a suite-wide banner would be
-            // wrong for every check the latest run did not cover.
-            if isStale {
-                Text("stale")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.orange)
-                    .accessibilityLabel(
-                        Text("This result no longer reflects the worktree's current content.")
-                    )
+            // **The row is the disclosure control.** There is no triangle: the
+            // tappable area is the whole row bar the run button, because a
+            // check's own button must not collapse the output the user pressed
+            // it to watch. A `Button` rather than an `.onTapGesture` on the
+            // `HStack`, since a tap gesture is invisible to VoiceOver and
+            // unreachable from the keyboard — and with the triangle gone this
+            // is the only way to open a check's output at all.
+            Button {
+                setExpanded(!isExpanded)
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: verificationRowGlyph(state))
+                        .foregroundStyle(verificationStateColor(state))
+                        .frame(width: 16)
+                        // The glyph alone is a thin signal: `.notRun`
+                        // (`circle.dashed`) and `.running` (`circle.dotted`)
+                        // differ by a few pixels at this size, with color as the
+                        // practical differentiator, and nowhere else in the row
+                        // does the state appear as text. VoiceOver gets the word
+                        // a sighted user reads from a glance at shape and hue.
+                        //
+                        // Inside the toggle `Button`, SwiftUI merges this with
+                        // the name, the stale marker and the duration into one
+                        // accessibility element — intended, not incidental: the
+                        // row is one control now, and its label should read as
+                        // one sentence ("failed, rspec, stale, 12.4s") rather
+                        // than as four stops.
+                        .accessibilityLabel(verificationStateWord(state))
+                    Text(name)
+                        .font(.system(size: 11, design: .monospaced))
+                    // Per row rather than per run, because the records behind the
+                    // rows were written at different moments — a suite-wide banner
+                    // would be wrong for every check the latest run did not cover.
+                    if isStale {
+                        Text("stale")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.orange)
+                            .accessibilityLabel(
+                                Text("This result no longer reflects the worktree's current content.")
+                            )
+                    }
+                    Spacer()
+                    if let duration {
+                        Text(verificationFormattedDuration(duration))
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                // Explicit rather than inferred from the `Spacer` above: the
+                // label has to *be* full width before `.contentShape` has a
+                // full-width rectangle to shape, and whether `.buttonStyle(.plain)`
+                // propagates a label's flexibility is not something a build
+                // failure would tell us about. Without it the row looks
+                // clickable across its width and is not.
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            Spacer()
-            if let duration {
-                Text(verificationFormattedDuration(duration))
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-            }
-            switch action {
-            case .run:
-                Button(action: onRun) { Text("Run") }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-            case .rerun:
-                Button(action: onRun) { Text("Re-run") }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-            case .stop:
-                Button(action: onStop) { Text("Stop") }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-            case .none:
-                EmptyView()
-            }
+            .buttonStyle(.plain)
+            .accessibilityHint(isExpanded
+                ? Text("Hides this check's output.")
+                : Text("Shows this check's output."))
+            .help(isExpanded ? Text("Hide output") : Text("Show output"))
+
+            runButton
         }
+    }
+
+    /// The row's one button, icon-only.
+    ///
+    /// `Run` and `Re-run` share `play.fill` deliberately, where they used to be
+    /// two words: the distinction between them is "has this check a result
+    /// already", which is exactly what the status glyph at the other end of the
+    /// row draws — a second rendering of the same fact, in the one column whose
+    /// meaning should be "press this to start this check". The words survive as
+    /// the accessibility label and the tooltip, which is where a distinction a
+    /// glyph cannot carry belongs. `verificationRowAction` is untouched: it
+    /// still decides *which* act is offered, including the `.stop` that is only
+    /// legal when this check is the whole live run.
+    @ViewBuilder
+    private var runButton: some View {
+        switch action {
+        case .run:
+            iconButton(systemName: "play.fill", label: Text("Run"), action: onRun)
+        case .rerun:
+            iconButton(systemName: "play.fill", label: Text("Re-run"), action: onRun)
+        case .stop:
+            iconButton(systemName: "stop.fill", label: Text("Stop"), action: onStop)
+        case .none:
+            // A placeholder rather than nothing. Every row loses its button for
+            // the length of a run, and the duration beside it is right-aligned
+            // against it — so an `EmptyView` here would slide every row's timing
+            // sideways the moment a run starts, and back again when it seals.
+            //
+            // The placeholder is the *same button*, hidden, rather than a
+            // `Color.clear` of `buttonWidth`: `.borderless` adds insets of its
+            // own, so a bare spacer sized to the image's frame is narrower than
+            // what it stands in for and the column still jogs.
+            iconButton(systemName: "play.fill", label: Text("Run"), action: {})
+                .hidden()
+                .accessibilityHidden(true)
+        }
+    }
+
+    private func iconButton(
+        systemName: String, label: Text, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 11))
+                .frame(width: Self.buttonWidth, height: 16)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel(label)
+        .help(label)
     }
 
     /// What the open group shows, in priority order: the live server, then
