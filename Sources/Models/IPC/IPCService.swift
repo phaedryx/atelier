@@ -947,6 +947,7 @@ extension IPC {
                 let start = try await runner.startVerification(
                     workstreamID: workstreamID,
                     checks: checks,
+                    requesterSurfaceID: request.client.surfaceID,
                     onFinish: onFinish
                 )
                 return .success(id: request.id, .text(startAnswer(for: start, deliverable: surfaceID != nil)))

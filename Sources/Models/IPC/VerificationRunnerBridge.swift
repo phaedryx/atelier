@@ -52,6 +52,17 @@ extension IPC {
         /// reports no duration rather than an invented one.
         private var finishedAt: [String: Date] = [:]
 
+        /// Which surface asked for each run, by run id. A run the user pressed has no
+        /// entry; its notices carry a nil surface and the service addresses the Coding
+        /// Agent tab.
+        ///
+        /// Dropped when the *run* finishes, not when a check does — a run has many checks
+        /// and the last one must still be addressed.
+        private var requesters: [String: String] = [:]
+
+        /// The one per-check handler. See `observeCheckCompletions`.
+        private var checkObserver: (@MainActor @Sendable (VerificationCheckNotice) -> Void)?
+
         init(
             runner: Verification.Runner,
             currentStamp: @escaping @Sendable (String, String) -> String = { worktreePath, projectDirectory in
@@ -65,6 +76,9 @@ extension IPC {
             runner.onFinish = { [weak self] run in
                 self?.runFinished(run)
             }
+            runner.onCheckFinished = { [weak self] workstreamID, record in
+                self?.checkFinished(workstreamID: workstreamID, record: record)
+            }
         }
 
         // MARK: - VerificationControlling
@@ -72,6 +86,7 @@ extension IPC {
         func startVerification(
             workstreamID: UUID,
             checks: [String],
+            requesterSurfaceID: String?,
             onFinish: @escaping @Sendable (VerificationRunInfo) -> Void
         ) async throws -> VerificationStart {
             let target = try WorkspaceActions.shared.verificationTarget(workstreamID: workstreamID)
@@ -92,8 +107,13 @@ extension IPC {
                 checks: checks
             )
             register(runID: started.runID, onFinish: onFinish)
+            register(runID: started.runID, requesterSurfaceID: requesterSurfaceID)
 
             return VerificationStart(runID: started.runID, started: started.started)
+        }
+
+        func observeCheckCompletions(_ handler: @escaping @MainActor @Sendable (VerificationCheckNotice) -> Void) {
+            checkObserver = handler
         }
 
         func verificationRun(id: String, in workstreamID: UUID) async -> VerificationRunInfo? {
@@ -121,8 +141,32 @@ extension IPC {
             completions[runID] = onFinish
         }
 
+        /// Registers which surface, if any, asked for a run.
+        ///
+        /// Internal rather than private so a test can drive the routing without a
+        /// process-compose binary; `startVerification` is its only production caller.
+        func register(runID: String, requesterSurfaceID: String?) {
+            requesters[runID] = requesterSurfaceID
+        }
+
+        private func checkFinished(workstreamID: UUID, record: Verification.CheckRecord) {
+            guard let observer = checkObserver else { return }
+            observer(
+                VerificationCheckNotice(
+                    runID: record.runID,
+                    workstreamID: workstreamID.uuidString,
+                    requesterSurfaceID: requesters[record.runID],
+                    check: Self.projection(of: record)
+                )
+            )
+        }
+
         private func runFinished(_ run: Verification.Run) {
             finishedAt[run.id] = Date()
+            // Dropped here, before the early return below: a run the user started has
+            // no completion entry and takes that return immediately, and a requester
+            // entry dropped after it would leak forever for every such run.
+            requesters.removeValue(forKey: run.id)
             // Removed as it fires: `Runner.seal` promises once per run, and this
             // makes a second call inert on this side too. A run the user started
             // has no entry and finishes silently, which is the point of keying
@@ -194,6 +238,36 @@ extension IPC {
                 return .stopped
             }
             return run.isFinished ? .finished : .running
+        }
+
+        /// The same mapping `projection(of: CheckResult)` performs, over a record.
+        ///
+        /// Two overloads rather than a conversion, because the two inputs are genuinely
+        /// different things — a row within one run, and one check's latest result — and
+        /// funnelling one through the other would invent a `CheckResult` with no run to
+        /// belong to.
+        private static func projection(of record: Verification.CheckRecord) -> VerificationCheckInfo {
+            let state: VerificationCheckState
+            var exitCode: Int?
+            switch record.state {
+            case .notRun: state = .notRun
+            case .pending: state = .pending
+            case .running: state = .running
+            case .passed: state = .passed
+            case let .failed(code):
+                state = .failed
+                exitCode = code
+            case .skipped: state = .skipped
+            case .stopped: state = .stopped
+            }
+            return VerificationCheckInfo(
+                name: record.name,
+                state: state,
+                exitCode: exitCode,
+                durationSeconds: record.duration,
+                outputTail: record.output,
+                outputTruncated: record.outputTruncated
+            )
         }
 
         private static func projection(of check: Verification.CheckResult) -> VerificationCheckInfo {

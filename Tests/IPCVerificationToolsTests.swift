@@ -37,6 +37,7 @@ private actor StubVerificationRunner: IPC.VerificationControlling {
     func startVerification(
         workstreamID: UUID,
         checks: [String],
+        requesterSurfaceID _: String?,
         onFinish: @escaping @Sendable (IPC.VerificationRunInfo) -> Void
     ) async throws -> IPC.VerificationStart {
         startedWorkstreams.append(workstreamID)
@@ -51,6 +52,8 @@ private actor StubVerificationRunner: IPC.VerificationControlling {
     func verificationRun(id: String, in _: UUID) async -> IPC.VerificationRunInfo? {
         runs[id]
     }
+
+    nonisolated func observeCheckCompletions(_: @escaping @MainActor @Sendable (IPC.VerificationCheckNotice) -> Void) {}
 }
 
 private struct StubRefusal: Error, LocalizedError {
