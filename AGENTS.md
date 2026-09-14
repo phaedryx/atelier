@@ -630,7 +630,7 @@ later reader would plausibly "simplify" away without knowing why:
    `recordCompletions` fetches at each check's own completion edge (`VerificationRunner.swift:1253-1304`)
    is all that exists anywhere afterward. No UI or agent-facing copy may imply a fuller log can be
    fetched later; the tab's own truncation notice says as much ("There is nothing more to fetch: the
-   run's own output no longer exists anywhere", `VerificationTabView.swift:1192`). 200 lines is not
+   run's own output no longer exists anywhere", `VerificationTabView.swift:1252`). 200 lines is not
    an arbitrary round number — it was sized against `IPC.Store`'s 65,536-byte-per-message cap
    (`IPCStore.swift:89`), which *throws rather than truncating* (`IPCStore.swift:203`, `:223` and `:259`),
    so an oversized completion notice would be lost silently while an agent waits for it.
