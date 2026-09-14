@@ -58,6 +58,55 @@ func verificationCanRunSelection(isLive: Bool, hasChecks: Bool) -> Bool {
     verificationCanRun(isLive: isLive) && hasChecks
 }
 
+/// What one row's button offers.
+enum VerificationRowAction: Equatable {
+    case run
+    case rerun
+    case stop
+    case none
+}
+
+/// The per-row button, as a pure function of the live run and whether this check has a
+/// recorded result.
+///
+/// A free function for the reason `verificationCanRun` is one: the branch order is the
+/// thing worth pinning, and it should be testable without a view, a runner or a socket.
+///
+/// Three facts decide every branch, and all three are structural rather than stylistic:
+///
+/// - **One run per workstream.** `<id>-verify.sock` admits exactly one control server and
+///   `Runner.start` refuses while `isLive`, so no row may offer to start anything while a
+///   run is live.
+/// - **There is no per-check stop.** `Runner.stop` is per-workstream and tears the whole
+///   run down; stopping one check through the control API would report it `Completed` with
+///   a non-zero code and seal it as a failure the user caused deliberately. So `.stop` is
+///   offered **only** when this check is the entire live run, where stopping it and
+///   stopping the run are the same act. During a Run all the rows show status and no
+///   button, and the top bar's Stop is the only stop.
+/// - **`isLive` is the runner's own bookkeeping, never `Run.isFinished`.** It stays true
+///   through sealing and the socket teardown, which is the window a button keyed on
+///   `isFinished` would re-enable in — letting a second `up` rebind the socket under the
+///   run still tearing itself down.
+///
+/// `.rerun` is offered for *any* record, deliberately: `.passed`, `.failed`, `.skipped`
+/// and `.stopped` all mean this check has been through a run, and re-running it is the
+/// sensible next act in every one of them. A check that never started has no record, so it
+/// offers `.run` — the honest offer rather than a "re-run" of nothing.
+func verificationRowAction(
+    liveRun: Verification.Run?,
+    isLive: Bool,
+    checkName: String,
+    hasRecord: Bool
+) -> VerificationRowAction {
+    guard !isLive else {
+        guard let liveRun, liveRun.checks.count == 1,
+              liveRun.checks.first?.name == checkName
+        else { return .none }
+        return .stop
+    }
+    return hasRecord ? .rerun : .run
+}
+
 /// What one `refreshStaleness` call should do.
 ///
 /// A free function for the reason `verificationAvailability` is one — "Pure,

@@ -576,4 +576,74 @@ final class VerificationTabViewTests: XCTestCase {
         XCTAssertEqual(decision, .start)
         XCTAssertEqual(asked, 1, "past the in-flight guard, the run has to be looked up")
     }
+
+    // MARK: - The per-row button
+
+    private func liveRun(_ checks: [String]) -> Verification.Run {
+        Verification.Run(
+            id: "abcd1234", workstreamID: UUID(), startedAt: Date(), stamp: "s",
+            checks: checks.map { .init(name: $0, state: .running, duration: nil, output: nil) },
+            wasStopped: false
+        )
+    }
+
+    func test_rowAction_offersRunForACheckThatHasNeverRun() {
+        XCTAssertEqual(
+            verificationRowAction(liveRun: nil, isLive: false, checkName: "rspec", hasRecord: false),
+            .run
+        )
+    }
+
+    func test_rowAction_offersRerunOnceThereIsAnyRecord() {
+        XCTAssertEqual(
+            verificationRowAction(liveRun: nil, isLive: false, checkName: "rspec", hasRecord: true),
+            .rerun
+        )
+    }
+
+    /// A row's button becomes Stop only when stopping that check and stopping the run are
+    /// the same act. `Runner.stop` is per-workstream and tears the whole run down —
+    /// deliberately, since killing one check through the control API would seal it as a
+    /// failure the user caused on purpose.
+    func test_rowAction_offersStopWhenThisCheckIsTheWholeLiveRun() {
+        XCTAssertEqual(
+            verificationRowAction(
+                liveRun: liveRun(["rspec"]), isLive: true, checkName: "rspec", hasRecord: false
+            ),
+            .stop
+        )
+    }
+
+    /// The Run all case. A Stop here would end `rubocop` too while claiming to end
+    /// `rspec`, so the row shows its live status and no button; the top bar's Stop is the
+    /// only stop.
+    func test_rowAction_offersNoButtonDuringAMultiCheckRun() {
+        XCTAssertEqual(
+            verificationRowAction(
+                liveRun: liveRun(["rspec", "rubocop"]), isLive: true, checkName: "rspec", hasRecord: true
+            ),
+            .none
+        )
+    }
+
+    /// One run per workstream: `<id>-verify.sock` admits one server and `Runner.start`
+    /// refuses while live. A check outside the live run cannot be started either.
+    func test_rowAction_offersNoButtonForACheckOutsideTheLiveRun() {
+        XCTAssertEqual(
+            verificationRowAction(
+                liveRun: liveRun(["rspec"]), isLive: true, checkName: "vitest", hasRecord: true
+            ),
+            .none
+        )
+    }
+
+    /// `isLive` stays true through sealing *and* the socket teardown. A button that
+    /// re-enabled on `Run.isFinished` would let a second `up` rebind the socket under the
+    /// run still tearing itself down.
+    func test_rowAction_offersNoButtonWhileLiveWithNoRunYetPublished() {
+        XCTAssertEqual(
+            verificationRowAction(liveRun: nil, isLive: true, checkName: "rspec", hasRecord: true),
+            .none
+        )
+    }
 }
