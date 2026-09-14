@@ -401,8 +401,8 @@ final class VerificationRunnerTests: XCTestCase {
 
     /// The feature's whole point, and the one thing a stub can prove about it:
     /// while the run is live the tab can read a *running* check's output, which
-    /// `captureFailedOutput` never fetches — it only takes failed checks, and
-    /// only once, at the end.
+    /// `recordCompletions` never fetches — it only takes a check once it
+    /// reaches a terminal state.
     func test_liveLog_readsARunningCheckWhileTheRunIsLive() async {
         let id = UUID()
         addTeardownBlock { Verification.Store.clear(for: id) }

@@ -206,8 +206,9 @@ extension ProcessCompose {
         /// Drop this workstream's stored process selection.
         ///
         /// `Workstream.Archiver.clearWorkstreamState` is its production caller,
-        /// in step with `Verification.clearSelection` — the key outlives a
-        /// purged workstream otherwise, and both checklists leak the same way.
+        /// in step with `Verification.CheckStore.clear` — the key outlives a
+        /// purged workstream otherwise, and the checklist and the per-check
+        /// results leak the same way.
         ///
         /// Removes the key rather than writing `.all`, which happens to remove
         /// it too: that is `ProcessSelection`'s encoding, not this function's

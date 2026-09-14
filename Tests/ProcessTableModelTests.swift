@@ -40,16 +40,6 @@ final class ProcessTableModelTests: XCTestCase {
         XCTAssertNil(ProcessCompose.TableModel.selection(for: workstreamID).namesToRun)
     }
 
-    /// The same encoding under the Verification tab's own key, because the two
-    /// checklists share a view and a type but not a key.
-    func testNothingSelectedRoundTripsForVerificationToo() {
-        let id = UUID()
-        addTeardownBlock { Verification.setSelection(.all, for: id) }
-        Verification.setSelection(.nothing, for: id)
-
-        XCTAssertEqual(Verification.selection(for: id), .nothing)
-    }
-
     /// `.all` is stored as the *absence* of the key, so a workstream that has
     /// been narrowed and widened again leaves nothing behind that a later read
     /// could mistake for an empty selection.

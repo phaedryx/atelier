@@ -158,8 +158,8 @@ extension Verification {
         ///
         /// Not private: `VerificationTabView`'s live log window asks for the
         /// same number of lines through `liveLog`, so what a user watches
-        /// scroll past while a check runs is exactly what `captureFailedOutput`
-        /// keeps if it fails. Two numbers would make the window silently
+        /// scroll past while a check runs is exactly what `recordCompletions`
+        /// keeps once it finishes. Two numbers would make the window silently
         /// shorten or lengthen at the moment the run sealed.
         static let logTailLines = 200
 
@@ -173,8 +173,8 @@ extension Verification {
         /// **This is a second *reader* of the one-shot log window, and it owns
         /// none of it.** The window — the stretch between the namespace
         /// finishing and the teardown, held open by `shutDownWhenDone: false`
-        /// — exists so `captureFailedOutput` can keep a failed check's tail
-        /// before the output stops existing. Nothing here changes that: this
+        /// — exists so `recordCompletions` can keep each check's tail before
+        /// the output stops existing. Nothing here changes that: this
         /// map never calls `shutDown`, never touches `sealedRunIDs`,
         /// `tearingDown` or `stopRequested`, and grants no way to reach
         /// `execute`. The teardown still has exactly one owner, and it is still
@@ -603,6 +603,7 @@ extension Verification {
         func forget(workstreamID: UUID) {
             runs.removeValue(forKey: workstreamID)
             stopRequested.remove(workstreamID)
+            forgetCheckRecords(for: workstreamID)
         }
 
         // MARK: - Per-check records

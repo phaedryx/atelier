@@ -356,17 +356,14 @@ final class ExecutionTabViewTests: XCTestCase {
 
     // MARK: - Selection storage
 
-    func test_selectionStores_useDifferentKeys() {
+    /// `ProcessSelectionStore.execute` is a thin closure pair over
+    /// `ProcessCompose.TableModel`; this is the direct proof the pair itself
+    /// round-trips, now that Verification has no store of its own to compare
+    /// it against.
+    func test_executeSelectionStore_roundTrips() {
         let id = UUID()
-        addTeardownBlock {
-            ProcessSelectionStore.execute.write(.all, id)
-            ProcessSelectionStore.verify.write(.all, id)
-        }
+        addTeardownBlock { ProcessSelectionStore.execute.write(.all, id) }
         ProcessSelectionStore.execute.write(.only(["bff"]), id)
-        ProcessSelectionStore.verify.write(.only(["rspec"]), id)
-        // Sharing one key would make checking a check in Verification uncheck a
-        // process in Execution.
         XCTAssertEqual(ProcessSelectionStore.execute.read(id), .only(["bff"]))
-        XCTAssertEqual(ProcessSelectionStore.verify.read(id), .only(["rspec"]))
     }
 }

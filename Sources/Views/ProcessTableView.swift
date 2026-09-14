@@ -207,11 +207,6 @@ struct ProcessSelectionStore: Sendable {
         read: { ProcessCompose.TableModel.selection(for: $0) },
         write: { ProcessCompose.TableModel.setSelection($0, for: $1) }
     )
-
-    static let verify = ProcessSelectionStore(
-        read: { Verification.selection(for: $0) },
-        write: { Verification.setSelection($0, for: $1) }
-    )
 }
 
 /// The height of one checklist row.
@@ -261,14 +256,13 @@ func processChecklistHeight(
 /// for choosing what to start was unreachable until after starting — the one
 /// moment it is no use.
 ///
-/// Rendered **before a run only**, for both callers — `showsProcessSelection`'s
-/// doc for Execution, `verificationShowsChecklist`'s for Verification. A stale
-/// version of this comment claimed Verification kept the list visible and
-/// merely `.disabled(isLive)` it during a run; that let a user click a box
-/// that could not take effect, since both runners read the stored selection
-/// only when their own Start/Run is pressed. Hiding it is the fix, and it is
-/// the same fix in both places even though the two runs look nothing alike —
-/// Execution's is a live process table, Verification's a headless one-shot.
+/// Rendered **before a run only** — see `showsProcessSelection`'s own doc for
+/// why. Execution is this view's only caller now: Verification once rendered
+/// it too, under the same rule, before its checklist was removed entirely. A
+/// stale version of this comment claimed Verification kept the list visible
+/// and merely `.disabled(isLive)` it during a run; that let a user click a box
+/// that could not take effect, since the runner read the stored selection
+/// only when Start was pressed. Hiding it before a run was the fix.
 ///
 /// The choices come from the config rather than from the live API for the same
 /// reason it moved out of the table: before Start there is nothing running to

@@ -135,6 +135,9 @@ extension Verification {
             !checks.contains { $0.state == .running || $0.state == .pending }
         }
 
+        /// Test-only now: its last production caller, `runFailed`, was deleted with the
+        /// checklist. `Tests/VerificationResultTests.swift` and `Tests/VerificationRunnerTests.swift`
+        /// still read it, which is what keeps it here.
         var failedNames: [String] {
             checks.compactMap { check in
                 if case .failed = check.state {

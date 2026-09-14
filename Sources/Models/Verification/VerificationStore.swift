@@ -1,5 +1,5 @@
-// ABOUTME: Persists the most recent verification run and the check selection.
-// ABOUTME: Only the latest run, because its stamp is what the tab needs on return.
+// ABOUTME: Persists the most recent verification run.
+// ABOUTME: Only the latest, because its stamp is what the tab needs on return.
 
 import Foundation
 import os
@@ -58,40 +58,5 @@ extension Verification {
         static func clear(for workstreamID: UUID) {
             UserDefaults.standard.removeObject(forKey: key(for: workstreamID))
         }
-    }
-
-    // MARK: - Selection
-
-    private static let selectionKeyPrefix = "atelier.verifySelection."
-
-    static func selectionKey(for workstreamID: UUID) -> String {
-        selectionKeyPrefix + workstreamID.uuidString.lowercased()
-    }
-
-    /// Which checks a run should start: all of them, none of them, or a named
-    /// subset — the same three states `ProcessCompose.TableModel.selection(for:)`
-    /// stores, under this tab's own key, because the two checklists share a view
-    /// and must not share a key. `ProcessSelection.namesToRun` is what turns the
-    /// answer into the list `up -n verify` takes, where no names means every
-    /// check.
-    static func selection(for workstreamID: UUID) -> ProcessSelection {
-        ProcessSelection.stored(forKey: selectionKey(for: workstreamID))
-    }
-
-    static func setSelection(_ selection: ProcessSelection, for workstreamID: UUID) {
-        selection.store(forKey: selectionKey(for: workstreamID))
-    }
-
-    /// Drop this workstream's stored check selection.
-    ///
-    /// `Workstream.Archiver.clearWorkstreamState` is its production caller, in
-    /// step with `ProcessCompose.TableModel.clearSelection` — the key outlives a
-    /// purged workstream otherwise, and both checklists leak the same way.
-    ///
-    /// Removes the key rather than writing `.all`, which happens to remove it
-    /// too: that is `ProcessSelection`'s encoding, not this function's promise,
-    /// and "no key" is the thing being asked for.
-    static func clearSelection(for workstreamID: UUID) {
-        UserDefaults.standard.removeObject(forKey: selectionKey(for: workstreamID))
     }
 }
