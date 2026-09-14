@@ -98,37 +98,62 @@ func verificationRowAction(
 /// here the branch *order* is the whole of it, which is not a thing a
 /// compiler can see.
 ///
-/// **The in-flight guard comes first.** `hasRun` is an `@autoclosure` because
-/// that ordering is a promise about what is *not* evaluated: the caller
-/// passes `currentRun != nil`, and `currentRun` falls through to
-/// `Verification.Store.latest` — a UserDefaults read plus a JSON decode of a
-/// run that may carry several 200-line outputs — on the main actor.
-/// Evaluating it first meant the guard that exists to absorb a ~5Hz burst of
-/// `.worktreeGitActivity` was paid for by the very decode it was meant to
-/// avoid. Taking a plain `Bool` here would put that cost back at every call
-/// site and leave nothing for a test to fail on.
+/// **The in-flight guard comes first.** `hasRunOrRecord` is an `@autoclosure`
+/// because that ordering is a promise about what is *not* evaluated: the
+/// caller composes it from `currentRun != nil` and the workstream's own
+/// `checkRecords`, and `currentRun` falls through to `Verification.Store.latest`
+/// — a UserDefaults read plus a JSON decode of a run that may carry several
+/// 200-line outputs — on the main actor. Evaluating it first meant the guard
+/// that exists to absorb a ~5Hz burst of `.worktreeGitActivity` was paid for
+/// by the very decode it was meant to avoid. Taking a plain `Bool` here would
+/// put that cost back at every call site and leave nothing for a test to fail
+/// on.
 ///
-/// `.markPending` for a call with no run *and* a refresh in flight is
-/// deliberate and costs at most one redundant refresh: the re-entrant call at
-/// completion returns `.skip` without clearing the bit, so it stays set until
-/// some later call gets past both guards. `currentRun` falls through to the
-/// store, so it barely ever goes nil once a run has existed at all.
+/// **Renamed from `hasRun`.** `CheckStore.save` fires per check, mid-run,
+/// from `recordCompletion`, while `Verification.Store.save` fires only from
+/// `seal` — so a session that quit after one check finished but before the
+/// suite sealed leaves a `CheckRecord` behind with no stored `Verification.Run`.
+/// `currentRun != nil` alone read that as "nothing to compare", which made
+/// this skip forever on the next launch and left `currentStamp` nil — and
+/// `verificationRecordIsStale` reads a nil `currentStamp` as stale, so every
+/// row wore the marker permanently. The caller now passes `currentRun != nil
+/// || !checkRecords.isEmpty`, which is what the parameter name has to say.
+///
+/// `.markPending` for a call with no run or record *and* a refresh in flight
+/// is deliberate and costs at most one redundant refresh: the re-entrant call
+/// at completion returns `.skip` without clearing the bit, so it stays set
+/// until some later call gets past both guards. `currentRun` falls through to
+/// the store, so it barely ever goes nil once a run has existed at all.
 enum VerificationStalenessRefresh: Equatable {
     /// A hop is already in flight; record that another was asked for and let
     /// that hop's completion re-run this.
     case markPending
-    /// No run to compare a stamp against, so there is nothing to compute.
+    /// Neither a run nor a record to compare a stamp against, so there is
+    /// nothing to compute.
     case skip
     /// Start a `diffFingerprint` hop.
     case start
 }
 
 func verificationStalenessRefresh(
-    isRefreshing: Bool, hasRun: @autoclosure () -> Bool
+    isRefreshing: Bool, hasRunOrRecord: @autoclosure () -> Bool
 ) -> VerificationStalenessRefresh {
     guard !isRefreshing else { return .markPending }
-    guard hasRun() else { return .skip }
+    guard hasRunOrRecord() else { return .skip }
     return .start
+}
+
+/// The `hasRunOrRecord` the view passes above.
+///
+/// A free function rather than inline arithmetic at the call site because the
+/// composition is the fix: `currentRun != nil` alone read a workstream that
+/// quit mid-suite — after `recordCompletion` wrote a `CheckRecord` but before
+/// `seal` wrote a `Verification.Run` — as having nothing to compare, so
+/// `refreshStaleness` skipped forever, `currentStamp` stayed nil, and
+/// `verificationRecordIsStale` reads a nil `currentStamp` as stale for every
+/// row, permanently.
+func verificationHasStalenessSubject(hasRun: Bool, hasAnyRecord: Bool) -> Bool {
+    hasRun || hasAnyRecord
 }
 
 /// What one check's disclosure group has to show.
@@ -535,13 +560,20 @@ struct VerificationTabView: View {
             }
         }
         .onAppear {
-            refreshStaleness()
             // Hydrates every row drawn before this session has run anything, so
             // a workstream reopened tomorrow still shows yesterday's verdicts.
             // A no-op once the workstream has an in-memory entry, so it cannot
             // overwrite a live run's records with the store's older copy.
+            //
+            // Must run before `refreshStaleness()` below, not after: that call
+            // reads `hasStalenessSubject`, which consults `runner.checkRecords`
+            // for this workstream, and a record can exist with no stored run —
+            // see `verificationStalenessRefresh`'s doc. Widening the gate alone
+            // does not fix the first paint if the records it widens on are not
+            // loaded yet when the gate is asked.
             runner.loadCheckRecords(for: workstreamID)
-            syncWorktreeWatcher(hasRun: currentRun != nil)
+            refreshStaleness()
+            syncWorktreeWatcher(hasRunOrRecord: hasStalenessSubject)
         }
         .onDisappear {
             // The tab leaves the tree on every tab switch, and an FSEvents
@@ -566,10 +598,9 @@ struct VerificationTabView: View {
         // stamp predates the edits and a current result would read as stale.
         .onChange(of: run?.id) {
             refreshStaleness()
-            // The watcher is armed only while there is a run to compare
-            // against, and the first run of a session is when that becomes
-            // true.
-            syncWorktreeWatcher(hasRun: run != nil)
+            // The watcher is armed while there is a run or a record to
+            // compare against — see `hasStalenessSubject`.
+            syncWorktreeWatcher(hasRunOrRecord: hasStalenessSubject)
         }
         // A run *ending*, which is the case the trigger above cannot answer: a
         // check that writes to the tree — a formatter, codegen — leaves
@@ -591,6 +622,22 @@ struct VerificationTabView: View {
 
     private var isLive: Bool {
         runner.isLive(workstreamID)
+    }
+
+    /// Whether `refreshStaleness` and the worktree watcher have anything to
+    /// compare a fresh stamp against: a run, or any check's own record.
+    ///
+    /// Widened from "a run" alone — see `verificationStalenessRefresh`'s doc
+    /// for why `currentRun != nil` on its own left every row's marker stuck on
+    /// `.stale` after a relaunch that followed a mid-suite quit. The
+    /// composition itself is `verificationHasStalenessSubject`, a free
+    /// function, so a test can pin it directly rather than re-deriving the
+    /// same boolean.
+    private var hasStalenessSubject: Bool {
+        verificationHasStalenessSubject(
+            hasRun: currentRun != nil,
+            hasAnyRecord: !(runner.checkRecords[workstreamID] ?? [:]).isEmpty
+        )
     }
 
     /// The run is passed in rather than read here, so `body` reads it once for
@@ -685,16 +732,23 @@ struct VerificationTabView: View {
         return VStack(alignment: .leading, spacing: 0) {
             ForEach(declaredProcesses, id: \.self) { name in
                 let record = records[name]
+                // Nil the instant this check is covered by the live run, same
+                // as `liveCheck` below — otherwise a mid-re-run row reads
+                // "running" and "stale" at once: `state` already prefers the
+                // live check over the (now superseded) record, but `isStale`
+                // was still computed from that record alone. That fires on
+                // every re-run-after-edit, not just the once-a-session case.
+                let liveCheck = isLive ? liveByName[name] : nil
                 VerificationCheckRow(
                     name: name,
-                    liveCheck: isLive ? liveByName[name] : nil,
+                    liveCheck: liveCheck,
                     record: record,
                     workstreamID: workstreamID,
                     runID: isLive ? run?.id : nil,
                     isLive: isLive,
-                    isStale: record.map {
+                    isStale: liveCheck == nil ? (record.map {
                         verificationRecordIsStale(record: $0, currentStamp: currentStamp)
-                    } ?? false,
+                    } ?? false) : false,
                     action: verificationRowAction(
                         liveRun: run, isLive: isLive, checkName: name, hasRecord: record != nil
                     ),
@@ -817,8 +871,8 @@ struct VerificationTabView: View {
     ///
     /// Created lazily rather than in an initialiser: `@State` initial values are
     /// built for every view SwiftUI makes, and this one owns an FSEvents stream.
-    private func syncWorktreeWatcher(hasRun: Bool) {
-        guard hasRun else {
+    private func syncWorktreeWatcher(hasRunOrRecord: Bool) {
+        guard hasRunOrRecord else {
             worktreeWatcher?.disarm()
             worktreeWatcher = nil
             return
@@ -837,23 +891,29 @@ struct VerificationTabView: View {
     /// would stall the tab's own redraw on every keystroke-adjacent save.
     ///
     /// Two guards keep that notification cheap rather than merely
-    /// off-actor: nothing here is rendered without a run to compare against —
-    /// `currentStamp` is only read for a row that has a `CheckRecord`, and a
-    /// record cannot exist where no run does, since `Verification.Store`'s key
-    /// and `CheckStore`'s are written by the same runner and cleared together
-    /// by `Workstream.Archiver` — and `HeadWatcher` can fire at up to ~5Hz during
-    /// ordinary agent activity — its own doc says the watched directory is
-    /// noisy — so a computation already in flight absorbs a burst instead of
-    /// queuing a matching burst of `git` spawns behind it. Absorbed, not
-    /// discarded: see `stalenessRefreshPending` for why the run-completion
-    /// trigger cannot afford to have its request dropped.
+    /// off-actor: nothing here is rendered without a run or a record to
+    /// compare against — `currentStamp` is only read for a row that has a
+    /// `CheckRecord`. **A record can exist where no run does**:
+    /// `CheckStore.save` fires per check, mid-run, from `recordCompletion`,
+    /// while `Verification.Store.save` fires only from `seal` — so a session
+    /// that quit after one check finished but before the suite sealed leaves
+    /// a `CheckRecord` with no stored `Verification.Run`, which is why
+    /// `hasStalenessSubject` asks about both. (The two keys are still
+    /// *cleared* together, by `Workstream.Archiver` — that half of the old
+    /// claim here was right; only "cannot exist where no run does" was not.)
+    /// And `HeadWatcher` can fire at up to ~5Hz during ordinary agent
+    /// activity — its own doc says the watched directory is noisy — so a
+    /// computation already in flight absorbs a burst instead of queuing a
+    /// matching burst of `git` spawns behind it. Absorbed, not discarded: see
+    /// `stalenessRefreshPending` for why the run-completion trigger cannot
+    /// afford to have its request dropped.
     ///
     /// Those two guards, and the order they have to be asked in, are
     /// `verificationStalenessRefresh` — extracted so a test can fail on the
     /// order rather than only on the answer.
     private func refreshStaleness() {
         switch verificationStalenessRefresh(
-            isRefreshing: isRefreshingStaleness, hasRun: currentRun != nil
+            isRefreshing: isRefreshingStaleness, hasRunOrRecord: hasStalenessSubject
         ) {
         case .markPending:
             stalenessRefreshPending = true

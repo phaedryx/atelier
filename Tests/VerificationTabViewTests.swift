@@ -527,37 +527,38 @@ final class VerificationTabViewTests: XCTestCase {
 
     /// **The in-flight guard comes first, and the order is the whole point.**
     ///
-    /// `refreshStaleness` passes `currentRun != nil`, and `currentRun` falls
-    /// through to `Verification.Store.latest` — a UserDefaults read plus a
-    /// JSON decode of a run that may carry several 200-line outputs — on the
-    /// main actor. Asking it first meant the guard that exists to absorb a
-    /// ~5Hz burst of `.worktreeGitActivity` was paid for by the very decode it
-    /// was meant to avoid, so the property is what is *not* evaluated rather
-    /// than which case comes back. Flipping the two guards fails here.
-    func test_stalenessRefresh_doesNotAskWhetherThereIsARunWhileOneIsInFlight() {
+    /// `refreshStaleness` passes `hasStalenessSubject`, which reads
+    /// `currentRun != nil` among other things, and `currentRun` falls through
+    /// to `Verification.Store.latest` — a UserDefaults read plus a JSON decode
+    /// of a run that may carry several 200-line outputs — on the main actor.
+    /// Asking it first meant the guard that exists to absorb a ~5Hz burst of
+    /// `.worktreeGitActivity` was paid for by the very decode it was meant to
+    /// avoid, so the property is what is *not* evaluated rather than which
+    /// case comes back. Flipping the two guards fails here.
+    func test_stalenessRefresh_doesNotAskWhetherThereIsARunOrRecordWhileOneIsInFlight() {
         var asked = 0
         let decision = verificationStalenessRefresh(
             isRefreshing: true,
-            hasRun: { asked += 1; return true }()
+            hasRunOrRecord: { asked += 1; return true }()
         )
         XCTAssertEqual(decision, .markPending)
-        XCTAssertEqual(asked, 0, "the run was looked up behind the in-flight guard")
+        XCTAssertEqual(asked, 0, "the run/record was looked up behind the in-flight guard")
     }
 
-    /// The pending bit is set even with no run, which is the one semantic
-    /// consequence of asking the guards in this order.
-    func test_stalenessRefresh_marksPendingWithNoRunWhileOneIsInFlight() {
+    /// The pending bit is set even with no run or record, which is the one
+    /// semantic consequence of asking the guards in this order.
+    func test_stalenessRefresh_marksPendingWithNoRunOrRecordWhileOneIsInFlight() {
         XCTAssertEqual(
-            verificationStalenessRefresh(isRefreshing: true, hasRun: false),
+            verificationStalenessRefresh(isRefreshing: true, hasRunOrRecord: false),
             .markPending
         )
     }
 
-    /// Nothing renders `currentStamp` without a run to compare it against, so
-    /// a refresh with no run is a git spawn for nobody.
-    func test_stalenessRefresh_skipsWhenThereIsNoRun() {
+    /// Nothing renders `currentStamp` without a run or a record to compare it
+    /// against, so a refresh with neither is a git spawn for nobody.
+    func test_stalenessRefresh_skipsWhenThereIsNoRunOrRecord() {
         XCTAssertEqual(
-            verificationStalenessRefresh(isRefreshing: false, hasRun: false),
+            verificationStalenessRefresh(isRefreshing: false, hasRunOrRecord: false),
             .skip
         )
     }
@@ -566,10 +567,43 @@ final class VerificationTabViewTests: XCTestCase {
         var asked = 0
         let decision = verificationStalenessRefresh(
             isRefreshing: false,
-            hasRun: { asked += 1; return true }()
+            hasRunOrRecord: { asked += 1; return true }()
         )
         XCTAssertEqual(decision, .start)
-        XCTAssertEqual(asked, 1, "past the in-flight guard, the run has to be looked up")
+        XCTAssertEqual(asked, 1, "past the in-flight guard, the run/record has to be looked up")
+    }
+
+    // MARK: - Whether there is anything to compare against
+
+    /// **The reachable case this gate was widened for.** `CheckStore.save`
+    /// fires per check, mid-run, from `recordCompletion`, while
+    /// `Verification.Store.save` fires only from `seal` — so quitting after
+    /// one check completes but before the suite seals leaves a `CheckRecord`
+    /// with no stored `Verification.Run`. `currentRun != nil` alone reads
+    /// that as nothing to compare against.
+    func test_hasStalenessSubject_isTrueWithARecordAndNoStoredRun() {
+        XCTAssertTrue(verificationHasStalenessSubject(hasRun: false, hasAnyRecord: true))
+    }
+
+    func test_hasStalenessSubject_isTrueWithARunAndNoRecord() {
+        XCTAssertTrue(verificationHasStalenessSubject(hasRun: true, hasAnyRecord: false))
+    }
+
+    func test_hasStalenessSubject_isFalseWithNeither() {
+        XCTAssertFalse(verificationHasStalenessSubject(hasRun: false, hasAnyRecord: false))
+    }
+
+    /// Feeding the widened composition into `verificationStalenessRefresh`
+    /// end to end: a record with no stored run must still start a refresh,
+    /// not skip it — skipping left `currentStamp` nil forever, and
+    /// `verificationRecordIsStale` reads a nil `currentStamp` as stale, so
+    /// every row wore the marker permanently.
+    func test_stalenessRefresh_startsWhenARecordExistsWithNoStoredRun() {
+        let hasSubject = verificationHasStalenessSubject(hasRun: false, hasAnyRecord: true)
+        XCTAssertEqual(
+            verificationStalenessRefresh(isRefreshing: false, hasRunOrRecord: hasSubject),
+            .start
+        )
     }
 
     // MARK: - The per-row button
