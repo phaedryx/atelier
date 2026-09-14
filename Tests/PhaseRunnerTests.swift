@@ -394,7 +394,6 @@ final class PhaseRunnerTests: XCTestCase {
         )
 
         XCTAssertTrue(command.contains("bff"), command)
-        XCTAssertFalse(command.contains("-n dispose"), command)
         XCTAssertEqual(command.components(separatedBy: "-n ").count - 1, 1, "exactly one -n: \(command)")
         XCTAssertFalse(command.contains("--keep-project"), command)
     }
@@ -431,7 +430,13 @@ final class PhaseRunnerTests: XCTestCase {
             phase: .verify, config: config, binary: "/usr/bin/process-compose",
             workstreamID: UUID(), selectedProcesses: ["-n", "rspec"], keepProject: false
         )
-        XCTAssertFalse(command.contains(" -n dispose"), command)
+        // Exactly one `-n`, which is the hazard: a check genuinely named `-n`
+        // reaching the shell as a trailing argument makes this
+        // `up -n verify -n rspec`, re-selecting the namespace the command
+        // exists to scope. The assertion this replaces — that " -n dispose"
+        // is absent — could not fail: no input to a `.verify` command can put
+        // that string in it.
+        XCTAssertEqual(command.components(separatedBy: "-n ").count - 1, 1, "exactly one -n: \(command)")
         XCTAssertTrue(command.hasSuffix("rspec"), command)
     }
 
