@@ -19,6 +19,7 @@ private actor StubVerificationRunner: IPC.VerificationControlling {
     func startVerification(
         workstreamID _: UUID,
         checks _: [String],
+        requesterSurfaceID _: String?,
         onFinish _: @escaping @Sendable (IPC.VerificationRunInfo) -> Void
     ) async throws -> IPC.VerificationStart {
         IPC.VerificationStart(runID: run.runID, started: run.checks.map(\.name))
@@ -27,6 +28,8 @@ private actor StubVerificationRunner: IPC.VerificationControlling {
     func verificationRun(id: String, in _: UUID) async -> IPC.VerificationRunInfo? {
         id == run.runID ? run : nil
     }
+
+    nonisolated func observeCheckCompletions(_: @escaping @MainActor @Sendable (IPC.VerificationCheckNotice) -> Void) {}
 }
 
 final class IPCServerTests: XCTestCase {

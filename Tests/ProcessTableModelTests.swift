@@ -40,16 +40,6 @@ final class ProcessTableModelTests: XCTestCase {
         XCTAssertNil(ProcessCompose.TableModel.selection(for: workstreamID).namesToRun)
     }
 
-    /// The same encoding under the Verification tab's own key, because the two
-    /// checklists share a view and a type but not a key.
-    func testNothingSelectedRoundTripsForVerificationToo() {
-        let id = UUID()
-        addTeardownBlock { Verification.setSelection(.all, for: id) }
-        Verification.setSelection(.nothing, for: id)
-
-        XCTAssertEqual(Verification.selection(for: id), .nothing)
-    }
-
     /// `.all` is stored as the *absence* of the key, so a workstream that has
     /// been narrowed and widened again leaves nothing behind that a later read
     /// could mistake for an empty selection.
@@ -417,7 +407,11 @@ actor StubComposeClient: ProcessCompose.Controlling {
 
     func logs(name: String, tail: Int) async throws -> [String] {
         guard !serverEnded else { throw ProcessCompose.Client.ClientError.notRunning }
+        // Recorded before the sleep, not after: a test that wants to land something
+        // *inside* this call's suspension polls `logRequests` rather than guessing a
+        // delay, the same reentrancy `processesCalls`/`inFlight` give `processes()`.
         logRequests.append(name)
+        try? await Task.sleep(for: latency)
         return Array((logsByName[name] ?? []).suffix(tail))
     }
 }

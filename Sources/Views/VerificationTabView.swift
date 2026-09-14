@@ -42,20 +42,53 @@ func verificationCanRun(isLive: Bool) -> Bool {
     !isLive
 }
 
-/// Whether the **Run** button may be pressed: no run is live, and the checklist
-/// leaves at least one check to run.
+/// What one row's button offers.
+enum VerificationRowAction: Equatable {
+    case run
+    case rerun
+    case stop
+    case none
+}
+
+/// The per-row button, as a pure function of the live run and whether this check has a
+/// recorded result.
 ///
-/// Separate from `verificationCanRun` because "Run failed" is gated on liveness
-/// alone — it runs `run.failedNames`, not the checklist's selection, so an empty
-/// checklist has nothing to say about it.
+/// A free function for the reason `verificationCanRun` is one: the branch order is the
+/// thing worth pinning, and it should be testable without a view, a runner or a socket.
 ///
-/// The selection can be empty at all because every box may now be unchecked;
-/// the last one used to be `.disabled`. `runAll` refuses the same state, from
-/// the same store, so the button and the run agree — `Verification.Runner`
-/// reads no check names as *run everything*, which is the opposite of what an
-/// empty checklist asked for.
-func verificationCanRunSelection(isLive: Bool, hasChecks: Bool) -> Bool {
-    verificationCanRun(isLive: isLive) && hasChecks
+/// Three facts decide every branch, and all three are structural rather than stylistic:
+///
+/// - **One run per workstream.** `<id>-verify.sock` admits exactly one control server and
+///   `Runner.start` refuses while `isLive`, so no row may offer to start anything while a
+///   run is live.
+/// - **There is no per-check stop.** `Runner.stop` is per-workstream and tears the whole
+///   run down; stopping one check through the control API would report it `Completed` with
+///   a non-zero code and seal it as a failure the user caused deliberately. So `.stop` is
+///   offered **only** when this check is the entire live run, where stopping it and
+///   stopping the run are the same act. During a Run all the rows show status and no
+///   button, and the top bar's Stop is the only stop.
+/// - **`isLive` is the runner's own bookkeeping, never `Run.isFinished`.** It stays true
+///   through sealing and the socket teardown, which is the window a button keyed on
+///   `isFinished` would re-enable in — letting a second `up` rebind the socket under the
+///   run still tearing itself down.
+///
+/// `.rerun` is offered for *any* record, deliberately: `.passed`, `.failed`, `.skipped`
+/// and `.stopped` all mean this check has been through a run, and re-running it is the
+/// sensible next act in every one of them. A check that never started has no record, so it
+/// offers `.run` — the honest offer rather than a "re-run" of nothing.
+func verificationRowAction(
+    liveRun: Verification.Run?,
+    isLive: Bool,
+    checkName: String,
+    hasRecord: Bool
+) -> VerificationRowAction {
+    guard !isLive else {
+        guard let liveRun, liveRun.checks.count == 1,
+              liveRun.checks.first?.name == checkName
+        else { return .none }
+        return .stop
+    }
+    return hasRecord ? .rerun : .run
 }
 
 /// What one `refreshStaleness` call should do.
@@ -65,55 +98,62 @@ func verificationCanRunSelection(isLive: Bool, hasChecks: Bool) -> Bool {
 /// here the branch *order* is the whole of it, which is not a thing a
 /// compiler can see.
 ///
-/// **The in-flight guard comes first.** `hasRun` is an `@autoclosure` because
-/// that ordering is a promise about what is *not* evaluated: the caller
-/// passes `currentRun != nil`, and `currentRun` falls through to
-/// `Verification.Store.latest` — a UserDefaults read plus a JSON decode of a
-/// run that may carry several 200-line outputs — on the main actor.
-/// Evaluating it first meant the guard that exists to absorb a ~5Hz burst of
-/// `.worktreeGitActivity` was paid for by the very decode it was meant to
-/// avoid. Taking a plain `Bool` here would put that cost back at every call
-/// site and leave nothing for a test to fail on.
+/// **The in-flight guard comes first.** `hasRunOrRecord` is an `@autoclosure`
+/// because that ordering is a promise about what is *not* evaluated: the
+/// caller composes it from `currentRun != nil` and the workstream's own
+/// `checkRecords`, and `currentRun` falls through to `Verification.Store.latest`
+/// — a UserDefaults read plus a JSON decode of a run that may carry several
+/// 200-line outputs — on the main actor. Evaluating it first meant the guard
+/// that exists to absorb a ~5Hz burst of `.worktreeGitActivity` was paid for
+/// by the very decode it was meant to avoid. Taking a plain `Bool` here would
+/// put that cost back at every call site and leave nothing for a test to fail
+/// on.
 ///
-/// `.markPending` for a call with no run *and* a refresh in flight is
-/// deliberate and costs at most one redundant refresh: the re-entrant call at
-/// completion returns `.skip` without clearing the bit, so it stays set until
-/// some later call gets past both guards. `currentRun` falls through to the
-/// store, so it barely ever goes nil once a run has existed at all.
+/// **Renamed from `hasRun`.** `CheckStore.save` fires per check, mid-run,
+/// from `recordCompletion`, while `Verification.Store.save` fires only from
+/// `seal` — so a session that quit after one check finished but before the
+/// suite sealed leaves a `CheckRecord` behind with no stored `Verification.Run`.
+/// `currentRun != nil` alone read that as "nothing to compare", which made
+/// this skip forever on the next launch and left `currentStamp` nil — and
+/// `verificationRecordIsStale` reads a nil `currentStamp` as stale, so every
+/// row wore the marker permanently. The caller now passes `currentRun != nil
+/// || !checkRecords.isEmpty`, which is what the parameter name has to say.
+///
+/// `.markPending` for a call with no run or record *and* a refresh in flight
+/// is deliberate and costs at most one redundant refresh: the re-entrant call
+/// at completion returns `.skip` without clearing the bit, so it stays set
+/// until some later call gets past both guards. `currentRun` falls through to
+/// the store, so it barely ever goes nil once a run has existed at all.
 enum VerificationStalenessRefresh: Equatable {
     /// A hop is already in flight; record that another was asked for and let
     /// that hop's completion re-run this.
     case markPending
-    /// No run to compare a stamp against, so there is nothing to compute.
+    /// Neither a run nor a record to compare a stamp against, so there is
+    /// nothing to compute.
     case skip
     /// Start a `diffFingerprint` hop.
     case start
 }
 
 func verificationStalenessRefresh(
-    isRefreshing: Bool, hasRun: @autoclosure () -> Bool
+    isRefreshing: Bool, hasRunOrRecord: @autoclosure () -> Bool
 ) -> VerificationStalenessRefresh {
     guard !isRefreshing else { return .markPending }
-    guard hasRun() else { return .skip }
+    guard hasRunOrRecord() else { return .skip }
     return .start
 }
 
-/// Whether the process checklist should render.
+/// The `hasRunOrRecord` the view passes above.
 ///
-/// Hidden while live, not merely disabled: `Verification.Runner.start` reads
-/// the stored selection once, when Run is pressed, so a checkbox toggled
-/// mid-run silently affects nothing until the next Run — the same reasoning
-/// `showsProcessSelection` gives for hiding Execution's checklist
-/// (`ExecutionTabView.swift:83`). This tab used to keep the list visible and
-/// merely `.disabled(isLive)` it; that let a user click a box that could not
-/// take effect, which is a confusing state to be in while a run is going.
-///
-/// The empty-list guard is not cosmetic: an empty list would make
-/// `ProcessSelectionView`'s own `.onAppear` read the stored selection as
-/// "nothing survived" and overwrite it with the canonical "all" — see
-/// `processSelectionOnLoad`.
-func verificationShowsChecklist(isLive: Bool, declaredProcesses: [String]) -> Bool {
-    !isLive && !declaredProcesses.isEmpty
+/// A free function rather than inline arithmetic at the call site because the
+/// composition is the fix: `currentRun != nil` alone read a workstream that
+/// quit mid-suite — after `recordCompletion` wrote a `CheckRecord` but before
+/// `seal` wrote a `Verification.Run` — as having nothing to compare, so
+/// `refreshStaleness` skipped forever, `currentStamp` stayed nil, and
+/// `verificationRecordIsStale` reads a nil `currentStamp` as stale for every
+/// row, permanently.
+func verificationHasStalenessSubject(hasRun: Bool, hasAnyRecord: Bool) -> Bool {
+    hasRun || hasAnyRecord
 }
 
 /// What one check's disclosure group has to show.
@@ -132,8 +172,9 @@ enum VerificationOutputContent: Equatable {
     /// The check produced output and none of it survives.
     ///
     /// Not a failure to look: the log lived in the control server, which the
-    /// run loop tears down once the run is sealed, and only a *failed* check's
-    /// tail is captured on the way past — see `Runner.captureFailedOutput`.
+    /// run loop tears down once the run is sealed, and the tail
+    /// `Runner.recordCompletions` takes on the way past is all that survives —
+    /// so this is a check whose own fetch of that tail did not succeed.
     /// Re-running the check is the only way to see it, and the copy for this
     /// case has to say so rather than imply a fetch could still be made.
     case notKept
@@ -157,9 +198,9 @@ private func verificationStateProducedOutput(_ state: Verification.CheckResult.S
 
 /// What a check's group shows, given the run's liveness and what it kept.
 ///
-/// **Live wins over captured, and the order is the point.** A failed check
-/// acquires its captured tail from `Runner.captureFailedOutput` in the window
-/// before teardown, while `isLive` is still true — so for the last moments of
+/// **Live wins over captured, and the order is the point.** A check acquires
+/// its captured tail from `Runner.recordCompletions` the moment it completes,
+/// while `isLive` is still true — so for the last moments of
 /// a run both sources exist, and the live one is the fuller of the two: the
 /// capture is a tail taken once, and the server still has whatever arrived
 /// after it.
@@ -202,6 +243,20 @@ func verificationIsStale(run: Verification.Run, currentStamp: String?) -> Bool {
     guard !run.stamp.isEmpty else { return false }
     guard let currentStamp else { return true }
     return currentStamp != run.stamp
+}
+
+/// Whether one check's recorded result still describes the worktree.
+///
+/// The record-shaped sibling of `verificationIsStale`, and the reason there are
+/// two: checks now complete at different moments, so staleness is a property of
+/// a record rather than of a run. The run-shaped one stays because
+/// `IPC.VerificationRunnerBridge.isStale` still asks it about a whole run. The
+/// empty-stamp rule is unchanged and load-bearing — `""` means "the run's
+/// baseline had not been captured yet", never "no diff".
+func verificationRecordIsStale(record: Verification.CheckRecord, currentStamp: String?) -> Bool {
+    guard !record.stamp.isEmpty else { return false }
+    guard let currentStamp else { return true }
+    return currentStamp != record.stamp
 }
 
 /// Present-tense wording for the tab's own empty state, when nothing can run
@@ -372,7 +427,7 @@ func verificationAvailability(
     )
     // `runnableChecks` is `Verification.Runner`'s own filter, and calling it
     // here rather than repeating it is the point: `Runner.start` resolves the
-    // user's selection against the same filtered list, so the checklist cannot
+    // user's selection against the same filtered list, so the rows cannot
     // offer a check the runner would refuse or silently drop. A process named
     // like a flag — `-n` is legal YAML — is dropped by `PhaseRunner.command`
     // before it reaches the shell, and offering it made the *only*-selected
@@ -440,14 +495,6 @@ struct VerificationTabView: View {
     /// `verificationIsStale`.
     @State private var currentStamp: String?
     @State private var startError: String?
-    /// Bumped whenever the checklist writes a selection.
-    ///
-    /// A trigger, not a value — `hasChecksToRun` re-reads the store, which is
-    /// the one authoritative copy, the same shape `TerminalContainerView` uses
-    /// for Execution's half. Never read; assigning any `@State` re-runs the
-    /// body, which is all this has to do, and deleting it as unused would leave
-    /// the Run button stuck on the selection the tab was built with.
-    @State private var selectionChanges = 0
     /// Bumped on every staleness refresh; a completion whose token no longer
     /// matches belongs to a refresh this view has already superseded — the
     /// same guard `ChangesView.fullLoad` uses against its own git hop.
@@ -513,8 +560,20 @@ struct VerificationTabView: View {
             }
         }
         .onAppear {
+            // Hydrates every row drawn before this session has run anything, so
+            // a workstream reopened tomorrow still shows yesterday's verdicts.
+            // A no-op once the workstream has an in-memory entry, so it cannot
+            // overwrite a live run's records with the store's older copy.
+            //
+            // Must run before `refreshStaleness()` below, not after: that call
+            // reads `hasStalenessSubject`, which consults `runner.checkRecords`
+            // for this workstream, and a record can exist with no stored run —
+            // see `verificationStalenessRefresh`'s doc. Widening the gate alone
+            // does not fix the first paint if the records it widens on are not
+            // loaded yet when the gate is asked.
+            runner.loadCheckRecords(for: workstreamID)
             refreshStaleness()
-            syncWorktreeWatcher(hasRun: currentRun != nil)
+            syncWorktreeWatcher(hasRunOrRecord: hasStalenessSubject)
         }
         .onDisappear {
             // The tab leaves the tree on every tab switch, and an FSEvents
@@ -539,10 +598,9 @@ struct VerificationTabView: View {
         // stamp predates the edits and a current result would read as stale.
         .onChange(of: run?.id) {
             refreshStaleness()
-            // The watcher is armed only while there is a run to compare
-            // against, and the first run of a session is when that becomes
-            // true.
-            syncWorktreeWatcher(hasRun: run != nil)
+            // The watcher is armed while there is a run or a record to
+            // compare against — see `hasStalenessSubject`.
+            syncWorktreeWatcher(hasRunOrRecord: hasStalenessSubject)
         }
         // A run *ending*, which is the case the trigger above cannot answer: a
         // check that writes to the tree — a formatter, codegen — leaves
@@ -564,6 +622,22 @@ struct VerificationTabView: View {
 
     private var isLive: Bool {
         runner.isLive(workstreamID)
+    }
+
+    /// Whether `refreshStaleness` and the worktree watcher have anything to
+    /// compare a fresh stamp against: a run, or any check's own record.
+    ///
+    /// Widened from "a run" alone — see `verificationStalenessRefresh`'s doc
+    /// for why `currentRun != nil` on its own left every row's marker stuck on
+    /// `.stale` after a relaunch that followed a mid-suite quit. The
+    /// composition itself is `verificationHasStalenessSubject`, a free
+    /// function, so a test can pin it directly rather than re-deriving the
+    /// same boolean.
+    private var hasStalenessSubject: Bool {
+        verificationHasStalenessSubject(
+            hasRun: currentRun != nil,
+            hasAnyRecord: !(runner.checkRecords[workstreamID] ?? [:]).isEmpty
+        )
     }
 
     /// The run is passed in rather than read here, so `body` reads it once for
@@ -588,22 +662,7 @@ struct VerificationTabView: View {
                 detailBanner(headline: Text("Some checks never started"), detail: detail)
             }
 
-            // Hidden, not merely disabled, while a run is live —
-            // `verificationShowsChecklist`'s own doc. The gate folds in the
-            // empty-list guard too: a momentarily-empty list would make
-            // `ProcessSelectionView`'s own `.onAppear` read the stored
-            // selection as "nothing survived" and overwrite it with the
-            // canonical "all" — see `processSelectionOnLoad`.
-            if verificationShowsChecklist(isLive: isLive, declaredProcesses: declaredProcesses) {
-                ProcessSelectionView(
-                    workstreamID: workstreamID,
-                    declaredProcesses: declaredProcesses,
-                    store: .verify,
-                    onSelectionChange: { selectionChanges += 1 }
-                )
-            }
-
-            actionRow(run: run)
+            actionRow()
 
             if let startError {
                 Text(startError)
@@ -611,10 +670,12 @@ struct VerificationTabView: View {
                     .foregroundStyle(.orange)
             }
 
-            if let run {
-                ScrollView {
-                    resultRows(for: run)
-                }
+            // Unconditional, where this used to be `if let run`: the rows come
+            // from the project's declared checks now, so they exist whether or
+            // not anything has ever run here. The `ScrollView` stays — one row
+            // per declared check can outgrow the pane.
+            ScrollView {
+                resultRows(run: run)
             }
         }
         .padding(16)
@@ -627,30 +688,16 @@ struct VerificationTabView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
-    private func actionRow(run: Verification.Run?) -> some View {
+    private func actionRow() -> some View {
         HStack(spacing: 8) {
             Button(action: runAll) {
-                Text("Run")
+                Text("Run all")
             }
             .buttonStyle(.borderedProminent)
-            .disabled(!verificationCanRunSelection(isLive: isLive, hasChecks: hasChecksToRun))
-
-            // Beside the disabled button rather than in a tooltip on it: a
-            // tooltip on a disabled control is how the checklist used to
-            // explain its own dimmed checkbox, which is to say not at all.
-            if !isLive, !hasChecksToRun {
-                Text("Select a check to run.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            }
-
-            if let run, !run.failedNames.isEmpty {
-                Button(action: runFailed) {
-                    Text("Run failed")
-                }
-                .buttonStyle(.bordered)
-                .disabled(!verificationCanRun(isLive: isLive))
-            }
+            // `isLive` is true for a single-check run started from a row just as
+            // much as for a Run all, so pressing one row's Run disables this
+            // until that run seals *and* its socket teardown returns.
+            .disabled(!verificationCanRun(isLive: isLive))
 
             if isLive {
                 Button(action: stop) {
@@ -665,21 +712,48 @@ struct VerificationTabView: View {
         }
     }
 
-    private func resultRows(for run: Verification.Run) -> some View {
-        let stale = verificationIsStale(run: run, currentStamp: currentStamp)
+    /// Rows come from the project's **declared** checks, not from the live run's.
+    ///
+    /// That is the whole of the redesign: a run started for one check contains
+    /// only that check, and `Verification.Store` keeps only the latest run — so
+    /// rows read off `run.checks` lost every other check's result the moment a
+    /// single row's Run was pressed. Status comes from `Runner.checkRecords`,
+    /// overridden by the live run's own row while a run is in flight.
+    ///
+    /// Staleness moved here with them: it is a per-row marker now, because the
+    /// records it is computed from were written at different moments, and one
+    /// run-level banner would be wrong for every row the latest run did not
+    /// cover.
+    private func resultRows(run: Verification.Run?) -> some View {
+        let records = runner.checkRecords[workstreamID] ?? [:]
+        let liveByName = Dictionary(
+            (run?.checks ?? []).map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first }
+        )
         return VStack(alignment: .leading, spacing: 0) {
-            if stale {
-                Text("This result no longer reflects the worktree's current content.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.orange)
-                    .padding(.bottom, 6)
-            }
-            ForEach(run.checks) { check in
+            ForEach(declaredProcesses, id: \.self) { name in
+                let record = records[name]
+                // Nil the instant this check is covered by the live run, same
+                // as `liveCheck` below — otherwise a mid-re-run row reads
+                // "running" and "stale" at once: `state` already prefers the
+                // live check over the (now superseded) record, but `isStale`
+                // was still computed from that record alone. That fires on
+                // every re-run-after-edit, not just the once-a-session case.
+                let liveCheck = isLive ? liveByName[name] : nil
                 VerificationCheckRow(
-                    check: check,
+                    name: name,
+                    liveCheck: liveCheck,
+                    record: record,
                     workstreamID: workstreamID,
-                    runID: run.id,
+                    runID: isLive ? run?.id : nil,
                     isLive: isLive,
+                    isStale: liveCheck == nil ? (record.map {
+                        verificationRecordIsStale(record: $0, currentStamp: currentStamp)
+                    } ?? false) : false,
+                    action: verificationRowAction(
+                        liveRun: run, isLive: isLive, checkName: name, hasRecord: record != nil
+                    ),
+                    onRun: { runOne(name) },
+                    onStop: stop,
                     // The expansion set lives in this view, not in the row.
                     // `runner` republishes at the poll cadence, so every row is
                     // rebuilt once a second for the length of a run; a `@State`
@@ -687,12 +761,12 @@ struct VerificationTabView: View {
                     // kept its identity, which `ForEach` over a value whose
                     // `state` and `duration` both change is not a safe bet.
                     // Here it is a set of names, which nothing rebuilds.
-                    isExpanded: expandedChecks.contains(check.name),
+                    isExpanded: expandedChecks.contains(name),
                     setExpanded: { expanded in
                         if expanded {
-                            expandedChecks.insert(check.name)
+                            expandedChecks.insert(name)
                         } else {
-                            expandedChecks.remove(check.name)
+                            expandedChecks.remove(name)
                         }
                     },
                     runner: runner
@@ -752,27 +826,26 @@ struct VerificationTabView: View {
 
     // MARK: - Actions
 
-    /// Whether the checklist leaves anything for Run to run. Read from the
-    /// store rather than held, so it cannot drift from what `runAll` resolves
-    /// out of the same key a moment later.
-    private var hasChecksToRun: Bool {
-        Verification.selection(for: workstreamID).namesToRun != nil
-    }
-
+    /// Every runnable declared check. Never empty when this is reachable —
+    /// `unavailableReason` is non-nil otherwise and the tab renders
+    /// `unavailableView`.
     private func runAll() {
-        // The same store the Run button's enabled state is read from, so the
-        // two cannot disagree. Nil is the checklist's "nothing", and it has to
-        // stop here: `Runner.start` reads an empty list as every check.
-        guard let checks = Verification.selection(for: workstreamID).namesToRun else { return }
-        startRun(checks: checks)
+        startRun(checks: declaredProcesses)
     }
 
-    private func runFailed() {
-        startRun(checks: currentRun?.failedNames ?? [])
+    private func runOne(_ name: String) {
+        startRun(checks: [name])
     }
 
     private func startRun(checks: [String]) {
         startError = nil
+        // Never an empty list: `Verification.Runner.resolveChecks` reads no
+        // names as *run everything*, so an empty array here would silently
+        // invert a single row's press into a whole-suite run. `runAll` passes
+        // the declared list explicitly rather than relying on that convention —
+        // which is also what the deleted `runFailed`, with its `?? []`, got
+        // wrong.
+        guard !checks.isEmpty else { return }
         do {
             _ = try runner.start(
                 workstreamID: workstreamID,
@@ -798,8 +871,8 @@ struct VerificationTabView: View {
     ///
     /// Created lazily rather than in an initialiser: `@State` initial values are
     /// built for every view SwiftUI makes, and this one owns an FSEvents stream.
-    private func syncWorktreeWatcher(hasRun: Bool) {
-        guard hasRun else {
+    private func syncWorktreeWatcher(hasRunOrRecord: Bool) {
+        guard hasRunOrRecord else {
             worktreeWatcher?.disarm()
             worktreeWatcher = nil
             return
@@ -818,21 +891,29 @@ struct VerificationTabView: View {
     /// would stall the tab's own redraw on every keystroke-adjacent save.
     ///
     /// Two guards keep that notification cheap rather than merely
-    /// off-actor: nothing here is rendered without a run to compare against
-    /// (`currentStamp` is only read by `resultRows`, which only exists when
-    /// `currentRun` does), and `HeadWatcher` can fire at up to ~5Hz during
-    /// ordinary agent activity — its own doc says the watched directory is
-    /// noisy — so a computation already in flight absorbs a burst instead of
-    /// queuing a matching burst of `git` spawns behind it. Absorbed, not
-    /// discarded: see `stalenessRefreshPending` for why the run-completion
-    /// trigger cannot afford to have its request dropped.
+    /// off-actor: nothing here is rendered without a run or a record to
+    /// compare against — `currentStamp` is only read for a row that has a
+    /// `CheckRecord`. **A record can exist where no run does**:
+    /// `CheckStore.save` fires per check, mid-run, from `recordCompletion`,
+    /// while `Verification.Store.save` fires only from `seal` — so a session
+    /// that quit after one check finished but before the suite sealed leaves
+    /// a `CheckRecord` with no stored `Verification.Run`, which is why
+    /// `hasStalenessSubject` asks about both. (The two keys are still
+    /// *cleared* together, by `Workstream.Archiver` — that half of the old
+    /// claim here was right; only "cannot exist where no run does" was not.)
+    /// And `HeadWatcher` can fire at up to ~5Hz during ordinary agent
+    /// activity — its own doc says the watched directory is noisy — so a
+    /// computation already in flight absorbs a burst instead of queuing a
+    /// matching burst of `git` spawns behind it. Absorbed, not discarded: see
+    /// `stalenessRefreshPending` for why the run-completion trigger cannot
+    /// afford to have its request dropped.
     ///
     /// Those two guards, and the order they have to be asked in, are
     /// `verificationStalenessRefresh` — extracted so a test can fail on the
     /// order rather than only on the answer.
     private func refreshStaleness() {
         switch verificationStalenessRefresh(
-            isRefreshing: isRefreshingStaleness, hasRun: currentRun != nil
+            isRefreshing: isRefreshingStaleness, hasRunOrRecord: hasStalenessSubject
         ) {
         case .markPending:
             stalenessRefreshPending = true
@@ -920,40 +1001,72 @@ private func verificationFormattedDuration(_ duration: TimeInterval) -> String {
 /// said; the decision of *whether* it may poll is `isExpanded` and
 /// `verificationOutputContent`, both passed in.
 struct VerificationCheckRow: View {
-    let check: Verification.CheckResult
+    let name: String
+    /// This check's row in the run currently in flight, when there is one and it
+    /// covers this check. Nil for every row while nothing is live.
+    let liveCheck: Verification.CheckResult?
+    /// The last recorded result for this check, from any run.
+    let record: Verification.CheckRecord?
     let workstreamID: UUID
-    /// The run these lines belong to. Part of the poll task's identity, so a
-    /// second run discards the first one's output rather than appearing to
+    /// The live run's id, when one is live. Part of the poll task's identity, so
+    /// a second run discards the first one's output rather than appearing to
     /// resume it.
-    let runID: String
+    let runID: String?
     let isLive: Bool
+    let isStale: Bool
+    let action: VerificationRowAction
+    let onRun: () -> Void
+    let onStop: () -> Void
     let isExpanded: Bool
     let setExpanded: (Bool) -> Void
     @ObservedObject var runner: Verification.Runner
 
+    /// The live run wins while it covers this check; otherwise the record;
+    /// otherwise the check has never run.
+    private var state: Verification.CheckResult.State {
+        liveCheck?.state ?? record?.state ?? .notRun
+    }
+
+    private var duration: TimeInterval? {
+        liveCheck?.duration ?? record?.duration
+    }
+
+    private var output: String? {
+        liveCheck?.output ?? record?.output
+    }
+
+    private var outputTruncated: Bool {
+        liveCheck?.outputTruncated ?? record?.outputTruncated ?? false
+    }
+
     /// The last tail read from the live control server, newest last.
     ///
-    /// **Kept after the run ends, and that is deliberate.** The server is torn
-    /// down once the run seals, so these lines stop being refreshable — but
-    /// they are real output that was really read, and clearing them would empty
-    /// a window the user is in the middle of reading at the exact moment the
-    /// run finishes. They are labelled as the last read rather than as live.
+    /// **Does not survive the run ending, and that is a consequence of
+    /// `runID` itself going nil at seal** (`runID: isLive ? run?.id : nil`,
+    /// where this row is built) rather than a separate decision made here.
+    /// `displayedLines` requires a non-nil `runID` that matches what was
+    /// stored, so the instant the run stops being live these lines stop being
+    /// shown — nothing is labelled "the last output read from it"; the row
+    /// falls straight through to the captured tail.
     ///
-    /// The rule is "an open group keeps what it read while it was open": a new
-    /// run replaces them, and closing the group ends the session that owned
-    /// them — so a group opened for the first time after a run shows the honest
-    /// `.notKept` note rather than a cache nothing told the user about.
+    /// That is an acceptable loss rather than a regression, because a
+    /// replacement exists on the other side of the fall-through:
+    /// `Runner.recordCompletions` now takes the captured tail for **every**
+    /// check at its own completion edge, not only for failures the way it did
+    /// before this tab read from `checkRecords`. So sealing loses a few
+    /// seconds of "freshest possible" text, not the output itself — the one
+    /// case with no replacement is `.notKept`, where the log fetch itself
+    /// threw and no tail was ever captured to fall through to.
     ///
-    /// **The run id is stored beside the lines rather than used to clear them,
-    /// and that is what makes the first half of that rule true without
-    /// depending on SwiftUI.** Clearing on an `.onChange(of: runID)` would
-    /// require this row to keep its view identity across two runs — `ForEach`
-    /// keys on `CheckResult.id`, which is the check's *name*, so the same name
-    /// in run 2 may or may not be the same view as in run 1, and only one of
-    /// the three possible answers ("identity kept, change observed") clears
-    /// anything. Carrying the id makes every answer correct: `displayedLines`
-    /// hands back nothing for a read belonging to a run this row is no longer
-    /// showing, whether or not any `onChange` ever fired.
+    /// The run id is still stored beside the lines rather than cleared on
+    /// `.onChange(of: runID)`, because `ForEach` keys on `CheckResult.id`
+    /// (the check's name), so the same name in run 2 may or may not be the
+    /// same view as in run 1 — only one of the three possible answers
+    /// ("identity kept, change observed") would clear anything. Carrying the
+    /// id makes every answer correct: `displayedLines` hands back nothing for
+    /// a read belonging to a run this row is no longer showing, whether or
+    /// not any `onChange` ever fired — including the seal itself, which is
+    /// just another case of "no longer showing that run".
     @State private var liveRead: LiveRead?
 
     /// A tail, and the run it was read from.
@@ -964,8 +1077,11 @@ struct VerificationCheckRow: View {
 
     /// The live lines this row may show: the ones read from *this* run, and
     /// never a previous one's.
+    ///
+    /// `runID` is nil whenever nothing is live, so this also hands back nothing
+    /// once the run that produced the lines has sealed.
     private var displayedLines: [String] {
-        guard let liveRead, liveRead.runID == runID else { return [] }
+        guard let liveRead, let runID, liveRead.runID == runID else { return [] }
         return liveRead.lines
     }
 
@@ -982,8 +1098,12 @@ struct VerificationCheckRow: View {
     private static let outputHeight: CGFloat = 200
 
     private var content: VerificationOutputContent {
+        // `isLive && liveCheck != nil`, not `isLive` alone: during a single-check
+        // run every *other* row is live-adjacent but has nothing on the server to
+        // read, and polling for it would be a socket round trip per second for a
+        // check this run never started.
         verificationOutputContent(
-            state: check.state, hasCapturedOutput: check.output != nil, isLive: isLive
+            state: state, hasCapturedOutput: output != nil, isLive: isLive && liveCheck != nil
         )
     }
 
@@ -991,7 +1111,7 @@ struct VerificationCheckRow: View {
     /// off, and nothing that merely changes with each poll — a `duration` or a
     /// line count in here would cancel and respawn the task it belongs to.
     private var pollKey: String {
-        "\(runID)|\(check.name)|\(isExpanded)|\(content == .live)"
+        "\(runID ?? "-")|\(name)|\(isExpanded)|\(content == .live)"
     }
 
     var body: some View {
@@ -1008,13 +1128,13 @@ struct VerificationCheckRow: View {
         }
         .padding(.vertical, 4)
         .task(id: pollKey) {
-            guard isExpanded, content == .live else { return }
+            guard isExpanded, content == .live, let runID else { return }
             while !Task.isCancelled {
                 // Nil is every reason there is nothing to read — the run
                 // ended, the server went away, the check is not this run's.
                 // `content` flips away from `.live` on the next republish and
                 // cancels this task; until then, keep what was last read.
-                if let lines = await runner.liveLog(workstreamID: workstreamID, check: check.name) {
+                if let lines = await runner.liveLog(workstreamID: workstreamID, check: name) {
                     let read = LiveRead(runID: runID, lines: lines)
                     if liveRead != read {
                         liveRead = read
@@ -1027,11 +1147,13 @@ struct VerificationCheckRow: View {
                 try? await Task.sleep(for: Self.pollInterval)
             }
         }
-        // **Not cleared in the task above, and that is the point.** `pollKey`
-        // carries liveness, so the task restarts the moment the run seals — a
-        // reset there would empty the window at exactly the instant the user is
-        // reading the end of it, which is what these lines are kept past the
-        // run to avoid.
+        // **Not cleared here on seal, and that is deliberate — but it does
+        // not need to be, because `displayedLines` already stops showing
+        // these lines the instant `runID` goes nil.** `pollKey` carries
+        // liveness, so the task restarts the moment the run seals; clearing
+        // `liveRead` here too would be redundant with that, not protective of
+        // anything the user is reading — see `liveRead`'s own comment for why
+        // sealing already ends the window.
         //
         // Closing the group ends the session that owned the lines. A new run is
         // handled by `displayedLines` instead of by a second `onChange` here,
@@ -1046,8 +1168,8 @@ struct VerificationCheckRow: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: verificationRowGlyph(check.state))
-                .foregroundStyle(verificationStateColor(check.state))
+            Image(systemName: verificationRowGlyph(state))
+                .foregroundStyle(verificationStateColor(state))
                 .frame(width: 16)
                 // The glyph alone is a thin signal: `.notRun`
                 // (`circle.dashed`) and `.running` (`circle.dotted`)
@@ -1055,27 +1177,54 @@ struct VerificationCheckRow: View {
                 // practical differentiator, and nowhere else in the row
                 // does the state appear as text. VoiceOver gets the word
                 // a sighted user reads from a glance at shape and hue.
-                .accessibilityLabel(verificationStateWord(check.state))
-            Text(check.name)
+                .accessibilityLabel(verificationStateWord(state))
+            Text(name)
                 .font(.system(size: 11, design: .monospaced))
+            // Per row rather than per run, because the records behind the rows
+            // were written at different moments — a suite-wide banner would be
+            // wrong for every check the latest run did not cover.
+            if isStale {
+                Text("stale")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.orange)
+                    .accessibilityLabel(
+                        Text("This result no longer reflects the worktree's current content.")
+                    )
+            }
             Spacer()
-            if let duration = check.duration {
+            if let duration {
                 Text(verificationFormattedDuration(duration))
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(.tertiary)
             }
+            switch action {
+            case .run:
+                Button(action: onRun) { Text("Run") }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            case .rerun:
+                Button(action: onRun) { Text("Re-run") }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            case .stop:
+                Button(action: onStop) { Text("Stop") }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            case .none:
+                EmptyView()
+            }
         }
     }
 
-    /// What the open group shows, in priority order: the live server, then the
-    /// last thing read from it, then what the run captured, then why there is
-    /// nothing.
+    /// What the open group shows, in priority order: the live server, then
+    /// what the run captured, then why there is nothing.
     ///
-    /// The middle branch is why this is not simply a switch over `content`:
-    /// lines read live outlive the run that produced them for as long as the
-    /// group stays open, and they are at least as fresh as the captured tail —
-    /// `Runner.captureFailedOutput` takes its copy in the same window this was
-    /// polling.
+    /// This is not simply a switch over `content` because the first branch
+    /// also has to say something for a live check with nothing printed yet —
+    /// `content == .live` covers both. There is no separate "just sealed"
+    /// branch: `displayedLines` already goes empty the instant `runID` does
+    /// (see `liveRead`), so a row falls straight from `.live` to `.captured`
+    /// or `.notKept` with nothing shown in between.
     @ViewBuilder
     private var outputBody: some View {
         let live = displayedLines
@@ -1088,15 +1237,17 @@ struct VerificationCheckRow: View {
             } else {
                 logWindow(live.joined(separator: "\n"))
             }
-        } else if !live.isEmpty {
-            logWindow(live.joined(separator: "\n"))
-            note(NSLocalizedString(
-                "The run has ended. This is the last output read from it.",
-                comment: "Verification tab: live output kept on screen after its run finished"
-            ))
-        } else if let output = check.output {
+        } else if let output, !output.isEmpty {
+            // **`!isEmpty`, and the guard is not decoration.** A check whose log
+            // came back empty is recorded with `output: ""` rather than nil —
+            // which is what keeps `.notKept` out of reach for a check that
+            // completed — so `let output` alone rendered an empty scrolling box
+            // with nothing to say about it. The concrete case is a skipped
+            // check: a `depends_on` failure produces no lines by definition.
+            // Such a row falls through to the final branch instead, which is
+            // the sentence that fits it.
             logWindow(output)
-            if check.outputTruncated {
+            if outputTruncated {
                 note(NSLocalizedString(
                     "Showing the last lines captured. There is nothing more to fetch: the run's own output no longer exists anywhere.",
                     comment: ""
@@ -1105,27 +1256,44 @@ struct VerificationCheckRow: View {
         } else if content == .notKept {
             // Must not read as "we failed to fetch it" or imply a fetch could
             // still be made: the output lived in the control server, the run
-            // loop tore that server down, and only a failed check's tail is
-            // kept on the way past. Re-running is the honest pointer.
+            // loop tore that server down, and the window is one-shot.
             //
-            // A stopped check gets its own sentence because the general one is
-            // wrong for it: "output is only kept for a check that failed" reads
-            // as an explanation to someone who did not choose this, and a user
-            // who pressed Stop did. Same fact, told to the person who caused it.
-            note(check.state == .stopped
+            // **Reachable only for a check that ran** — `.notKept` requires
+            // `verificationStateProducedOutput`, which is false for `.notRun`,
+            // so a never-run check lands in the final branch and not here. The
+            // non-stopped case is a check that completed while its tail could
+            // not be fetched: `Runner.recordCompletions` catches a failing
+            // `client.logs` and records `output: nil`, and `seal` passes a nil
+            // `check.output` through for a check whose server died between
+            // polls. That loss is permanent, which is why the runner logs it as
+            // a warning, and this is the only surface that tells the user.
+            //
+            // A stopped check gets its own sentence because it is the one case
+            // the user caused: same fact, told to the person who chose it.
+            note(state == .stopped
                 ? NSLocalizedString(
                     "This check was stopped before its output could be kept. Re-run it to see the output.",
                     comment: "Verification tab: a check the user stopped, whose output was not kept"
                 )
                 : NSLocalizedString(
-                    "Output is only kept for a check that failed. Re-run this check to see its output.",
-                    comment: "Verification tab: a check whose output was not kept past its run"
+                    "This check's output was not kept. Re-run it to see the output.",
+                    comment: "Verification tab: a completed check whose output could not be captured"
                 ))
         } else {
-            note(NSLocalizedString(
-                "This check has not produced any output.",
-                comment: "Verification tab: a check that has not run, is waiting, or was skipped"
-            ))
+            // `.notStarted`, plus the empty-captured-output fall-through above —
+            // so `content` is not always `.notStarted` here, and a check that
+            // *did* run can reach this. `.notRun` is the one state that has a
+            // next step to offer; `.pending`, `.skipped` and a check that ran
+            // and printed nothing all get the plain statement.
+            note(state == .notRun
+                ? NSLocalizedString(
+                    "This check has not run yet. Run it to see its output.",
+                    comment: "Verification tab: a check with no recorded result"
+                )
+                : NSLocalizedString(
+                    "This check has not produced any output.",
+                    comment: "Verification tab: a check that is waiting, was skipped, or printed nothing"
+                ))
         }
     }
 

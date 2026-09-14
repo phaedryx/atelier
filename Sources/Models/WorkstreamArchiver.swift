@@ -332,24 +332,26 @@ extension Workstream {
         /// Drop every per-workstream UserDefaults key a purge must not leave
         /// behind.
         ///
-        /// Three keys, and the two selections are the reason this is a function
-        /// rather than three lines inline: `atelier.verifySelection.<id>` and
-        /// `atelier.processSelection.<id>` are two checklists over two
-        /// namespaces, stored apart on purpose (one key for both would make
-        /// checking a verify check uncheck an execute process) — so they also
-        /// have to be *dropped* apart, and a purge that remembered one and
-        /// forgot the other is exactly what happened. Named together here so a
-        /// third checklist has one place to join.
+        /// Three keys, and that is the reason this is a function rather than
+        /// three lines inline: `atelier.processSelection.<id>` is Execution's
+        /// checklist selection, `atelier.verifyChecks.<id>` is Verification's
+        /// per-check results — it has no checklist or selection of its own any
+        /// more, only results a check can be re-run to replace — and
+        /// `atelier.verifyRun.<id>` is the last run. Named together here so a
+        /// fourth key has one place to join.
         ///
         /// Nonisolated: `purge` calls it from a detached task, and none of the
         /// three reads touches the main actor.
         ///
         /// Purge only. `remove` keeps the worktree on disk and destroys nothing,
-        /// so a selection it left behind is the shape that has always been there
-        /// and is not this function's to change.
+        /// so a selection or result it left behind is the shape that has always
+        /// been there and is not this function's to change.
         static func clearWorkstreamState(for workstreamID: UUID) {
             ProcessCompose.TableModel.clearSelection(for: workstreamID)
-            Verification.clearSelection(for: workstreamID)
+            // Was `Verification.clearSelection`. The Verification tab has no checklist and
+            // no selection key any more; what outlives a purged workstream now is its
+            // per-check results.
+            Verification.CheckStore.clear(for: workstreamID)
             Verification.Store.clear(for: workstreamID)
         }
 

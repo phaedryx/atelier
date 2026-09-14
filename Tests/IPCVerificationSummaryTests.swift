@@ -117,6 +117,24 @@ final class IPCVerificationSummaryTests: XCTestCase {
         XCTAssertTrue(message.contains("no checks"), message)
     }
 
+    /// The same trap, the other shape: a spawn that dies before binding leaves every
+    /// *declared* check present as a row, sealed `.notRun` — rows exist, `total > 0`, so
+    /// the empty-`checks` guard above never fires. "0 of 3 failed" is exactly as true and
+    /// exactly as green as "0 of 0 failed".
+    func test_message_neverRendersARunWhoseRowsAreAllNotRunAsAPass() {
+        let message = IPC.VerificationSummary.message(for: run(checks: [
+            check("rspec", .notRun),
+            check("rubocop", .notRun),
+            check("tsc", .notRun),
+        ]))
+
+        XCTAssertFalse(message.lowercased().contains("passed"), "nothing ran, so nothing passed: \(message)")
+        XCTAssertEqual(
+            message.split(separator: "\n").first,
+            "run v7f3a11 finished in 50.0s — declared 3 checks but none of them ran"
+        )
+    }
+
     func test_message_reportsAStoppedRunAsStoppedRatherThanFailed() {
         let message = IPC.VerificationSummary.message(for: run(state: .stopped, duration: 12, checks: [
             check("rspec", .stopped, duration: 12),
@@ -211,6 +229,68 @@ final class IPCVerificationSummaryTests: XCTestCase {
         ]))
 
         XCTAssertTrue(message.contains("25m 3.2s"), message)
+    }
+
+    // MARK: - The per-check notice
+
+    private func notice(
+        state: IPC.VerificationCheckState, exitCode: Int? = nil,
+        tail: String? = nil, truncated: Bool = false
+    ) -> IPC.VerificationCheckNotice {
+        IPC.VerificationCheckNotice(
+            runID: "abcd1234", workstreamID: UUID().uuidString, requesterSurfaceID: nil,
+            check: IPC.VerificationCheckInfo(
+                name: "rspec", state: state, exitCode: exitCode, durationSeconds: 48.1,
+                outputTail: tail, outputTruncated: truncated
+            )
+        )
+    }
+
+    func test_checkMessage_namesTheCheckTheVerdictAndTheRun() {
+        let message = IPC.VerificationSummary.checkMessage(
+            for: notice(state: .failed, exitCode: 1, tail: "3 failures")
+        )
+
+        XCTAssertTrue(message.contains("rspec"))
+        XCTAssertTrue(message.contains("failed"))
+        XCTAssertTrue(message.contains("abcd1234"))
+        XCTAssertTrue(message.contains("3 failures"))
+    }
+
+    /// `IPC.Store` refuses content over 64KB **outright** — it throws rather than
+    /// truncating — so an oversized notice is lost, silently, exactly when the agent is
+    /// waiting for it.
+    func test_checkMessage_staysUnderTheCheckBudget() {
+        let message = IPC.VerificationSummary.checkMessage(
+            for: notice(
+                state: .failed, exitCode: 1,
+                tail: String(repeating: "x", count: 200_000), truncated: true
+            )
+        )
+
+        XCTAssertLessThanOrEqual(
+            message.utf8.count, IPC.VerificationSummary.maxCheckMessageBytes
+        )
+    }
+
+    /// The truncation notice must never read as though a fuller log can be fetched. The
+    /// window lives in the control server and is gone once the run seals; re-running the
+    /// one check is the honest pointer.
+    func test_checkMessage_doesNotPromiseAFullerLog() {
+        let message = IPC.VerificationSummary.checkMessage(
+            for: notice(state: .failed, exitCode: 1, tail: "tail", truncated: true)
+        )
+
+        XCTAssertTrue(message.contains("re-run"))
+        XCTAssertFalse(message.lowercased().contains("fetch the full"))
+    }
+
+    /// A passing check gets a notice too — that is what makes an agent able to tell "the
+    /// suite is green" from "the suite has not reported yet".
+    func test_checkMessage_reportsAPassAsAPass() {
+        let message = IPC.VerificationSummary.checkMessage(for: notice(state: .passed, tail: "ok"))
+
+        XCTAssertTrue(message.contains("passed"))
     }
 
     // MARK: - Staying deliverable

@@ -259,4 +259,98 @@ final class IPCVerificationBridgeTests: XCTestCase {
         let info = await bridge.verificationRun(id: "nosuchid", in: workstreamID)
         XCTAssertNil(info)
     }
+
+    /// A check completing in a run an agent started carries that agent's surface, so the
+    /// notice reaches the pane that asked rather than the workstream's main tab.
+    func test_bridge_routesACheckNoticeToTheRequestingSurface() {
+        let runner = Verification.Runner()
+        let bridge = IPC.VerificationRunnerBridge(runner: runner, currentStamp: { _, _ in "s" })
+        let id = UUID()
+        let surface = UUID()
+        addTeardownBlock { Verification.CheckStore.clear(for: id) }
+
+        var notices: [IPC.VerificationCheckNotice] = []
+        bridge.observeCheckCompletions { notices.append($0) }
+        bridge.register(runID: "abcd1234", requesterSurfaceID: surface.uuidString)
+
+        runner.recordCompletion(
+            workstreamID: id, runID: "abcd1234", name: "rspec", state: .failed(2),
+            duration: 3.0, output: "boom", outputTruncated: true, stamp: "s"
+        )
+
+        XCTAssertEqual(notices.count, 1)
+        XCTAssertEqual(notices.first?.requesterSurfaceID, surface.uuidString)
+        XCTAssertEqual(notices.first?.check.name, "rspec")
+        XCTAssertEqual(notices.first?.check.state, .failed)
+        XCTAssertEqual(notices.first?.check.exitCode, 2)
+        XCTAssertEqual(notices.first?.check.outputTail, "boom")
+        XCTAssertEqual(notices.first?.check.outputTruncated, true)
+        XCTAssertEqual(notices.first?.workstreamID, id.uuidString)
+    }
+
+    /// A run the *user* pressed has no requester. It still produces a notice — that is the
+    /// behaviour change — and the service resolves the Coding Agent surface from the
+    /// workstream id.
+    func test_bridge_stillEmitsANoticeForARunNobodyAskedFor() {
+        let runner = Verification.Runner()
+        let bridge = IPC.VerificationRunnerBridge(runner: runner, currentStamp: { _, _ in "s" })
+        let id = UUID()
+        addTeardownBlock { Verification.CheckStore.clear(for: id) }
+
+        var notices: [IPC.VerificationCheckNotice] = []
+        bridge.observeCheckCompletions { notices.append($0) }
+
+        runner.recordCompletion(
+            workstreamID: id, runID: "abcd1234", name: "rubocop", state: .passed,
+            duration: 1.0, output: "clean", outputTruncated: false, stamp: "s"
+        )
+
+        XCTAssertEqual(notices.count, 1)
+        XCTAssertNil(notices.first?.requesterSurfaceID)
+        XCTAssertEqual(notices.first?.check.state, .passed)
+    }
+
+    /// Regression for the ordering `runFinished` must keep: `requesters.removeValue`
+    /// has to run *before* the early return that a run with no registered completion
+    /// takes, or that run's requester entry is never dropped. A run the user pressed
+    /// (only a requester registered, no `onFinish`) takes that early return on every
+    /// seal — so if the drop happened after it, the entry would leak forever and a
+    /// later check notice for the same run id would still carry the stale surface.
+    func test_bridge_dropsTheRequesterEntryEvenWhenTheRunHasNoRegisteredCompletion() {
+        let runner = Verification.Runner()
+        let bridge = IPC.VerificationRunnerBridge(runner: runner, currentStamp: { _, _ in "s" })
+        addTeardownBlock { Verification.CheckStore.clear(for: self.workstreamID) }
+
+        var notices: [IPC.VerificationCheckNotice] = []
+        bridge.observeCheckCompletions { notices.append($0) }
+        // Only the requester is registered — the run-level `onFinish` never is, the
+        // same shape a run the user pressed has in production.
+        bridge.register(runID: "abcd1234", requesterSurfaceID: "leaked-surface")
+        runner.seedRunForTesting(workstreamID: workstreamID, runID: "abcd1234", checks: ["rubocop"])
+
+        // Fires `Runner.onFinish` → `runFinished`, which takes the early return
+        // because no completion was registered for this run id.
+        runner.seal(
+            runID: "abcd1234",
+            from: [entry("rubocop", status: "Completed", isRunning: false, exitCode: 0)],
+            stopped: false
+        )
+
+        // A different check completing under the same run id afterwards must not see
+        // the requester the leaked entry would have kept alive. A different name than
+        // the one `seal` already recorded, so `recordCompletion`'s own per-(run, name)
+        // idempotence guard cannot be what silences this — a genuinely fresh
+        // completion is what proves the requester lookup, not a suppressed repeat.
+        runner.recordCompletion(
+            workstreamID: workstreamID, runID: "abcd1234", name: "vitest", state: .passed,
+            duration: 1.0, output: "clean", outputTruncated: false, stamp: "s"
+        )
+
+        // `seal` itself records "rubocop" as a terminal check before it calls
+        // `onFinish`, so that notice legitimately carries the requester the run
+        // still had at that moment.
+        XCTAssertEqual(notices.map(\.check.name), ["rubocop", "vitest"])
+        XCTAssertEqual(notices.first?.requesterSurfaceID, "leaked-surface")
+        XCTAssertNil(notices.last?.requesterSurfaceID, "the requester entry must not outlive the run it belonged to")
+    }
 }

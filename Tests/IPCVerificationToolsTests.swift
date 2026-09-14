@@ -11,11 +11,26 @@ import XCTest
 private actor StubVerificationRunner: IPC.VerificationControlling {
     var startedWorkstreams: [UUID] = []
     var startedChecks: [[String]] = []
+    /// Recorded so a test can pin that `IPC.Service.startVerification` threads
+    /// the caller's own surface id all the way through, rather than trusting
+    /// it by inspection. Nothing else here exercised this parameter — both
+    /// conformances ignored it and the bridge's own routing test builds its
+    /// notice by hand — so a nil crossing this seam silently misrouted every
+    /// agent-started run's per-check notices to the Coding Agent tab instead
+    /// of the requesting pane.
+    var startedRequesterSurfaceIDs: [String?] = []
     var refusal: Error?
     var runs: [String: IPC.VerificationRunInfo] = [:]
 
     private var start: IPC.VerificationStart
     private var onFinish: (@Sendable (IPC.VerificationRunInfo) -> Void)?
+
+    /// Unsafe on purpose: `observeCheckCompletions` is declared `@MainActor` on the
+    /// protocol and satisfied here by a `nonisolated` stub, the same shape the
+    /// no-op version already had. Tests only ever set this before, and read it
+    /// after, an `await` on the same task, so there is no real race — just no
+    /// actor to hop through for a synchronous store.
+    private nonisolated(unsafe) var checkHandler: (@MainActor @Sendable (IPC.VerificationCheckNotice) -> Void)?
 
     init(start: IPC.VerificationStart = IPC.VerificationStart(runID: "v7f3a11", started: ["rspec", "rubocop"])) {
         self.start = start
@@ -37,10 +52,12 @@ private actor StubVerificationRunner: IPC.VerificationControlling {
     func startVerification(
         workstreamID: UUID,
         checks: [String],
+        requesterSurfaceID: String?,
         onFinish: @escaping @Sendable (IPC.VerificationRunInfo) -> Void
     ) async throws -> IPC.VerificationStart {
         startedWorkstreams.append(workstreamID)
         startedChecks.append(checks)
+        startedRequesterSurfaceIDs.append(requesterSurfaceID)
         if let refusal {
             throw refusal
         }
@@ -50,6 +67,15 @@ private actor StubVerificationRunner: IPC.VerificationControlling {
 
     func verificationRun(id: String, in _: UUID) async -> IPC.VerificationRunInfo? {
         runs[id]
+    }
+
+    nonisolated func observeCheckCompletions(_ handler: @escaping @MainActor @Sendable (IPC.VerificationCheckNotice) -> Void) {
+        checkHandler = handler
+    }
+
+    /// Fires the check-completion callback the way `recordCompletion` does.
+    nonisolated func completeCheck(_ notice: IPC.VerificationCheckNotice) async {
+        await MainActor.run { checkHandler?(notice) }
     }
 }
 
@@ -132,6 +158,14 @@ final class IPCVerificationToolsTests: XCTestCase {
         ])
     }
 
+    /// A run that reached a terminal state having reported on nothing — `up -n` on an
+    /// empty namespace, or an undecodable config. No check ever reached a terminal edge,
+    /// so there are no per-check notices, and this is the one case the run-level notice
+    /// still exists for.
+    private func nothingRanRun(id: String = "v7f3a11", workstreamID: UUID, state: IPC.VerificationRunState = .finished) -> IPC.VerificationRunInfo {
+        run(id: id, workstreamID: workstreamID, state: state, checks: [])
+    }
+
     /// Drains an inbox, waiting for the detached delivery task to land.
     private func waitForInbox(_ identity: IPC.ClientIdentity, timeout: TimeInterval = 3) async -> [IPC.MessageInfo] {
         let deadline = Date().addingTimeInterval(timeout)
@@ -163,6 +197,29 @@ final class IPCVerificationToolsTests: XCTestCase {
         let startedWorkstreams = await runner.startedWorkstreams
         XCTAssertEqual(startedChecks, [["rspec", "rubocop"]])
         XCTAssertEqual(startedWorkstreams, [workstreamID], "a run belongs to the caller's own workstream")
+    }
+
+    /// `IPC.Service.startVerification` parses `request.client.surfaceID` into
+    /// `surfaceID` and passes `surfaceID?.uuidString` to the runner as
+    /// `requesterSurfaceID` — that is how `IPC.VerificationRunnerBridge`
+    /// later addresses the per-check notices back to the pane that asked,
+    /// rather than to the workstream's Coding Agent tab by default. Nothing
+    /// pinned that thread end to end: both `StubVerificationRunner`
+    /// conformances discarded the parameter, and
+    /// `IPCVerificationBridgeTests` builds its notice with a hand-written
+    /// `requesterSurfaceID` rather than one that arrived through a real
+    /// `start_verification` call. A nil crossing this seam would silently
+    /// misroute every agent-started run's notices and nothing here would
+    /// notice.
+    func test_startVerification_passesTheCallersSurfaceIDToTheRunner() async throws {
+        await service.setVerificationRunner(runner)
+        let surfaceID = UUID()
+        let caller = try await register(surfaceID: surfaceID, name: "builder")
+
+        _ = await call(.startVerification, ["checks": "rspec, rubocop"], as: caller)
+
+        let startedRequesterSurfaceIDs = await runner.startedRequesterSurfaceIDs
+        XCTAssertEqual(startedRequesterSurfaceIDs, [surfaceID.uuidString])
     }
 
     func test_startVerification_withNoChecks_startsTheWholeNamespace() async throws {
@@ -213,15 +270,32 @@ final class IPCVerificationToolsTests: XCTestCase {
         XCTAssertNil(response.payload)
     }
 
-    // MARK: - The completion notice
+    // MARK: - The run-level notice (only for a run that completed nothing)
 
-    func test_aFinishedRun_postsASummaryIntoTheCallersInbox() async throws {
+    /// Every check that reaches a terminal state posts its own notice — see the
+    /// "per-check notice" section below — so a normal run's `onFinish` must stay
+    /// silent, or the agent would be told twice.
+    func test_aNormalFinishedRun_postsNoRunLevelNotice() async throws {
+        await service.setVerificationRunner(runner)
+        let caller = try await register(surfaceID: UUID(), name: "builder")
+        _ = await call(.startVerification, [:], as: caller)
+
+        await runner.finish(with: failingRun(workstreamID: workstreamID))
+
+        let messages = await waitForInbox(caller, timeout: 0.3)
+        XCTAssertTrue(messages.isEmpty, "each check posts its own notice; a run-level one would be a second telling")
+    }
+
+    /// The one case with no per-check notices to be silent through: nothing ran, so
+    /// nothing completed. `up -n` on an empty namespace never exits, so `PhaseExecutor`
+    /// returns `.skipped` without spawning — reachable here.
+    func test_aRunThatCompletedNothing_postsARunLevelNotice() async throws {
         await service.setVerificationRunner(runner)
         let surfaceID = UUID()
         let caller = try await register(surfaceID: surfaceID, name: "builder")
         _ = await call(.startVerification, [:], as: caller)
 
-        await runner.finish(with: failingRun(workstreamID: workstreamID))
+        await runner.finish(with: nothingRanRun(workstreamID: workstreamID))
 
         let messages = await waitForInbox(caller)
         XCTAssertEqual(messages.count, 1)
@@ -231,7 +305,47 @@ final class IPCVerificationToolsTests: XCTestCase {
             "atelier/verification",
             "the sender is a reserved label, not a peer id an agent could try to reply to"
         )
-        XCTAssertTrue(messages.first?.content.contains("1 of 1 checks failed") == true, messages.first?.content ?? "")
+        XCTAssertTrue(messages.first?.content.contains("no checks ran") == true, messages.first?.content ?? "")
+    }
+
+    /// The other shape of "completed nothing": a spawn that died before binding leaves
+    /// every *declared* check present as a row, sealed `.notRun` (`VerificationRunner.swift`,
+    /// `case .pending: sealed.state = .notRun`) — rather than an empty `checks` array. With
+    /// `total == 3` and `failed == 0`, "all 3 checks passed" is both true and a lie: nothing
+    /// ran. This is the case the run-level notice exists to catch and the empty-array case
+    /// does not exercise.
+    func test_aRunThatCompletedNothingButLeftRowsBehind_isNotReportedAsAPass() async throws {
+        await service.setVerificationRunner(runner)
+        let caller = try await register(surfaceID: UUID(), name: "builder")
+        _ = await call(.startVerification, [:], as: caller)
+
+        await runner.finish(with: run(workstreamID: workstreamID, checks: [
+            IPC.VerificationCheckInfo(name: "rspec", state: .notRun, exitCode: nil, durationSeconds: nil, outputTail: nil, outputTruncated: false),
+            IPC.VerificationCheckInfo(name: "rubocop", state: .notRun, exitCode: nil, durationSeconds: nil, outputTail: nil, outputTruncated: false),
+            IPC.VerificationCheckInfo(name: "tsc", state: .notRun, exitCode: nil, durationSeconds: nil, outputTail: nil, outputTruncated: false),
+        ]))
+
+        let messages = await waitForInbox(caller)
+        XCTAssertEqual(messages.count, 1)
+        XCTAssertFalse(
+            messages.first?.content.lowercased().contains("passed") == true,
+            "a run that ran nothing must never read as a green suite: \(messages.first?.content ?? "")"
+        )
+    }
+
+    /// A run the user stopped before any check started also seals every row
+    /// `.notRun`, but the user caused that deliberately and knows it happened — the
+    /// notice exists to break a silence, not to report an action back to the person
+    /// who took it.
+    func test_aStoppedRunThatCompletedNothing_postsNoNotice() async throws {
+        await service.setVerificationRunner(runner)
+        let caller = try await register(surfaceID: UUID(), name: "builder")
+        _ = await call(.startVerification, [:], as: caller)
+
+        await runner.finish(with: nothingRanRun(workstreamID: workstreamID, state: .stopped))
+
+        let messages = await waitForInbox(caller, timeout: 0.3)
+        XCTAssertTrue(messages.isEmpty, "the user already knows they stopped it")
     }
 
     /// Two agents in one worktree is a supported shape and they report the same
@@ -243,7 +357,7 @@ final class IPCVerificationToolsTests: XCTestCase {
         let sibling = try await register(surfaceID: UUID(), name: "reviewer")
         _ = await call(.startVerification, [:], as: caller)
 
-        await runner.finish(with: failingRun(workstreamID: workstreamID))
+        await runner.finish(with: nothingRanRun(workstreamID: workstreamID))
 
         let delivered = await waitForInbox(caller)
         XCTAssertEqual(delivered.count, 1)
@@ -259,9 +373,9 @@ final class IPCVerificationToolsTests: XCTestCase {
         let caller = try await register(surfaceID: UUID(), name: "builder")
         _ = await call(.startVerification, [:], as: caller)
 
-        await runner.finish(with: failingRun(workstreamID: workstreamID))
+        await runner.finish(with: nothingRanRun(workstreamID: workstreamID))
         _ = await waitForInbox(caller)
-        await runner.finish(with: failingRun(workstreamID: workstreamID))
+        await runner.finish(with: nothingRanRun(workstreamID: workstreamID))
 
         let second = await waitForInbox(caller, timeout: 0.3)
         XCTAssertTrue(second.isEmpty, "the second completion must not post again")
@@ -285,7 +399,7 @@ final class IPCVerificationToolsTests: XCTestCase {
         let second = try await register(surfaceID: surfaceID, name: "builder")
         XCTAssertNotEqual(second.peerID, first.peerID, "precondition: this is a new identity on the same surface")
 
-        await runner.finish(with: failingRun(workstreamID: workstreamID))
+        await runner.finish(with: nothingRanRun(workstreamID: workstreamID))
 
         let messages = await waitForInbox(second)
         XCTAssertEqual(messages.count, 1, "the notice must follow the surface, not the peer id captured at start")
@@ -302,6 +416,58 @@ final class IPCVerificationToolsTests: XCTestCase {
         }
         XCTAssertTrue(text.contains("check_verification"), text)
         XCTAssertTrue(text.lowercased().contains("nothing will be posted"), text)
+    }
+
+    // MARK: - The per-check notice
+
+    private func checkNotice(
+        requesterSurfaceID: String?,
+        state: IPC.VerificationCheckState = .passed,
+        workstreamID: UUID
+    ) -> IPC.VerificationCheckNotice {
+        IPC.VerificationCheckNotice(
+            runID: "v7f3a11", workstreamID: workstreamID.uuidString, requesterSurfaceID: requesterSurfaceID,
+            check: IPC.VerificationCheckInfo(
+                name: "rspec", state: state, exitCode: nil, durationSeconds: 12, outputTail: nil, outputTruncated: false
+            )
+        )
+    }
+
+    /// Nil means the user pressed Run, not an agent — so there is no requester's own
+    /// pane to address. The fallback is the workstream's Coding Agent tab, whose
+    /// surface id *is* the workstream id: this is the change the whole task is for,
+    /// since such a run finished silently before it.
+    func test_checkCompletion_withNoRequester_reachesTheWorkstreamsCodingAgentSurface() async throws {
+        await service.setVerificationRunner(runner)
+        let codingAgent = try await register(surfaceID: workstreamID, name: "coding-agent")
+        await service.observeVerificationChecks()
+
+        await runner.completeCheck(checkNotice(requesterSurfaceID: nil, workstreamID: workstreamID))
+
+        let messages = await waitForInbox(codingAgent)
+        XCTAssertEqual(messages.count, 1)
+        XCTAssertEqual(messages.first?.from, "atelier/verification")
+        XCTAssertTrue(messages.first?.content.contains("rspec") == true, messages.first?.content ?? "")
+    }
+
+    /// An agent that called `start_verification` gets its own run's checks back on
+    /// its own pane — two agents in one worktree report the same workstream name, so
+    /// the surface is the only discriminator between them.
+    func test_checkCompletion_withARequester_reachesThatSurfaceNotASibling() async throws {
+        await service.setVerificationRunner(runner)
+        let requesterSurfaceID = UUID()
+        let requester = try await register(surfaceID: requesterSurfaceID, name: "builder")
+        let sibling = try await register(surfaceID: UUID(), name: "reviewer")
+        await service.observeVerificationChecks()
+
+        await runner.completeCheck(
+            checkNotice(requesterSurfaceID: requesterSurfaceID.uuidString, workstreamID: workstreamID)
+        )
+
+        let delivered = await waitForInbox(requester)
+        XCTAssertEqual(delivered.count, 1)
+        let siblingInbox = await waitForInbox(sibling, timeout: 0.3)
+        XCTAssertTrue(siblingInbox.isEmpty, "the sibling agent did not ask for this run")
     }
 
     // MARK: - Reading

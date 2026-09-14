@@ -207,19 +207,17 @@ final class WorkstreamArchiverPurgeTests: XCTestCase {
 
     // MARK: - What a purge must not leave behind
 
-    /// Both checklists' stored selections, and the stored run, gone together.
+    /// The execute checklist's stored selection, and the stored run, gone together.
     ///
-    /// `atelier.verifySelection.<id>` and `atelier.processSelection.<id>` are
-    /// deliberately separate keys — one key for both would make checking a
-    /// verify check uncheck an execute process — so they leak separately too,
-    /// and a purge that dropped one and forgot the other is what this pins.
-    /// `purge` proper destroys a worktree, so the seam is what is tested.
-    func test_clearWorkstreamState_dropsBothSelectionKeysAndTheStoredRun() {
+    /// Verification has no checklist or selection key of its own any more — see
+    /// `test_clearWorkstreamState_dropsThePerCheckRecords` below for what
+    /// outlives a purged workstream on that side now. `purge` proper destroys a
+    /// worktree, so the seam is what is tested.
+    func test_clearWorkstreamState_dropsTheExecuteSelectionKeyAndTheStoredRun() {
         let id = UUID()
         addTeardownBlock {
             Workstream.Archiver.clearWorkstreamState(for: id)
         }
-        Verification.setSelection(.only(["rspec"]), for: id)
         ProcessCompose.TableModel.setSelection(.only(["web"]), for: id)
         Verification.Store.save(Verification.Run(
             id: "abcd1234", workstreamID: id, startedAt: Date(), stamp: "s",
@@ -228,10 +226,6 @@ final class WorkstreamArchiverPurgeTests: XCTestCase {
 
         Workstream.Archiver.clearWorkstreamState(for: id)
 
-        XCTAssertNil(
-            UserDefaults.standard.object(forKey: Verification.selectionKey(for: id)),
-            "the verify checklist's key outlived the workstream"
-        )
         XCTAssertNil(
             UserDefaults.standard.object(forKey: ProcessCompose.TableModel.selectionKey(for: id)),
             "the execution checklist's key outlived the workstream"
@@ -324,6 +318,23 @@ final class WorkstreamArchiverPurgeTests: XCTestCase {
             worktreePath: "/tmp",
             checks: ["rspec"]
         )
+    }
+
+    /// The per-check results outlive a purged workstream otherwise, and they are keyed by
+    /// a UUID nothing will ever reuse — so nothing would ever clean them up.
+    func test_clearWorkstreamState_dropsThePerCheckRecords() {
+        let id = UUID()
+        Verification.CheckStore.save(
+            ["rspec": Verification.CheckRecord(
+                name: "rspec", state: .passed, duration: 1, output: nil,
+                outputTruncated: false, stamp: "s", runID: "abcd1234", completedAt: Date()
+            )],
+            for: id
+        )
+
+        Workstream.Archiver.clearWorkstreamState(for: id)
+
+        XCTAssertTrue(Verification.CheckStore.records(for: id).isEmpty)
     }
 }
 

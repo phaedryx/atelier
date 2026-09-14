@@ -43,6 +43,14 @@ extension IPC {
         /// Cap on one check's output in a `check_verification` answer.
         static let maxReadTailBytesPerCheck = 4_000
 
+        /// Cap on one check's completion notice.
+        ///
+        /// Below `maxMessageBytes` because there are now N of these per run where there
+        /// was one summary, and an agent reads them all. `IPC.Store` refuses content over
+        /// 64KB outright — it throws rather than trimming — so overshooting loses the
+        /// notice silently at the moment the agent is waiting for it.
+        static let maxCheckMessageBytes = 4_000
+
         /// The label an app-originated completion notice arrives from.
         ///
         /// Not a peer id, and deliberately not one: there is nothing inside
@@ -80,6 +88,19 @@ extension IPC {
         /// first, since one line per check is what the agent needs to act, then
         /// as much failing output as the remaining room allows, then a pointer at
         /// `check_verification` for the rest.
+        ///
+        /// **Its one production caller is `IPC.Service.startVerification`'s
+        /// `onFinish`, and that closure only calls it when `info.state != .stopped
+        /// && info.checks.allSatisfy { $0.state == .notRun }`** — every check
+        /// that reaches a terminal state posts its own per-check notice instead,
+        /// so a normal run's result has already arrived by the time a run
+        /// finishes. So in production this function only ever runs over a
+        /// non-stopped run whose rows are all `.notRun`, and its pass/fail
+        /// verdict branch below is dead there. Keep it that way on purpose: this
+        /// line is what stops a future caller from re-broadening who invokes
+        /// this and reviving the bug it was narrowed to prevent — an all-`.skipped`
+        /// suite (`up -n` on an empty namespace, or a config that declares no
+        /// processes) rendering here as "0 of 0 failed", which reads as a pass.
         static func message(for run: VerificationRunInfo) -> String {
             let header = headerLine(for: run)
             let pointer = run.checks.isEmpty ? nil : pointerLine(runID: run.runID)
@@ -140,6 +161,43 @@ extension IPC {
                 lines.append(pointer)
             }
             return lines.joined(separator: "\n")
+        }
+
+        /// The notice an agent finds in its inbox when one check finishes.
+        ///
+        /// Verdict first, output second, and the output is what gets trimmed: an agent that
+        /// reads only the first line still learns whether the check passed.
+        ///
+        /// **The tail is all that exists.** The log lives in process-compose's control
+        /// server and the runner tears that down when the run seals, so nothing here may
+        /// read as though a fuller copy can be fetched — not from `check_verification`, not
+        /// from the Verification tab, not from disk. Re-running the one check is the honest
+        /// pointer, and it is the one this gives.
+        static func checkMessage(for notice: VerificationCheckNotice) -> String {
+            let verdict = switch notice.check.state {
+            case .passed: "passed"
+            case .failed: notice.check.exitCode.map { "failed (exit \($0))" } ?? "failed"
+            case .skipped: "was skipped"
+            case .stopped: "was stopped"
+            case .notRun: "did not run"
+            case .pending, .running: "is still going"
+            }
+            let duration = notice.check.durationSeconds.map { String(format: " in %.1fs", $0) } ?? ""
+            var head = "Verification check \(notice.check.name) \(verdict)\(duration). "
+                + "Run \(notice.runID); check_verification(run_id: \"\(notice.runID)\") reads the whole run."
+            guard let tail = notice.check.outputTail, !tail.isEmpty else { return head }
+
+            let trailer = notice.check.outputTruncated
+                ? "\n\n(Output above is the tail captured while the check ran. There is no fuller copy "
+                + "anywhere — re-run this one check to see more.)"
+                : ""
+            let budget = maxCheckMessageBytes - head.utf8.count - trailer.utf8.count - 2
+            guard budget >= minTailBytes else {
+                return head + "\n\n(Output omitted: it did not fit in one message. "
+                    + "Re-run this one check to see it.)"
+            }
+            head += "\n\n" + clamped(tail, to: budget).text + trailer
+            return head
         }
 
         /// As many verdict lines as `budget` holds, and how many were left out.
@@ -304,6 +362,15 @@ extension IPC {
                 // decode declares no processes at all — both land here.
                 guard total > 0 else {
                     return "run \(run.runID) finished\(elapsed) — no checks ran; the verify namespace declared none"
+                }
+                // The same trap under a different shape: a spawn that dies before
+                // binding leaves every *declared* check present as a row, sealed
+                // `.notRun`, rather than an empty `checks` array. "0 of N failed"
+                // is exactly as true and exactly as green as "0 of 0 failed" — and
+                // this is the case the run-level notice was retained to catch, so
+                // it must not be the one case it renders as a pass.
+                guard !run.checks.allSatisfy({ $0.state == .notRun }) else {
+                    return "run \(run.runID) finished\(elapsed) — declared \(total) checks but none of them ran"
                 }
                 return failed == 0
                     ? "run \(run.runID) finished\(elapsed) — all \(total) checks passed"

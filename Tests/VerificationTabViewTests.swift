@@ -19,48 +19,6 @@ final class VerificationTabViewTests: XCTestCase {
         XCTAssertTrue(verificationCanRun(isLive: false))
     }
 
-    /// Run is gated on the checklist as well as on liveness, because every box
-    /// may now be unchecked and `Verification.Runner` reads no check names as
-    /// *run everything* — the opposite of what an empty checklist asked for.
-    func testRunIsDisabledWhenNothingIsChecked() {
-        XCTAssertFalse(verificationCanRunSelection(isLive: false, hasChecks: false))
-        XCTAssertTrue(verificationCanRunSelection(isLive: false, hasChecks: true))
-    }
-
-    /// And liveness still wins on its own: a live run is a live run however
-    /// many boxes are ticked.
-    func testRunStaysDisabledDuringARunWhateverIsChecked() {
-        XCTAssertFalse(verificationCanRunSelection(isLive: true, hasChecks: true))
-    }
-
-    /// "Run failed" runs the previous run's `failedNames`, not the checklist,
-    /// so an empty checklist has nothing to say about it. It is gated on
-    /// liveness alone — which is what `verificationCanRun` still answers.
-    func testRunFailedIsNotGatedOnTheChecklist() {
-        XCTAssertTrue(verificationCanRun(isLive: false))
-    }
-
-    // MARK: - Checklist visibility
-
-    // Hidden while live, not merely disabled: clicking a box that cannot take
-    // effect is the confusing state, and Execution already resolves it this way
-    // (ExecutionTabView.swift:83 gates its own checklist on `!runStarted`).
-    func test_showsChecklist_hiddenWhileARunIsLive() {
-        XCTAssertFalse(verificationShowsChecklist(isLive: true, declaredProcesses: ["rspec"]))
-    }
-
-    func test_showsChecklist_visibleWhenIdleWithChecks() {
-        XCTAssertTrue(verificationShowsChecklist(isLive: false, declaredProcesses: ["rspec"]))
-    }
-
-    /// The empty-list guard stays. It is not cosmetic: an empty list would make
-    /// ProcessSelectionView's own .onAppear read the stored selection as "nothing
-    /// survived" and overwrite it with the canonical "all" — see
-    /// processSelectionOnLoad.
-    func test_showsChecklist_hiddenWhenNothingIsDeclared() {
-        XCTAssertFalse(verificationShowsChecklist(isLive: false, declaredProcesses: []))
-    }
-
     // MARK: - Staleness
 
     func test_isStale_comparesTheStamp() {
@@ -91,14 +49,51 @@ final class VerificationTabViewTests: XCTestCase {
         XCTAssertFalse(verificationIsStale(run: run, currentStamp: nil))
     }
 
+    // MARK: - Per-record staleness
+
+    private func record(stamp: String) -> Verification.CheckRecord {
+        Verification.CheckRecord(
+            name: "rspec", state: .passed, duration: 1, output: nil,
+            outputTruncated: false, stamp: stamp, runID: "abcd1234", completedAt: Date()
+        )
+    }
+
+    /// The record-shaped sibling of `verificationIsStale`, and the reason there
+    /// are two: checks now complete at different moments, so staleness is a
+    /// property of one record rather than of a run — a single run-level banner
+    /// would be wrong for most rows the moment one row is re-run on its own.
+    func test_recordIsStale_comparesTheStamp() {
+        XCTAssertFalse(
+            verificationRecordIsStale(record: record(stamp: "head|10|aaaa"), currentStamp: "head|10|aaaa")
+        )
+        XCTAssertTrue(
+            verificationRecordIsStale(record: record(stamp: "head|10|aaaa"), currentStamp: "head|11|bbbb")
+        )
+        // No stamp to compare against is not evidence of freshness.
+        XCTAssertTrue(
+            verificationRecordIsStale(record: record(stamp: "head|10|aaaa"), currentStamp: nil)
+        )
+    }
+
+    /// The empty-stamp rule is unchanged from the run-shaped function and just
+    /// as load-bearing: `""` means "the run's baseline had not been captured
+    /// yet", never "no diff". A real fingerprint is always `head|count|digest`,
+    /// so `""` cannot arise any other way.
+    func test_recordIsStale_treatsAnUncapturedStampAsNotYetComparable() {
+        XCTAssertFalse(
+            verificationRecordIsStale(record: record(stamp: ""), currentStamp: "head|10|aaaa")
+        )
+        XCTAssertFalse(verificationRecordIsStale(record: record(stamp: ""), currentStamp: nil))
+    }
+
     // MARK: - Row glyphs
 
     // MARK: - What a check's output group shows
 
     /// Live wins over captured, and the window where both exist is real:
-    /// `Runner.captureFailedOutput` attaches a failed check's tail while
-    /// `isLive` is still true, and the server still holds whatever arrived
-    /// after that copy was taken.
+    /// `Runner.recordCompletions` attaches a check's tail the moment it
+    /// completes, while `isLive` is still true, and the server still holds
+    /// whatever arrived after that copy was taken.
     func test_outputContent_prefersTheLiveServerOverACapturedTail() {
         XCTAssertEqual(
             verificationOutputContent(state: .failed(1), hasCapturedOutput: true, isLive: true),
@@ -532,37 +527,38 @@ final class VerificationTabViewTests: XCTestCase {
 
     /// **The in-flight guard comes first, and the order is the whole point.**
     ///
-    /// `refreshStaleness` passes `currentRun != nil`, and `currentRun` falls
-    /// through to `Verification.Store.latest` — a UserDefaults read plus a
-    /// JSON decode of a run that may carry several 200-line outputs — on the
-    /// main actor. Asking it first meant the guard that exists to absorb a
-    /// ~5Hz burst of `.worktreeGitActivity` was paid for by the very decode it
-    /// was meant to avoid, so the property is what is *not* evaluated rather
-    /// than which case comes back. Flipping the two guards fails here.
-    func test_stalenessRefresh_doesNotAskWhetherThereIsARunWhileOneIsInFlight() {
+    /// `refreshStaleness` passes `hasStalenessSubject`, which reads
+    /// `currentRun != nil` among other things, and `currentRun` falls through
+    /// to `Verification.Store.latest` — a UserDefaults read plus a JSON decode
+    /// of a run that may carry several 200-line outputs — on the main actor.
+    /// Asking it first meant the guard that exists to absorb a ~5Hz burst of
+    /// `.worktreeGitActivity` was paid for by the very decode it was meant to
+    /// avoid, so the property is what is *not* evaluated rather than which
+    /// case comes back. Flipping the two guards fails here.
+    func test_stalenessRefresh_doesNotAskWhetherThereIsARunOrRecordWhileOneIsInFlight() {
         var asked = 0
         let decision = verificationStalenessRefresh(
             isRefreshing: true,
-            hasRun: { asked += 1; return true }()
+            hasRunOrRecord: { asked += 1; return true }()
         )
         XCTAssertEqual(decision, .markPending)
-        XCTAssertEqual(asked, 0, "the run was looked up behind the in-flight guard")
+        XCTAssertEqual(asked, 0, "the run/record was looked up behind the in-flight guard")
     }
 
-    /// The pending bit is set even with no run, which is the one semantic
-    /// consequence of asking the guards in this order.
-    func test_stalenessRefresh_marksPendingWithNoRunWhileOneIsInFlight() {
+    /// The pending bit is set even with no run or record, which is the one
+    /// semantic consequence of asking the guards in this order.
+    func test_stalenessRefresh_marksPendingWithNoRunOrRecordWhileOneIsInFlight() {
         XCTAssertEqual(
-            verificationStalenessRefresh(isRefreshing: true, hasRun: false),
+            verificationStalenessRefresh(isRefreshing: true, hasRunOrRecord: false),
             .markPending
         )
     }
 
-    /// Nothing renders `currentStamp` without a run to compare it against, so
-    /// a refresh with no run is a git spawn for nobody.
-    func test_stalenessRefresh_skipsWhenThereIsNoRun() {
+    /// Nothing renders `currentStamp` without a run or a record to compare it
+    /// against, so a refresh with neither is a git spawn for nobody.
+    func test_stalenessRefresh_skipsWhenThereIsNoRunOrRecord() {
         XCTAssertEqual(
-            verificationStalenessRefresh(isRefreshing: false, hasRun: false),
+            verificationStalenessRefresh(isRefreshing: false, hasRunOrRecord: false),
             .skip
         )
     }
@@ -571,9 +567,112 @@ final class VerificationTabViewTests: XCTestCase {
         var asked = 0
         let decision = verificationStalenessRefresh(
             isRefreshing: false,
-            hasRun: { asked += 1; return true }()
+            hasRunOrRecord: { asked += 1; return true }()
         )
         XCTAssertEqual(decision, .start)
-        XCTAssertEqual(asked, 1, "past the in-flight guard, the run has to be looked up")
+        XCTAssertEqual(asked, 1, "past the in-flight guard, the run/record has to be looked up")
+    }
+
+    // MARK: - Whether there is anything to compare against
+
+    /// **The reachable case this gate was widened for.** `CheckStore.save`
+    /// fires per check, mid-run, from `recordCompletion`, while
+    /// `Verification.Store.save` fires only from `seal` — so quitting after
+    /// one check completes but before the suite seals leaves a `CheckRecord`
+    /// with no stored `Verification.Run`. `currentRun != nil` alone reads
+    /// that as nothing to compare against.
+    func test_hasStalenessSubject_isTrueWithARecordAndNoStoredRun() {
+        XCTAssertTrue(verificationHasStalenessSubject(hasRun: false, hasAnyRecord: true))
+    }
+
+    func test_hasStalenessSubject_isTrueWithARunAndNoRecord() {
+        XCTAssertTrue(verificationHasStalenessSubject(hasRun: true, hasAnyRecord: false))
+    }
+
+    func test_hasStalenessSubject_isFalseWithNeither() {
+        XCTAssertFalse(verificationHasStalenessSubject(hasRun: false, hasAnyRecord: false))
+    }
+
+    /// Feeding the widened composition into `verificationStalenessRefresh`
+    /// end to end: a record with no stored run must still start a refresh,
+    /// not skip it — skipping left `currentStamp` nil forever, and
+    /// `verificationRecordIsStale` reads a nil `currentStamp` as stale, so
+    /// every row wore the marker permanently.
+    func test_stalenessRefresh_startsWhenARecordExistsWithNoStoredRun() {
+        let hasSubject = verificationHasStalenessSubject(hasRun: false, hasAnyRecord: true)
+        XCTAssertEqual(
+            verificationStalenessRefresh(isRefreshing: false, hasRunOrRecord: hasSubject),
+            .start
+        )
+    }
+
+    // MARK: - The per-row button
+
+    private func liveRun(_ checks: [String]) -> Verification.Run {
+        Verification.Run(
+            id: "abcd1234", workstreamID: UUID(), startedAt: Date(), stamp: "s",
+            checks: checks.map { .init(name: $0, state: .running, duration: nil, output: nil) },
+            wasStopped: false
+        )
+    }
+
+    func test_rowAction_offersRunForACheckThatHasNeverRun() {
+        XCTAssertEqual(
+            verificationRowAction(liveRun: nil, isLive: false, checkName: "rspec", hasRecord: false),
+            .run
+        )
+    }
+
+    func test_rowAction_offersRerunOnceThereIsAnyRecord() {
+        XCTAssertEqual(
+            verificationRowAction(liveRun: nil, isLive: false, checkName: "rspec", hasRecord: true),
+            .rerun
+        )
+    }
+
+    /// A row's button becomes Stop only when stopping that check and stopping the run are
+    /// the same act. `Runner.stop` is per-workstream and tears the whole run down —
+    /// deliberately, since killing one check through the control API would seal it as a
+    /// failure the user caused on purpose.
+    func test_rowAction_offersStopWhenThisCheckIsTheWholeLiveRun() {
+        XCTAssertEqual(
+            verificationRowAction(
+                liveRun: liveRun(["rspec"]), isLive: true, checkName: "rspec", hasRecord: false
+            ),
+            .stop
+        )
+    }
+
+    /// The Run all case. A Stop here would end `rubocop` too while claiming to end
+    /// `rspec`, so the row shows its live status and no button; the top bar's Stop is the
+    /// only stop.
+    func test_rowAction_offersNoButtonDuringAMultiCheckRun() {
+        XCTAssertEqual(
+            verificationRowAction(
+                liveRun: liveRun(["rspec", "rubocop"]), isLive: true, checkName: "rspec", hasRecord: true
+            ),
+            .none
+        )
+    }
+
+    /// One run per workstream: `<id>-verify.sock` admits one server and `Runner.start`
+    /// refuses while live. A check outside the live run cannot be started either.
+    func test_rowAction_offersNoButtonForACheckOutsideTheLiveRun() {
+        XCTAssertEqual(
+            verificationRowAction(
+                liveRun: liveRun(["rspec"]), isLive: true, checkName: "vitest", hasRecord: true
+            ),
+            .none
+        )
+    }
+
+    /// `isLive` stays true through sealing *and* the socket teardown. A button that
+    /// re-enabled on `Run.isFinished` would let a second `up` rebind the socket under the
+    /// run still tearing itself down.
+    func test_rowAction_offersNoButtonWhileLiveWithNoRunYetPublished() {
+        XCTAssertEqual(
+            verificationRowAction(liveRun: nil, isLive: true, checkName: "rspec", hasRecord: true),
+            .none
+        )
     }
 }

@@ -33,9 +33,12 @@ extension IPC {
     /// - **Run ids are opaque, short, and unique for the app's lifetime**, not just
     ///   within a workstream: `check_verification` takes a run id and nothing else.
     /// - **`onFinish` fires exactly once per run, on every terminal path** — sealed
-    ///   normally, stopped by the user, timed out, or skipped. This side guards
-    ///   against a second call, but a path that never fires is a completion notice
-    ///   the agent never gets.
+    ///   normally, stopped, timed out, or skipped. It is now the *run-level*
+    ///   notice only, and the service posts it only for a run that completed
+    ///   nothing.
+    /// - **Every check completion is announced through `observeCheckCompletions`,
+    ///   exactly once.** A path that records a completion without announcing it
+    ///   is a notice the agent never gets.
     /// - **Approval and the rest of the preconditions are the runner's**, through
     ///   `ProcessCompose.PhasePolicy.plan`. There is deliberately no second copy
     ///   here; a refusal reaches the agent as the error this throws.
@@ -45,11 +48,15 @@ extension IPC {
         /// - Parameters:
         ///   - checks: the processes to run. **Empty means all of them**, which is
         ///     already this codebase's convention for a process selection.
+        ///   - requesterSurfaceID: the surface of the agent asking, so its own
+        ///     run's notices come back to it. Nil for a caller Atelier did not
+        ///     launch.
         ///   - onFinish: called once, when the run reaches a terminal state, with
         ///     the same projection `verificationRun(id:)` would then return.
         func startVerification(
             workstreamID: UUID,
             checks: [String],
+            requesterSurfaceID: String?,
             onFinish: @escaping @Sendable (VerificationRunInfo) -> Void
         ) async throws -> VerificationStart
 
@@ -65,6 +72,31 @@ extension IPC {
         /// never existed. The caller's scoping is not what this parameter is
         /// for; `IPC.Service` does that itself, against the run it gets back.
         func verificationRun(id: String, in workstreamID: UUID) async -> VerificationRunInfo?
+
+        /// Observe every check completion the app performs, in every workstream.
+        ///
+        /// **Not per run.** A run the user pressed produces notices too — that is what
+        /// makes the agent aware of checks its human ran — so the handler is installed once
+        /// and each notice says who, if anyone, asked for its run. One handler: installing
+        /// a second replaces the first, the same single-slot constraint `Runner.onFinish`
+        /// carries.
+        @MainActor
+        func observeCheckCompletions(_ handler: @escaping @MainActor @Sendable (VerificationCheckNotice) -> Void)
+    }
+
+    /// One check's completion, addressed.
+    ///
+    /// Carries `requesterSurfaceID` rather than a resolved peer for the reason
+    /// `postVerificationNotice` resolves at delivery time: a helper whose old socket has
+    /// not closed re-registers under a new peer id, so an id captured when the run started
+    /// can be dead while its pane has an agent sitting in it. Nil means no agent asked for
+    /// this run — the user pressed Run — and the service addresses the workstream's Coding
+    /// Agent surface instead.
+    struct VerificationCheckNotice: Sendable, Equatable {
+        let runID: String
+        let workstreamID: String
+        let requesterSurfaceID: String?
+        let check: VerificationCheckInfo
     }
 
     /// What a start answers with: the run's id, and the checks it actually

@@ -579,7 +579,9 @@
 "This project's verify namespace declared no processes to run." = "This project's verify namespace declared no processes to run.";
 
 /* Verification tab */
-"Run failed" = "Run failed";
+"Run all" = "Run all";
+"Re-run" = "Re-run";
+"stale" = "stale";
 "Output" = "Output";
 "Nothing to verify yet" = "Nothing to verify yet";
 "This result no longer reflects the worktree's current content." = "This result no longer reflects the worktree's current content.";
@@ -592,9 +594,9 @@
 
 /* Verification tab - a check's output group */
 "No output yet." = "No output yet.";
-"The run has ended. This is the last output read from it." = "The run has ended. This is the last output read from it.";
-"Output is only kept for a check that failed. Re-run this check to see its output." = "Output is only kept for a check that failed. Re-run this check to see its output.";
 "This check was stopped before its output could be kept. Re-run it to see the output." = "This check was stopped before its output could be kept. Re-run it to see the output.";
+"This check's output was not kept. Re-run it to see the output." = "This check's output was not kept. Re-run it to see the output.";
+"This check has not run yet. Run it to see its output." = "This check has not run yet. Run it to see its output.";
 "This check has not produced any output." = "This check has not produced any output.";
 
 /* Verification tab - per-check state, accessibility label */
@@ -612,7 +614,6 @@
 
 /* Process selection */
 "Select a process to start." = "Select a process to start.";
-"Select a check to run." = "Select a check to run.";
 "is not a usable variable name; use letters, digits and _, not starting with a digit" = "is not a usable variable name; use letters, digits and _, not starting with a digit";
 "pins port %d, which %@ already pins" = "pins port %d, which %@ already pins";
 

@@ -401,8 +401,8 @@ final class VerificationRunnerTests: XCTestCase {
 
     /// The feature's whole point, and the one thing a stub can prove about it:
     /// while the run is live the tab can read a *running* check's output, which
-    /// `captureFailedOutput` never fetches — it only takes failed checks, and
-    /// only once, at the end.
+    /// `recordCompletions` never fetches — it only takes a check once it
+    /// reaches a terminal state.
     func test_liveLog_readsARunningCheckWhileTheRunIsLive() async {
         let id = UUID()
         addTeardownBlock { Verification.Store.clear(for: id) }
@@ -517,7 +517,7 @@ final class VerificationRunnerTests: XCTestCase {
                 ]),
             ],
             latency: .zero,
-            logsByName: ["rspec": ["1 example, 1 failure", "boom"]]
+            logsByName: ["rspec": ["1 example, 1 failure", "boom"], "rubocop": ["clean"]]
         )
         let spawner = StubSpawner(
             client: client, finishAfter: .milliseconds(60), atShutDown: { witness.observe() }
@@ -540,11 +540,11 @@ final class VerificationRunnerTests: XCTestCase {
 
         let sealed = runner.run(id: "abcd1234")
         XCTAssertEqual(sealed?.checks.map(\.state), [.failed(1), .passed])
-        // Only failed checks keep output: a 200-line tail per passing check would
-        // go into UserDefaults for output nobody asked for.
-        XCTAssertNil(sealed?.checks.first { $0.name == "rubocop" }?.output)
+        // Every check keeps output now, pass or fail — the retirement of the old
+        // failures-only rule (`recordCompletions` replaces `captureFailedOutput`).
+        XCTAssertEqual(sealed?.checks.first { $0.name == "rubocop" }?.output, "clean")
         let requested = await client.logRequests
-        XCTAssertEqual(requested, ["rspec"])
+        XCTAssertEqual(requested, ["rspec", "rubocop"])
     }
 
     /// The staleness baseline is computed off the main actor.
@@ -1343,6 +1343,319 @@ final class VerificationRunnerTests: XCTestCase {
         XCTAssertNil(runner.runs[id], "the loop must not resurrect a forgotten workstream")
         XCTAssertNil(Verification.Store.latest(for: id), "and must not persist a run for it")
         XCTAssertFalse(announced.value, "nor announce one to an agent")
+    }
+
+    /// The non-vacuous sibling of the test above. There the check never leaves
+    /// `.running`, so `recordCompletions` never reaches its `client.logs` await and
+    /// the guard *after* that await is never exercised — only the guard at the
+    /// function's own entry is. Here the check is `.passed` from the very first
+    /// poll, so the loop enters the log fetch, and `forget` is timed to land
+    /// *during* that fetch's suspension: `client.logRequests` records the name
+    /// before the stub's simulated latency, so polling it is a deterministic way
+    /// to catch the await mid-flight rather than guessing a sleep duration.
+    ///
+    /// `recordCompletion` — the writer `recordCompletions` calls — has no
+    /// run-existence check of its own by design (Task 3 needs it bare for
+    /// `seal`'s post-sealing records), so the only thing standing between a late
+    /// completion and a write-back for a purged workstream is the re-check this
+    /// test pins.
+    func test_forget_stopsALateCompletionDuringTheLogFetchFromWritingBackAPurgedWorkstream() async {
+        let id = UUID()
+        addTeardownBlock {
+            Verification.Store.clear(for: id)
+            Verification.CheckStore.clear(for: id)
+        }
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: [.list([entry("rspec", status: "Completed", isRunning: false, exitCode: 0)])],
+            latency: .milliseconds(150),
+            logsByName: ["rspec": ["ok"]]
+        )
+        // Long enough that the loop is still polling, well past the log fetch,
+        // when `drive` gives up waiting on `meanwhile` and moves on.
+        let spawner = StubSpawner(client: client, finishAfter: .milliseconds(500))
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
+        let runAnnounced = Flag()
+        let checkAnnounced = Flag()
+        runner.onFinish = { _ in runAnnounced.value = true }
+        runner.onCheckFinished = { _, _ in checkAnnounced.value = true }
+
+        await drive(runner, request(workstreamID: id, checks: ["rspec"]), runID: "abcd1234") {
+            let deadline = Date().addingTimeInterval(2)
+            while await !client.logRequests.contains("rspec"), Date() < deadline {
+                try? await Task.sleep(for: .milliseconds(2))
+            }
+            runner.forget(workstreamID: id)
+        }
+
+        XCTAssertTrue(
+            Verification.CheckStore.records(for: id).isEmpty,
+            "no record must be written for a workstream forgotten mid-fetch"
+        )
+        XCTAssertFalse(checkAnnounced.value, "nor a per-check completion notice")
+        XCTAssertFalse(runAnnounced.value, "nor a run-level finish notice")
+    }
+
+    // MARK: - Per-check records
+
+    /// The idempotence point. `seal` calls the same writer the poll-loop edge detector
+    /// does, and a check reported terminal on several consecutive polls must produce one
+    /// record and one notice — not one per poll.
+    func test_recordCompletion_firesOncePerCheckPerRun() {
+        let runner = Verification.Runner()
+        let id = UUID()
+        addTeardownBlock { Verification.CheckStore.clear(for: id) }
+        var notices: [Verification.CheckRecord] = []
+        runner.onCheckFinished = { _, record in notices.append(record) }
+
+        for _ in 0 ..< 3 {
+            runner.recordCompletion(
+                workstreamID: id, runID: "abcd1234", name: "rspec", state: .failed(1),
+                duration: 2.0, output: "boom", outputTruncated: false, stamp: "s"
+            )
+        }
+
+        XCTAssertEqual(notices.count, 1)
+        XCTAssertEqual(notices.first?.state, .failed(1))
+        XCTAssertEqual(Verification.CheckStore.records(for: id)["rspec"]?.output, "boom")
+    }
+
+    /// A later run overwrites the same name and fires again — the idempotence key is the
+    /// pair, not the name. This is the ordinary case every time a row's Re-run is pressed.
+    func test_recordCompletion_aSecondRunReplacesTheRecordAndFiresAgain() {
+        let runner = Verification.Runner()
+        let id = UUID()
+        addTeardownBlock { Verification.CheckStore.clear(for: id) }
+        var notices: [Verification.CheckRecord] = []
+        runner.onCheckFinished = { _, record in notices.append(record) }
+
+        runner.recordCompletion(
+            workstreamID: id, runID: "aaaaaaaa", name: "rspec", state: .failed(1),
+            duration: 2.0, output: "boom", outputTruncated: false, stamp: "s"
+        )
+        runner.recordCompletion(
+            workstreamID: id, runID: "bbbbbbbb", name: "rspec", state: .passed,
+            duration: 1.0, output: "ok", outputTruncated: false, stamp: "t"
+        )
+
+        XCTAssertEqual(notices.count, 2)
+        XCTAssertEqual(Verification.CheckStore.records(for: id)["rspec"]?.state, .passed)
+        XCTAssertEqual(Verification.CheckStore.records(for: id)["rspec"]?.runID, "bbbbbbbb")
+    }
+
+    /// Records are published for the tab as well as persisted; the tab is not a
+    /// subscriber to `onCheckFinished` and reads this instead.
+    func test_recordCompletion_publishesForTheTab() {
+        let runner = Verification.Runner()
+        let id = UUID()
+        addTeardownBlock { Verification.CheckStore.clear(for: id) }
+
+        runner.recordCompletion(
+            workstreamID: id, runID: "abcd1234", name: "rspec", state: .passed,
+            duration: 1.0, output: nil, outputTruncated: false, stamp: "s"
+        )
+
+        XCTAssertEqual(runner.checkRecords[id]?["rspec"]?.state, .passed)
+    }
+
+    /// The completion edge fires mid-run, while the server is still up — which is what
+    /// makes a per-check notice arrive before the suite ends, and what lets a passing
+    /// check's output be captured at all.
+    func test_execute_recordsEachCheckAsItCompletesWithItsOutput() async {
+        let id = UUID()
+        addTeardownBlock {
+            Verification.Store.clear(for: id)
+            Verification.CheckStore.clear(for: id)
+        }
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: [
+                .list([
+                    entry("rubocop", status: "Completed", isRunning: false, exitCode: 0),
+                    entry("rspec", status: "Running", isRunning: true, exitCode: 0),
+                ]),
+                .list([
+                    entry("rubocop", status: "Completed", isRunning: false, exitCode: 0),
+                    entry("rspec", status: "Completed", isRunning: false, exitCode: 1),
+                ]),
+            ],
+            latency: .zero,
+            logsByName: ["rubocop": ["clean"], "rspec": ["1 failure"]]
+        )
+        let spawner = StubSpawner(client: client, finishAfter: .milliseconds(60))
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rubocop", "rspec"])
+
+        await drive(runner, request(workstreamID: id, checks: ["rubocop", "rspec"]), runID: "abcd1234")
+
+        let records = Verification.CheckStore.records(for: id)
+        XCTAssertEqual(records["rubocop"]?.state, .passed)
+        XCTAssertEqual(records["rubocop"]?.output, "clean", "a passing check's output is kept now")
+        XCTAssertEqual(records["rspec"]?.state, .failed(1))
+        XCTAssertEqual(records["rspec"]?.output, "1 failure")
+    }
+
+    /// The stamp on a record is the run's, and the run loop fills it before the spawn —
+    /// so a record written at a completion edge already carries a real fingerprint.
+    func test_execute_recordsCarryTheRunsStalenessStamp() async {
+        let id = UUID()
+        addTeardownBlock {
+            Verification.Store.clear(for: id)
+            Verification.CheckStore.clear(for: id)
+        }
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: [.list([entry("rspec", status: "Completed", isRunning: false, exitCode: 0)])],
+            latency: .zero
+        )
+        let spawner = StubSpawner(client: client, finishAfter: .milliseconds(20))
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
+
+        await drive(runner, request(workstreamID: id, checks: ["rspec"]), runID: "abcd1234")
+
+        let stamp = Verification.CheckStore.records(for: id)["rspec"]?.stamp
+        XCTAssertEqual(stamp, runner.run(id: "abcd1234")?.stamp)
+        XCTAssertFalse(stamp?.isEmpty ?? true, "an empty stamp would read as 'not captured yet'")
+    }
+
+    /// A check the user stopped is terminal only after `seal` relabels it, so no mid-run
+    /// edge ever fired for it. It still gets a record — with no output, because Stop is
+    /// what ends the server and there was never a completed log to fetch.
+    func test_seal_recordsAStoppedCheckWithNoOutput() {
+        let runner = Verification.Runner()
+        let id = UUID()
+        addTeardownBlock {
+            Verification.Store.clear(for: id)
+            Verification.CheckStore.clear(for: id)
+        }
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
+
+        runner.seal(
+            runID: "abcd1234",
+            from: [entry("rspec", status: "Running", isRunning: true, exitCode: 0)],
+            stopped: true
+        )
+
+        let record = Verification.CheckStore.records(for: id)["rspec"]
+        XCTAssertEqual(record?.state, .stopped)
+        XCTAssertNil(record?.output)
+    }
+
+    /// A check the server never mentioned seals `.notRun`, and that is **not** a
+    /// completion — no record, and no notice. A row with no record renders "Run", which is
+    /// the honest offer for a check that never started.
+    func test_seal_doesNotRecordACheckThatNeverRan() {
+        let runner = Verification.Runner()
+        let id = UUID()
+        addTeardownBlock {
+            Verification.Store.clear(for: id)
+            Verification.CheckStore.clear(for: id)
+        }
+        var notices: [Verification.CheckRecord] = []
+        runner.onCheckFinished = { _, record in notices.append(record) }
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec", "gone"])
+
+        runner.seal(
+            runID: "abcd1234",
+            from: [entry("rspec", status: "Completed", isRunning: false, exitCode: 0)],
+            stopped: false
+        )
+
+        XCTAssertNil(Verification.CheckStore.records(for: id)["gone"])
+        XCTAssertEqual(notices.map(\.name), ["rspec"])
+    }
+
+    /// Decision 7, now pointed at the record writer: a record written mid-run is what the
+    /// row keeps. `seal`'s own view of a check that the server has since stopped reporting
+    /// must not replace it — `execute` passes `verifyProcesses(...) ?? []`, so a server
+    /// that shut itself down after a failure arrives here as an empty list.
+    func test_seal_doesNotOverwriteARecordTheLiveLoopWrote() {
+        let runner = Verification.Runner()
+        let id = UUID()
+        addTeardownBlock {
+            Verification.Store.clear(for: id)
+            Verification.CheckStore.clear(for: id)
+        }
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
+        runner.recordCompletion(
+            workstreamID: id, runID: "abcd1234", name: "rspec", state: .failed(1),
+            duration: 3.0, output: "the failure", outputTruncated: false, stamp: "s"
+        )
+
+        runner.seal(runID: "abcd1234", from: [], stopped: false)
+
+        let record = Verification.CheckStore.records(for: id)["rspec"]
+        XCTAssertEqual(record?.state, .failed(1), "the live loop's verdict stands")
+        XCTAssertEqual(record?.output, "the failure")
+    }
+
+    /// **The statement-ordering test.** `recordCompletion` mutates `runs[workstreamID]` to
+    /// mirror output onto the row, and `seal` holds a local `var run` copy it later hands
+    /// to `Verification.Store.save`. A `seal` that saves its stale local copy persists a
+    /// run whose rows have no output while the record does — invisible to every guard in
+    /// the file, because `sealedRunIDs` is inserted last and `recordCompletion` has no
+    /// `sealedRunIDs` check of its own.
+    func test_seal_persistsTheOutputTheRecordWriterAttached() {
+        let runner = Verification.Runner()
+        let id = UUID()
+        addTeardownBlock {
+            Verification.Store.clear(for: id)
+            Verification.CheckStore.clear(for: id)
+        }
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
+
+        runner.seal(
+            runID: "abcd1234",
+            from: [entry("rspec", status: "Completed", isRunning: false, exitCode: 1)],
+            stopped: false
+        )
+
+        XCTAssertEqual(
+            Verification.Store.latest(for: id)?.checks.first?.state, .failed(1),
+            "the persisted run must be the post-record copy, not the pre-record one"
+        )
+    }
+
+    /// A whole run that completed nothing writes no records at all. Task 8 depends on this
+    /// being the discriminator for the surviving run-level notice.
+    func test_seal_aRunThatCompletedNothingWritesNoRecords() {
+        let runner = Verification.Runner()
+        let id = UUID()
+        addTeardownBlock {
+            Verification.Store.clear(for: id)
+            Verification.CheckStore.clear(for: id)
+        }
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec", "rubocop"])
+
+        let sealed = runner.seal(runID: "abcd1234", from: [], stopped: false)
+
+        XCTAssertEqual(sealed?.checks.map(\.state), [.notRun, .notRun])
+        XCTAssertTrue(Verification.CheckStore.records(for: id).isEmpty)
+    }
+
+    /// The run's own rows keep carrying output, because `check_verification` projects from
+    /// them and `Verification.Store` is what survives a restart.
+    func test_execute_theRunsOwnRowsStillCarryOutput() async {
+        let id = UUID()
+        addTeardownBlock {
+            Verification.Store.clear(for: id)
+            Verification.CheckStore.clear(for: id)
+        }
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: [.list([entry("rspec", status: "Completed", isRunning: false, exitCode: 1)])],
+            latency: .zero,
+            logsByName: ["rspec": ["1 failure"]]
+        )
+        let spawner = StubSpawner(client: client, finishAfter: .milliseconds(20))
+        let runner = Verification.Runner(spawner: spawner, pollInterval: .milliseconds(5))
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
+
+        await drive(runner, request(workstreamID: id, checks: ["rspec"]), runID: "abcd1234")
+
+        XCTAssertEqual(Verification.Store.latest(for: id)?.checks.first?.output, "1 failure")
     }
 }
 

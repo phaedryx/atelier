@@ -408,7 +408,7 @@ extension IPC {
     }
 
     /// One check's result within a run.
-    struct VerificationCheckInfo: Codable {
+    struct VerificationCheckInfo: Codable, Equatable {
         let name: String
         let state: VerificationCheckState
         /// The process's exit code. Only meaningful for `.failed`, and nil

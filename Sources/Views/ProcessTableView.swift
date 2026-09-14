@@ -196,9 +196,12 @@ func processesToStart(stored: ProcessSelection, declared: [String]) -> [String]?
 
 /// Where a checklist's selection is stored.
 ///
-/// Injected rather than reached for, because there are now two checklists over
-/// two namespaces: Execution's picks what `execute` starts, Verification's picks
-/// which checks run. One key for both would make checking `rspec` uncheck `bff`.
+/// Injected rather than reached for, which is what makes `ProcessSelectionView`
+/// testable and reusable. `.execute` is the only member now — Verification had
+/// its own key and its own constant here, keyed separately for a reason worth
+/// keeping: one key for both would have made checking a check in Verification
+/// uncheck a process in Execution. Verification's checklist was removed along
+/// with that key; Execution's is what is left.
 struct ProcessSelectionStore: Sendable {
     let read: @Sendable (UUID) -> ProcessSelection
     let write: @Sendable (ProcessSelection, UUID) -> Void
@@ -206,11 +209,6 @@ struct ProcessSelectionStore: Sendable {
     static let execute = ProcessSelectionStore(
         read: { ProcessCompose.TableModel.selection(for: $0) },
         write: { ProcessCompose.TableModel.setSelection($0, for: $1) }
-    )
-
-    static let verify = ProcessSelectionStore(
-        read: { Verification.selection(for: $0) },
-        write: { Verification.setSelection($0, for: $1) }
     )
 }
 
@@ -261,14 +259,13 @@ func processChecklistHeight(
 /// for choosing what to start was unreachable until after starting — the one
 /// moment it is no use.
 ///
-/// Rendered **before a run only**, for both callers — `showsProcessSelection`'s
-/// doc for Execution, `verificationShowsChecklist`'s for Verification. A stale
-/// version of this comment claimed Verification kept the list visible and
-/// merely `.disabled(isLive)` it during a run; that let a user click a box
-/// that could not take effect, since both runners read the stored selection
-/// only when their own Start/Run is pressed. Hiding it is the fix, and it is
-/// the same fix in both places even though the two runs look nothing alike —
-/// Execution's is a live process table, Verification's a headless one-shot.
+/// Rendered **before a run only** — see `showsProcessSelection`'s own doc for
+/// why. Execution is this view's only caller now: Verification once rendered
+/// it too, under the same rule, before its checklist was removed entirely. A
+/// stale version of this comment claimed Verification kept the list visible
+/// and merely `.disabled(isLive)` it during a run; that let a user click a box
+/// that could not take effect, since the runner read the stored selection
+/// only when Start was pressed. Hiding it before a run was the fix.
 ///
 /// The choices come from the config rather than from the live API for the same
 /// reason it moved out of the table: before Start there is nothing running to
