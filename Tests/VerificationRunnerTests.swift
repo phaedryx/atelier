@@ -165,13 +165,36 @@ final class VerificationRunnerTests: XCTestCase {
         XCTAssertTrue(id.allSatisfy { $0.isHexDigit && !$0.isUppercase }, id)
     }
 
-    /// "Unique for the app's lifetime" is enforced, not hoped for.
-    func test_runID_neverReissuesAnId() {
+    /// "Unique for the app's lifetime" is enforced, not hoped for — pinned
+    /// against a forced collision, which is the only way the dedup set is
+    /// observable.
+    ///
+    /// Its predecessor drew 2000 ids and asserted they all differed. Eight hex
+    /// characters is 2^32 candidates, so that assertion held whether or not
+    /// `issuedRunIDs` existed: it tested `UUID`'s randomness rather than
+    /// `makeRunID`'s promise. Deleting the dedup set left it green.
+    func test_runID_redrawsWhenACandidateHasAlreadyBeenIssued() {
         let runner = Verification.Runner()
-        var seen: Set<String> = []
-        for _ in 0 ..< 2000 {
-            XCTAssertTrue(seen.insert(runner.makeRunID()).inserted)
-        }
+        var candidates = ["aaaaaaaa", "aaaaaaaa", "bbbbbbbb"]
+        runner.runIDCandidate = { candidates.removeFirst() }
+
+        XCTAssertEqual(runner.makeRunID(), "aaaaaaaa")
+        // The second draw repeats the first id. Without the dedup set this
+        // returns "aaaaaaaa" a second time and never reaches "bbbbbbbb".
+        XCTAssertEqual(runner.makeRunID(), "bbbbbbbb")
+        XCTAssertTrue(candidates.isEmpty, "the colliding candidate was not redrawn")
+    }
+
+    /// The dedup set spans the runner's whole life, not one call.
+    func test_runID_neverReissuesAnIdIssuedEarlier() {
+        let runner = Verification.Runner()
+        var candidates = ["aaaaaaaa", "bbbbbbbb", "aaaaaaaa", "cccccccc"]
+        runner.runIDCandidate = { candidates.removeFirst() }
+
+        XCTAssertEqual(runner.makeRunID(), "aaaaaaaa")
+        XCTAssertEqual(runner.makeRunID(), "bbbbbbbb")
+        XCTAssertEqual(runner.makeRunID(), "cccccccc")
+        XCTAssertTrue(candidates.isEmpty, "the colliding candidate was not redrawn")
     }
 
     // MARK: - Sealing
@@ -522,6 +545,55 @@ final class VerificationRunnerTests: XCTestCase {
         XCTAssertNil(sealed?.checks.first { $0.name == "rubocop" }?.output)
         let requested = await client.logRequests
         XCTAssertEqual(requested, ["rspec"])
+    }
+
+    /// The staleness baseline is computed off the main actor.
+    ///
+    /// `captureStamp` hops to a global queue because `diffFingerprint` is
+    /// `git rev-parse`, `git diff --stat`, `git ls-files` and batched
+    /// `git hash-object` — four-plus serial spawns — and `Runner` is
+    /// `@MainActor`, so a synchronous call would block the actor for all of
+    /// them. A stamp computed on the actor and one computed off it are the
+    /// same string, so the only way to fail on the difference is to ask the
+    /// fingerprint itself which thread it ran on.
+    ///
+    /// **What this catches**: the hop being dropped, so the fingerprint runs
+    /// synchronously on the main actor. **What it does not**: a different
+    /// off-actor mechanism, or the hop being kept while something else on the
+    /// path blocks the actor anyway.
+    func test_execute_computesTheStalenessStampOffTheMainActor() async {
+        let id = UUID()
+        addTeardownBlock { Verification.Store.clear(for: id) }
+        let witness = ThreadWitness()
+        let client = StubComposeClient(
+            socketPath: "/nonexistent",
+            replies: [
+                .list([entry("rspec", status: "Completed", isRunning: false, exitCode: 0)]),
+            ],
+            latency: .zero,
+            logsByName: [:]
+        )
+        let spawner = StubSpawner(client: client, finishAfter: .milliseconds(10))
+        let runner = Verification.Runner(
+            spawner: spawner,
+            pollInterval: .milliseconds(5),
+            fingerprint: { _, _ in
+                witness.record(isMain: Thread.isMainThread)
+                return "stamp-of-the-run"
+            }
+        )
+        runner.seedRunForTesting(workstreamID: id, runID: "abcd1234", checks: ["rspec"])
+
+        await drive(runner, request(workstreamID: id, checks: ["rspec"]), runID: "abcd1234")
+
+        XCTAssertEqual(witness.calls, 1, "the staleness baseline is taken exactly once per run")
+        XCTAssertEqual(
+            witness.ranOnMainThread, false,
+            "the staleness fingerprint ran on the main thread"
+        )
+        // And it still reaches the sealed run, so the hop is not bought by
+        // dropping the answer.
+        XCTAssertEqual(runner.run(id: "abcd1234")?.stamp, "stamp-of-the-run")
     }
 
     /// Live rows are published while the suite runs, not only at the end: the
@@ -1061,12 +1133,15 @@ final class VerificationRunnerTests: XCTestCase {
         XCTAssertEqual(runner.run(id: "abcd1234")?.checks.map(\.state), [.passed, .notRun])
     }
 
-    /// The staleness baseline is captured by the run loop, off the main actor,
-    /// rather than by `start` — which is synchronous on it and would spawn
-    /// `git rev-parse`, `git diff --stat`, `git ls-files` and batched
-    /// `git hash-object` on every press. It still has to land, and land before
-    /// the run is sealed, or the persisted result could never be called stale.
-    func test_execute_capturesTheStalenessStampOffTheMainActor() async {
+    /// The staleness baseline is captured by the **run loop** rather than by
+    /// `start`, and it lands before the run is sealed — otherwise the
+    /// persisted result could never be called stale.
+    ///
+    /// Renamed from `…OffTheMainActor`: nothing below could tell an on-actor
+    /// capture from an off-actor one, since both produce the same string.
+    /// `test_execute_computesTheStalenessStampOffTheMainActor` is the test
+    /// that fails on that, and this one keeps the half it really pins.
+    func test_execute_fillsTheStalenessStampBeforeSealing() async {
         let id = UUID()
         addTeardownBlock { Verification.Store.clear(for: id) }
         let client = StubComposeClient(
@@ -1268,6 +1343,37 @@ final class VerificationRunnerTests: XCTestCase {
         XCTAssertNil(runner.runs[id], "the loop must not resurrect a forgotten workstream")
         XCTAssertNil(Verification.Store.latest(for: id), "and must not persist a run for it")
         XCTAssertFalse(announced.value, "nor announce one to an agent")
+    }
+}
+
+/// Which thread the injected fingerprint ran on.
+///
+/// Locked rather than main-actor isolated, unlike `Flag` and
+/// `TeardownWitness`: the whole point is that it is written from a thread
+/// that is not the main one.
+private final class ThreadWitness: @unchecked Sendable {
+    private let lock = NSLock()
+    private var observed: [Bool] = []
+
+    func record(isMain: Bool) {
+        lock.lock()
+        observed.append(isMain)
+        lock.unlock()
+    }
+
+    var calls: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return observed.count
+    }
+
+    /// Nil when it was never called, which must not read the same as "it ran
+    /// off the main thread".
+    var ranOnMainThread: Bool? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !observed.isEmpty else { return nil }
+        return observed.contains(true)
     }
 }
 

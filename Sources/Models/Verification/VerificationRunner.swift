@@ -78,10 +78,12 @@ extension Verification {
         /// completion message hangs off this; nothing else may assume it is the
         /// only subscriber.
         ///
-        /// Reserved, not dead: nothing on this branch sets it. Its consumer is
-        /// the `VerificationControlling` adapter owned by the
-        /// `verification-ipc-tools` branch, which is not merged — the tab reads
-        /// `runs` directly and needs no callback.
+        /// **One slot, and `IPC.VerificationRunnerBridge` holds it** — which is
+        /// why that type routes completions per run id rather than assuming
+        /// every finish is one an agent asked about: this fires for the user's
+        /// own presses too. Constructing a second bridge silently unsubscribes
+        /// the first, so `ContentView` builds exactly one. The tab is not a
+        /// subscriber; it reads `runs` directly and needs no callback.
         var onFinish: ((Verification.Run) -> Void)?
 
         /// Everything one verify run needs from process-compose, resolved by
@@ -172,6 +174,15 @@ extension Verification {
         private let spawner: Spawning
         private let pollInterval: Duration
 
+        /// The staleness baseline, as a function, so `captureStamp` can be held
+        /// to running it off the main actor.
+        ///
+        /// Injected the same way `IPC.VerificationRunnerBridge` injects its own
+        /// `currentStamp`, and for a reason that is not about stubbing out git:
+        /// a fingerprint computed on the actor and one computed off it return
+        /// the same string, so *where* it ran is only observable from inside.
+        private let fingerprint: @Sendable (_ worktreePath: String, _ projectDirectory: String) -> String
+
         /// The spawner is injected for the same reason `TableModel`'s client is:
         /// the ordering this loop exists to guarantee — logs fetched before the
         /// server goes away, one teardown, after sealing — is not observable
@@ -181,10 +192,16 @@ extension Verification {
         /// be exercised in milliseconds; production always takes the default.
         init(
             spawner: Spawning = Verification.PhaseSpawner(),
-            pollInterval: Duration = Runner.defaultPollInterval
+            pollInterval: Duration = Runner.defaultPollInterval,
+            fingerprint: @escaping @Sendable (String, String) -> String = { worktreePath, projectDirectory in
+                Git.Operations.diffFingerprint(
+                    worktreePath: worktreePath, projectPath: projectDirectory, mode: "uncommitted"
+                )
+            }
         ) {
             self.spawner = spawner
             self.pollInterval = pollInterval
+            self.fingerprint = fingerprint
         }
 
         enum Failure: Error, Equatable, LocalizedError {
@@ -229,14 +246,29 @@ extension Verification {
         /// meant to confine a caller to its own workstream, not this type.
         func makeRunID() -> String {
             while true {
-                let candidate = String(
-                    UUID().uuidString.replacingOccurrences(of: "-", with: "")
-                        .prefix(8).lowercased()
-                )
+                let candidate = runIDCandidate()
                 if issuedRunIDs.insert(candidate).inserted {
                     return candidate
                 }
             }
+        }
+
+        /// Where a candidate id comes from, before `issuedRunIDs` has had its
+        /// say. A test seam, the same kind as `seedRunForTesting`.
+        ///
+        /// The redraw above is otherwise unreachable: eight hex characters is
+        /// 2^32 candidates, so a natural collision does not happen inside a
+        /// test, and drawing ids until two match tests `UUID`'s randomness
+        /// rather than this type's promise not to reissue one. Driving the
+        /// source is the only way the dedup set is observable.
+        ///
+        /// Not `@Sendable`: a test's generator is a queue it mutates, and this
+        /// is only ever called on the actor.
+        var runIDCandidate: () -> String = {
+            String(
+                UUID().uuidString.replacingOccurrences(of: "-", with: "")
+                    .prefix(8).lowercased()
+            )
         }
 
         /// Which checks a request resolves to, or why it cannot.
@@ -278,9 +310,11 @@ extension Verification {
             // than relying on every caller having remembered to wrap its own
             // `declared` — the "guard the precondition at each call site" shape
             // `ProcessCompose.RunCommandPlan`'s note records being reopened
-            // four times before the invariant moved to the consumer. The
-            // parked `start_verification` handler is the next caller, and would
-            // plausibly hand `declaredProcesses` straight through.
+            // four times before the invariant moved to the consumer.
+            // `start_verification` reaches this through `start`, which does
+            // wrap its own `declared` — but the guarantee must not rest on
+            // every caller having remembered to, which is the shape that was
+            // reopened four times.
             let runnable = runnableChecks(declared)
             // **"Declares nothing" and "declares nothing runnable" are not the
             // same refusal.** A namespace whose every process is named like a
@@ -344,11 +378,12 @@ extension Verification {
 
         /// The run with this id, whichever workstream it belongs to.
         ///
-        /// Reserved, not dead: nothing on this branch calls it in production.
-        /// It exists for `check_verification`, whose handler lives on the
-        /// unmerged `verification-ipc-tools` branch and is where the caller is
-        /// confined to its own workstream — see `makeRunID` on why that scoping
-        /// is not this type's. The tab looks runs up by workstream instead.
+        /// **Unscoped, and its caller is what scopes it.**
+        /// `IPC.VerificationRunnerBridge.verificationRun(id:in:)` is that
+        /// caller — it is where `check_verification` is confined to its own
+        /// workstream, and see `makeRunID` on why that confinement is not this
+        /// type's job. The tab never comes through here; it looks runs up by
+        /// workstream.
         func run(id: String) -> Verification.Run? {
             runs.values.first { $0.id == id }
         }
@@ -786,10 +821,11 @@ extension Verification {
         /// `start` answers the four preconditions — integration enabled, a
         /// located config, a resolvable binary, approval of every
         /// repository-provided file — and hands the results here in a
-        /// `SpawnRequest`. Any future caller, the parked IPC adapter included,
-        /// **must enter through `start`**; calling this directly runs a
-        /// repository's YAML unattended and ungated, which is exactly what that
-        /// one gate exists to prevent.
+        /// `SpawnRequest`. Every caller **must enter through `start`** —
+        /// `IPC.VerificationRunnerBridge` does, which is why the IPC half adds
+        /// no gate of its own; calling this directly runs a repository's YAML
+        /// unattended and ungated, which is exactly what that one gate exists
+        /// to prevent.
         ///
         /// Internal rather than private so a test can drive it with a seeded run
         /// and a stub spawner; `start` is its only production caller.
@@ -811,7 +847,7 @@ extension Verification {
             // and it lands before `seal`, so the persisted run carries the
             // stamp rather than racing it. Milliseconds after the press, which
             // is still "the moment the run started" for staleness.
-            let stamp = await Self.captureStamp(
+            let stamp = await captureStamp(
                 worktreePath: request.worktreePath, projectDirectory: request.projectDirectory
             )
             if runs[workstreamID]?.id == runID {
@@ -917,21 +953,23 @@ extension Verification {
             }
         }
 
-        /// `Git.Operations.diffFingerprint`, off the main actor.
+        /// `fingerprint` — `Git.Operations.diffFingerprint` unless a test said
+        /// otherwise — off the main actor.
         ///
         /// The same hop `PhaseSpawner.run` uses, and for the same reason: this
         /// is `git rev-parse`, `git diff --stat`, `git ls-files` and batched
         /// `git hash-object`, which `VerificationTabView.refreshStaleness`
-        /// already refuses to run on the actor.
-        private static func captureStamp(
+        /// already refuses to run on the actor. See `fingerprint` for why that
+        /// placement is injectable rather than merely written down here.
+        private func captureStamp(
             worktreePath: String, projectDirectory: String
         ) async -> String {
-            await withCheckedContinuation { continuation in
+            let compute = fingerprint
+            return await withCheckedContinuation { continuation in
                 DispatchQueue.global(qos: .userInitiated).async {
-                    continuation.resume(returning: Git.Operations.diffFingerprint(
-                        worktreePath: worktreePath, projectPath: projectDirectory,
-                        mode: "uncommitted"
-                    ))
+                    continuation.resume(
+                        returning: compute(worktreePath, projectDirectory)
+                    )
                 }
             }
         }

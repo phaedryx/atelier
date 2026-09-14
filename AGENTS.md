@@ -608,7 +608,7 @@ two hand-written mirrors below (`RunCommandPlan.unavailableReason` and
 fails to compile when they disagree with this. It is deliberately the *only* copy: a second, inlined set in
 `Workstream.Archiver` could not be tested and would not follow a change made here. Any new
 unattended execution path for repository-provided commands must go through it.
-`Verification.Runner.start` calls it too (`VerificationRunner.swift:347-363`), not because `verify`
+`Verification.Runner.start` calls it too (`VerificationRunner.swift:704-715`), not because `verify`
 runs automatically the way `bootstrap` and `dispose` do, but on the same underlying argument its own
 comment gives: captured output means nobody is watching a TTY, so the reasoning that leaves
 `execute` ungated does not apply — to a user press or to an agent call. See below.
@@ -618,14 +618,14 @@ Eight decisions from writing `verify` cost a review round each, and each is the 
 later reader would plausibly "simplify" away without knowing why:
 
 1. **The log window is one-shot.** Per-check output lives in the control server that ran the
-   namespace, and the run loop (`Verification.Runner.execute`, `VerificationRunner.swift:438-499`)
+   namespace, and the run loop (`Verification.Runner.execute`, `VerificationRunner.swift:832-954`)
    tears that server down only after `seal` has returned — so the 200-line tail
-   `captureFailedOutput` fetches first (`VerificationRunner.swift:604-655`) is all that exists
+   `captureFailedOutput` fetches first (`VerificationRunner.swift:1118-1169`) is all that exists
    anywhere afterward. No UI or agent-facing copy may imply a fuller log can be fetched later; the
    tab's own truncation notice says as much ("There is nothing more to fetch: the run's own output
-   no longer exists anywhere", `VerificationTabView.swift:498`). 200 lines is not an arbitrary
+   no longer exists anywhere", `VerificationTabView.swift:1101`). 200 lines is not an arbitrary
    round number — it was sized against `IPC.Store`'s 65,536-byte-per-message cap
-   (`IPCStore.swift:62`), which *throws rather than truncating* (`IPCStore.swift:176` and `:196`),
+   (`IPCStore.swift:89`), which *throws rather than truncating* (`IPCStore.swift:203`, `:223` and `:259`),
    so an oversized completion notice would be lost silently while an agent waits for it.
    `outputTruncated` means "there was more at capture time", never "more is retrievable".
 
@@ -650,22 +650,22 @@ later reader would plausibly "simplify" away without knowing why:
    after the run ends — labelled as the last read, not as live — because clearing them would empty
    a window mid-read; they are `@State` in the row and go when a new run starts.
 2. **Teardown has exactly one owner.** `spawner.shutDown` is called once, from the run loop, only
-   after `seal` returns (`VerificationRunner.swift:484-490`). Not from a `defer` — that can run
+   after `seal` returns (`VerificationRunner.swift:922-929`). Not from a `defer` — that can run
    before the log fetch, and the output is gone by the time `seal` wants it. Not from
-   `stop(workstreamID:)` (`VerificationRunner.swift:250-253`) — Stop and the run loop would then
+   `stop(workstreamID:)` (`VerificationRunner.swift:488-491`) — Stop and the run loop would then
    race two teardowns on one socket, the hazard `shutDownWhenDone: false` exists to avoid; `stop`
    only sets a flag. A missed trailing teardown is recoverable because `ProcessCompose.PhaseExecutor.run`
    shuts the socket down again at its own top, before spawning, the next time `start` is called.
 3. **A Stop is not acted on until the control server has answered.** `shouldStop` withholds a
-   pending Stop until `state.sawServer` is true (`VerificationRunner.swift:517-537`), because
+   pending Stop until `state.sawServer` is true (`VerificationRunner.swift:1031-1051`), because
    `PhaseExecutor.shutDown` returns immediately when the socket file does not exist yet
-   (`PhaseExecutor.swift:452-453`) — a Stop observed before `up` binds would make that teardown a
+   (`PhaseExecutor.swift:529-530`) — a Stop observed before `up` binds would make that teardown a
    no-op while the suite kept running: `isLive` would clear while the suite was still live, and a
    second `start` would be admitted onto the same socket.
 4. **Liveness is `Verification.Runner.isLive(_:)`, never `Run.isFinished`.** The run loop publishes
    each check's state as the poll sees it, so a run's rows can all read terminal while the spawn is
    still winding down and nothing has been sealed or persisted — `isFinished` goes true at that
-   moment; `isLive` does not (`VerificationRunner.swift:201-214`). `verificationCanRun`
+   moment; `isLive` does not (`VerificationRunner.swift:391-414`). `verificationCanRun`
    (`VerificationTabView.swift:32-43`) gates the Run button on `isLive` for the same reason.
    `Run.isFinished` is a row-state property, not a liveness signal: using it here would let a second
    `start` rebind `<id>-verify.sock` while the first run's spawn is still winding down and its
@@ -673,7 +673,7 @@ later reader would plausibly "simplify" away without knowing why:
 5. **The Verification tab's availability decision is `PhasePolicy.plan`'s; only the wording is
    separate.** `verificationAvailability` calls `plan(phase: .verify, …)` for the decision and
    `verificationUnavailableReason` only to phrase it in the present tense
-   (`VerificationTabView.swift:113-245`), because `Plan.nothingToDo` carries a past-tense string and
+   (`VerificationTabView.swift:207-399`), because `Plan.nothingToDo` carries a past-tense string and
    no discriminated case. **Nothing enforces the agreement** —
    `verificationUnavailableReason` hand-mirrors `plan`'s three preconditions in the same order; a
    fourth precondition added to `plan` has to be added here too, by hand, and nothing will fail to
@@ -684,10 +684,10 @@ later reader would plausibly "simplify" away without knowing why:
    the declared list off `plan`'s own returned config as a fourth fact, so Run cannot be enabled
    for a project `start` would refuse.
 6. **A parse failure is not "declares nothing".** `declaredProcesses(in:)` returns nil, not `[]`,
-   when a file cannot be parsed (`ProcessComposeConfig.swift:107-134`). `Verification.Runner.start`
+   when a file cannot be parsed (`ProcessComposeConfig.swift:173-198`). `Verification.Runner.start`
    throws `Failure.unavailable` on that nil rather than letting `resolveChecks` see an empty list
-   (`VerificationRunner.swift:374-386`), and `verificationUnavailableReason` keeps `declared` as an
-   `Optional` through its own guard chain for the same reason (`VerificationTabView.swift:113-162`).
+   (`VerificationRunner.swift:739-746`), and `verificationUnavailableReason` keeps `declared` as an
+   `Optional` through its own guard chain for the same reason (`VerificationTabView.swift:207-308`).
    Coalescing either one to `[]` early would report a broken config to the user as "this project
    declares no verify checks" — the same message a project with genuinely no verify checks gets,
    and the only diagnostic either path gives.
@@ -724,7 +724,7 @@ later reader would plausibly "simplify" away without knowing why:
 9. **A purge stops a verify run *through the runner*, and the wait is bounded.**
    `Workstream.Archiver.purge` used to call `ProcessCompose.PhaseExecutor.shutDown` for the
    verify socket directly. That call returns immediately when the socket file does not exist
-   yet (`PhaseExecutor.swift:452-453`), so a purge landing in the binding window reported the
+   yet (`PhaseExecutor.swift:529-530`), so a purge landing in the binding window reported the
    run dealt with and went on to `dispose` and `git worktree remove --force` while a suite was
    still coming up in that tree — the same hazard `shouldStop` defends at the *other* end of a
    run's life, and it composes with it rather than working around it.
@@ -769,12 +769,16 @@ cannot be is started **by name**, which process-compose could not do either. (An
 on the same fact — see "The checklist's own gate" above. A refusal only the run knows about is the
 thing to avoid, not a refusal.)
 
-**No agent can start a verify run yet.** `Verification.Runner`'s own doc already talks about "a run
-an agent started through `start_verification`" (`VerificationRunner.swift:12-17`), and that is why
-the type is app-level rather than owned by the tab — so an IPC adapter can attach to `runs` and
-`onFinish` later without moving ownership. But no such tool exists today: `IPC.Tool`
-(`IPCProtocol.swift`) has no `start_verification` or `check_verification` case, and nothing under
-`Sources/MCPHelper` mentions verification. The Verification tab is the only caller right now.
+**An agent can start a verify run, and that is what the type is app-level for.** A run an agent
+started through `start_verification` has to appear in the user's tab, and `<id>-verify.sock` admits
+exactly one server — so "one run per workstream" needs a single enforcement point rather than one in
+the tab and another in the IPC handler (`VerificationRunner.swift:12-17`). The adapter that was
+anticipated here is `IPC.VerificationRunnerBridge`, which attaches to `runs` and `onFinish` without
+owning either; `IPC.Tool` (`IPCProtocol.swift`) carries `startVerification` and `checkVerification`,
+and `Sources/MCPHelper/main.swift` advertises both. So `Verification.Runner.start` now has **two**
+callers — the Verification tab and that bridge — and they are the only legal entrances, because
+`start` is where `PhasePolicy.plan` is consulted. See "The verification tools, and the first message
+Atelier sends itself" for the rest of the contract.
 
 ### ports.yaml
 A **`ports.yaml`** in the project directory declares the port variables Atelier supplies, so
