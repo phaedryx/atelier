@@ -753,22 +753,6 @@ struct VerificationTabView: View {
 
     // MARK: - Refresh
 
-    /// Recomputes `currentStamp` off the main actor, the same way
-    /// `ChangesView.fullLoad` computes its own fingerprint: `diffFingerprint`
-    /// spawns `git hash-object` in batches over the dirty tree, and this is
-    /// called from `.onAppear` and from a notification that fires on every
-    /// git-activity event in the worktree — running that on the main actor
-    /// would stall the tab's own redraw on every keystroke-adjacent save.
-    ///
-    /// Two guards keep that notification cheap rather than merely
-    /// off-actor: nothing here is rendered without a run to compare against
-    /// (`currentStamp` is only read by `resultRows`, which only exists when
-    /// `currentRun` does), and `HeadWatcher` can fire at up to ~5Hz during
-    /// ordinary agent activity — its own doc says the watched directory is
-    /// noisy — so a computation already in flight absorbs a burst instead of
-    /// queuing a matching burst of `git` spawns behind it. Absorbed, not
-    /// discarded: see `stalenessRefreshPending` for why the run-completion
-    /// trigger cannot afford to have its request dropped.
     /// Arm the worktree watcher while there is a result to go stale, and not
     /// otherwise.
     ///
@@ -786,6 +770,22 @@ struct VerificationTabView: View {
         worktreeWatcher?.arm(path: worktreePath)
     }
 
+    /// Recomputes `currentStamp` off the main actor, the same way
+    /// `ChangesView.fullLoad` computes its own fingerprint: `diffFingerprint`
+    /// spawns `git hash-object` in batches over the dirty tree, and this is
+    /// called from `.onAppear` and from a notification that fires on every
+    /// git-activity event in the worktree — running that on the main actor
+    /// would stall the tab's own redraw on every keystroke-adjacent save.
+    ///
+    /// Two guards keep that notification cheap rather than merely
+    /// off-actor: nothing here is rendered without a run to compare against
+    /// (`currentStamp` is only read by `resultRows`, which only exists when
+    /// `currentRun` does), and `HeadWatcher` can fire at up to ~5Hz during
+    /// ordinary agent activity — its own doc says the watched directory is
+    /// noisy — so a computation already in flight absorbs a burst instead of
+    /// queuing a matching burst of `git` spawns behind it. Absorbed, not
+    /// discarded: see `stalenessRefreshPending` for why the run-completion
+    /// trigger cannot afford to have its request dropped.
     private func refreshStaleness() {
         // **The in-flight guard comes first, and the order is the whole point.**
         // `currentRun` falls through to `Verification.Store.latest` — a
