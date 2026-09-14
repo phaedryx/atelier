@@ -19,48 +19,6 @@ final class VerificationTabViewTests: XCTestCase {
         XCTAssertTrue(verificationCanRun(isLive: false))
     }
 
-    /// Run is gated on the checklist as well as on liveness, because every box
-    /// may now be unchecked and `Verification.Runner` reads no check names as
-    /// *run everything* — the opposite of what an empty checklist asked for.
-    func testRunIsDisabledWhenNothingIsChecked() {
-        XCTAssertFalse(verificationCanRunSelection(isLive: false, hasChecks: false))
-        XCTAssertTrue(verificationCanRunSelection(isLive: false, hasChecks: true))
-    }
-
-    /// And liveness still wins on its own: a live run is a live run however
-    /// many boxes are ticked.
-    func testRunStaysDisabledDuringARunWhateverIsChecked() {
-        XCTAssertFalse(verificationCanRunSelection(isLive: true, hasChecks: true))
-    }
-
-    /// "Run failed" runs the previous run's `failedNames`, not the checklist,
-    /// so an empty checklist has nothing to say about it. It is gated on
-    /// liveness alone — which is what `verificationCanRun` still answers.
-    func testRunFailedIsNotGatedOnTheChecklist() {
-        XCTAssertTrue(verificationCanRun(isLive: false))
-    }
-
-    // MARK: - Checklist visibility
-
-    // Hidden while live, not merely disabled: clicking a box that cannot take
-    // effect is the confusing state, and Execution already resolves it this way
-    // (ExecutionTabView.swift:83 gates its own checklist on `!runStarted`).
-    func test_showsChecklist_hiddenWhileARunIsLive() {
-        XCTAssertFalse(verificationShowsChecklist(isLive: true, declaredProcesses: ["rspec"]))
-    }
-
-    func test_showsChecklist_visibleWhenIdleWithChecks() {
-        XCTAssertTrue(verificationShowsChecklist(isLive: false, declaredProcesses: ["rspec"]))
-    }
-
-    /// The empty-list guard stays. It is not cosmetic: an empty list would make
-    /// ProcessSelectionView's own .onAppear read the stored selection as "nothing
-    /// survived" and overwrite it with the canonical "all" — see
-    /// processSelectionOnLoad.
-    func test_showsChecklist_hiddenWhenNothingIsDeclared() {
-        XCTAssertFalse(verificationShowsChecklist(isLive: false, declaredProcesses: []))
-    }
-
     // MARK: - Staleness
 
     func test_isStale_comparesTheStamp() {
@@ -91,14 +49,51 @@ final class VerificationTabViewTests: XCTestCase {
         XCTAssertFalse(verificationIsStale(run: run, currentStamp: nil))
     }
 
+    // MARK: - Per-record staleness
+
+    private func record(stamp: String) -> Verification.CheckRecord {
+        Verification.CheckRecord(
+            name: "rspec", state: .passed, duration: 1, output: nil,
+            outputTruncated: false, stamp: stamp, runID: "abcd1234", completedAt: Date()
+        )
+    }
+
+    /// The record-shaped sibling of `verificationIsStale`, and the reason there
+    /// are two: checks now complete at different moments, so staleness is a
+    /// property of one record rather than of a run — a single run-level banner
+    /// would be wrong for most rows the moment one row is re-run on its own.
+    func test_recordIsStale_comparesTheStamp() {
+        XCTAssertFalse(
+            verificationRecordIsStale(record: record(stamp: "head|10|aaaa"), currentStamp: "head|10|aaaa")
+        )
+        XCTAssertTrue(
+            verificationRecordIsStale(record: record(stamp: "head|10|aaaa"), currentStamp: "head|11|bbbb")
+        )
+        // No stamp to compare against is not evidence of freshness.
+        XCTAssertTrue(
+            verificationRecordIsStale(record: record(stamp: "head|10|aaaa"), currentStamp: nil)
+        )
+    }
+
+    /// The empty-stamp rule is unchanged from the run-shaped function and just
+    /// as load-bearing: `""` means "the run's baseline had not been captured
+    /// yet", never "no diff". A real fingerprint is always `head|count|digest`,
+    /// so `""` cannot arise any other way.
+    func test_recordIsStale_treatsAnUncapturedStampAsNotYetComparable() {
+        XCTAssertFalse(
+            verificationRecordIsStale(record: record(stamp: ""), currentStamp: "head|10|aaaa")
+        )
+        XCTAssertFalse(verificationRecordIsStale(record: record(stamp: ""), currentStamp: nil))
+    }
+
     // MARK: - Row glyphs
 
     // MARK: - What a check's output group shows
 
     /// Live wins over captured, and the window where both exist is real:
-    /// `Runner.captureFailedOutput` attaches a failed check's tail while
-    /// `isLive` is still true, and the server still holds whatever arrived
-    /// after that copy was taken.
+    /// `Runner.recordCompletions` attaches a check's tail the moment it
+    /// completes, while `isLive` is still true, and the server still holds
+    /// whatever arrived after that copy was taken.
     func test_outputContent_prefersTheLiveServerOverACapturedTail() {
         XCTAssertEqual(
             verificationOutputContent(state: .failed(1), hasCapturedOutput: true, isLive: true),
