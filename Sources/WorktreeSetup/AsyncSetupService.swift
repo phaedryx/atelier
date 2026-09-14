@@ -203,20 +203,6 @@ actor AsyncSetupService {
         )
     }
 
-    /// Remove tracked state for a workstream (cleanup after archiving).
-    /// Stop an in-flight bootstrap for this workstream and wait for it to let go.
-    ///
-    /// Archive has to do this before it removes the worktree. `dispose` and a
-    /// running `bootstrap` in the same directory are already bad — two
-    /// process-compose runs over one project — but `git worktree remove`
-    /// deleting the tree out from under a running `pnpm install` is worse, and
-    /// bootstrap's own server would then hold its ports until its 30-minute
-    /// deadline with nothing left to shut it down.
-    ///
-    /// Shutting the socket down is what makes `ProcessCompose.PhaseExecutor.run` return: the
-    /// server exits, the spawned `up` follows, and the `defer` in
-    /// `runBackgroundSetup` clears the claim. The poll below reads that claim
-    /// rather than the process, so it observes the real end of the work.
     /// Why `cancelBootstrap` stopped waiting. Reported rather than only logged,
     /// because "the bootstrap stopped" and "we gave up on it" are different
     /// answers to the archive that asked.
@@ -233,6 +219,19 @@ actor AsyncSetupService {
         case timedOut
     }
 
+    /// Stop an in-flight bootstrap for this workstream and wait for it to let go.
+    ///
+    /// Archive has to do this before it removes the worktree. `dispose` and a
+    /// running `bootstrap` in the same directory are already bad — two
+    /// process-compose runs over one project — but `git worktree remove`
+    /// deleting the tree out from under a running `pnpm install` is worse, and
+    /// bootstrap's own server would then hold its ports until its 30-minute
+    /// deadline with nothing left to shut it down.
+    ///
+    /// Shutting the socket down is what makes `ProcessCompose.PhaseExecutor.run` return: the
+    /// server exits, the spawned `up` follows, and the `defer` in
+    /// `runBackgroundSetup` clears the claim. The poll below reads that claim
+    /// rather than the process, so it observes the real end of the work.
     @discardableResult
     func cancelBootstrap(for workstreamID: UUID, binary: String?, worktreePath: String) async -> CancelOutcome {
         guard runningBootstraps.contains(workstreamID) else { return .notRunning }
@@ -273,6 +272,7 @@ actor AsyncSetupService {
         runningBootstraps.insert(workstreamID)
     }
 
+    /// Remove tracked state for a workstream (cleanup after archiving).
     func clearState(for workstreamID: UUID) {
         states.removeValue(forKey: workstreamID)
     }
