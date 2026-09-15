@@ -41,38 +41,53 @@ some behaviour that looks alarming is intended:
 - **The Coding Agent can modify files and run commands.** Its own permission
   prompts are the boundary, and turning on "Bypass permission prompts" removes
   that boundary deliberately.
-- **Repository-provided `bootstrap`, `dispose`, and `verify` processes
-  require your approval before they run.** Atelier reads a
-  `process-compose.yaml` and its override file, and runs five namespaces from
-  it: `bootstrap` when a worktree is created, `prepare` and `execute` when you
-  press Start, `verify` when you press Run in the Verification tab, and
-  `dispose` when a workstream is archived. `bootstrap` and `dispose` run
-  unattended, with nobody watching; `verify` is a deliberate press, but its
-  output is captured rather than shown in a terminal, so the same requirement
-  applies to it too. Those three are the ones behind approval. Atelier shows
-  you the files that will load, runs nothing until you approve, and asks again
-  when their contents change. A path that runs any of them without approval is
-  a vulnerability; please report it.
+- **The commands Atelier runs for a project come from three files in the
+  project directory, and nowhere else.** `execution.process-compose.yaml`
+  declares the process-compose namespaces, `initialization.yaml` the steps run
+  once behind a new worktree, and `verification.yaml` the checks the
+  Verification tab runs. Each is looked for in the project directory — the
+  repository's *home*, the `.bare` container in that layout — and nothing
+  inside a work tree is read. There is no override file, no worktree tier, and
+  no generic name: a plain `process-compose.yaml` is never read, because a
+  repository may run process-compose for its own reasons.
 
-  Approval keys off *location*, not content: a config inside the worktree is
-  repository-provided and is gated, while one in the project directory beside
-  `.bare` is yours and is not — git cannot see it, so a repository cannot put
-  one there.
+  **That location rule is the whole trust decision, which is why there is no
+  approval step.** A file outside every work tree cannot have arrived with a
+  clone; it was placed there by hand, by you. Atelier does not fingerprint
+  these files, does not show an approval sheet, and does not ask again when
+  they change — the earlier releases that did were gating a worktree tier that
+  no longer exists. The rule also means an agent confined to its worktree by
+  the "Restrict to worktree" system prompt cannot edit what runs there.
 
-- **`prepare` and `execute` are not gated, deliberately.** They run only when
-  you press Start, which is an attended action on a workstream you made, and
-  the same reasoning covers the terminal above it. Report a path that runs
-  either of them *without* a Start press.
+  **The known hole, stated rather than papered over: the project directory is
+  sometimes inside a work tree.** For an ordinary clone the project directory
+  *is* the checkout, so all three files can be committed and can arrive with
+  the repository. New Project seeds its templates into a directory it then runs
+  `git init` on, which is the same case. The layout the README describes — a
+  `.bare` directory with worktrees beside it — is the one where the rule holds
+  as stated. Reports here are welcome, but a committed config in an ordinary
+  clone is this hole and not a separate finding.
 
-- **What approval covers is the YAML Atelier hashes, not everything that YAML
-  can reach.** The fingerprint is over the config files Atelier loads. A
-  `command:` that invokes a script in the repository, a path built from an
-  environment variable, or an `include:` of another YAML file all reach content
-  outside that fingerprint, so a repository can leave the approved file
-  untouched and change what it does. Treat approving a repository's config as
-  trusting that repository, not as auditing one file. Narrowing this gap is
-  wanted; a concrete divergence between what you approved and what ran is worth
-  reporting.
+- **What runs attended, and what does not.** `prepare` and `execute` run on a
+  deliberate press of Start, in a terminal surface in front of you, with Stop
+  to hand — the same reasoning that covers the terminal above. A verification
+  check is a deliberate press too, and its output lives only in that check's
+  own terminal surface: Atelier never captures it, never persists it, destroys
+  it when the check is re-run, and sends none of it to an agent. `dispose`,
+  which runs when a workstream is *purged* — not when it is archived with
+  Remove, which deletes nothing — and the `initialization.yaml` steps that run
+  behind a new worktree are the unattended paths. Both are covered by the
+  location rule above and by nothing else.
 
-Anything that runs code from a repository without the user agreeing to it is in
-scope, whatever the mechanism.
+- **Location trust covers the config file, not everything its commands can
+  reach.** These files hold shell commands, and a command runs with the
+  worktree as its working directory. A `command:` that invokes a script from
+  the repository, a path built from an environment variable, or a tool whose
+  behaviour the repository controls all reach content the location rule says
+  nothing about. Treat placing one of these files as trusting the repository it
+  drives, not as auditing a single file. Narrowing that gap is wanted.
+
+Anything that runs code from a repository without the user having put it there
+is in scope, whatever the mechanism. Concretely: a path by which Atelier reads
+or executes any of these three files from inside a work tree, or loads a config
+file it did not locate in the project directory.
