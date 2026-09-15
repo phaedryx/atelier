@@ -44,7 +44,11 @@ private actor StubVerificationRunner: IPC.VerificationControlling {
     /// actor to hop through for a synchronous store.
     private nonisolated(unsafe) var checkHandler: (@MainActor @Sendable (IPC.VerificationCheckNotice) -> Void)?
 
-    init(start: IPC.VerificationStart = IPC.VerificationStart(runID: "v7f3a11", started: ["rspec", "rubocop"])) {
+    init(
+        start: IPC.VerificationStart = IPC.VerificationStart(
+            runID: "v7f3a11", started: ["rspec", "rubocop"], refused: []
+        )
+    ) {
         self.start = start
     }
 
@@ -218,6 +222,31 @@ final class IPCVerificationToolsTests: XCTestCase {
         let startedWorkstreams = await runner.startedWorkstreams
         XCTAssertEqual(startedChecks, [["rspec", "rubocop"]])
         XCTAssertEqual(startedWorkstreams, [workstreamID], "a run belongs to the caller's own workstream")
+    }
+
+    /// **A partial start has to say what did *not* start, and where those verdicts
+    /// go.** A refused check is one already running, so its completion is posted
+    /// under the run that started it — an agent told only "refused: rspec" would
+    /// wait for a notice that cannot arrive under this run id, which is the
+    /// silence the run-level notice exists to break.
+    func test_startVerification_namesTheRefusedChecksAndSaysTheirVerdictsLandElsewhere() async throws {
+        let partial = StubVerificationRunner(
+            start: IPC.VerificationStart(runID: "v7f3a11", started: ["rubocop"], refused: ["rspec"])
+        )
+        await service.setVerificationRunner(partial)
+        let caller = try await register(surfaceID: UUID(), name: "builder")
+
+        let response = await call(.startVerification, [:], as: caller)
+
+        guard case let .text(text) = response.payload else {
+            return XCTFail("expected text, got \(String(describing: response.error))")
+        }
+        XCTAssertTrue(text.contains("rubocop"), "the half that started: \(text)")
+        XCTAssertTrue(text.contains("Already running, so not part of this run: rspec"), text)
+        XCTAssertTrue(
+            text.contains("not this one"),
+            "the agent must not wait for rspec's verdict under this run id: \(text)"
+        )
     }
 
     /// `IPC.Service.startVerification` parses `request.client.surfaceID` into

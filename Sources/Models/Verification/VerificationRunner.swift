@@ -129,9 +129,14 @@ extension Verification {
         }
 
         enum Failure: Error, Equatable, LocalizedError {
-            /// This check is already running. Per check, never per workstream:
-            /// two different checks starting at once is the point.
-            case alreadyRunning(String)
+            /// Every check this call named is already running. Per check, never
+            /// per workstream: two different checks starting at once is the point,
+            /// and a call naming one live check and one idle one starts the idle
+            /// one rather than throwing. This is the whole-call refusal that is
+            /// left — a start with nothing to start — and it names all of them,
+            /// because naming only the first would leave the caller retrying into
+            /// the second.
+            case alreadyRunning([String])
             /// No `verification.yaml`, or one that could not be read.
             case unavailable(String)
             case unknownChecks([String], valid: [String])
@@ -142,14 +147,25 @@ extension Verification {
 
             var errorDescription: String? {
                 switch self {
-                case let .alreadyRunning(name):
-                    String(
-                        format: NSLocalizedString(
-                            "“%@” is already running.",
-                            comment: "Verification: a check asked to start twice"
-                        ),
-                        name
-                    )
+                case let .alreadyRunning(names):
+                    // The one-name wording is unchanged: it is what the
+                    // Verification tab's row shows, and both UI callers name
+                    // exactly one check.
+                    names.count == 1
+                        ? String(
+                            format: NSLocalizedString(
+                                "“%@” is already running.",
+                                comment: "Verification: a check asked to start twice"
+                            ),
+                            names[0]
+                        )
+                        : String(
+                            format: NSLocalizedString(
+                                "Already running: %@.",
+                                comment: "Verification: every check a start named was already running"
+                            ),
+                            names.joined(separator: ", ")
+                        )
                 case let .unavailable(reason):
                     reason
                 case let .unknownChecks(names, valid):
@@ -231,7 +247,16 @@ extension Verification {
         /// set that this call started — the unit `start_verification` answers with.
         /// A check already running is refused by name and the rest still start,
         /// because refusing the whole call would make an agent's re-request of two
-        /// checks fail for the one that is already going.
+        /// checks fail for the one that is already going. The refused names come
+        /// back on `Run.refused`, and they are in no `checks` row: they belong to
+        /// the run that started them.
+        ///
+        /// **The whole call is refused only when there is nothing left to start**,
+        /// which is `Failure.alreadyRunning` naming every one of them. That is what
+        /// keeps the two UI callers — the row's button and the palette command,
+        /// each naming exactly one check — throwing exactly as they did, and it is
+        /// the same rule the seam states: refuse rather than mint a run that cannot
+        /// report.
         @discardableResult
         func start(
             workstreamID: UUID,
@@ -260,12 +285,17 @@ extension Verification {
                     comment: "Verification: verification.yaml exists but is empty"
                 ))
             }
-            if let clash = names.first(where: { isRunning(workstreamID, check: $0) }) {
-                throw Failure.alreadyRunning(clash)
+            // Filtered rather than set-differenced, so both halves keep the order
+            // the caller asked in — which for the implicit all-checks case is
+            // verification.yaml's own order, the one every other surface uses.
+            let refused = names.filter { isRunning(workstreamID, check: $0) }
+            let startable = names.filter { !isRunning(workstreamID, check: $0) }
+            guard !startable.isEmpty else {
+                throw Failure.alreadyRunning(refused)
             }
 
             guard let surfaces else {
-                throw Failure.noSurface(names.joined(separator: ", "))
+                throw Failure.noSurface(startable.joined(separator: ", "))
             }
 
             // Computed once for the whole press rather than per check: it is four
@@ -285,7 +315,7 @@ extension Verification {
             var started: [CheckResult] = []
             var failures: [String] = []
 
-            for name in names {
+            for name in startable {
                 guard let check = config.check(named: name) else { continue }
                 let spawn = Verification.Spawn.build(check: check, workstreamID: workstreamID)
                 // Before the surface, never after: a status file left by the
@@ -323,7 +353,8 @@ extension Verification {
                 startedAt: Date(),
                 stamp: stamp,
                 checks: started,
-                wasStopped: false
+                wasStopped: false,
+                refused: refused
             )
             runs[runID] = run
             runIDsByWorkstream[workstreamID, default: []].append(runID)

@@ -128,12 +128,63 @@ final class VerificationRunnerTests: XCTestCase {
         try start(runner, checks: ["rspec"])
 
         XCTAssertThrowsError(try start(runner, checks: ["rspec"])) { error in
-            guard case let Verification.Runner.Failure.alreadyRunning(name) = error else {
+            guard case let Verification.Runner.Failure.alreadyRunning(names) = error else {
                 return XCTFail("expected .alreadyRunning, got \(error)")
             }
-            XCTAssertEqual(name, "rspec")
+            XCTAssertEqual(names, ["rspec"])
         }
         XCTAssertNoThrow(try start(runner, checks: ["rubocop"]), "a different check is not blocked")
+    }
+
+    /// **The refusal is per check, so a mixed call is a partial start.** This is
+    /// the shape that shipped broken: the guard refused the whole call on the
+    /// first clash, which the doc comment and CLAUDE.md both forbid.
+    func test_start_startsTheIdleCheckAndRefusesOnlyTheRunningOne() throws {
+        try writeConfig()
+        let host = StubSurfaceHost()
+        let runner = makeRunner(host)
+        try start(runner, checks: ["rspec"])
+        let startedSurfaces = host.started.count
+
+        let run = try start(runner, checks: ["rspec", "rubocop"])
+
+        XCTAssertEqual(run.checks.map(\.name), ["rubocop"], "only the idle check is in the run")
+        XCTAssertEqual(run.refused, ["rspec"], "the live check is named back, not thrown")
+        XCTAssertEqual(
+            host.started.count, startedSurfaces + 1,
+            "the live check got no second surface — one would replace its terminal and strand it"
+        )
+        XCTAssertTrue(runner.isRunning(workstreamID, check: "rubocop"))
+    }
+
+    /// The IPC symptom the bug was reported for: `start_verification` with no
+    /// `checks` means all of them, so one running check refused the agent's whole
+    /// run.
+    func test_start_withNoNamesSkipsTheRunningCheckRatherThanRefusingEverything() throws {
+        try writeConfig()
+        let runner = makeRunner(StubSurfaceHost())
+        try start(runner, checks: ["rspec"])
+
+        let run = try start(runner, checks: nil)
+
+        XCTAssertEqual(run.checks.map(\.name), ["rubocop"])
+        XCTAssertEqual(run.refused, ["rspec"])
+    }
+
+    /// The one whole-call refusal left: nothing to start. It names every check
+    /// rather than the first, so the caller does not retry into the second.
+    func test_start_refusesTheWholeCallOnlyWhenEveryNamedCheckIsRunning() throws {
+        try writeConfig()
+        let runner = makeRunner(StubSurfaceHost())
+        try start(runner, checks: ["rspec"])
+        try start(runner, checks: ["rubocop"])
+
+        XCTAssertThrowsError(try start(runner, checks: nil)) { error in
+            guard case let Verification.Runner.Failure.alreadyRunning(names) = error else {
+                return XCTFail("expected .alreadyRunning, got \(error)")
+            }
+            XCTAssertEqual(names, ["rspec", "rubocop"], "every one of them, in file order")
+        }
     }
 
     /// **A check with no terminal never runs**, so a host that cannot make one is

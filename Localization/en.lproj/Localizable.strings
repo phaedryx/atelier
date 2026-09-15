@@ -580,6 +580,7 @@
 
 /* Verification runner */
 "“%@” is already running." = "“%@” is already running.";
+"Already running: %@." = "Already running: %@.";
 "No such check: %1$@. This project declares: %2$@." = "No such check: %1$@. This project declares: %2$@.";
 "nothing" = "nothing";
 "“%@” could not be given a terminal to run in." = "“%@” could not be given a terminal to run in.";

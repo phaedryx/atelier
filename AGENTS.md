@@ -1614,6 +1614,25 @@ is already running**, per check rather than per workstream, since two *different
 at once is the design; and `onFinish` must fire on every terminal path, because a path
 that does not is a completion notice that never arrives.
 
+**Per check means a partial start, not a whole-call refusal**, and for one round the code
+said otherwise — `Runner.start` threw `alreadyRunning` on the *first* clash while its own
+doc comment and this section both said it should not. A call naming a live check and an
+idle one starts the idle one and hands the refused name back on `Run.refused`; only a call
+with nothing left to start throws, and that refusal names **every** one of them rather
+than the first, so a caller does not retry into the second. The IPC path is where this bit
+hardest: `start_verification` with no `checks` means *all* of them, so one running check
+refused an agent's entire run. `Tests/VerificationRunnerTests.swift` pins the mixed call —
+one running, one idle — which is the case that was untested and is how this shipped.
+
+**The refused names are reported in `start_verification`'s answer and nowhere else.** They
+are deliberately not on `VerificationRunInfo`: none of the seven `CheckResult.State` cases
+honestly says "not part of this run", and a refused check's verdict is posted under the run
+that *started* it — a different run id. So the answer has to say so in as many words, or an
+agent waits for a notice that cannot arrive under the id it was handed, which is the same
+silence the run-level notice exists to break. The two UI callers — the row's Run button and
+the palette's per-check command — each name exactly one check, so they still throw exactly
+as they did and their wording is unchanged.
+
 **There is no approval gate to recheck.** `verification.yaml` lives in the project
 directory, outside every work tree, so it cannot have arrived with the repository — the
 same location rule that leaves the execution config unasked-about.

@@ -22,7 +22,7 @@ private actor StubVerificationRunner: IPC.VerificationControlling {
         requesterSurfaceID _: String?,
         onFinish _: @escaping @Sendable (IPC.VerificationRunInfo) -> Void
     ) async throws -> IPC.VerificationStart {
-        IPC.VerificationStart(runID: run.runID, started: run.checks.map(\.name))
+        IPC.VerificationStart(runID: run.runID, started: run.checks.map(\.name), refused: [])
     }
 
     func verificationRun(id: String, in _: UUID) async -> IPC.VerificationRunInfo? {

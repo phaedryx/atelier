@@ -24,9 +24,14 @@ extension IPC {
     ///   suite outlives an MCP tool call; the run id is the answer, and the result
     ///   arrives through `onFinish` and `verificationRun(id:)`.
     /// - **It must refuse a check that is already running — per check, not per
-    ///   workstream.** Checks are independent and two *different* ones at once is
-    ///   the design, so the refusal is scoped to the one name: a second start of a
-    ///   live check would replace its terminal surface and strand the first.
+    ///   workstream, and not the whole call.** Checks are independent and two
+    ///   *different* ones at once is the design, so the refusal is scoped to the
+    ///   one name: a second start of a live check would replace its terminal
+    ///   surface and strand the first. A call naming a live check and an idle one
+    ///   starts the idle one and reports the other on `VerificationStart.refused`;
+    ///   only a call with *nothing* left to start throws. Refusing the whole call
+    ///   would make `checks: []` — which means all of them — fail outright whenever
+    ///   a single check happened to be going.
     /// - **It must refuse rather than mint a run that cannot report.** No
     ///   `verification.yaml`, one that will not parse, one declaring nothing, or a
     ///   name in `checks` the config does not declare — each is a refusal naming
@@ -120,10 +125,20 @@ extension IPC {
     /// started.
     ///
     /// `started` is the *resolved* list, never the empty one that was asked for —
-    /// an agent that omits `checks` still needs to see what it set running.
+    /// an agent that omits `checks` still needs to see what it set running. It is
+    /// also never *empty*: a start with nothing left to start is refused rather
+    /// than minted.
+    ///
+    /// `refused` is the names that were already running, and it is reported here
+    /// and nowhere else. It is deliberately **not** on `VerificationRunInfo`: none
+    /// of the seven check states honestly describes "not part of this run", and a
+    /// refused check's own completion notice carries the *earlier* run's id — so
+    /// this answer is the only place an agent can be told, and it has to say that
+    /// those verdicts will not arrive under this run id.
     struct VerificationStart: Sendable, Equatable {
         let runID: String
         let started: [String]
+        let refused: [String]
     }
 
     /// Why a verification tool could not act, on this side of the seam.
