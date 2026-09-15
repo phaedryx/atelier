@@ -55,12 +55,17 @@ final class WorkspaceActionsPathTests: XCTestCase {
         try WorkspaceActions.resolvePath(path, inWorktree: worktree, fileExists: { _ in exists })
     }
 
-    func testRelativePathResolvesAgainstTheWorktree() throws {
-        XCTAssertEqual(try resolve("Sources/App.swift"), "/repos/app/feature/Sources/App.swift")
+    /// The answer is worktree-relative because that is `editorFilePaths`' unit:
+    /// every other producer (the file tree, the Cmd+P finder) stores paths
+    /// relative to the worktree root, and `EditorView.loadFile` resolves them
+    /// against `workingDirectory`. An absolute path stored there gets appended
+    /// to the worktree a second time and reads back as "no such file".
+    func testRelativePathResolvesToAWorktreeRelativePath() throws {
+        XCTAssertEqual(try resolve("Sources/App.swift"), "Sources/App.swift")
     }
 
-    func testAbsolutePathInsideTheWorktreeIsAccepted() throws {
-        XCTAssertEqual(try resolve("/repos/app/feature/Sources/App.swift"), "/repos/app/feature/Sources/App.swift")
+    func testAbsolutePathInsideTheWorktreeIsRelativized() throws {
+        XCTAssertEqual(try resolve("/repos/app/feature/Sources/App.swift"), "Sources/App.swift")
     }
 
     func testAbsolutePathOutsideTheWorktreeIsRejected() {
@@ -74,7 +79,21 @@ final class WorkspaceActionsPathTests: XCTestCase {
     }
 
     func testTraversalThatStaysInsideIsAccepted() throws {
-        XCTAssertEqual(try resolve("Sources/../Tests/AppTests.swift"), "/repos/app/feature/Tests/AppTests.swift")
+        XCTAssertEqual(try resolve("Sources/../Tests/AppTests.swift"), "Tests/AppTests.swift")
+    }
+
+    /// The relativization must use the same standardized components the
+    /// containment test used — a worktree path spelled with a `.` or a
+    /// trailing slash would otherwise leave its debris in the prefix strip.
+    func testAnUnstandardizedWorktreePathStillYieldsACleanRelativePath() throws {
+        XCTAssertEqual(
+            try WorkspaceActions.resolvePath(
+                "Sources/App.swift",
+                inWorktree: "/repos/app/feature/./",
+                fileExists: { _ in true }
+            ),
+            "Sources/App.swift"
+        )
     }
 
     /// A sibling worktree whose name merely starts with this one's is outside

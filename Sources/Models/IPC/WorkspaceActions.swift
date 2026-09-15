@@ -389,12 +389,22 @@ final class WorkspaceActions {
         surfaceCache != nil && TerminalApp.shared.app != nil
     }
 
-    /// Resolves a tool-supplied path against the worktree.
+    /// Resolves a tool-supplied path against the worktree, returning it
+    /// **worktree-relative**.
     ///
     /// Accepts a repo-relative path or an absolute one inside the worktree, and
     /// rejects anything that escapes it — including by way of `..`, which is why
     /// this standardizes before comparing rather than checking the raw string.
     /// Pure and static so the traversal cases are testable without a workspace.
+    ///
+    /// Relative because that is `editorFilePaths`' unit: the file tree and the
+    /// Cmd+P finder both store worktree-relative paths there, and
+    /// `EditorView.loadFile` resolves whatever it finds against the worktree. An
+    /// absolute path handed to `addEditor` gets the worktree prepended a second
+    /// time and the tab opens onto "no such file". The strip reuses the same
+    /// standardized components the containment test compared, so a worktree
+    /// spelled with a symlinked or unnormalized segment cannot make the two
+    /// halves disagree.
     nonisolated static func resolvePath(
         _ path: String,
         inWorktree worktree: String,
@@ -422,6 +432,6 @@ final class WorkspaceActions {
         guard fileExists(candidate.path) else {
             throw Failure.invalidArgument(name: "path", reason: "no such file: \(candidate.path)")
         }
-        return candidate.path
+        return candidate.pathComponents.dropFirst(rootParts.count).joined(separator: "/")
     }
 }
