@@ -1118,8 +1118,7 @@ struct ProjectSidebar: View {
               let pi = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
         let projectID = projects[pi].id
         Workstream.Archiver.remove(wsID, in: &projects[pi], surfaceCache: surfaceCache, tmuxPath: appEnv.toolStatus.tmux.path,
-                                   verificationRunner: verificationRunner)
-        agentStateTracker.clear(workstreamID: wsID)
+                                   verificationRunner: verificationRunner, agentStateTracker: agentStateTracker)
         rebuildIndices()
         if case let .workstream(id) = selection, id == wsID {
             selection = projects[pi].workstreams.first.map { .workstream($0.id) } ?? .project(projectID)
@@ -1135,9 +1134,9 @@ struct ProjectSidebar: View {
         Workstream.Archiver.purge(
             wsID, in: &projects[pi], surfaceCache: surfaceCache,
             tmuxPath: appEnv.toolStatus.tmux.path,
-            verificationRunner: verificationRunner
+            verificationRunner: verificationRunner,
+            agentStateTracker: agentStateTracker
         )
-        agentStateTracker.clear(workstreamID: wsID)
         rebuildIndices()
         if case let .workstream(id) = selection, id == wsID {
             selection = projects[pi].workstreams.first.map { .workstream($0.id) } ?? .project(projectID)

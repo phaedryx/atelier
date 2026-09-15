@@ -25,7 +25,8 @@ extension Workstream {
             in project: inout Project,
             surfaceCache: TerminalSurfaceCache,
             tmuxPath: String?,
-            verificationRunner: Verification.Runner? = nil
+            verificationRunner: Verification.Runner? = nil,
+            agentStateTracker: Workstream.AgentStateTracker
         ) {
             if let ws = project.workstreams.first(where: { $0.id == workstreamID }) {
                 let projName = project.name
@@ -54,6 +55,31 @@ extension Workstream {
             StatusLine.Config.remove(for: workstreamID)
             LaunchLogger.removeLog(for: workstreamID)
             project.workstreams.removeAll { $0.id == workstreamID }
+            clearAgentState(workstreamID, tracker: agentStateTracker)
+        }
+
+        /// Drop the agent-state entry for a workstream both archive paths are ending.
+        ///
+        /// Here rather than at the two call sites for the reason
+        /// `Verification.Runner.forget` moved here: it is cleanup belonging to
+        /// archiving a workstream, it was copied into `ContentView` and
+        /// `ProjectSidebar` alike, and a third archive path would forget it.
+        ///
+        /// **Last, and synchronous.** `clear` is not a plain state drop — it
+        /// posts `.agentPermissionResolved` on its way out, which `ContentView`
+        /// receives. Called as the final statement of each function's
+        /// synchronous tail, that notification fires in the same main-actor turn
+        /// and in the same order relative to `project.workstreams.removeAll` as
+        /// it did when the views made the call themselves. In particular it does
+        /// **not** belong in `purge`'s detached task beside
+        /// `clearWorkstreamState`, however similar the flavour: that block runs
+        /// after dispose and `git worktree remove`, which can be minutes later.
+        @MainActor
+        private static func clearAgentState(
+            _ workstreamID: UUID,
+            tracker: Workstream.AgentStateTracker
+        ) {
+            tracker.clear(workstreamID: workstreamID)
         }
 
         /// Check if purging a workstream would lose work. Returns a warning message
@@ -144,13 +170,21 @@ extension Workstream {
         /// to pass it a silent return to the bug that API exists to close. Both
         /// call sites are views `ContentView` builds, and it holds the one
         /// runner the app has.
+        ///
+        /// `agentStateTracker` is required on the same terms, in both this and
+        /// `remove`: it is a `@MainActor` singleton any caller can reach, so the
+        /// migration concession behind `verificationRunner`'s optionality does
+        /// not apply, and a forgotten `clear` fails silently — stale `states`,
+        /// `rosters` and `surfaceStates` entries, and a permission edge that is
+        /// never posted.
         @MainActor
         static func purge(
             _ workstreamID: UUID,
             in project: inout Project,
             surfaceCache: TerminalSurfaceCache,
             tmuxPath: String?,
-            verificationRunner: Verification.Runner
+            verificationRunner: Verification.Runner,
+            agentStateTracker: Workstream.AgentStateTracker
         ) {
             if let ws = project.workstreams.first(where: { $0.id == workstreamID }) {
                 let projectDir = project.directory
@@ -274,6 +308,7 @@ extension Workstream {
             surfaceCache.removeWorkstreamSurfaces(for: workstreamID)
             LaunchLogger.removeLog(for: workstreamID)
             project.workstreams.removeAll { $0.id == workstreamID }
+            clearAgentState(workstreamID, tracker: agentStateTracker)
         }
 
         /// Stop this workstream's verification checks and wait until none of them

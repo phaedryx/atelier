@@ -1147,8 +1147,7 @@ struct ContentView: View {
         guard let wsID = workstreamToRemove,
               let projectIndex = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
         Workstream.Archiver.remove(wsID, in: &projects[projectIndex], surfaceCache: surfaceCache, tmuxPath: appEnvironment.toolStatus.tmux.path,
-                                   verificationRunner: verificationRunner)
-        agentStateTracker.clear(workstreamID: wsID)
+                                   verificationRunner: verificationRunner, agentStateTracker: agentStateTracker)
         ProjectStore.save(projects)
         syncHeadWatcher(projects: projects)
         workstreamToRemove = nil
@@ -1161,9 +1160,9 @@ struct ContentView: View {
         Workstream.Archiver.purge(
             wsID, in: &projects[projectIndex], surfaceCache: surfaceCache,
             tmuxPath: appEnvironment.toolStatus.tmux.path,
-            verificationRunner: verificationRunner
+            verificationRunner: verificationRunner,
+            agentStateTracker: agentStateTracker
         )
-        agentStateTracker.clear(workstreamID: wsID)
         ProjectStore.save(projects)
         // Before anything else touches the deleted worktree: purge removes the
         // directory this was watching.
