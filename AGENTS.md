@@ -891,6 +891,17 @@ check as finished before it had run anything, silently. `stopRequested` is the o
 distinguishes a killed check from one that died on its own, because killing the group takes the
 wrapper with it before it can write a status.
 
+**`stop`'s kill after the grace belongs to the *run*, not to the check.** `stop` sends `SIGTERM`
+and schedules a `SIGKILL` `killGrace` (5s) later; the task fires only while the live check is
+still the same **run id**. Guarding it on `isRunning(_:check:)` — "is *a* run of this check
+going" — killed the *next* run when a stop and a re-run fell inside one grace, and capturing the
+`Spawn` is no defence: `Verification.Spawn.fileStem` is the workstream id and a hash of the check's
+name with no run id in it, so both runs share one pid file and the stale task reads the new group
+out of it. The damage was silent and misattributed — the new `LiveCheck` has `stopRequested` false
+and a killed wrapper writes no status, so the row recorded `.failed(-1)`, a check apparently
+crashing, with nothing tying it to a Stop press two runs ago. `killGrace` is injectable through
+`Runner.init` for the regression test alone; production takes `Runner.defaultKillGrace`.
+
 **Output lives in the surface and nowhere else.** It is never captured, never persisted, and does
 not survive the app — which is the whole bargain this design makes, and it retired
 `outputTruncated`, the 200-line tail, the one-shot log window, and the "there is nothing more to

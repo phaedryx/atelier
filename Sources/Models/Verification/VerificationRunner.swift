@@ -104,10 +104,14 @@ extension Verification {
         private var surfaces: (any SurfaceHosting)?
         private let fingerprint: @Sendable (_ worktreePath: String, _ projectDirectory: String) -> String
         private let pollInterval: Duration
+        /// Injected only by tests: a real grace is five seconds, and
+        /// `VerificationRunnerTests`' two stop tests are timing tests that must
+        /// not pay it.
+        private let killGrace: Duration
         private var pollTask: Task<Void, Never>?
 
         /// How long after `SIGTERM` a check that has not died is killed outright.
-        static let killGrace: Duration = .seconds(5)
+        static let defaultKillGrace: Duration = .seconds(5)
         static let defaultPollInterval: Duration = .milliseconds(400)
 
         init(
@@ -116,10 +120,12 @@ extension Verification {
                     worktreePath: worktreePath, projectPath: projectDirectory, mode: "uncommitted"
                 )
             },
-            pollInterval: Duration = Runner.defaultPollInterval
+            pollInterval: Duration = Runner.defaultPollInterval,
+            killGrace: Duration = Runner.defaultKillGrace
         ) {
             self.fingerprint = fingerprint
             self.pollInterval = pollInterval
+            self.killGrace = killGrace
         }
 
         /// Installed once, by `ContentView`, with the adapter over
@@ -410,16 +416,34 @@ extension Verification {
         /// is actually gone, which the completion pass observes; declaring it
         /// stopped on the request would let a purge proceed to
         /// `git worktree remove --force` with the command still running in that tree.
+        ///
+        /// **The kill after the grace is keyed to the *run*, not to the check.**
+        /// `isRunning(_:check:)` answers "is *a* run of this check going", which is
+        /// a different question once a stop and a re-run happen inside five seconds:
+        /// stop at t=0, the user presses Run again at t=2, and the stale task fires
+        /// at t=5 into a check that is running for the second time. Capturing the
+        /// `Spawn` does not save you — `Verification.Spawn.fileStem` is derived from
+        /// the workstream and the check's name and carries no run id, so both runs
+        /// share one pid file and the stale task reads the *new* group out of it.
+        /// The new `LiveCheck` has `stopRequested` false and the killed wrapper
+        /// writes no status, so the completion pass records `.failed(-1)`: the row
+        /// reads as the check crashing, with nothing tying it to a Stop press two
+        /// runs ago. The run id is what tells the two apart, so the task re-reads
+        /// the live check and fires only when it is still the same run.
         func stop(workstreamID: UUID, check: String) {
             guard var live = running[workstreamID]?[check] else { return }
             live.stopRequested = true
             running[workstreamID]?[check] = live
             signal(live.spawn, SIGTERM)
-            let spawn = live.spawn
+            let runID = live.runID
+            let grace = killGrace
             Task { [weak self] in
-                try? await Task.sleep(for: Runner.killGrace)
-                guard let self, isRunning(workstreamID, check: check) else { return }
-                signal(spawn, SIGKILL)
+                try? await Task.sleep(for: grace)
+                guard let self,
+                      let live = running[workstreamID]?[check],
+                      live.runID == runID
+                else { return }
+                signal(live.spawn, SIGKILL)
             }
         }
 
