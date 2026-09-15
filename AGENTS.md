@@ -645,6 +645,19 @@ that. The known hole, stated rather than papered over: for an ordinary clone `Pr
 *is* the checkout, so the file can be committed. That hole already exists for process-compose's
 project-directory tier and the rule is applied here unchanged rather than half-tightened.
 
+**A newly created project starts with one.** The two paths that *create* the project
+directory — "New Project" and Clone Repository, both in `ProjectSidebar` — call
+`Verification.Config.writeDefault`, which drops a commented template carrying one
+placeholder check. The two paths that *adopt* a directory the user already had (the
+picker and the drag-and-drop) deliberately do not: writing there would leave an untracked
+file in a repository they merely registered. The writer lives on `Verification.Config`
+beside `fileNames` rather than in the view, so only one place knows the filename, and it
+refuses when **either** spelling is already present — seeding a `verification.yaml` beside
+an existing `verification.yml` would win the lookup and hide the project's real checks.
+The template's example check is **uncommented on purpose**: a file of nothing but comments
+composes to nil, which loads as "declares no checks", so an all-comments template would
+have replaced the actionable empty state with a dead-end one.
+
 `Verification.Config.load` returns **three** cases and never two: `.missing`, `.invalid(reason:)`
 and `.loaded`. A file Atelier cannot read must never render as "this project declares no checks",
 which is the same sentence a project with genuinely none gets and the only diagnostic either one

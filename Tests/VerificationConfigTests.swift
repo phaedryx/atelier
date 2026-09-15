@@ -195,4 +195,48 @@ final class VerificationConfigTests: XCTestCase {
         XCTAssertNil(parse("rspec:\n  command: echo hi").unavailableReason)
         XCTAssertEqual(parse("rspec:\n  command: echo hi").checkNames, ["rspec"])
     }
+
+    // MARK: - The file a new project starts with
+
+    /// The round trip is the point: the template a creation path writes must be
+    /// a file `load` reads back as runnable checks. An all-comments template
+    /// would pass a "the file exists" assertion and still leave the tab saying
+    /// "declares no checks", which is a worse empty state than writing nothing.
+    func test_writeDefault_producesAConfigThatLoadsWithChecks() {
+        XCTAssertTrue(Verification.Config.writeDefault(projectDirectory: projectDirectory.path))
+
+        guard case let .loaded(config) = Verification.Config.load(
+            projectDirectory: projectDirectory.path
+        ) else { return XCTFail("the default template must load") }
+        XCTAssertFalse(config.checks.isEmpty, "a template that declares nothing is not a template")
+        XCTAssertNil(
+            Verification.Config.load(projectDirectory: projectDirectory.path).unavailableReason
+        )
+    }
+
+    func test_writeDefault_leavesAnExistingConfigAlone() throws {
+        try write("mine:\n  command: echo mine")
+
+        XCTAssertFalse(Verification.Config.writeDefault(projectDirectory: projectDirectory.path))
+        XCTAssertEqual(
+            Verification.Config.load(projectDirectory: projectDirectory.path).checkNames,
+            ["mine"]
+        )
+    }
+
+    /// `.yml` is the other name `load` reads, so it has to be the other name
+    /// `writeDefault` refuses to write over — otherwise a project whose checks
+    /// live in `verification.yml` gains a `verification.yaml` that wins the
+    /// lookup and hides them.
+    func test_writeDefault_alsoRespectsTheYmlSpelling() throws {
+        try "mine:\n  command: echo mine".write(
+            toFile: projectDirectory.appendingPathComponent("verification.yml").path,
+            atomically: true, encoding: .utf8
+        )
+
+        XCTAssertFalse(Verification.Config.writeDefault(projectDirectory: projectDirectory.path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: projectDirectory.appendingPathComponent("verification.yaml").path
+        ))
+    }
 }

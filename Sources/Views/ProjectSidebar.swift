@@ -1231,6 +1231,11 @@ struct ProjectSidebar: View {
         // Initialize git repo in the new directory
         _ = Git.Operations.initRepo(at: dirURL.path)
 
+        // A directory this path just created is a directory nobody had, so the
+        // template cannot land in a repository the user merely registered — the
+        // reason the picker and the drop path do not do this.
+        Verification.Config.writeDefault(projectDirectory: dirURL.path)
+
         showingNewProjectName = false
         addProject(name: name, directory: dirURL.path)
     }
@@ -1280,6 +1285,10 @@ struct ProjectSidebar: View {
                 switch result {
                 case let .success(containerPath):
                     showingCloneRepo = false
+                    // The container is `Project.directory` for this layout — the
+                    // `.bare` peer, outside every worktree — which is exactly
+                    // where `Config.load` looks.
+                    Verification.Config.writeDefault(projectDirectory: containerPath)
                     addProject(
                         name: URL(fileURLWithPath: containerPath).lastPathComponent,
                         directory: containerPath

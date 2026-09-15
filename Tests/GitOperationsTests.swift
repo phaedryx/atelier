@@ -1463,6 +1463,45 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertNil(Git.Operations.projectLocation(for: repoDir.path).checkoutDirectory)
     }
 
+    /// The seam between the two creation paths in `ProjectSidebar` and the file
+    /// the Verification tab reads. Those paths write the default
+    /// `verification.yaml` to the path they created, while `addProject` re-resolves
+    /// that path through `projectLocation` before it becomes `Project.directory` —
+    /// which is what `Verification.Config.load` is handed. If the resolution moved
+    /// either one, the template would land where nothing looks for it and the
+    /// feature would be silently inert rather than visibly broken.
+    func testAFreshlyInitializedRepoIsItsOwnProjectDirectory() throws {
+        let repoDir = tempDir.appendingPathComponent("new-project")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        _ = Git.Operations.initRepo(at: repoDir.path)
+
+        XCTAssertTrue(Verification.Config.writeDefault(projectDirectory: repoDir.path))
+
+        let resolved = Git.Operations.projectLocation(for: repoDir.path).directory
+        XCTAssertEqual(standardized(resolved), repoDir.standardizedFileURL.path)
+        XCTAssertNotNil(
+            Verification.Config.load(projectDirectory: resolved).config,
+            "the default template must be found at the path the project registers under"
+        )
+    }
+
+    /// The same round trip for the clone layout, where the container and the
+    /// checkout are different directories and only the container is right.
+    func testABareContainerIsItsOwnProjectDirectory() throws {
+        let container = try makeBareContainer(named: "cloned-project")
+
+        XCTAssertTrue(Verification.Config.writeDefault(projectDirectory: container.path))
+
+        let location = Git.Operations.projectLocation(for: container.path)
+        XCTAssertEqual(standardized(location.directory), container.standardizedFileURL.path)
+        XCTAssertNotNil(Verification.Config.load(projectDirectory: location.directory).config)
+        XCTAssertEqual(
+            Verification.Config.load(projectDirectory: location.checkoutDirectory ?? ""),
+            .missing,
+            "the template belongs outside every work tree"
+        )
+    }
+
     func testProjectLocationPrefersTheCheckedOutDefaultOverADevelopmentBranch() throws {
         // defaultBranch prefers `development` for branching new work, which is a
         // different question from which checkout represents the project. A repo
