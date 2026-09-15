@@ -147,28 +147,15 @@ extension Worktree {
             }
         }
 
-        struct UnmergedCommit: Identifiable {
-            let hash: String
-            let message: String
-
-            var id: String {
-                hash
-            }
-        }
-
         let changes: [FileChange]
-        let unmergedCommits: [UnmergedCommit]
 
         /// `git status` did not run — git is missing, timed out, or exited non-zero.
         /// `changes` is then empty for want of an answer, not because the tree is
-        /// clean, and callers must not present it as the latter: the worktree detail
-        /// sheet says "nothing to lose" directly above a Force Remove button.
+        /// clean, and callers must not present it as the latter. `RepoChangesPopover`
+        /// is the one that reads this; the flag was added for the worktree detail
+        /// sheet (deleted in 2e6f2f8), which said "nothing to lose" directly above a
+        /// Force Remove button.
         let changesUnavailable: Bool
-
-        /// The unmerged-commit log did not run: either `git log` failed, or the base
-        /// branch did not resolve, which turns the comparison into `HEAD..HEAD` — a
-        /// valid empty range that exits 0 and reports every commit as merged.
-        let unmergedCommitsUnavailable: Bool
     }
 }
 
@@ -290,12 +277,13 @@ extension Git {
         ///
         /// **Cached, because the cost is a fan-out and the answer is a property of
         /// the repository.** Resolving costs up to six sequential git probes, and
-        /// the three comparison sites — `mergeBase`, `hasBranchCommits`,
-        /// `worktreeDetail` — are each called *per worktree*: `refreshPathValidity`
-        /// runs `hasBranchCommits` for every worktree on a 15-second timer, and
-        /// `listWorktreesWithInfo` does the same on every project-overview refresh.
-        /// Twelve workstreams in two projects meant ~72 subprocesses every tick
-        /// resolving two strings.
+        /// the two comparison sites — `mergeBase` and `hasBranchCommits` — are each
+        /// called *per worktree*: `refreshPathValidity` runs `hasBranchCommits` for
+        /// every worktree on a 15-second timer, and `listWorktreesWithInfo` does the
+        /// same on every project-overview refresh. Twelve workstreams in two projects
+        /// meant ~72 subprocesses every tick resolving two strings. (There was a
+        /// third, `worktreeDetail`'s unmerged-commit log, until that dead field was
+        /// deleted; it no longer resolves a base branch at all.)
         ///
         /// The cache lives **here** rather than in `AppEnvironment` — which is
         /// where it started — because half the callers structurally cannot reach a
@@ -451,11 +439,12 @@ extension Git {
             // uncommitted work and dropped every commit on the branch. An
             // unresolvable base is no base at all.
             //
-            // Same sentinel already guarded in `worktreeDetail` and
-            // `hasBranchCommits`, and for the same reason this is not the
-            // `BaseBranchSetting` migration those three sites share: which branch
-            // is compared does not change here, only whether an unresolved one is
-            // reported as a successful comparison.
+            // Same sentinel already guarded in `hasBranchCommits`, and for the same
+            // reason this is not the `BaseBranchSetting` migration those two sites
+            // share: which branch is compared does not change here, only whether an
+            // unresolved one is reported as a successful comparison. (`worktreeDetail`
+            // guarded it too, until its unmerged-commit log — dead since
+            // `WorktreeDetailSheet` went in 2e6f2f8 — was deleted.)
             guard base != "HEAD" else { return nil }
             guard let sha = run(args: ["merge-base", base, "HEAD"], in: worktreePath)?
                 .trimmingCharacters(in: .whitespacesAndNewlines),
@@ -1069,7 +1058,6 @@ extension Git {
             return !status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
 
-        /// Get detailed changes and unmerged commits for a worktree.
         /// The destination half of a `git status --porcelain` path field.
         ///
         /// Renames and copies are reported as `old -> new`; every other status reports a
@@ -1080,7 +1068,8 @@ extension Git {
             return String(pathField[arrow.upperBound...]).trimmingCharacters(in: .whitespaces)
         }
 
-        static func worktreeDetail(at worktreePath: String, mainRepoPath: String) -> Worktree.Detail {
+        /// Get the uncommitted file changes in a worktree.
+        static func worktreeDetail(at worktreePath: String) -> Worktree.Detail {
             var changes: [Worktree.Detail.FileChange] = []
 
             let status = run(args: ["status", "--porcelain"], in: worktreePath)
@@ -1111,30 +1100,9 @@ extension Git {
                 }
             }
 
-            var commits: [Worktree.Detail.UnmergedCommit] = []
-            let baseBranch = defaultBranch(at: mainRepoPath)
-            // `defaultBranch` falls back to the literal "HEAD" when it resolves
-            // nothing. `git log HEAD..HEAD` is a valid empty range that exits 0, so
-            // that failure used to arrive as a confident "no unmerged commits". It is
-            // an unrun check, not an empty result. Handled here rather than in
-            // `defaultBranch`: `mergeBase` and `hasBranchCommits` share that fallback
-            // and are out of scope.
-            let log = baseBranch == "HEAD"
-                ? nil
-                : run(args: ["log", "\(baseBranch)..HEAD", "--oneline"], in: worktreePath)
-            if let log {
-                for line in log.components(separatedBy: "\n") where !line.isEmpty {
-                    let parts = line.split(separator: " ", maxSplits: 1)
-                    guard parts.count == 2 else { continue }
-                    commits.append(.init(hash: String(parts[0]), message: String(parts[1])))
-                }
-            }
-
             return Worktree.Detail(
                 changes: changes,
-                unmergedCommits: commits,
-                changesUnavailable: status == nil,
-                unmergedCommitsUnavailable: log == nil
+                changesUnavailable: status == nil
             )
         }
 
@@ -1174,10 +1142,10 @@ extension Git {
         ///
         /// This does not change *which* branch is compared against, so it is not the
         /// `BaseBranchSetting` migration AGENTS.md holds all-or-none across this
-        /// function, `mergeBase`, and `worktreeDetail`'s unmerged-commit log. That
-        /// question is untouched here. (The commit log has had no reader since
-        /// `WorktreeDetailSheet` was deleted in 2e6f2f8; it still counts toward the
-        /// all-or-none rule until it is either wired up again or removed.)
+        /// function and `mergeBase`. That question is untouched here. (There was a
+        /// third site, `worktreeDetail`'s unmerged-commit log. It had no reader after
+        /// `WorktreeDetailSheet` was deleted in 2e6f2f8, so it was deleted rather than
+        /// migrated — the rule now binds two sites, not three.)
         static func hasBranchCommits(at path: String, projectPath: String) -> Bool? {
             let base = defaultBranch(at: projectPath)
             guard base != "HEAD" else { return nil }

@@ -171,7 +171,7 @@ final class GitOperationsTests: XCTestCase {
     }
 
     /// The cache lives here rather than in `AppEnvironment` because callers like
-    /// `mergeBase`, `worktreeDetail` and `BaseBranchSetting.repositoryDefault`
+    /// `mergeBase`, `hasBranchCommits` and `BaseBranchSetting.repositoryDefault`
     /// never touch `AppEnvironment` at all. Deleting the repository between the
     /// two calls is what makes this a test of the cache rather than of git: an
     /// uncached second call has no directory to run in and would fall through to
@@ -643,9 +643,9 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertEqual(Git.Operations.hasUncommittedChanges(at: repoDir.path), true)
     }
 
-    /// Same `"HEAD"` sentinel `worktreeDetail` guards against: `git log HEAD..HEAD`
-    /// is a valid empty range that exits 0, so an unresolvable base branch used to
-    /// report "no branch commits" with full confidence.
+    /// Same `"HEAD"` sentinel `mergeBase` guards against: `git log HEAD..HEAD` is a
+    /// valid empty range that exits 0, so an unresolvable base branch used to report
+    /// "no branch commits" with full confidence.
     func testHasBranchCommitsSaysItCouldNotTellWhenTheBaseDoesNotResolve() throws {
         let repoDir = tempDir.appendingPathComponent("develop-only")
         try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
@@ -793,8 +793,10 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertEqual(mb, baseSHA)
     }
 
-    /// The third of the three `defaultBranch` comparison sites, and the one left
-    /// unguarded when `worktreeDetail` and `hasBranchCommits` got the same fix.
+    /// The last `defaultBranch` comparison site to be guarded: `worktreeDetail` and
+    /// `hasBranchCommits` got the same fix first. (`worktreeDetail` has since stopped
+    /// being one — its unmerged-commit log was deleted — leaving this and
+    /// `hasBranchCommits`.)
     ///
     /// `defaultBranch` returns the literal "HEAD" when it resolves nothing, and
     /// `git merge-base HEAD HEAD` answers with HEAD's own SHA — exit 0, non-empty,
@@ -1873,23 +1875,20 @@ final class GitOperationsTests: XCTestCase {
 
     // MARK: - worktreeDetail availability
 
-    /// The sheet renders an empty `changes` + empty `unmergedCommits` as
-    /// "No uncommitted changes or unmerged commits found." directly above a Force
-    /// Remove button. A failed probe produced exactly that shape, so the user was
-    /// told there was nothing to lose at the one moment the check had not run.
-    func testWorktreeDetailMarksBothProbesUnavailableOutsideARepository() throws {
+    /// An empty `changes` reads as "nothing to lose" wherever it is rendered, and a
+    /// failed probe produces exactly that shape — so the flag is the only thing that
+    /// separates a clean tree from a check that never ran.
+    func testWorktreeDetailMarksChangesUnavailableOutsideARepository() throws {
         let plainDir = tempDir.appendingPathComponent("not-a-repo")
         try FileManager.default.createDirectory(at: plainDir, withIntermediateDirectories: true)
 
-        let detail = Git.Operations.worktreeDetail(at: plainDir.path, mainRepoPath: plainDir.path)
+        let detail = Git.Operations.worktreeDetail(at: plainDir.path)
 
         XCTAssertTrue(detail.changes.isEmpty)
-        XCTAssertTrue(detail.unmergedCommits.isEmpty)
         XCTAssertTrue(detail.changesUnavailable, "git status failed here; empty is for want of an answer")
-        XCTAssertTrue(detail.unmergedCommitsUnavailable, "no base branch resolves outside a repository")
     }
 
-    /// The positive control for the flags above. Without it an inverted or
+    /// The positive control for the flag above. Without it an inverted or
     /// always-true flag ships and puts a "could not be read" banner on every clean
     /// worktree — a worse regression than the bug being fixed.
     func testWorktreeDetailReportsACleanTreeAsCheckedAndClean() throws {
@@ -1899,34 +1898,10 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertTrue(git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
                            "commit", "--allow-empty", "-m", "init"], in: repoDir))
 
-        let detail = Git.Operations.worktreeDetail(at: repoDir.path, mainRepoPath: repoDir.path)
+        let detail = Git.Operations.worktreeDetail(at: repoDir.path)
 
         XCTAssertTrue(detail.changes.isEmpty)
-        XCTAssertTrue(detail.unmergedCommits.isEmpty)
         XCTAssertFalse(detail.changesUnavailable, "git status ran and found a clean tree")
-        XCTAssertFalse(detail.unmergedCommitsUnavailable, "main resolved, so base..HEAD is a real comparison")
-    }
-
-    /// `defaultBranch` falls back to the literal "HEAD" when it can resolve nothing
-    /// (see `testDefaultBranchReturnsHEADWhenNeitherMainNorMasterExist`). `git log
-    /// HEAD..HEAD` is a valid empty range that exits 0, so the failure arrived as a
-    /// successful "no unmerged commits" rather than as an error. `develop` is one of
-    /// `BaseBranchSetting`'s own options, so this is not a contrived repository.
-    func testWorktreeDetailMarksCommitsUnavailableWhenTheBaseBranchDoesNotResolve() throws {
-        let repoDir = tempDir.appendingPathComponent("develop-repo")
-        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
-        XCTAssertTrue(git(["init", "-b", "develop"], in: repoDir))
-        XCTAssertTrue(git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
-                           "commit", "--allow-empty", "-m", "init"], in: repoDir))
-        XCTAssertEqual(Git.Operations.defaultBranch(at: repoDir.path), "HEAD", "precondition")
-
-        let detail = Git.Operations.worktreeDetail(at: repoDir.path, mainRepoPath: repoDir.path)
-
-        XCTAssertFalse(detail.changesUnavailable, "git status still ran; only the base branch is missing")
-        XCTAssertTrue(
-            detail.unmergedCommitsUnavailable,
-            "HEAD..HEAD is a comparison against itself, not a check that found nothing"
-        )
     }
 
     /// A tree with real changes still has to report them, and report them as read.
@@ -1938,11 +1913,10 @@ final class GitOperationsTests: XCTestCase {
                            "commit", "--allow-empty", "-m", "init"], in: repoDir))
         try "hello".write(to: repoDir.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
 
-        let detail = Git.Operations.worktreeDetail(at: repoDir.path, mainRepoPath: repoDir.path)
+        let detail = Git.Operations.worktreeDetail(at: repoDir.path)
 
         XCTAssertEqual(detail.changes.map(\.path), ["new.txt"])
         XCTAssertFalse(detail.changesUnavailable)
-        XCTAssertFalse(detail.unmergedCommitsUnavailable)
     }
 
     // MARK: - Porcelain rename parsing

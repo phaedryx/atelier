@@ -407,7 +407,7 @@ struct ProjectOverviewView: View {
         let dir = project.checkout
         repoDetail = nil
         Task.detached {
-            let result = Git.Operations.worktreeDetail(at: dir, mainRepoPath: dir)
+            let result = Git.Operations.worktreeDetail(at: dir)
             await MainActor.run { repoDetail = result }
         }
     }
