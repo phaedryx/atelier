@@ -4,7 +4,7 @@
 import SwiftUI
 
 /// Asks the user to approve the unattended phases of the files that arrived with
-/// the repository — `bootstrap` at worktree creation and `dispose` at archive,
+/// the repository — `dispose` at archive,
 /// neither of which the user is present for.
 ///
 /// Takes a *list*, never one file. process-compose loads a base config and
@@ -47,7 +47,7 @@ struct ConfigApprovalView: View {
 
         /// Rendered lossily on purpose. Bytes that are not valid UTF-8 are still
         /// the bytes that will run, and refusing to show them would leave the
-        /// project's bootstrap unapprovable with no way back. The gate needs the
+        /// project's dispose unapprovable with no way back. The gate needs the
         /// bytes hashed to be the bytes shown, which holds however they render.
         var text: String {
             guard let data else {
@@ -91,7 +91,7 @@ struct ConfigApprovalView: View {
 
             Text(String(
                 format: NSLocalizedString(
-                    "%@ came with this repository. Its bootstrap phase runs automatically when a workstream is created, and its dispose phase when one is archived — both without asking. They run on your machine under your user account.",
+                    "%@ came with this repository. Its dispose phase runs automatically when a workstream is archived, without asking. It runs on your machine under your user account.",
                     comment: ""
                 ),
                 fileNames
@@ -140,7 +140,7 @@ struct ConfigApprovalView: View {
 
             HStack(spacing: 10) {
                 Button(NSLocalizedString("Not Now", comment: ""), action: onCancel)
-                Button(NSLocalizedString("Approve and Run Bootstrap", comment: ""), action: approve)
+                Button(NSLocalizedString("Approve", comment: ""), action: approve)
                     .buttonStyle(.borderedProminent)
                     .disabled(reviewedFingerprint == nil)
             }

@@ -115,7 +115,7 @@ final class PhaseEnvironmentTests: XCTestCase {
     /// the workstream's own, then the login PATH. Asserted here rather than
     /// through `run`, which spawns process-compose.
     func testTheChildEnvironmentLayersTheWorkstreamVariablesOverTheInheritedOnes() {
-        let child = ProcessCompose.PhaseExecutor.childEnvironment(
+        let child = ProcessCompose.PhaseEnvironment.childEnvironment(
             workstreamEnvironment: ["ATELIER_WORKTREE_DIR": "/w", "BFF_PORT": "41476"],
             loginPath: "/opt/homebrew/bin:/usr/bin",
             baseEnvironment: ["PATH": "/usr/bin", "HOME": "/h", "ATELIER_WORKTREE_DIR": "/stale"]
@@ -131,7 +131,7 @@ final class PhaseEnvironmentTests: XCTestCase {
     /// whose PATH came from the repository's YAML would resolve tools from
     /// somewhere the user never chose.
     func testADeclaredPathCannotDisplaceTheLoginPath() {
-        let child = ProcessCompose.PhaseExecutor.childEnvironment(
+        let child = ProcessCompose.PhaseEnvironment.childEnvironment(
             workstreamEnvironment: ["PATH": "/attacker/bin"],
             loginPath: "/usr/bin",
             baseEnvironment: ["PATH": "/inherited"]
@@ -143,7 +143,7 @@ final class PhaseEnvironmentTests: XCTestCase {
     /// With no login shell PATH to inject, the inherited one stands — the
     /// pre-existing behaviour, which was to leave the environment alone.
     func testTheInheritedPathSurvivesWhenNoLoginPathResolves() {
-        let child = ProcessCompose.PhaseExecutor.childEnvironment(
+        let child = ProcessCompose.PhaseEnvironment.childEnvironment(
             workstreamEnvironment: ["ATELIER_PORT": "5000"],
             loginPath: nil,
             baseEnvironment: ["PATH": "/inherited"]
@@ -159,7 +159,7 @@ final class PhaseEnvironmentTests: XCTestCase {
     /// comment says cannot happen. The test above it passes either way, because it
     /// never puts a declared PATH in the way.
     func testADeclaredPathCannotSurviveAFailedLoginShellLookup() {
-        let child = ProcessCompose.PhaseExecutor.childEnvironment(
+        let child = ProcessCompose.PhaseEnvironment.childEnvironment(
             workstreamEnvironment: ["PATH": "/attacker/bin"],
             loginPath: nil,
             baseEnvironment: ["PATH": "/inherited"]
@@ -171,7 +171,7 @@ final class PhaseEnvironmentTests: XCTestCase {
     /// And with nothing to fall back to, the child gets no PATH at all rather than
     /// the declared one.
     func testNoPathAtAllBeatsADeclaredOneWhenNothingCanBeInherited() {
-        let child = ProcessCompose.PhaseExecutor.childEnvironment(
+        let child = ProcessCompose.PhaseEnvironment.childEnvironment(
             workstreamEnvironment: ["PATH": "/attacker/bin"],
             loginPath: nil,
             baseEnvironment: ["HOME": "/h"]

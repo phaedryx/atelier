@@ -742,16 +742,16 @@ extension IPC {
             return command
         }
 
-        /// Creates a new workstream — worktree, branch, `bootstrap` — in the
+        /// Creates a new workstream — worktree, branch, initialization — in the
         /// caller's project, and optionally starts an agent in it.
         ///
-        /// **Bootstrap's approval gate is inherited, not reimplemented.** The
-        /// work happens by posting `.workstreamWorktreeReady`, which
-        /// `ContentView` answers by calling
-        /// `AsyncSetupService.setupExistingWorktree` — and that is what runs
-        /// `bootstrap` through `ProcessCompose.PhasePolicy.plan`. `PhasePolicy`
-        /// is deliberately the only copy of those preconditions, so this handler
-        /// must never call `setupExistingWorktree` itself.
+        /// **Initialization is inherited, not reimplemented.** The work happens
+        /// by posting `.workstreamWorktreeReady`, which `ContentView` answers by
+        /// calling `Initialization.Runner.run` — and that one path is also what
+        /// gets path persistence, the HeadWatcher, the agent-state lookup and the
+        /// Shortcut story id, none of which a second creation path would
+        /// remember. So this handler must never call `Initialization.Runner.run`
+        /// itself.
         ///
         /// **The agent goes in the workstream's Coding Agent tab**, on the
         /// surface whose id *is* the workstream id — so the user opening the
@@ -848,7 +848,7 @@ extension IPC {
                 guard prompt?.isEmpty == false else {
                     return .success(id: request.id, .text(
                         "Created workstream \(launched.name) at \(launched.worktreePath). "
-                            + "Its `bootstrap` is running in the background. No agent was started — pass `prompt` to start one."
+                            + "Its initialization is running in the background. No agent was started — pass `prompt` to start one."
                     ))
                 }
 
@@ -864,7 +864,7 @@ extension IPC {
 
                 return .success(id: request.id, .text(
                     "Created workstream \(launched.name) at \(launched.worktreePath) and started an agent in its "
-                        + "Coding Agent tab, surface \(launched.workstreamID.uuidString). Its `bootstrap` may still be "
+                        + "Coding Agent tab, surface \(launched.workstreamID.uuidString). Its initialization may still be "
                         + "running, so the worktree's dependencies may not be installed yet. The agent is not "
                         + "addressable until it registers: poll list_peers until a peer reports that surface id, then "
                         + "send_message to it."

@@ -9,8 +9,8 @@ extension ProcessCompose {
     /// This exists to hold **one invariant**: the command string
     /// `DevCommand.Resolver` builds for a `.processCompose` source is *never
     /// executed*. That string is `process-compose up -U -f <files>` — it carries no
-    /// `-n`, so process-compose runs every namespace it finds, `bootstrap` and
-    /// `dispose` included. Those two are exactly what `PhasePolicy` gates behind the
+    /// `-n`, so process-compose runs every namespace it finds, `dispose` included.
+    /// That one is exactly what `PhasePolicy` gates behind the
     /// user having approved every repository-provided file, and that string reaches
     /// process-compose without passing through `PhasePolicy` or `ScriptTrust` at
     /// all. It is a display string: the pane shows it so the user can see which

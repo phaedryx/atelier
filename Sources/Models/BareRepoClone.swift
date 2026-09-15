@@ -32,44 +32,12 @@ enum BareRepoClone {
     /// time on the network, so cancelling means terminating whichever one is
     /// running. That makes the step fail, which unwinds through the same
     /// cleanup path as any other failure and removes the half-built container.
-    final class Cancellation: @unchecked Sendable {
-        private let lock = NSLock()
-        private var running: Process?
-        private var isCancelled = false
-
-        init() {}
-
-        var cancelled: Bool {
-            lock.withLock { isCancelled }
-        }
-
-        func cancel() {
-            let process: Process? = lock.withLock {
-                isCancelled = true
-                return running
-            }
-            // `track` registers the process before `run()`, so a cancel landing in
-            // that window sees a `Process` with no PID — `terminate()` on one of
-            // those raises NSInvalidArgumentException. The launch site re-checks
-            // `cancelled` after `run()`, so nothing is stranded by skipping it here.
-            guard process?.isRunning == true else { return }
-            process?.terminate()
-        }
-
-        /// Returns false when cancellation already happened, so the caller can
-        /// stop before launching another subprocess.
-        fileprivate func track(_ process: Process) -> Bool {
-            lock.withLock {
-                guard !isCancelled else { return false }
-                running = process
-                return true
-            }
-        }
-
-        fileprivate func clearTracking() {
-            lock.withLock { running = nil }
-        }
-    }
+    ///
+    /// The mechanism now lives on `ProcessRunner`, because worktree
+    /// initialization needs the same handle and a second copy of a
+    /// launch-window race is not worth having. This alias is kept so the
+    /// clone's own call sites still read as the clone's.
+    typealias Cancellation = ProcessRunner.Cancellation
 
     /// The `owner/repo` shorthand expands to this form, matching the README.
     private static let shorthandTemplate = "git@github.com:%@.git"

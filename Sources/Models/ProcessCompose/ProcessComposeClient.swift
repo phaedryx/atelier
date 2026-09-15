@@ -327,7 +327,7 @@ extension ProcessCompose {
         /// the stacks it exists to show. Worse, `ProcessCompose.PhaseExecutor.pollToCompletion`
         /// reads through `try?`, so the decode failure was indistinguishable from
         /// "the server is not up yet": `sawServer` never set, the poll ran to its
-        /// deadline, and a bootstrap that had already succeeded was reported as
+        /// deadline, and a phase that had already succeeded was reported as
         /// "did not finish in time" up to 30 minutes later.
         static func body(of response: Data) throws -> Data {
             let separator = Data("\r\n\r\n".utf8)

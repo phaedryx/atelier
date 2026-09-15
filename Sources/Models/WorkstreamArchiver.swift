@@ -134,7 +134,7 @@ extension Workstream {
         }
 
         /// Purges a workstream by stopping everything still running in its worktree — the dev
-        /// stack, a bootstrap, a verify run — then running its `dispose` phase, removing the git
+        /// stack, an initialization, a verification check — then running its `dispose` phase, removing the git
         /// worktree from disk, deleting the local branch, updating the default branch to latest,
         /// killing tmux sessions, and evicting terminal surfaces from the cache.
         ///
@@ -172,7 +172,6 @@ extension Workstream {
                 let branchName = worktreePath.flatMap { Git.Operations.currentBranch(at: $0) }
                 archivingPaths.insert(standardizedPath)
                 NotificationCenter.default.post(name: archivingDidStart, object: nil)
-                let composeBinary = ProcessCompose.Settings.resolveBinary()
                 Task.detached {
                     defer {
                         Task { @MainActor in
@@ -180,8 +179,8 @@ extension Workstream {
                             NotificationCenter.default.post(name: archivingDidComplete, object: nil)
                         }
                     }
-                    // A bootstrap for this workstream may still be running: it goes
-                    // on in the background behind an already-open terminal, so
+                    // Initialization for this workstream may still be running: it
+                    // goes on in the background behind an already-open terminal, so
                     // "created a workstream, then archived it" overlaps them. Stop
                     // it before dispose runs in the same directory and before
                     // `git worktree remove` deletes that directory underneath it.
@@ -194,9 +193,8 @@ extension Workstream {
                     if let tmuxPath {
                         TmuxSession.killRunSession(tmuxPath: tmuxPath, project: projName, workstream: wsName)
                     }
-                    await AsyncSetupService.shared.cancelBootstrap(
+                    await Initialization.Runner.shared.cancel(
                         for: workstreamID,
-                        binary: composeBinary,
                         worktreePath: worktreePath ?? projectDir
                     )
                     // A running check is the project's own command executing in
@@ -231,7 +229,7 @@ extension Workstream {
                     // phase at up to `Timeout.userCommand`, and each git call waits
                     // on a child. On the cooperative pool that pins a thread for
                     // minutes, so it goes to a utility queue — the same bridge
-                    // `AsyncSetupService` uses for bootstrap, and for the same
+                    // `Initialization.Runner` uses for setup, and for the same
                     // reason.
                     await withCheckedContinuation { continuation in
                         DispatchQueue.global(qos: .utility).async {
@@ -263,7 +261,7 @@ extension Workstream {
                     // The state entry outlives the workstream otherwise: nothing
                     // else called this, so `states` grew by one per archive for the
                     // life of the process.
-                    await AsyncSetupService.shared.clearState(for: workstreamID)
+                    await Initialization.Runner.shared.clearState(for: workstreamID)
                     // Same reason, and last on purpose: the verify teardown above
                     // makes the run loop seal, and `seal` writes the run to this
                     // very key. Clearing it beside that teardown would be
@@ -358,7 +356,7 @@ extension Workstream {
         /// The preconditions are not restated here. `PhasePolicy.plan` owns
         /// them — a config located, a binary to run it with, and approval of every
         /// repository-provided file process-compose will load — and dispose is
-        /// unattended in exactly the way bootstrap is, so a second inline copy
+        /// unattended with nobody watching, so a second inline copy
         /// would be a second security policy with no tests and no way to follow a
         /// change made to the first.
         ///

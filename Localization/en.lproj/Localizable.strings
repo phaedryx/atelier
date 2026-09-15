@@ -469,7 +469,7 @@
 "New Editor" = "New Editor";
 "Close Tab" = "Close Tab";
 "Start/Rerun" = "Start/Rerun";
-"Rerun Bootstrap" = "Rerun Bootstrap";
+"Rerun Initialization" = "Rerun Initialization";
 "Open in External Browser" = "Open in External Browser";
 "Back to Project" = "Back to Project";
 "Archive Workstream" = "Archive Workstream";
@@ -537,15 +537,30 @@
 "The process manager returned %d." = "The process manager returned %d.";
 "The process manager sent an unreadable response." = "The process manager sent an unreadable response.";
 
-/* Worktree bootstrap phase */
-"Running bootstrap" = "Running bootstrap";
-"This project declares no bootstrap processes, so nothing ran." = "This project declares no bootstrap processes, so nothing ran.";
-"Bootstrap" = "Bootstrap";
-"Bootstrap failed: %@" = "Bootstrap failed: %@";
+/* Worktree initialization */
+"Reading initialization.yaml" = "Reading initialization.yaml";
+"Running “%1$@” (%2$d of %3$d)" = "Running “%1$@” (%2$d of %3$d)";
+"Initialization" = "Initialization";
+"Initialization failed at “%1$@”: %2$@" = "Initialization failed at “%1$@”: %2$@";
+"Initialization was stopped at “%@”." = "Initialization was stopped at “%@”.";
 "Nothing reported this session." = "Nothing reported this session.";
 "Ran successfully." = "Ran successfully.";
-"Bootstrap is already running." = "Bootstrap is already running.";
-"Run this project's bootstrap namespace against this worktree again." = "Run this project's bootstrap namespace against this worktree again.";
+"Initialization is already running." = "Initialization is already running.";
+"Run this project's initialization.yaml steps against this worktree again." = "Run this project's initialization.yaml steps against this worktree again.";
+"The command could not be run, or exceeded its deadline." = "The command could not be run, or exceeded its deadline.";
+"exited %d with no output" = "exited %d with no output";
+"There was nothing to run." = "There was nothing to run.";
+"This project's process-compose.yaml still declares a bootstrap namespace, which is no longer run. Move those steps to an initialization.yaml in the project directory." = "This project's process-compose.yaml still declares a bootstrap namespace, which is no longer run. Move those steps to an initialization.yaml in the project directory.";
+
+/* initialization.yaml */
+"This project has no initialization.yaml, so no setup ran." = "This project has no initialization.yaml, so no setup ran.";
+"This project's initialization.yaml could not be read, so no setup ran: %@" = "This project's initialization.yaml could not be read, so no setup ran: %@";
+"This project's initialization.yaml declares no steps, so nothing ran." = "This project's initialization.yaml declares no steps, so nothing ran.";
+"The file must be a mapping of step names to their commands." = "The file must be a mapping of step names to their commands.";
+"Every step needs a name." = "Every step needs a name.";
+"“%@” needs a command: to run." = "“%@” needs a command: to run.";
+
+/* Unattended process-compose phase */
 "No shell was available to run the phase." = "No shell was available to run the phase.";
 "The %@ phase did not finish in time." = "The %@ phase did not finish in time.";
 "%@ failed." = "%@ failed.";
@@ -553,18 +568,18 @@
 
 /* Process-compose config approval */
 "Approve this repository's process config?" = "Approve this repository's process config?";
-"%@ came with this repository. Its bootstrap phase runs automatically when a workstream is created, and its dispose phase when one is archived — both without asking. They run on your machine under your user account." = "%@ came with this repository. Its bootstrap phase runs automatically when a workstream is created, and its dispose phase when one is archived — both without asking. They run on your machine under your user account.";
+"%@ came with this repository. Its dispose phase runs automatically when a workstream is archived, without asking. It runs on your machine under your user account." = "%@ came with this repository. Its dispose phase runs automatically when a workstream is archived, without asking. It runs on your machine under your user account.";
 "Not Now" = "Not Now";
-"Approve and Run Bootstrap" = "Approve and Run Bootstrap";
+"Approve" = "Approve";
 "Could not read this file." = "Could not read this file.";
 "These files changed while you were reviewing them, so nothing was approved. What is shown above is what is on disk now — review it and approve again." = "These files changed while you were reviewing them, so nothing was approved. What is shown above is what is on disk now — review it and approve again.";
 "%@ came with this repository and has not been approved" = "%@ came with this repository and has not been approved";
-"Its bootstrap and dispose phases will not run until you review it. Start is unaffected." = "Its bootstrap and dispose phases will not run until you review it. Start is unaffected.";
+"Its dispose phase will not run until you review it. Start is unaffected." = "Its dispose phase will not run until you review it. Start is unaffected.";
 "Process Config" = "Process Config";
-"Bootstrap runs when a workstream is created and dispose when one is archived, both without asking." = "Bootstrap runs when a workstream is created and dispose when one is archived, both without asking.";
+"Its dispose phase runs when a workstream is archived, without asking." = "Its dispose phase runs when a workstream is archived, without asking.";
 "Review" = "Review";
 
-/* Unattended phase policy — shared by bootstrap and dispose */
+/* Unattended phase policy — dispose */
 "This project has no process-compose config, so no %@ ran." = "This project has no process-compose config, so no %@ ran.";
 "process-compose was not found, so no %@ ran." = "process-compose was not found, so no %@ ran.";
 "This project's process-compose files came with the repository and have not been approved, so no %@ ran." = "This project's process-compose files came with the repository and have not been approved, so no %@ ran.";
