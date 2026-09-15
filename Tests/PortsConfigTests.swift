@@ -289,4 +289,40 @@ final class PortsConfigTests: XCTestCase {
 
         XCTAssertThrowsError(try ProcessCompose.PortsConfig.load(from: dir.path))
     }
+
+    // MARK: - The file a new project starts with
+
+    /// All comments on purpose: an uncommented example would allocate a real
+    /// port and inject its variable into every terminal surface. The round trip
+    /// that matters is that the template reads back as "declares nothing" —
+    /// never as malformed.
+    func test_writeDefault_producesAFileThatLoadsWithNoEntries() throws {
+        XCTAssertTrue(ProcessCompose.PortsConfig.writeDefault(projectDirectory: dir.path))
+
+        let config = try XCTUnwrap(ProcessCompose.PortsConfig.load(from: dir.path))
+        XCTAssertTrue(config.entries.isEmpty, "a template entry would claim a real port")
+    }
+
+    func test_writeDefault_leavesAnExistingFileAlone() throws {
+        try write("ports:\n  WEB_PORT: { assigned: true }\n")
+
+        XCTAssertFalse(ProcessCompose.PortsConfig.writeDefault(projectDirectory: dir.path))
+        let config = try XCTUnwrap(ProcessCompose.PortsConfig.load(from: dir.path))
+        XCTAssertEqual(config.entries.map(\.name), ["WEB_PORT"])
+    }
+
+    /// `.yml` is the other name `load` reads, so it has to be the other name
+    /// `writeDefault` refuses to write over — otherwise a project whose ports
+    /// live in `ports.yml` gains a `ports.yaml` that wins the lookup and hides
+    /// them.
+    func test_writeDefault_alsoRespectsTheYmlSpelling() throws {
+        try "ports:\n  WEB_PORT: { assigned: true }\n".write(
+            to: dir.appendingPathComponent("ports.yml"), atomically: true, encoding: .utf8
+        )
+
+        XCTAssertFalse(ProcessCompose.PortsConfig.writeDefault(projectDirectory: dir.path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: dir.appendingPathComponent("ports.yaml").path
+        ))
+    }
 }

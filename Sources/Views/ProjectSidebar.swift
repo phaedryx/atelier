@@ -1234,8 +1234,7 @@ struct ProjectSidebar: View {
         // A directory this path just created is a directory nobody had, so the
         // templates cannot land in a repository the user merely registered — the
         // reason the picker and the drop path do not do this.
-        Verification.Config.writeDefault(projectDirectory: dirURL.path)
-        ProcessCompose.Config.writeDefault(projectDirectory: dirURL.path)
+        Project.seedDefaultConfigs(projectDirectory: dirURL.path)
 
         showingNewProjectName = false
         addProject(name: name, directory: dirURL.path)
@@ -1288,9 +1287,8 @@ struct ProjectSidebar: View {
                     showingCloneRepo = false
                     // The container is `Project.directory` for this layout — the
                     // `.bare` peer, outside every worktree — which is exactly
-                    // where both configs are looked for.
-                    Verification.Config.writeDefault(projectDirectory: containerPath)
-                    ProcessCompose.Config.writeDefault(projectDirectory: containerPath)
+                    // where every config is looked for.
+                    Project.seedDefaultConfigs(projectDirectory: containerPath)
                     addProject(
                         name: URL(fileURLWithPath: containerPath).lastPathComponent,
                         directory: containerPath

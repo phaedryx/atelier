@@ -177,4 +177,40 @@ final class InitializationConfigTests: XCTestCase {
         else { return XCTFail("expected a reason") }
         XCTAssertTrue(reason.contains("the moon was wrong"))
     }
+
+    // MARK: - The file a new project starts with
+
+    /// The opposite round trip from `Verification.Config`'s template, on
+    /// purpose: a verification check runs only when somebody presses Run, but an
+    /// initialization step runs unattended behind every new worktree — so the
+    /// template must load as *zero* steps while still being a file `parse`
+    /// accepts, never `.invalid`.
+    func test_writeDefault_producesAFileThatLoadsWithNoSteps() {
+        XCTAssertTrue(Initialization.Config.writeDefault(projectDirectory: project.path))
+
+        guard case let .loaded(config) = load() else {
+            return XCTFail("the default template must load, not read as missing or invalid")
+        }
+        XCTAssertTrue(config.stepNames.isEmpty, "a template step would run behind every new worktree")
+    }
+
+    func test_writeDefault_leavesAnExistingFileAlone() throws {
+        try write("initialization.yaml", "mine:\n  command: echo mine\n")
+
+        XCTAssertFalse(Initialization.Config.writeDefault(projectDirectory: project.path))
+        XCTAssertEqual(load().stepNames, ["mine"])
+    }
+
+    /// `.yml` is the other name `load` reads, so it has to be the other name
+    /// `writeDefault` refuses to write over — otherwise a project whose steps
+    /// live in `initialization.yml` gains an `initialization.yaml` that wins
+    /// the lookup and hides them.
+    func test_writeDefault_alsoRespectsTheYmlSpelling() throws {
+        try write("initialization.yml", "mine:\n  command: echo mine\n")
+
+        XCTAssertFalse(Initialization.Config.writeDefault(projectDirectory: project.path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: project.appendingPathComponent("initialization.yaml").path
+        ))
+    }
 }
