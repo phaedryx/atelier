@@ -570,6 +570,16 @@ struct VerificationCheckRow: View {
 /// running the wrapper the moment its group was opened. Here a missing surface is
 /// an ordinary state the row draws a sentence for, and the runner is the only
 /// thing that ever starts one.
+///
+/// That is also why this view has to be *told* when a check is re-run.
+/// `SingleTerminalView` never needs telling, because it asks the cache for the
+/// surface inside its own update pass and so always holds the current one. Here
+/// the surface id is the same across a re-run — it is derived from the
+/// workstream and the check's name — so this value does not change, and nothing
+/// would re-evaluate it: the group would go on showing the previous run's dead
+/// terminal. `VerificationSurfaceHost.startSurface` publishes on the cache for
+/// exactly that reason, and `existingSurface` is then re-read and the new
+/// terminal attached by the `superview !== container` branch below.
 private struct VerificationSurfaceView: NSViewRepresentable {
     let surfaceID: UUID
 
@@ -635,6 +645,22 @@ final class VerificationSurfaceHost: Verification.SurfaceHosting {
     /// the surface and nowhere else — and scrolling back past a boundary into a
     /// previous run's output is worth less than knowing that what is on screen is
     /// this run's.
+    ///
+    /// **And the replacement is published, or the destroy is all the user sees.**
+    /// The id does not change across a re-run, so `VerificationSurfaceView`'s own
+    /// value does not either, and nothing else re-evaluates it — the open group
+    /// kept the destroyed terminal on screen, frozen on the last run's output,
+    /// while the new one ran unseen. The send is here rather than in
+    /// `surface(for:)`, which is reached from `TerminalSurfaceView.updateNSView`
+    /// — publishing there is publishing from within a view update; this is only
+    /// ever reached from the row's button or an agent's `start_verification`.
+    ///
+    /// **Only a surface that exists is published.** A failed creation leaves a
+    /// view behind whose ghostty surface is nil, and the runner does not record
+    /// it, so the row goes on naming the same id — announcing that view would
+    /// swap the last run's readable output for an empty black rectangle. The old
+    /// surface is destroyed either way, but a dead terminal still shows what it
+    /// printed, and that beats nothing beside the refusal the row draws.
     func startSurface(
         id: UUID,
         command: String,
@@ -658,7 +684,9 @@ final class VerificationSurfaceHost: Verification.SurfaceHosting {
         // `surface` reports failure by leaving the ghostty surface nil and
         // recording the command in `failedSurfaces`; the runner turns that into a
         // refusal the user sees rather than a row that silently never starts.
-        return view.surface != nil
+        guard view.surface != nil else { return false }
+        cache.objectWillChange.send()
+        return true
     }
 
     func disposeSurface(id: UUID) {
