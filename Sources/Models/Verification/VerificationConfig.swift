@@ -2,7 +2,10 @@
 // ABOUTME: Project directory only, so it can never arrive with the repository.
 
 import Foundation
+import os
 import Yams
+
+private let logger = Logger(subsystem: "atelier", category: "verification.config")
 
 extension Verification {
     /// A project's declared checks, in the order the file declares them.
@@ -240,5 +243,71 @@ extension Verification.Config {
             ))
         }
         return .loaded(Verification.Config(path: path, checks: checks))
+    }
+}
+
+extension Verification.Config {
+    /// The file a newly created project starts with.
+    ///
+    /// Deliberately **not** localized, for the reason `BareRepoClone` writes
+    /// `"gitdir: ./.bare\n"` as a literal: this is file content the user edits,
+    /// not UI, and the keys are part of the schema.
+    ///
+    /// The example check is left *uncommented* on purpose. A file of nothing but
+    /// comments composes to nil, which `parse` reads as a config declaring no
+    /// checks — so the Verification tab would swap the actionable "Add a
+    /// verification.yaml…" for the dead-end "declares no checks", and writing the
+    /// template would have made the empty state worse than not writing it.
+    static let defaultContents = """
+    # Verification checks for this project.
+    #
+    # Each entry is one check: its name, the command to run, and optionally the
+    # shell to run it in (`$SHELL` by default). Commands run with the
+    # workstream's worktree as the working directory, each in its own terminal
+    # in the Verification tab.
+    #
+    #   rubocop:
+    #     shell: fish
+    #     command: bundle exec rubocop
+    #
+    #   rspec:
+    #     command: bundle exec rspec
+    #
+    # Replace the example below with this project's real checks.
+
+    example:
+      command: echo "Edit verification.yaml to declare this project's checks."
+
+    """
+
+    /// Seed a newly created project with `defaultContents`.
+    ///
+    /// Called only by the two paths that *create* the project directory — a new
+    /// empty project and a fresh clone — and never by the paths that adopt a
+    /// directory the user already had, which would drop an untracked file into a
+    /// repository they merely registered.
+    ///
+    /// Does nothing when either name in `fileNames` is already present, and
+    /// reports rather than throws: a convenience template must not fail project
+    /// creation, but a write that silently did not happen is worse than one that
+    /// says so.
+    @discardableResult
+    static func writeDefault(projectDirectory: String) -> Bool {
+        let fileManager = FileManager.default
+        let directory = URL(fileURLWithPath: projectDirectory, isDirectory: true)
+        guard !fileNames.contains(where: {
+            fileManager.fileExists(atPath: directory.appendingPathComponent($0).path)
+        }) else { return false }
+
+        let path = directory.appendingPathComponent(fileNames[0])
+        do {
+            try defaultContents.write(to: path, atomically: true, encoding: .utf8)
+            return true
+        } catch {
+            logger.warning(
+                "[Atelier] could not write default verification.yaml: \(error.localizedDescription, privacy: .public)"
+            )
+            return false
+        }
     }
 }
