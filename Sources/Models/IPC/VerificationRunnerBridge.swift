@@ -114,6 +114,25 @@ extension IPC {
             return VerificationStart(runID: started.id, started: started.checks.map(\.name))
         }
 
+        func verificationChecks(in workstreamID: UUID) async throws -> VerificationChecksInfo {
+            // The same resolution a start does, and for the same reason: the
+            // config is keyed by the *project* directory, which only
+            // `WorkspaceActions` can reach from a workstream id.
+            let target = try WorkspaceActions.shared.verificationTarget(workstreamID: workstreamID)
+            let load = Verification.Config.load(projectDirectory: target.projectDirectory)
+            return VerificationChecksInfo(
+                configPath: load.config?.path,
+                checks: load.config?.checks.map {
+                    VerificationCheckDeclaration(name: $0.name, command: $0.command, shell: $0.shell)
+                } ?? [],
+                // Not paraphrased. `Load` is the availability decision, and this
+                // is the same sentence the Verification tab shows the user, so
+                // an agent and its human are never told different things about
+                // the same file.
+                unavailableReason: load.unavailableReason
+            )
+        }
+
         func observeCheckCompletions(_ handler: @escaping @MainActor @Sendable (VerificationCheckNotice) -> Void) {
             checkObserver = handler
         }

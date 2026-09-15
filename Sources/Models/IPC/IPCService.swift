@@ -82,6 +82,8 @@ extension IPC {
                 return await openAgentTab(for: request)
             case .openEditor:
                 return await openEditor(for: request)
+            case .openTab:
+                return await openTab(for: request)
             case .requestAttention:
                 return await requestAttention(for: request)
             case .createWorkstream:
@@ -90,6 +92,8 @@ extension IPC {
                 return await startVerification(for: request)
             case .checkVerification:
                 return await checkVerification(for: request)
+            case .listVerificationChecks:
+                return await listVerificationChecks(for: request)
             }
         }
 
@@ -463,6 +467,38 @@ extension IPC {
                     try WorkspaceActions.shared.openEditor(workstreamID: workstreamID, path: path, line: line)
                 }
                 return .success(id: request.id, .text("Opened \(opened) in the editor."))
+            } catch {
+                return .failure(id: request.id, error.localizedDescription)
+            }
+        }
+
+        /// Opens one of the caller's singleton tabs — Changes, Execution or
+        /// Verification — without taking the selection.
+        ///
+        /// **The answer must never imply the user is now looking at it.** The tab
+        /// is opened behind whatever they have in front of them, on purpose, so
+        /// an agent that needs their eyes has to ask for them separately with
+        /// `request_attention`. Saying "opened" and leaving the rest implied is
+        /// how an agent ends up waiting for a reaction to something nobody saw.
+        private func openTab(for request: Request) async -> Response {
+            guard let workstreamID = callerWorkstreamID(request) else {
+                return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
+            }
+            guard let kind = request.arguments["kind"], !kind.isEmpty else {
+                return .failure(id: request.id, WorkspaceActions.Failure.missingArgument("kind").localizedDescription)
+            }
+            do {
+                let opened = try await MainActor.run {
+                    try WorkspaceActions.shared.openTab(workstreamID: workstreamID, kind: kind)
+                }
+                let what = opened.wasAlreadyOpen
+                    ? "The \(opened.kind) tab was already open."
+                    : "Opened the \(opened.kind) tab."
+                return .success(
+                    id: request.id,
+                    .text(what + " It did not take the selection, so the user is still looking at whatever they had "
+                        + "in front of them — use request_attention if you need them to come and look.")
+                )
             } catch {
                 return .failure(id: request.id, error.localizedDescription)
             }
@@ -900,6 +936,28 @@ extension IPC {
 
         // MARK: - Verification
 
+        /// Answers what the project declares in `verification.yaml`, running
+        /// nothing.
+        ///
+        /// **This is the only way an agent can learn a check's name.** The file
+        /// lives in the project directory, outside every work tree, and the
+        /// "Restrict to worktree" system prompt is on by default — so before this
+        /// existed a name could only be found by guessing one and reading
+        /// `start_verification`'s refusal.
+        private func listVerificationChecks(for request: Request) async -> Response {
+            guard let workstreamID = callerWorkstreamID(request) else {
+                return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
+            }
+            guard let runner = verification else {
+                return .failure(id: request.id, VerificationFailure.notAvailable.localizedDescription)
+            }
+            do {
+                return try await .success(id: request.id, .verificationChecks(runner.verificationChecks(in: workstreamID)))
+            } catch {
+                return .failure(id: request.id, error.localizedDescription)
+            }
+        }
+
         /// Starts a verification run in the caller's own workstream and answers
         /// with its run id.
         ///
@@ -911,11 +969,14 @@ extension IPC {
         /// that finishes having completed nothing gets one notice instead, since
         /// there is no per-check completion to have announced it.
         ///
-        /// Nothing here decides whether the run is *allowed*. The preconditions —
-        /// the integration switch, a located config, a binary, and approval of
-        /// every repository-provided file — are `ProcessCompose.PhasePolicy.plan`,
-        /// deliberately the only copy, and they live behind the seam. A refusal
-        /// arrives as the runner's error and is passed through verbatim.
+        /// Nothing here decides whether the run is *allowed*. The preconditions
+        /// are `Verification.Config.Load`'s own three cases — no file, a file that
+        /// will not parse, a file declaring nothing — and `Verification.Runner.start`
+        /// asks them behind the seam, deliberately the only copy. There is no
+        /// approval gate to re-check: `verification.yaml` lives in the project
+        /// directory, outside every work tree, so it cannot have arrived with the
+        /// repository. A refusal arrives as the runner's error and is passed through
+        /// verbatim.
         private func startVerification(for request: Request) async -> Response {
             guard let workstreamID = callerWorkstreamID(request) else {
                 return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
@@ -985,7 +1046,10 @@ extension IPC {
         /// about a pane it may not be sitting in, so the honest answer names the fallback
         /// instead and points at `check_verification`.
         private nonisolated func startAnswer(for start: VerificationStart, deliverable: Bool) -> String {
-            let names = start.started.isEmpty ? "the whole verify namespace" : start.started.joined(separator: ", ")
+            // `started` is the *resolved* list and is never empty — an agent that
+            // omitted `checks` still needs to see what it set running, and a start
+            // that would resolve to nothing is refused rather than minted.
+            let names = start.started.joined(separator: ", ")
             let delivery = deliverable
                 ? "Each check posts its own verdict to your inbox from \(VerificationSummary.sender) as it finishes — "
                 + "receive_messages to read them, and remember delivery is a pull, so check at your next natural boundary."

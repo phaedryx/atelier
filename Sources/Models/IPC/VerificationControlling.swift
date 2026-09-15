@@ -4,12 +4,13 @@
 import Foundation
 
 extension IPC {
-    /// What `start_verification` and `check_verification` need from the app.
+    /// What `start_verification`, `check_verification` and
+    /// `list_verification_checks` need from the app.
     ///
     /// **This side declares it and the runner conforms**, mirroring
     /// `ProcessCompose.Controlling`: the tools then have a test seam that does
-    /// not need a `verify` namespace, a process-compose binary, or a worktree,
-    /// and the two halves of the feature can land in either order.
+    /// not need a `verification.yaml`, a shell, or a worktree, and the two
+    /// halves of the feature can land in either order.
     ///
     /// Everything crossing it is an `IPC` projection rather than the runner's own
     /// `Verification.Run` — the relationship `PeerInfo` has to the store's `Peer`,
@@ -22,14 +23,14 @@ extension IPC {
     /// - **`startVerification` must return without waiting for the suite.** A real
     ///   suite outlives an MCP tool call; the run id is the answer, and the result
     ///   arrives through `onFinish` and `verificationRun(id:)`.
-    /// - **It must refuse while a run is already in flight for that workstream.**
-    ///   Not a nicety: `ProcessCompose.PhaseExecutor.run` calls `shutDown` at the
-    ///   *top* to clear a server a killed run left behind, so a second start on the
-    ///   same `<id>-verify.sock` kills the first mid-suite and strands its results.
-    /// - **It must refuse rather than mint a run that cannot report.** An absent or
-    ///   empty `verify` namespace, or a name in `checks` the config does not
-    ///   declare, is a refusal naming what is available — not a run id whose
-    ///   completion never arrives.
+    /// - **It must refuse a check that is already running — per check, not per
+    ///   workstream.** Checks are independent and two *different* ones at once is
+    ///   the design, so the refusal is scoped to the one name: a second start of a
+    ///   live check would replace its terminal surface and strand the first.
+    /// - **It must refuse rather than mint a run that cannot report.** No
+    ///   `verification.yaml`, one that will not parse, one declaring nothing, or a
+    ///   name in `checks` the config does not declare — each is a refusal naming
+    ///   what is available, not a run id whose completion never arrives.
     /// - **Run ids are opaque, short, and unique for the app's lifetime**, not just
     ///   within a workstream: `check_verification` takes a run id and nothing else.
     /// - **`onFinish` fires exactly once per run, on every terminal path** — sealed
@@ -39,9 +40,11 @@ extension IPC {
     /// - **Every check completion is announced through `observeCheckCompletions`,
     ///   exactly once.** A path that records a completion without announcing it
     ///   is a notice the agent never gets.
-    /// - **Approval and the rest of the preconditions are the runner's**, through
-    ///   `ProcessCompose.PhasePolicy.plan`. There is deliberately no second copy
-    ///   here; a refusal reaches the agent as the error this throws.
+    /// - **The preconditions are the runner's**, through the three cases of
+    ///   `Verification.Config.Load`. There is deliberately no second copy here,
+    ///   and no approval gate anywhere: `verification.yaml` lives in the project
+    ///   directory, outside every work tree, so it cannot have arrived with the
+    ///   repository. A refusal reaches the agent as the error this throws.
     protocol VerificationControlling: Sendable {
         /// Starts a run in `workstreamID` and returns as soon as it has an id.
         ///
@@ -59,6 +62,20 @@ extension IPC {
             requesterSurfaceID: String?,
             onFinish: @escaping @Sendable (VerificationRunInfo) -> Void
         ) async throws -> VerificationStart
+
+        /// What `verification.yaml` declares for the project `workstreamID`
+        /// belongs to, without running anything.
+        ///
+        /// **The three load cases must stay distinguishable.** `.missing`,
+        /// `.invalid` and a file declaring zero checks all yield an empty list,
+        /// and telling an agent "this project declares no checks" for the middle
+        /// one sends it looking for a file that is right there and broken. The
+        /// answer therefore carries `Load.unavailableReason` alongside the list,
+        /// rather than a bare array or a throw.
+        ///
+        /// Throws only when the workstream cannot be resolved to a project at
+        /// all — the same `WorkspaceActions` failure a start throws.
+        func verificationChecks(in workstreamID: UUID) async throws -> VerificationChecksInfo
 
         /// A run by id within one workstream, or nil when that workstream has
         /// no run with that id.
@@ -112,8 +129,9 @@ extension IPC {
     /// Why a verification tool could not act, on this side of the seam.
     ///
     /// Every case is something the calling agent can act on. The runner's own
-    /// refusals — no `verify` namespace, no binary, unapproved config, a run
-    /// already in flight — arrive as its errors and are passed through verbatim.
+    /// refusals — no `verification.yaml`, one that will not parse or declares
+    /// nothing, an undeclared check name, a check already running — arrive as its
+    /// errors and are passed through verbatim.
     enum VerificationFailure: Swift.Error, LocalizedError {
         case notAvailable
         case unknownRun(String)

@@ -29,6 +29,16 @@ private actor StubVerificationRunner: IPC.VerificationControlling {
         id == run.runID ? run : nil
     }
 
+    func verificationChecks(in _: UUID) async throws -> IPC.VerificationChecksInfo {
+        IPC.VerificationChecksInfo(
+            configPath: "/repos/atelier/verification.yaml",
+            checks: run.checks.map {
+                IPC.VerificationCheckDeclaration(name: $0.name, command: "bundle exec \($0.name)", shell: nil)
+            },
+            unavailableReason: nil
+        )
+    }
+
     nonisolated func observeCheckCompletions(_: @escaping @MainActor @Sendable (IPC.VerificationCheckNotice) -> Void) {}
 }
 
@@ -613,13 +623,14 @@ final class IPCServerTests: XCTestCase {
             #"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
             #"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_peers","arguments":{}}}"#,
             #"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"check_verification","arguments":{"run_id":"v7f3a11c"}}}"#,
+            #"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"list_verification_checks","arguments":{}}}"#,
         ]
         input.fileHandleForWriting.write(Data((requests.joined(separator: "\n") + "\n").utf8))
 
         var replies: [[String: Any]] = []
         var buffer = Data()
         let deadline = Date().addingTimeInterval(10)
-        while replies.count < 4, Date() < deadline {
+        while replies.count < 5, Date() < deadline {
             buffer.append(output.fileHandleForReading.availableData)
             let (lines, remainder) = IPC.Framing.lines(from: buffer)
             buffer = remainder
@@ -629,7 +640,7 @@ final class IPCServerTests: XCTestCase {
                 }
             }
         }
-        XCTAssertEqual(replies.count, 4, "helper did not answer all four requests")
+        XCTAssertEqual(replies.count, 5, "helper did not answer all five requests")
 
         let initialize = try XCTUnwrap(replies.first?["result"] as? [String: Any])
         XCTAssertEqual(initialize["protocolVersion"] as? String, "2025-06-18")
@@ -640,8 +651,9 @@ final class IPCServerTests: XCTestCase {
             advertised,
             [
                 "register_peer", "list_peers", "send_message", "receive_messages", "broadcast", "get_peer_status",
-                "list_tabs", "read_review_comments", "open_editor", "open_agent_tab", "request_attention",
+                "list_tabs", "read_review_comments", "open_editor", "open_tab", "open_agent_tab", "request_attention",
                 "create_workstream", "start_verification", "check_verification",
+                "list_verification_checks",
             ]
         )
         // Every advertised name must be a real `IPC.Tool`. `toolDefinitions` and
@@ -692,6 +704,18 @@ final class IPCServerTests: XCTestCase {
         // surface and Atelier keeps no copy of what it printed, so a render that
         // carried any would be inventing it.
         XCTAssertFalse(rendered.contains("    "), "no output may be rendered here: \(rendered)")
+
+        // The same argument for `renderText`'s declaration case: it only ever
+        // runs inside the helper binary.
+        let declarations = try XCTUnwrap(replies[4]["result"] as? [String: Any])
+        XCTAssertEqual(declarations["isError"] as? Bool, false)
+        let listed = try XCTUnwrap(
+            (declarations["content"] as? [[String: Any]])?.first?["text"] as? String
+        )
+        XCTAssertTrue(listed.contains("/repos/atelier/verification.yaml"), listed)
+        XCTAssertTrue(listed.contains("rspec: bundle exec rspec"), listed)
+        // The list is only useful if it says what to do with it.
+        XCTAssertTrue(listed.contains("start_verification"), listed)
     }
 }
 

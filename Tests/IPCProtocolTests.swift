@@ -87,7 +87,10 @@ final class IPCProtocolTests: XCTestCase {
     /// Every workspace *read* stays replayable, so the helper's recovery from a
     /// restarted app is not lost along with the duplicates.
     func test_readsAndRenames_stayReplayable() {
-        for tool in [IPC.Tool.listPeers, .getPeerStatus, .listTabs, .readReviewComments, .checkVerification, .openEditor, .requestAttention] {
+        for tool in [
+            IPC.Tool.listPeers, .getPeerStatus, .listTabs, .readReviewComments,
+            .checkVerification, .listVerificationChecks, .openEditor, .openTab, .requestAttention,
+        ] {
             XCTAssertTrue(tool.isSafeToReplay, "\(tool.rawValue) changes nothing by running twice")
         }
         XCTAssertTrue(

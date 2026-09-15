@@ -1356,8 +1356,8 @@ checks rather than a comment:
 | Group | Tools | Trust story |
 |---|---|---|
 | Messaging | `register_peer`, `list_peers`, `send_message`, `receive_messages`, `broadcast`, `get_peer_status` | none needed — text between agents, nothing a user can see |
-| Workspace reads | `list_tabs`, `read_review_comments`, `check_verification` | none needed — answers about the caller's own workstream |
-| Workspace actions | `open_agent_tab`, `open_editor`, `request_attention`, `create_workstream`, `start_verification` | see below |
+| Workspace reads | `list_tabs`, `read_review_comments`, `check_verification`, `list_verification_checks` | none needed — answers about the caller's own workstream |
+| Workspace actions | `open_agent_tab`, `open_editor`, `open_tab`, `request_attention`, `create_workstream`, `start_verification` | see below |
 
 The messaging six were once the whole enum. Calix's IPC core is the same six, and everything it
 grew on top — pane/tab control, LSP, shell integration — arrived as separate tool surfaces with
@@ -1420,6 +1420,26 @@ rule exists to prevent. `IPCProtocolTests` pins the two tables and
 `call()` consults them — against a listener that hangs up rather than a slow one, because both
 reach the same branch and only one of them finishes in milliseconds.
 
+**`open_tab` opens a singleton pane and deliberately does not take the selection.**
+Changes, Execution and Verification start *closed* — `startupWorkspaceTabState` seeds Info and
+Agent alone — so a tool an agent already has could produce something with no visible surface to
+read it in, worst of all `start_verification`, whose per-check output lives only in those
+terminals and never crosses IPC. It goes through `WorkspaceModel.ensureSingleton`, never
+`activateSingleton`: opening a pane is not a reason to pull someone off what they are working
+in, the same call the run pane already makes when a browser tab starts the dev server. The
+answer says so in as many words, because an agent that reads "opened" as "they are looking at
+it" waits for a reaction nobody had; `request_attention` is the tool for their eyes and the two
+are meant to be paired.
+
+`WorkspaceActions.openableTabs` is the table, **keyed by `WorkspaceTabKind.id`** — the same
+string `list_tabs` reports as a tab's `kind`, so the name an agent reads off a tab is the name
+it passes back, and there is no second vocabulary for anything to keep in step. The two
+exclusions are different refusals rather than one: Info and Agent are **permanent**, so opening
+them can neither fail nor do anything, while terminal, browser and editor are **instanced** —
+"the" tab is meaningless, and two of the three already have a tool that says which one. The
+kind is validated *before* the workstream is resolved, so a typo is answered with the legal
+values rather than with whatever the app's readiness happens to be.
+
 **`open_agent_tab` spawns the surface already running the agent** —
 `TerminalSurfaceCache.surface(for:…command:)`, not a paste into a shell. There is no synthetic
 Return, no timing heuristic, and no question of whether the pane was interruptible. Two
@@ -1481,6 +1501,19 @@ Two further things about it that are not guesses:
   `Workstream.Archiver` kills.
 
 ### The verification tools, and the first message Atelier sends itself
+
+**`list_verification_checks` is how an agent learns a check's name at all**, and it is not a
+convenience on top of `start_verification`. `verification.yaml` lives in the project directory,
+outside every work tree, and the "Restrict to worktree" system prompt is on by default — so
+before this tool a name could only be discovered by guessing one and reading the refusal. It
+reads the same `Verification.Config.Load` the tab draws from and carries **both** halves of it:
+the declarations in file order, and `Load.unavailableReason`, non-nil exactly when the list is
+empty. That pairing is the point rather than tidiness — `.missing`, `.invalid` and a file
+declaring nothing all yield no checks, and telling an agent "this project declares no checks"
+for the middle one sends it looking for a file that is right there and broken. The wording is
+`Load`'s own, never paraphrased, so an agent and its human are told the same thing about the
+same file. It deliberately carries **no verdict and no staleness**: `check_verification` answers
+verdicts, and a staleness read costs four-plus git spawns on a call an agent makes casually.
 
 `start_verification` runs the project's `verification.yaml` checks against the caller's own
 worktree and answers with a **run id**, never a result: a real suite outlives an MCP tool
