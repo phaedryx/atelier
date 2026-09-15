@@ -22,6 +22,7 @@ func defaultPaletteCommands() -> [PaletteCommand] {
     let app = NSLocalizedString("Application", comment: "Palette category")
     let create = NSLocalizedString("Create", comment: "Palette category")
     let browser = NSLocalizedString("Browser", comment: "Palette category")
+    let git = NSLocalizedString("Git", comment: "Palette category")
 
     let commands: [PaletteCommand] = [
         // Ungated, and `.addNew` is the reason: its receiver already decides
@@ -33,6 +34,20 @@ func defaultPaletteCommands() -> [PaletteCommand] {
                        shortcut: "⌘N", action: post(.addNew)),
         PaletteCommand(id: "create.newProject", title: NSLocalizedString("New Project", comment: ""), category: create,
                        shortcut: "⌘⇧N", action: post(.addProject)),
+        // The two variants the sidebar's add menu offers. `.addNew` carries the
+        // choice as its payload; with no payload it means "whatever the
+        // `atelier.bypassPermissions` default says", which is what `create.new`
+        // above posts and what every other producer of this notification wants.
+        PaletteCommand(id: "create.newFullPermissions",
+                       title: NSLocalizedString("New Workstream (Full Permissions)", comment: ""),
+                       category: create, action: {
+                           NotificationCenter.default.post(name: .addNew, object: true)
+                       }),
+        PaletteCommand(id: "create.newWithPrompts",
+                       title: NSLocalizedString("New Workstream (With Prompts)", comment: ""),
+                       category: create, action: {
+                           NotificationCenter.default.post(name: .addNew, object: false)
+                       }),
 
         PaletteCommand(id: "tab.info", title: NSLocalizedString("Show Info", comment: ""), category: tabs,
                        shortcut: "⌘I", isAvailable: workstream, action: post(.toggleInfo)),
@@ -98,6 +113,29 @@ func defaultPaletteCommands() -> [PaletteCommand] {
         PaletteCommand(id: "changes.submitReview", title: NSLocalizedString("Submit Review Comments", comment: ""), category: changes,
                        isAvailable: workstream, action: post(.submitChangeReview)),
 
+        // Acts on the selected workstream, resolved by the receiver in
+        // `ContentView` — the sidebar's own context-menu items read row-local
+        // values the palette has no access to.
+        PaletteCommand(id: "workstream.revealInFinder", title: NSLocalizedString("Reveal in Finder", comment: ""),
+                       category: external, isAvailable: workstream, action: post(.revealInFinder)),
+        // Hidden rather than disabled when there is nothing to open, the same
+        // choice the sidebar's context menu makes by omitting the item: a
+        // workstream with no pull request has no reason for the row to exist,
+        // and "there is no PR" is not a condition the user acts on from here.
+        PaletteCommand(id: "workstream.openOnGitHub", title: NSLocalizedString("Open on GitHub", comment: ""),
+                       category: external,
+                       isAvailable: { $0.workstreamActive && $0.hasGitHubRemote }, action: post(.openOnGitHub)),
+        PaletteCommand(id: "workstream.openPullRequest", title: NSLocalizedString("Open Pull Request", comment: ""),
+                       category: external,
+                       isAvailable: { $0.workstreamActive && $0.hasPullRequest }, action: post(.openPullRequest)),
+        PaletteCommand(id: "workstream.openInShortcut", title: NSLocalizedString("Open in Shortcut", comment: ""),
+                       category: external,
+                       isAvailable: { $0.workstreamActive && $0.hasShortcutStory }, action: post(.openInShortcut)),
+        PaletteCommand(id: "workstream.copyBranchName", title: NSLocalizedString("Copy Branch Name", comment: ""),
+                       category: navigation, isAvailable: workstream, action: post(.copyBranchName)),
+        PaletteCommand(id: "workstream.copyWorktreePath", title: NSLocalizedString("Copy Worktree Path", comment: ""),
+                       category: navigation, isAvailable: workstream, action: post(.copyWorktreePath)),
+
         PaletteCommand(id: "external.browser", title: NSLocalizedString("Open in External Browser", comment: ""), category: external,
                        shortcut: "⌘⌥B", isAvailable: workstream, action: post(.openExternalBrowser)),
         PaletteCommand(id: "external.terminal", title: NSLocalizedString("Open in External Terminal", comment: ""), category: external,
@@ -121,6 +159,14 @@ func defaultPaletteCommands() -> [PaletteCommand] {
                        shortcut: "⌘⇧R", isAvailable: workstream, action: post(.renameWorkstream)),
         PaletteCommand(id: "workstream.archive", title: NSLocalizedString("Archive Workstream", comment: ""), category: navigation,
                        shortcut: "⌘⇧W", isAvailable: workstream, action: post(.archiveWorkstream)),
+        // Destructive, and sitting one fuzzy match away from Archive — but the
+        // receiver is `ContentView.confirmPurge`, the same entrance the sidebar's
+        // context menu uses, so `purgeWarning` and `destroyableWorktreePath` still
+        // stand between this row and `git worktree remove`. Posted with no payload:
+        // the receiver reads the current selection, because a palette command
+        // closure is built once and cannot know which workstream is active.
+        PaletteCommand(id: "workstream.purge", title: NSLocalizedString("Purge Workstream", comment: ""), category: navigation,
+                       isAvailable: workstream, action: post(.purgeWorkstream)),
 
         PaletteCommand(id: "app.toggleSidebar", title: NSLocalizedString("Toggle Sidebar", comment: ""), category: app,
                        shortcut: "⌘⇧C", action: post(.toggleSidebar)),
@@ -140,7 +186,45 @@ func defaultPaletteCommands() -> [PaletteCommand] {
                        shortcut: "⌘/", action: post(.openHelp)),
     ]
 
-    return commands + settingsPaneCommands(category: app)
+    return commands + quickActionCommands(category: git) + settingsPaneCommands(category: app)
+}
+
+/// The four quick actions the GitHub toolbar menu runs, as palette commands.
+///
+/// Disabled rather than hidden when a tool is missing, because the reason is
+/// something the user can act on. `QuickAction.unavailableReason` is the one
+/// copy of that decision — shared with the menu's `.disabled` and with the
+/// receiver that runs them — so a row cannot offer what the runner refuses.
+///
+/// What this deliberately does *not* mirror is the menu's repo-state filtering
+/// (offering Push only when something is unpushed). That is the menu choosing a
+/// single primary action for a toolbar button; a palette searched by name should
+/// find "Commit" whether or not the tree is dirty, and a no-op `git push` says
+/// so in its own output.
+@MainActor
+private func quickActionCommands(category: String) -> [PaletteCommand] {
+    QuickAction.allCases.map { action in
+        PaletteCommand(
+            id: "git.\(action.rawValue)",
+            title: action.label,
+            category: category,
+            availability: { context in
+                guard context.workstreamActive else { return .hidden }
+                if let reason = QuickAction.unavailableReason(
+                    for: action,
+                    claudeInstalled: context.claudeInstalled,
+                    ghInstalled: context.ghInstalled,
+                    bypassPermissions: context.bypassPermissions
+                ) {
+                    return .disabled(reason)
+                }
+                return .available
+            },
+            action: {
+                NotificationCenter.default.post(name: .runQuickAction, object: action.rawValue)
+            }
+        )
+    }
 }
 
 /// One deep-link per Settings pane, so the palette reaches a named pane rather
@@ -239,9 +323,16 @@ func storedPromptCommandKey(_ promptID: UUID) -> String {
 /// Palette commands for the user's stored prompts, rebuilt whenever the store
 /// changes (`CommandRegistry.sync`). Each command posts the prompt's id;
 /// the active `TerminalContainerView` resolves it, switches to the Agent tab,
-/// and types the prompt via `PromptInjector`. Hidden unless that workstream's
-/// agent pane can actually take the text, so the palette never offers a prompt
-/// that would land in someone's work — or vanish into a pane with no surface.
+/// and types the prompt via `PromptInjector`.
+///
+/// **Disabled with its reason, never dropped.** These used to disappear whenever
+/// the pane could not take the text, which is the common case — an agent is
+/// mid-turn most of the time you reach for a prompt — and the palette simply
+/// came up shorter, with nothing to say why. Worse, `surfaceStates` has no decay
+/// path, so a single `Stop` hook lost by `atelier-hook`'s one-second curl hid
+/// every prompt for the rest of the session. The gate itself is unchanged and
+/// still lives in `PromptInjector`, which re-checks at delivery; what changed is
+/// that a refusal is now something the user can read.
 @MainActor
 func promptPaletteCommands(for prompts: [StoredPrompt]) -> [PaletteCommand] {
     let category = NSLocalizedString("Prompts", comment: "Palette category")
@@ -250,12 +341,57 @@ func promptPaletteCommands(for prompts: [StoredPrompt]) -> [PaletteCommand] {
             id: "\(storedPromptCommandPrefix)\(storedPromptCommandKey(prompt.id))",
             title: prompt.label,
             category: category,
-            isAvailable: { $0.workstreamActive && $0.agentCanReceivePrompt },
+            availability: { context in
+                guard context.workstreamActive else { return .hidden }
+                if let reason = context.promptDelivery.reason {
+                    return .disabled(reason)
+                }
+                return .available
+            },
             action: {
                 NotificationCenter.default.post(
                     name: .runStoredPrompt,
                     object: storedPromptCommandKey(prompt.id)
                 )
+            }
+        )
+    }
+}
+
+/// Id prefix reserved for the verification-check family: one command per check
+/// the active project's `verification.yaml` declares, rebuilt whenever the
+/// selection changes.
+///
+/// Deliberately not `verify.` alone and not `run.`: `CommandRegistry.sync`
+/// clears every id carrying the prefix it is handed, and `run.startRerun` and
+/// `run.rerunInitialization` are static built-ins — a family under `run.` would
+/// delete both on its first emission, the hazard `gotoCommandPrefix` documents.
+let verificationCommandPrefix = "verify.check."
+
+/// Palette commands that start one declared verification check in the active
+/// workstream, rebuilt from the project's config by `CommandRegistry.sync`.
+///
+/// Verification has no Run-all and no top-bar Stop by design — every row carries
+/// its own button — so a keyboard route to a single named check is the palette's
+/// to provide. The names are read from the config for the *list*; the run itself
+/// goes through `Verification.Runner.start`, which loads the config again and is
+/// the only thing that may refuse. The list is therefore advisory, the same split
+/// `tab.close` is commented for above: availability answers "is there a workspace
+/// to act on", the receiver answers "can this run right now".
+@MainActor
+func verificationPaletteCommands(for checkNames: [String]) -> [PaletteCommand] {
+    let category = NSLocalizedString("Verification", comment: "Palette category")
+    return checkNames.map { name in
+        PaletteCommand(
+            id: "\(verificationCommandPrefix)\(name)",
+            title: String(
+                format: NSLocalizedString("Run Check: %@", comment: "Palette command running one verification check"),
+                name
+            ),
+            category: category,
+            isAvailable: { $0.workstreamActive },
+            action: {
+                NotificationCenter.default.post(name: .runVerificationCheck, object: name)
             }
         )
     }

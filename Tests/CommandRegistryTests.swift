@@ -90,6 +90,50 @@ final class CommandRegistryTests: XCTestCase {
         XCTAssertEqual(registry.commands.first?.title, "First")
     }
 
+    private func disabledCommand(_ id: String, title: String, reason: String) -> PaletteCommand {
+        PaletteCommand(id: id, title: title, category: "Test", shortcut: nil,
+                       availability: { _ in .disabled(reason) }, action: {})
+    }
+
+    /// A disabled command is listed — it is there to explain itself — but it
+    /// never outranks a runnable one, however well it scores. Return lands on a
+    /// disabled row only when the user has deliberately arrowed to it.
+    func testDisabledCommandsSortBelowRunnableOnes() {
+        let registry = CommandRegistry(commands: [
+            disabledCommand("d", title: "Alpha", reason: "The Coding Agent is mid-turn."),
+            command("a", title: "Alpha Later Words"),
+        ], defaults: defaults)
+
+        XCTAssertEqual(registry.search("alpha", context: anyContext).map(\.id), ["a", "d"])
+        XCTAssertEqual(registry.search("", context: anyContext).map(\.id), ["a", "d"])
+    }
+
+    /// Usage ranking must not lift a disabled row over a runnable one: the
+    /// frequently-used prompt is exactly the one most likely to be mid-turn.
+    func testUsageCannotLiftADisabledCommandAboveARunnableOne() {
+        let registry = CommandRegistry(commands: [
+            disabledCommand("d", title: "Alpha", reason: "busy"),
+            command("a", title: "Alpha"),
+        ], defaults: defaults)
+        for _ in 0 ..< 10 {
+            registry.recordUsage("d")
+        }
+
+        XCTAssertEqual(registry.search("alpha", context: anyContext).first?.id, "a")
+        XCTAssertEqual(registry.search("", context: anyContext).first?.id, "a")
+    }
+
+    /// `.hidden` still means gone, which is what every command using the
+    /// `isAvailable:` initializer gets.
+    func testHiddenCommandsAreStillDropped() {
+        let registry = CommandRegistry(commands: [
+            command("a", title: "Alpha", available: { _ in false }),
+        ], defaults: defaults)
+
+        XCTAssertTrue(registry.search("alpha", context: anyContext).isEmpty)
+        XCTAssertTrue(registry.search("", context: anyContext).isEmpty)
+    }
+
     func testClampedPaletteSelection() {
         XCTAssertEqual(clampedPaletteSelection(0, resultCount: 0), 0)
         XCTAssertEqual(clampedPaletteSelection(5, resultCount: 3), 2)

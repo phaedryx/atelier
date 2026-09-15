@@ -12,7 +12,21 @@ extension Notification.Name {
     static let workstreamWorktreeReady = Notification.Name("atelier.workstreamWorktreeReady")
     static let workstreamCreationFailed = Notification.Name("atelier.workstreamCreationFailed")
     static let projectCreated = Notification.Name("atelier.projectCreated")
+    /// object: the workstream's `UUID`, or nil to mean the selected workstream.
+    /// Nil is what the palette posts — a command closure is built once and never
+    /// learns which workstream is active — and either way this lands on
+    /// `confirmPurge`, so the warning sheet stands where it always did.
     static let purgeWorkstream = Notification.Name("atelier.purgeWorkstream")
+    // The sidebar's context-menu actions, reachable by name from the palette.
+    // Received here because this is the one view that can resolve "the selected
+    // workstream" into a worktree path, a branch and a project directory; the
+    // sidebar's own items read row-local values the palette has no access to.
+    static let revealInFinder = Notification.Name("atelier.revealInFinder")
+    static let openOnGitHub = Notification.Name("atelier.openOnGitHub")
+    static let openPullRequest = Notification.Name("atelier.openPullRequest")
+    static let openInShortcut = Notification.Name("atelier.openInShortcut")
+    static let copyBranchName = Notification.Name("atelier.copyBranchName")
+    static let copyWorktreePath = Notification.Name("atelier.copyWorktreePath")
     /// object: the workstream's `UUID`. Posted by `Workstream.AgentStateTracker`
     /// on the edges into and out of a permission block; received here, where the
     /// workstream's name and the current selection are known.
@@ -165,12 +179,41 @@ struct ContentView: View {
             editorActive: editorTabActive,
             // Requires a live agent surface, not just a selected workstream:
             // the workspace is unmounted while a worktree is still being
-            // created, and a surface is never built when the setup script is
-            // awaiting approval or claude isn't installed. Running a prompt in
-            // any of those states would silently do nothing.
-            agentCanReceivePrompt: activeWorkstream.map {
-                PromptInjector.shared.canDeliver(to: $0.id)
-            } ?? false
+            // created, and a surface is never built when claude isn't
+            // installed. Carried as the reason rather than as a Bool, because
+            // the stored-prompt rows show it instead of disappearing.
+            promptDelivery: activeWorkstream.map {
+                PromptInjector.shared.deliverability(to: $0.id)
+            } ?? .noAgent,
+            claudeInstalled: appEnvironment.toolStatus.claude.path != nil,
+            ghInstalled: appEnvironment.toolStatus.gh.path != nil,
+            bypassPermissions: activeWorkstream?.bypassPermissions ?? false,
+            hasGitHubRemote: workstreamActionTarget?.githubURL != nil,
+            hasPullRequest: workstreamActionTarget?.pullRequestURL != nil,
+            hasShortcutStory: workstreamActionTarget?.shortcutURL != nil
+        )
+    }
+
+    /// The selected workstream resolved into the handful of values the palette's
+    /// workstream actions need — the same values the sidebar's context menu reads
+    /// off its own row, which nothing outside that row can see.
+    ///
+    /// Every field is a cache read (`AppEnvironment` refreshes them on its own
+    /// 15s sweep), so building this per body evaluation spawns nothing. It backs
+    /// both halves of each action: whether the palette offers the row, and what
+    /// the receiver opens when it is chosen — one resolution, so the two cannot
+    /// disagree about whether a pull request exists.
+    private var workstreamActionTarget: WorkstreamActionTarget? {
+        guard let workstream = activeWorkstream, let project = activeProject else { return nil }
+        let worktreePath = workstream.workingDirectory(checkout: project.checkout)
+        let branch = appEnvironment.branchName(for: worktreePath)
+        let pr = branch.flatMap { appEnvironment.githubPR(for: project.directory, branch: $0) }
+        return WorkstreamActionTarget(
+            worktreePath: worktreePath,
+            branchName: branch,
+            githubURL: appEnvironment.githubURL(for: project.directory),
+            pullRequestURL: pr.flatMap { URL(string: $0.url) },
+            shortcutURL: appEnvironment.shortcutStory(for: worktreePath).flatMap { URL(string: $0.appURL) }
         )
     }
 
@@ -448,6 +491,9 @@ struct ContentView: View {
                 if let wsID {
                     agentStateTracker.markSeen(workstreamID: wsID)
                 }
+                // The verification family belongs to whichever project is now
+                // selected; see `syncVerificationCommands`.
+                syncVerificationCommands()
             }
             .onKeyPress(.escape) {
                 if selection == .settings || selection == .help {
@@ -505,6 +551,9 @@ struct ContentView: View {
             // owns; it is a @StateObject here rather than a singleton.
             AgentNudge.shared.surfaceCache = surfaceCache
             PromptInjector.shared.surfaceCache = surfaceCache
+            // Seeds the palette's verification family for the restored selection;
+            // `onChange(of: selection)` keeps it current from here.
+            syncVerificationCommands()
             // The IPC workspace tools reach the live app through the same weak
             // references; `IPC.Service` is an actor with no view hierarchy.
             WorkspaceActions.shared.surfaceCache = surfaceCache
@@ -668,10 +717,14 @@ struct ContentView: View {
                 logger.warning("[Atelier] projectCreated notification handled: \(project.name, privacy: .public)")
             }
             .onReceive(NotificationCenter.default.publisher(for: .purgeWorkstream)) { notification in
-                if let wsID = notification.object as? UUID {
+                // A nil object means "the selected workstream", which is what the
+                // palette posts. Either way this goes through `confirmPurge`, so
+                // the warning sheet is still what stands in front of the delete.
+                if let wsID = notification.object as? UUID ?? activeWorkstream?.id {
                     confirmPurge(wsID)
                 }
             }
+            .modifier(WorkstreamActionCommands(target: workstreamActionTarget))
             .onReceive(Timer.publish(every: 15, on: .main, in: .common).autoconnect()) { _ in
                 appEnvironment.refreshAllRepoInfo(projects: projects)
                 appEnvironment.refreshPathValidity(projects: projects)
@@ -1003,6 +1056,29 @@ struct ContentView: View {
         )
     }
 
+    /// Rebuilds the palette's verification family for whichever project is
+    /// selected.
+    ///
+    /// Per selection rather than per project: the checks a command may start are
+    /// the active workstream's, so listing one project's declarations while
+    /// another is selected would offer checks that cannot run.
+    ///
+    /// Synchronous, deliberately. It is one small file read and a YAML parse —
+    /// the same call `ProcessCompose.ResolutionModel` and `Verification.Runner`
+    /// make — and running it off the main actor buys nothing here while costing
+    /// a generation counter to discard a load that lands after the selection has
+    /// moved on. The list is advisory in any case: `Runner.start` loads the
+    /// config again and is the only thing that may refuse.
+    private func syncVerificationCommands() {
+        let names = activeProject.map {
+            Verification.Config.load(projectDirectory: $0.directory).checkNames
+        } ?? []
+        commandRegistry.sync(
+            idPrefix: verificationCommandPrefix,
+            with: verificationPaletteCommands(for: names)
+        )
+    }
+
     /// Update workstream names to match their branch name.
     /// Called periodically so that when the agent renames a branch, the sidebar reflects it.
     private func syncWorkstreamNamesFromBranches() {
@@ -1177,6 +1253,60 @@ private struct UsagePolling: ViewModifier {
                 // `refresh()` is still throttled, so this stays cheap.
                 guard phase == .active else { return }
                 Task { await store.refresh() }
+            }
+    }
+}
+
+/// What the palette's workstream actions act on, resolved from the selection by
+/// `ContentView.workstreamActionTarget`.
+///
+/// A value rather than a set of closures, so the availability decision and the
+/// action read the same facts: a row that offers "Open Pull Request" and a
+/// receiver that finds no URL would be the silent no-op these commands exist to
+/// avoid.
+struct WorkstreamActionTarget: Equatable {
+    let worktreePath: String
+    let branchName: String?
+    let githubURL: URL?
+    let pullRequestURL: URL?
+    let shortcutURL: URL?
+}
+
+/// The palette's six workstream actions, as one modifier rather than six more
+/// `onReceive`s in `ContentView.body`.
+///
+/// Each is the sidebar context menu's item aimed at the *selected* workstream
+/// instead of the hovered row. They no-op when `target` is nil, which is the
+/// state the palette hides the rows in — the receiver checks anyway, because
+/// nothing stops a notification arriving between a body evaluation and a click.
+private struct WorkstreamActionCommands: ViewModifier {
+    let target: WorkstreamActionTarget?
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: .revealInFinder)) { _ in
+                guard let path = target?.worktreePath else { return }
+                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: path)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .openOnGitHub)) { _ in
+                guard let url = target?.githubURL else { return }
+                NSWorkspace.shared.open(url)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .openPullRequest)) { _ in
+                guard let url = target?.pullRequestURL else { return }
+                NSWorkspace.shared.open(url)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .openInShortcut)) { _ in
+                guard let url = target?.shortcutURL else { return }
+                NSWorkspace.shared.open(url)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .copyBranchName)) { _ in
+                guard let branch = target?.branchName else { return }
+                copyTextToPasteboard(branch)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .copyWorktreePath)) { _ in
+                guard let path = target?.worktreePath else { return }
+                copyTextToPasteboard(path)
             }
     }
 }

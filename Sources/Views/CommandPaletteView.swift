@@ -113,20 +113,33 @@ struct CommandPaletteView: View {
         }
     }
 
+    /// One row. A refused command keeps its row and shows why in place of its
+    /// category and shortcut — the alternative, dropping it, is what made stored
+    /// prompts look like a feature that came and went.
     private func row(_ command: PaletteCommand, isSelected: Bool) -> some View {
-        HStack {
+        let reason = command.availability(context).reason
+        return HStack {
             Text(command.title)
+                .foregroundStyle(reason == nil ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
             Spacer()
-            Text(command.category)
-                .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
-            if let shortcut = command.shortcut {
-                Text(shortcut)
-                    .font(.system(size: 11, design: .monospaced))
+            if let reason {
+                Text(reason)
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 4))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            } else {
+                Text(command.category)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                if let shortcut = command.shortcut {
+                    Text(shortcut)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(.quaternary, in: RoundedRectangle(cornerRadius: 4))
+                }
             }
         }
         .padding(.horizontal, 12)
@@ -135,6 +148,12 @@ struct CommandPaletteView: View {
         .background(isSelected ? AnyShapeStyle(.selection) : AnyShapeStyle(.clear))
     }
 
+    /// Runs the highlighted command, unless it is a disabled row.
+    ///
+    /// A disabled row does nothing *and does not dismiss*: the palette stays up
+    /// with the reason still on screen, which is the whole point of listing it.
+    /// `search` already sorts every disabled row below every runnable one, so
+    /// Return lands on one only when the user has deliberately arrowed to it.
     private func runSelected() {
         let current = results
         let index = clampedPaletteSelection(selectedIndex, resultCount: current.count)
@@ -143,6 +162,7 @@ struct CommandPaletteView: View {
             return
         }
         let command = current[index]
+        guard command.isAvailable(context) else { return }
         registry.recordUsage(command.id)
         onDismiss()
         command.action()

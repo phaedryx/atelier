@@ -493,7 +493,7 @@ struct ChangesView: View {
 
         let toSend = annotations.comments(mode: mode)
         guard !toSend.isEmpty else { return }
-        guard let blocker = submitBlocker(for: workstreamID, cache: surfaceCache) else {
+        guard let blocker = submitBlocker(for: workstreamID) else {
             submitBlocked = nil
             return proceedWithSubmit(toSend)
         }
@@ -501,10 +501,20 @@ struct ChangesView: View {
     }
 
     /// Why `surfaceID` cannot be typed into right now, or nil when it can be.
-    private func submitBlocker(for surfaceID: UUID, cache: TerminalSurfaceCache) -> SubmitBlocker? {
-        guard cache.hasLiveSurface(surfaceID) else { return .noAgent }
-        let state = Workstream.AgentStateTracker.shared.state(forSurface: surfaceID)
-        return PromptInjector.canInject(state: state) ? nil : .busy
+    ///
+    /// Takes no cache: `PromptInjector` holds the same one `ContentView` handed
+    /// this view, and asking it is what keeps this answer and the palette's
+    /// stored-prompt gate the same answer.
+    private func submitBlocker(for surfaceID: UUID) -> SubmitBlocker? {
+        // Through `PromptInjector` rather than deciding here: this is the same
+        // question the palette's stored prompts ask, including the mask that
+        // stops a dropped `Stop` hook refusing forever, and two spellings of it
+        // would drift.
+        switch PromptInjector.shared.deliverability(to: surfaceID) {
+        case .ready: nil
+        case .noAgent: .noAgent
+        case .midTurn, .awaitingPermission: .busy
+        }
     }
 
     private func proceedWithSubmit(_ toSend: [ReviewComment]) {
@@ -525,7 +535,7 @@ struct ChangesView: View {
                 // The surface can die — or the agent can start a turn — during
                 // the git hop above, so both are re-checked here rather than
                 // silently no-oping or interrupting a turn that just began.
-                if let blocker = submitBlocker(for: target, cache: cache) {
+                if let blocker = submitBlocker(for: target) {
                     submitBlocked = blocker
                     return
                 }

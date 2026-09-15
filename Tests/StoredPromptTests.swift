@@ -173,15 +173,34 @@ final class PromptPaletteCommandTests: XCTestCase {
     func testAvailabilityRequiresWorkstreamAndReceptiveAgent() {
         let command = promptPaletteCommands(for: [StoredPrompt(label: "X", text: "y")])[0]
 
-        XCTAssertTrue(command.isAvailable(
-            PaletteContext(workstreamActive: true, editorActive: false, agentCanReceivePrompt: true)
-        ))
-        XCTAssertFalse(command.isAvailable(
-            PaletteContext(workstreamActive: false, editorActive: false, agentCanReceivePrompt: true)
-        ))
-        XCTAssertFalse(command.isAvailable(
-            PaletteContext(workstreamActive: true, editorActive: false, agentCanReceivePrompt: false)
-        ))
+        XCTAssertEqual(
+            command.availability(
+                PaletteContext(workstreamActive: true, editorActive: false, promptDelivery: .ready)
+            ),
+            .available
+        )
+        XCTAssertEqual(
+            command.availability(
+                PaletteContext(workstreamActive: false, editorActive: false, promptDelivery: .ready)
+            ),
+            .hidden
+        )
+    }
+
+    /// The reason is the whole point of keeping the row: a prompt that simply
+    /// vanished while the agent worked read as a feature that came and went, and
+    /// `surfaceStates` has no decay path, so one dropped `Stop` hook hid every
+    /// prompt for the rest of the session with nothing to say why.
+    func testRefusedPromptIsDisabledWithItsReasonRatherThanHidden() {
+        let command = promptPaletteCommands(for: [StoredPrompt(label: "X", text: "y")])[0]
+
+        for verdict in [PromptInjector.Deliverability.midTurn, .awaitingPermission, .noAgent] {
+            let availability = command.availability(
+                PaletteContext(workstreamActive: true, editorActive: false, promptDelivery: verdict)
+            )
+            XCTAssertNotEqual(availability, .hidden, String(describing: verdict))
+            XCTAssertEqual(availability.reason, verdict.reason, String(describing: verdict))
+        }
     }
 
     func testActionPostsRunStoredPromptWithPromptID() {
@@ -286,6 +305,56 @@ final class PromptInjectorPolicyTests: XCTestCase {
         XCTAssertFalse(PromptInjector.canInject(state: .working))
         XCTAssertFalse(PromptInjector.canInject(state: .stalled))
         XCTAssertFalse(PromptInjector.canInject(state: .needsAttention(.permission)))
+    }
+
+    /// A surface nothing is running in is `.noAgent` whatever the turn state
+    /// says, and the two are not interchangeable: `.noAgent` is what a
+    /// workstream whose agent never started reports, and it is not something a
+    /// `Stop` hook can clear.
+    func testDeliverabilityNeedsASurfaceFirst() {
+        XCTAssertEqual(
+            PromptInjector.deliverability(state: .idle, hasSurface: false, channelDown: false),
+            .noAgent
+        )
+        XCTAssertEqual(
+            PromptInjector.deliverability(state: nil, hasSurface: true, channelDown: false),
+            .ready
+        )
+        XCTAssertEqual(
+            PromptInjector.deliverability(state: .working, hasSurface: true, channelDown: false),
+            .midTurn
+        )
+        XCTAssertEqual(
+            PromptInjector.deliverability(state: .needsAttention(.permission), hasSurface: true, channelDown: false),
+            .awaitingPermission
+        )
+    }
+
+    /// A down channel unmakes `.working` and `.stalled` — both are held up by
+    /// hook events still arriving — the same masking `AgentStatusLabel` applies
+    /// to the sidebar's status word. Without it, one lost `Stop` hides every
+    /// stored prompt for the session, because nothing decays `surfaceStates`.
+    func testChannelDownMasksWorkingAndStalledButNotPermission() {
+        XCTAssertEqual(
+            PromptInjector.deliverability(state: .working, hasSurface: true, channelDown: true),
+            .ready
+        )
+        XCTAssertEqual(
+            PromptInjector.deliverability(state: .stalled, hasSurface: true, channelDown: true),
+            .ready
+        )
+        // A permission block is a positive fact a delivered hook established;
+        // losing the channel afterwards does not unmake it, and typing there
+        // would answer the prompt.
+        XCTAssertEqual(
+            PromptInjector.deliverability(state: .needsAttention(.permission), hasSurface: true, channelDown: true),
+            .awaitingPermission
+        )
+        // And a missing surface is still a missing surface.
+        XCTAssertEqual(
+            PromptInjector.deliverability(state: .working, hasSurface: false, channelDown: true),
+            .noAgent
+        )
     }
 
     /// Both typing paths classify through this one property; the nil policy is

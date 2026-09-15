@@ -1250,6 +1250,76 @@ until someone answers. `AgentStatusLabel` also exists because the row and the ro
 already drifted: the row grew a permission state and a live-session-aware idle that the cards
 never learned.
 
+### The command palette, and what a missing row means
+
+`PaletteCommand.availability` returns **three** cases, not two: `.available`,
+`.hidden`, and `.disabled(reason)`. The `isAvailable:` initializer is sugar over the
+first two and is what nearly every built-in uses — a command for a surface that is not
+on screen (Save, with no editor) has nothing to explain. `.disabled` is for a command
+the user is deliberately reaching for, refused by a condition they can act on: the
+Coding Agent is mid-turn, `gh` is not installed. `CommandRegistry.search` drops
+`.hidden` and keeps `.disabled` **below every runnable result**, whatever it scores,
+and `runSelected` refuses it *without dismissing* — the palette stays up with the
+reason on screen, which is the whole point of listing it.
+
+**That distinction exists because of the stored prompts.** They were `.hidden`
+whenever `PromptInjector` would refuse, which is the common case — an agent is mid-turn
+most of the time you reach for a prompt — so the palette simply came up shorter, with
+nothing to say why. Worse, `surfaceStates` has **no decay path**: the only things that
+move a surface off `.working` are `agentIdle`, `agentSessionStarted` and
+`agentSessionEnded`, and `sweepForStalls` writes `rosters` and the workstream-level
+`states` without ever touching it. So a `Stop` that is lost or never sent — and
+`atelier-hook` fails silently by construction, `curl --max-time 1` — is unrecoverable
+for the session: the surface reads `.working` until the agent restarts, and every
+stored prompt was gone with it. Do not put the gate back as a hide.
+
+**`PromptInjector.deliverability` is the one decision, and `channelDown` masks
+`.working` and `.stalled` — nothing else.** That is the same rule `AgentStatusLabel`
+applies to the sidebar's status word, for the same reason: both states are held up by
+the *continued arrival* of hook events, and neither survives learning that the app has
+stopped hearing. `.needsAttention(.permission)` is deliberately **not** masked — it is a
+positive fact a delivered hook established, and typing there answers the prompt.
+`ChangesView.submitBlocker` routes through the same function rather than re-deciding,
+so the Changes tab's Submit and the palette's prompts cannot drift apart.
+
+**Three dynamic families, each owning an id prefix that `CommandRegistry.sync` clears
+wholesale**: `goto.`, `prompt.`, and `verify.check.`. A static command named under one
+of those is silently deleted on that family's first emission, which is why none of them
+is spelled `workstream.`, `project.` or `run.` — `workstream.rename`, `workstream.purge`
+and `run.startRerun` are built-ins. The verification family is rebuilt **per selection**,
+not per project, and off the main thread because it reads `verification.yaml`; a
+generation counter drops a load that finished after the selection moved on. The list is
+advisory — `Verification.Runner.start` loads the config again and is the only thing that
+may refuse — and the receiver opens the Verification tab before starting, because a
+check's output lives only in its own surface and the runner's refusals are states that
+tab already draws.
+
+**Commands that act on the selected workstream are received in `ContentView`**, not in
+the sidebar: Reveal in Finder, Open on GitHub, Open Pull Request, Open in Shortcut, Copy
+Branch Name, Copy Worktree Path. The sidebar's context menu reads row-local values
+(`worktreePath`, `githubURL`, `branchName`) that nothing outside that row can see;
+`ContentView.workstreamActionTarget` resolves the same facts from the selection, out of
+`AppEnvironment`'s caches, and backs **both** the availability decision and the action,
+so a row offering "Open Pull Request" and a receiver finding no URL cannot happen. The
+three "open" rows are `.hidden` with nothing to open, the same choice the context menu
+makes by omitting the item.
+
+**`.purgeWorkstream` and `.addNew` gained optional payloads**, and the absent case is
+load-bearing in both. A nil `.purgeWorkstream` object means "the selected workstream" —
+a command closure is built once and never learns which one is active — and it still
+lands on `confirmPurge`, so `purgeWarning` and `destroyableWorktreePath` stand where
+they always did. A nil `.addNew` object means "the `atelier.bypassPermissions` default",
+which is what ⌘N and every other producer wants; the palette's two variant rows post
+`true` and `false`. Reading a missing payload as `false` would silently strip
+permissions from ⌘N.
+
+**`QuickAction.unavailableReason` is the one copy of the quick actions' gate**, read by
+the toolbar menu's `.disabled`, by the palette row that shows it, and by the receiver in
+`TerminalContainerView` that runs the action. The palette deliberately does *not* mirror
+the menu's repo-state filtering (offering Push only when something is unpushed): that is
+the menu choosing a single primary action for one button, while a palette searched by
+name should find "Commit" whether or not the tree is dirty.
+
 ### System prompts
 
 The Coding Agent receives additional system prompts via `--append-system-prompt` based on
