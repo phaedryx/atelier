@@ -286,6 +286,26 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         XCTAssertEqual(requests, 1)
     }
 
+    /// A stalled run is still silence worth explaining. Marking a run `.stalled`
+    /// must not stop the sweep asking about the channel: once every quiet run is
+    /// stalled, the probe's re-checks are the only path by which a `.down`
+    /// verdict can clear before the run's tool finally returns — real traffic is
+    /// by definition absent. Without this, one false `.down` during a long
+    /// silent tool renders "No Signal" until the tool ends, however healthy the
+    /// channel is.
+    func test_aStalledRun_stillRequestsAChannelCheck() {
+        handle(.waiting(agentId: "main"))
+        backdateMainRun(secondsAgo: Workstream.AgentStateTracker.wedgeThreshold + 60)
+        tracker.sweepForStalls(now: Date())
+        XCTAssertEqual(tracker.runs(for: wsID)[0].state, .stalled, "precondition: the run was marked stalled")
+
+        var requests = 0
+        tracker.onProlongedSilence = { requests += 1 }
+        tracker.sweepForStalls(now: Date())
+
+        XCTAssertEqual(requests, 1, "a stalled run's continued silence is peak suspicion, not resolved suspicion")
+    }
+
     /// One question about the channel, however many rows have gone quiet. The
     /// probe debounces too, but the sweep should not be making the call once
     /// per run in the first place.
