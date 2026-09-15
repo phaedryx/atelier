@@ -24,6 +24,23 @@ final class HookEventReceiver: @unchecked Sendable {
     /// life of the app. Settable so a test can shorten it.
     nonisolated(unsafe) static var connectionTimeout: TimeInterval = 15
 
+    /// Most bytes the receiver will accumulate for one request, and the largest
+    /// `Content-Length` it will wait for. Past either, the connection is closed
+    /// rather than buffered further.
+    ///
+    /// Four mebibytes, and the size is chosen from the cost of being *under* it
+    /// rather than over. A hook body is the harness's own JSON: a few hundred
+    /// bytes for most events, and at its largest a `PreToolUse`/`PostToolUse`
+    /// carrying a tool's input or output — a file about to be written, a file
+    /// just read — which runs to hundreds of kilobytes. Refusing one of those
+    /// would drop the event, and a dropped `PostToolUse` leaves a tool bracket
+    /// open, which the stall sweep reads as a wedged agent: a worse outcome than
+    /// the unbounded buffer this replaces. So the number is orders of magnitude
+    /// above anything a real session sends, and there is no reason to tighten
+    /// it. `HookChannelProbe`'s ping is a couple of hundred bytes and nowhere
+    /// near it.
+    static let maximumRequestBytes = 4 * 1024 * 1024
+
     /// `hook_event_name` of the liveness ping. Deliberately not a Claude Code
     /// event name, so a real session can never produce one.
     static let pingEventName = "AtelierPing"
@@ -201,13 +218,43 @@ final class HookEventReceiver: @unchecked Sendable {
         receiveData(on: connection, buffer: Data())
     }
 
-    private func receiveData(on connection: NWConnection, buffer: Data) {
+    /// Reads one request off `connection`, a chunk at a time.
+    ///
+    /// `buffer` is what has arrived so far and `headerEnd` is where the headers
+    /// were found to end, once they have been. Both are carried across chunks so
+    /// the separator is searched for **once** over the life of the request: the
+    /// scan resumes near the end of what the previous pass covered, and stops
+    /// happening at all as soon as it has an answer. Starting over on every chunk
+    /// made a request delivered in N pieces cost N scans of a growing buffer.
+    ///
+    /// Carrying an *index* across passes is safe because `accumulated` only ever
+    /// grows by appending: `startIndex` stays put, so an index taken on a shorter
+    /// buffer still names the same byte of a longer one. Anything that dropped
+    /// the consumed prefix instead would shift every index and silently invalidate
+    /// this — which is why `findHeaderEnd` indexes from `startIndex` rather than
+    /// from zero.
+    private func receiveData(on connection: NWConnection, buffer: Data, headerEnd: Data.Index? = nil) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
             guard let self else { return }
 
+            // How much of `accumulated` the previous pass already scanned for the
+            // header separator. Everything before it has been looked at, so this
+            // pass resumes there rather than starting over — see `findHeaderEnd`.
+            let alreadyScanned = buffer.count
             var accumulated = buffer
             if let data {
                 accumulated.append(data)
+            }
+
+            // Ahead of the `isComplete` branch on purpose: a request past the
+            // ceiling is refused whether or not it finished arriving, so nothing
+            // downstream — `JSONSerialization` included — is ever handed a body
+            // this large.
+            if accumulated.count > Self.maximumRequestBytes {
+                logger.warning("Closing a hook connection that sent more than \(Self.maximumRequestBytes) bytes")
+                connection.cancel()
+                removeConnection(connection)
+                return
             }
 
             if isComplete || error != nil {
@@ -216,34 +263,60 @@ final class HookEventReceiver: @unchecked Sendable {
                 return
             }
 
-            // Check if we have the full HTTP body yet
-            if let headerEnd = findHeaderEnd(in: accumulated) {
-                let headerData = accumulated[..<headerEnd]
-                let bodyStart = headerEnd
-                if let contentLength = parseContentLength(from: headerData),
-                   accumulated.count >= bodyStart + contentLength
-                {
-                    // Full request received
-                    processHTTPRequest(accumulated, on: connection)
-                    return
+            // Check if we have the full HTTP body yet. The headers end where they
+            // ended on whichever earlier chunk first covered them — re-deriving
+            // that from a resumed scan would look for a separator that is now
+            // behind the resume point and conclude the headers had never ended.
+            let resolvedHeaderEnd = headerEnd ?? findHeaderEnd(in: accumulated, scannedCount: alreadyScanned)
+            if let resolvedHeaderEnd {
+                let headerData = accumulated[..<resolvedHeaderEnd]
+                if let contentLength = parseContentLength(from: headerData) {
+                    guard contentLength >= 0, contentLength <= Self.maximumRequestBytes else {
+                        // Waiting for it would mean buffering to the ceiling and
+                        // closing there anyway, one chunk at a time.
+                        logger.warning("Closing a hook connection declaring Content-Length \(contentLength)")
+                        connection.cancel()
+                        removeConnection(connection)
+                        return
+                    }
+                    if accumulated.endIndex - resolvedHeaderEnd >= contentLength {
+                        // Full request received
+                        processHTTPRequest(accumulated, on: connection)
+                        return
+                    }
                 }
             }
 
             // Need more data
-            receiveData(on: connection, buffer: accumulated)
+            receiveData(on: connection, buffer: accumulated, headerEnd: resolvedHeaderEnd)
         }
     }
 
-    private func findHeaderEnd(in data: Data) -> Int? {
-        let separator: [UInt8] = [0x0D, 0x0A, 0x0D, 0x0A] // \r\n\r\n
-        let bytes = Array(data)
-        guard bytes.count >= 4 else { return nil }
-        for i in 0 ... (bytes.count - 4) {
-            if bytes[i] == separator[0], bytes[i + 1] == separator[1],
-               bytes[i + 2] == separator[2], bytes[i + 3] == separator[3]
+    /// Index just past the `\r\n\r\n` ending the headers, or nil while they are
+    /// still arriving.
+    ///
+    /// `scannedCount` is an *offset* — how many leading bytes a previous pass
+    /// already covered — while the return value is an *index* into `data`, so it
+    /// stays correct for a slice whose indices do not start at zero. The scan
+    /// actually resumes three bytes earlier than `scannedCount`, because that is
+    /// the most of the separator that can lie behind the boundary a chunk arrived
+    /// on.
+    ///
+    /// The offset is what keeps this linear. Scanning from zero on every chunk
+    /// made a request delivered in N pieces cost N scans of a growing buffer, and
+    /// `Array(data)` made each of those a full copy as well. `Data` subscripts
+    /// fine, so there is no copy at all now.
+    private func findHeaderEnd(in data: Data, scannedCount: Int = 0) -> Data.Index? {
+        guard data.count >= 4 else { return nil }
+        var index = data.startIndex + max(0, scannedCount - 3)
+        let last = data.endIndex - 4
+        while index <= last {
+            if data[index] == 0x0D, data[index + 1] == 0x0A,
+               data[index + 2] == 0x0D, data[index + 3] == 0x0A
             {
-                return i + 4
+                return index + 4
             }
+            index += 1
         }
         return nil
     }

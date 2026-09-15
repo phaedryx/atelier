@@ -432,6 +432,176 @@ final class HookEventReceiverTests: XCTestCase {
         XCTAssertEqual(receiver.connectionCount, 0, "the stalled connection was never reaped")
     }
 
+    // MARK: - Chunked delivery and the size ceiling
+
+    /// Opens a socket to the listener, with SIGPIPE off and both directions on a
+    /// deadline. The tests below deliberately write to a connection the receiver
+    /// is closing under them, and an unhandled SIGPIPE takes the whole test
+    /// process with it.
+    private func connectToListener(timeout: TimeInterval = 10) throws -> Int32 {
+        receiver.start()
+        let resolved = try XCTUnwrap(waitForBoundPort(timeout: timeout), "hook receiver did not bind a port")
+
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        var on: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        var window = timeval(tv_sec: 10, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &window, socklen_t(MemoryLayout<timeval>.size))
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &window, socklen_t(MemoryLayout<timeval>.size))
+
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = resolved.bigEndian
+        address.sin_addr.s_addr = INADDR_LOOPBACK.bigEndian
+        let connected = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        XCTAssertEqual(connected, 0, "could not reach the hook receiver")
+        return fd
+    }
+
+    @discardableResult
+    private func write(_ bytes: Data, to fd: Int32) -> Int {
+        bytes.withUnsafeBytes { Darwin.send(fd, $0.baseAddress!, bytes.count, 0) }
+    }
+
+    /// Blocks until the receiver closes its end of `fd`. A zero-length read is
+    /// the FIN; `ECONNRESET` is the same answer arriving less politely.
+    private func receiverClosed(_ fd: Int32) -> Bool {
+        var scratch = [UInt8](repeating: 0, count: 256)
+        while true {
+            let read = Darwin.recv(fd, &scratch, scratch.count, 0)
+            if read == 0 {
+                return true
+            }
+            if read < 0 {
+                return errno == ECONNRESET
+            }
+            // A response body: keep reading until the connection itself ends.
+        }
+    }
+
+    /// Delivers one request split so that `separatorBytesInFirstChunk` of the
+    /// header's `\r\n\r\n` arrive before the boundary and the rest after it, then
+    /// splits the body across another boundary. Returns the events produced.
+    ///
+    /// The fd is held open until the event has arrived, and that is not fussiness:
+    /// closing it fires `isComplete`, whose branch re-scans the whole buffer from
+    /// byte 0 and would find the separator however broken the incremental resume
+    /// was. The delays are for the same reason — back-to-back loopback writes
+    /// coalesce into a single `receive`, and then nothing straddles anything.
+    private func requestSplitAcrossHeaderEnd(separatorBytesInFirstChunk: Int) throws -> [AgentEvent] {
+        var received: [AgentEvent] = []
+        let delivered = expectation(description: "hook event routed")
+        delivered.assertForOverFulfill = false
+        receiver.onEvent = { _, event in
+            received.append(event)
+            delivered.fulfill()
+        }
+
+        let body = try JSONSerialization.data(withJSONObject: [
+            "event_input": ["hook_event_name": "Stop", "agent_id": "main"],
+            "project_dir": "/tmp/atelier-hook-test",
+            "surface_id": "",
+        ])
+        let head = "POST /hook HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: \(body.count)\r\n\r\n"
+        var request = Data(head.utf8)
+        let headerEnd = request.count
+        request.append(body)
+
+        let firstBoundary = headerEnd - 4 + separatorBytesInFirstChunk
+        let secondBoundary = headerEnd + body.count / 2
+
+        let fd = try connectToListener()
+        defer { close(fd) }
+        write(request[..<firstBoundary], to: fd)
+        usleep(150_000)
+        write(request[firstBoundary ..< secondBoundary], to: fd)
+        usleep(150_000)
+        write(request[secondBoundary...], to: fd)
+
+        wait(for: [delivered], timeout: 10)
+        return received
+    }
+
+    /// The header separator can land across a chunk boundary, so the scan resumes
+    /// from `previousCount - 3` rather than from byte 0. Three is exactly the most
+    /// of `\r\n\r\n` that can lie behind the boundary, and the last case here is
+    /// the one that pins the number: resume at `previousCount` and the separator
+    /// is never seen, so the request never completes and this fails by timeout.
+    func test_aSeparatorSplitAcrossChunks_stillCompletesTheRequest() throws {
+        for split in 1 ... 3 {
+            let events = try requestSplitAcrossHeaderEnd(separatorBytesInFirstChunk: split)
+            XCTAssertEqual(events.count, 1, "\(split) separator byte(s) before the boundary lost the request")
+        }
+    }
+
+    /// Nothing used to bound how much a connection could accumulate. It does now,
+    /// and a client past the ceiling is hung up on rather than buffered further.
+    ///
+    /// The read deadline is pushed far out so that a close observed here can only
+    /// be the ceiling's.
+    func test_aRequestPastTheSizeCeiling_isClosedRatherThanBuffered() throws {
+        let previous = HookEventReceiver.connectionTimeout
+        HookEventReceiver.connectionTimeout = 120
+        addTeardownBlock { HookEventReceiver.connectionTimeout = previous }
+
+        let quiet = expectation(description: "no hook event routed")
+        quiet.isInverted = true
+        receiver.onEvent = { _, _ in quiet.fulfill() }
+
+        let fd = try connectToListener()
+        defer { close(fd) }
+
+        // Headers that never end, so the ceiling is the only thing that can stop
+        // this — no Content-Length to bound it and no body to complete.
+        write(Data("POST /hook HTTP/1.1\r\nHost: 127.0.0.1\r\n".utf8), to: fd)
+        let chunk = Data(repeating: UInt8(ascii: "A"), count: 64 * 1024)
+        var sent = 0
+        while sent <= HookEventReceiver.maximumRequestBytes + chunk.count {
+            let wrote = write(chunk, to: fd)
+            // The receiver hung up mid-write, which is the outcome under test.
+            if wrote <= 0 {
+                break
+            }
+            sent += wrote
+        }
+
+        XCTAssertTrue(receiverClosed(fd), "the oversized request was buffered instead of refused")
+        wait(for: [quiet], timeout: 1)
+    }
+
+    /// A `Content-Length` past the ceiling is refused when it is read, not after
+    /// the bytes have been buffered up to it one chunk at a time.
+    func test_anOutsizedContentLength_isRefusedWithoutWaitingForTheBody() throws {
+        let previous = HookEventReceiver.connectionTimeout
+        HookEventReceiver.connectionTimeout = 120
+        addTeardownBlock { HookEventReceiver.connectionTimeout = previous }
+
+        let fd = try connectToListener()
+        defer { close(fd) }
+
+        let declared = HookEventReceiver.maximumRequestBytes + 1
+        let head = "POST /hook HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: \(declared)\r\n\r\n"
+        write(Data(head.utf8), to: fd)
+
+        XCTAssertTrue(receiverClosed(fd), "the receiver settled in to wait for \(declared) bytes")
+    }
+
+    /// The payload `HookChannelProbe` sends is the one request that must never be
+    /// refused — the probe is what tells the app the channel is alive at all, so a
+    /// ceiling that rejected it would report the channel down by enforcing itself.
+    func test_theChannelProbesOwnPayload_isFarBelowTheCeiling() throws {
+        let payload = try JSONSerialization.data(withJSONObject: [
+            "hook_event_name": HookEventReceiver.pingEventName,
+            "nonce": UUID().uuidString,
+            "session_id": UUID().uuidString,
+        ])
+        XCTAssertLessThan(payload.count * 1000, HookEventReceiver.maximumRequestBytes)
+    }
+
     // MARK: - Tool brackets pair
 
     /// An MCP call is a tool call like any other, and often a slow one. Dropping
