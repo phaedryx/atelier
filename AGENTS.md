@@ -604,10 +604,10 @@ are the same *set*. `Tests/ProcessComposeConfigTests.swift` pins that an overrid
 config is never loaded, and that nothing in a work tree is.
 
 **A newly created project starts with one.** `ProcessCompose.Config.writeDefault` drops a
-commented template carrying one example process, called from the two paths that *create* the
-project directory — New Project and Clone Repository in `ProjectSidebar` — and deliberately not
-from the two that adopt a directory the user already had. Same rule, same two call sites, as
-`Verification.Config.writeDefault`. **New Project seeds into a work tree** — that path runs
+commented template carrying one example process, called through `Project.seedDefaultConfigs`
+(see **Seeded config templates** below) from the two paths that *create* the project
+directory, and deliberately not from the two that adopt a directory the user already had.
+Same rule, same entry point, as `Verification.Config.writeDefault`. **New Project seeds into a work tree** — that path runs
 `git init` on the directory it made, so `Project.directory` is the checkout — and that is the
 known hole above rather than a new one: a hand-written config in the same place is read
 identically, and `verification.yaml`, whose checks are commands too, is seeded on the same terms.
@@ -649,6 +649,35 @@ unattended execution path for repository-provided commands must go through it.
 from `verification.yaml` in the *project directory*, which is outside every work tree, so the
 location rule this gate implements already answers the question. See **verification.yaml** below.
 
+### Seeded config templates
+The two paths that *create* the project directory — "New Project" and Clone Repository,
+both in `ProjectSidebar` — call **`Project.seedDefaultConfigs`**, which writes one
+commented template per config file the app reads from the project directory:
+`verification.yaml`, `initialization.yaml`, `ports.yaml` and
+`execution.process-compose.yaml`. The two paths that *adopt* a
+directory the user already had (the picker and the drag-and-drop) deliberately do not:
+writing there would leave untracked files in a repository they merely registered.
+
+Each writer lives on its config type beside that type's `fileNames`, so only one place
+knows each filename, and each refuses when **either** spelling is already present —
+seeding a `ports.yaml` beside an existing `ports.yml` would win the lookup and hide the
+project's real declarations. The refusals are per file, not all-or-nothing: a project
+that already carries its own `ports.yml` still gains the templates it lacks.
+
+**Whether a template's example is commented out is a per-file safety decision, not
+style.** `verification.yaml`'s example check is uncommented (a check runs only on a
+deliberate press, and an all-comments file would render the dead-end "declares no
+checks" instead of the actionable empty state), and so is
+`execution.process-compose.yaml`'s example process — there a comments-only file fails to
+decode, `namespacePresence("execute")` answers `.unknown`, and Start runs a namespace
+nobody declared, which idles forever (see the process-compose section).
+`initialization.yaml`'s and
+`ports.yaml`'s examples are commented out, because an uncommented step would *execute*
+behind every new worktree and an uncommented port entry would claim a real port and
+inject its variable into every terminal surface. The round-trip tests in
+`InitializationConfigTests`, `PortsConfigTests` and `VerificationConfigTests` pin each
+template to the loading behavior its choice depends on.
+
 ### initialization.yaml
 Worktree setup does **not** go through process-compose. A project declares what a new
 worktree needs in an `initialization.yaml`, and the steps run once, in the background,
@@ -673,6 +702,10 @@ cannot rewrite what runs when the next worktree is made. There is deliberately *
 worktree tier** mirroring `ProcessCompose.Config.locate`'s. The known hole is the same one
 `verification.yaml` documents and is left unchanged rather than half-tightened: for an
 ordinary clone `Project.directory` *is* the checkout.
+
+**A newly created project starts with one**, all comments, via `Project.seedDefaultConfigs`
+(see **Seeded config templates** above) — it loads as "declares no steps", the benign
+Info-tab note, where an uncommented example would run behind every new worktree.
 
 `Initialization.Config.load` returns **three** cases and never two — `.missing`,
 `.invalid(reason:)`, `.loaded` — because a file Atelier cannot read must never render as
@@ -784,18 +817,12 @@ there was gated by a `ScriptTrust` fingerprint the user approved in a sheet. Ver
 written to the project-directory-only rule first; the execution config then followed it, and the
 gate went with the tiers it existed for.
 
-**A newly created project starts with one.** The two paths that *create* the project
-directory — "New Project" and Clone Repository, both in `ProjectSidebar` — call
-`Verification.Config.writeDefault`, which drops a commented template carrying one
-placeholder check. The two paths that *adopt* a directory the user already had (the
-picker and the drag-and-drop) deliberately do not: writing there would leave an untracked
-file in a repository they merely registered. The writer lives on `Verification.Config`
-beside `fileNames` rather than in the view, so only one place knows the filename, and it
-refuses when **either** spelling is already present — seeding a `verification.yaml` beside
-an existing `verification.yml` would win the lookup and hide the project's real checks.
-The template's example check is **uncommented on purpose**: a file of nothing but comments
-composes to nil, which loads as "declares no checks", so an all-comments template would
-have replaced the actionable empty state with a dead-end one.
+**A newly created project starts with one**, seeded through `Project.seedDefaultConfigs`
+(see **Seeded config templates** below). The template's example check is **uncommented on
+purpose**: a file of nothing but comments composes to nil, which loads as "declares no
+checks", so an all-comments template would have replaced the actionable empty state with a
+dead-end one. Uncommented is safe *here* because a check runs only when somebody presses
+Run — the templates that run unattended make the opposite choice.
 
 `Verification.Config.load` returns **three** cases and never two: `.missing`, `.invalid(reason:)`
 and `.loaded`. A file Atelier cannot read must never render as "this project declares no checks",
@@ -953,6 +980,10 @@ At most one entry may set `browser: true`; that port is what the embedded browse
 wins over detection — Atelier assigned it, so there is nothing to infer. Entries are sorted by
 name before allocation, so an assigned port does not move because a YAML key was reordered.
 `assigned: false` is an error rather than a no-op, because it reads like it means something.
+
+**A newly created project starts with one**, all comments, via `Project.seedDefaultConfigs`
+(see **Seeded config templates** above) — it loads as "declares nothing", the ordinary state
+for a project without ports, where an uncommented example would claim a real port.
 
 Every declared name reaches **every** terminal surface via `Workstream.Environment.variables`,
 not just the run pane — a port visible only to the run pane is invisible to a test run in a

@@ -2,7 +2,10 @@
 // ABOUTME: Project directory only, so it can never arrive with the repository.
 
 import Foundation
+import os
 import Yams
+
+private let logger = Logger(subsystem: "atelier", category: "initialization.config")
 
 /// A project's worktree setup: named steps, run in order, once, at creation.
 ///
@@ -256,5 +259,74 @@ extension Initialization.Config {
             ))
         }
         return .loaded(Initialization.Config(path: path, steps: steps))
+    }
+}
+
+extension Initialization.Config {
+    /// The file a newly created project starts with.
+    ///
+    /// Deliberately **not** localized, for the reason `Verification.Config`'s
+    /// template is not: this is file content the user edits, not UI, and the
+    /// keys are part of the schema.
+    ///
+    /// Every line is a comment, which is the opposite of that template's
+    /// decision and deliberate for the opposite reason: a verification check
+    /// runs only when somebody presses Run, but a step here runs unattended
+    /// behind every new worktree — so an uncommented example would *execute*,
+    /// per worktree, in every seeded project. A comment-only file loads as
+    /// "declares no steps", which the Info tab reports as a note rather than
+    /// a failure.
+    static let defaultContents = """
+    # Worktree setup for this project.
+    #
+    # Each entry is one step, run once when a new worktree is created, with the
+    # worktree as the working directory. Steps run in this file's order and
+    # setup halts on the first failure; progress and failures show on the
+    # workstream's Info tab. `shell:` is optional and defaults to $SHELL.
+    #
+    # Steps run with Atelier's environment: every ATELIER_* variable and every
+    # port declared in ports.yaml.
+    #
+    #   deps:
+    #     command: bundle install
+    #
+    #   assets:
+    #     shell: fish
+    #     command: bun install && bun run build
+    #
+    # Uncomment and replace with this project's real setup steps. A file with
+    # no steps means no setup runs.
+
+    """
+
+    /// Seed a newly created project with `defaultContents`.
+    ///
+    /// Called only by the two paths that *create* the project directory — a new
+    /// empty project and a fresh clone — and never by the paths that adopt a
+    /// directory the user already had, which would drop an untracked file into a
+    /// repository they merely registered.
+    ///
+    /// Does nothing when either name in `fileNames` is already present, and
+    /// reports rather than throws: a convenience template must not fail project
+    /// creation, but a write that silently did not happen is worse than one that
+    /// says so.
+    @discardableResult
+    static func writeDefault(projectDirectory: String) -> Bool {
+        let fileManager = FileManager.default
+        let directory = URL(fileURLWithPath: projectDirectory, isDirectory: true)
+        guard !fileNames.contains(where: {
+            fileManager.fileExists(atPath: directory.appendingPathComponent($0).path)
+        }) else { return false }
+
+        let path = directory.appendingPathComponent(fileNames[0])
+        do {
+            try defaultContents.write(to: path, atomically: true, encoding: .utf8)
+            return true
+        } catch {
+            logger.warning(
+                "[Atelier] could not write default initialization.yaml: \(error.localizedDescription, privacy: .public)"
+            )
+            return false
+        }
     }
 }

@@ -2,7 +2,10 @@
 // ABOUTME: Names come from the file; numbers come from ProcessCompose.PortPlan.
 
 import Foundation
+import os
 import Yams
+
+private let logger = Logger(subsystem: "atelier", category: "ports.config")
 
 extension ProcessCompose {
     /// One declared port variable.
@@ -215,6 +218,73 @@ extension ProcessCompose {
             }
 
             return ProcessCompose.PortsConfig(entries: entries)
+        }
+    }
+}
+
+extension ProcessCompose.PortsConfig {
+    /// The file a newly created project starts with.
+    ///
+    /// Deliberately **not** localized, for the reason `Verification.Config`'s
+    /// template is not: this is file content the user edits, not UI, and the
+    /// keys are part of the schema.
+    ///
+    /// Every line is a comment, and here that is the safe shape rather than a
+    /// dead end: an uncommented example would claim a real port and inject its
+    /// variable into every terminal surface of every seeded project, and a
+    /// comment-only file loads as "declares nothing" — the ordinary state for a
+    /// project that does not use ports.
+    static let defaultContents = """
+    # Port variables Atelier supplies to this project.
+    #
+    # Each entry declares an environment variable. `assigned: true` means
+    # Atelier picks a stable per-worktree port, so two worktrees can run the
+    # same stack at once. `fixed: <number>` means that exact port everywhere,
+    # for values registered outside the machine — an OAuth redirect URI, a CORS
+    # allowlist. At most one entry may set `browser: true`; that port is the one
+    # the embedded browser opens.
+    #
+    # Every declared name reaches every terminal, initialization step,
+    # verification check and process-compose namespace.
+    #
+    #   ports:
+    #     WEB_PORT: { assigned: true, browser: true }
+    #     API_PORT: { assigned: true }
+    #     OAUTH_PORT: { fixed: 4000 }
+    #
+    # Uncomment and replace with this project's real ports. A file declaring
+    # nothing supplies nothing.
+
+    """
+
+    /// Seed a newly created project with `defaultContents`.
+    ///
+    /// Called only by the two paths that *create* the project directory — a new
+    /// empty project and a fresh clone — and never by the paths that adopt a
+    /// directory the user already had, which would drop an untracked file into a
+    /// repository they merely registered.
+    ///
+    /// Does nothing when either name in `fileNames` is already present, and
+    /// reports rather than throws: a convenience template must not fail project
+    /// creation, but a write that silently did not happen is worse than one that
+    /// says so.
+    @discardableResult
+    static func writeDefault(projectDirectory: String) -> Bool {
+        let fileManager = FileManager.default
+        let directory = URL(fileURLWithPath: projectDirectory, isDirectory: true)
+        guard !fileNames.contains(where: {
+            fileManager.fileExists(atPath: directory.appendingPathComponent($0).path)
+        }) else { return false }
+
+        let path = directory.appendingPathComponent(fileNames[0])
+        do {
+            try defaultContents.write(to: path, atomically: true, encoding: .utf8)
+            return true
+        } catch {
+            logger.warning(
+                "[Atelier] could not write default ports.yaml: \(error.localizedDescription, privacy: .public)"
+            )
+            return false
         }
     }
 }
