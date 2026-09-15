@@ -90,6 +90,12 @@ extension ProcessCompose {
             case .override:
                 return nil
             case .processCompose:
+                // Defensive, and not the migration pointer it reads as: a
+                // `.processCompose` source exists only because
+                // `detectProcessCompose` located a config, so this cannot fire
+                // for a project that has none. What such a project sees is
+                // `ExecutionTabView.scriptInstructions`'s own default copy, which
+                // names the same file.
                 if config == nil {
                     return NSLocalizedString(
                         "This project has no execution.process-compose.yaml in its directory, so there is nothing to start.",

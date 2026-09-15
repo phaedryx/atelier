@@ -605,7 +605,12 @@ config is never loaded, and that nothing in a work tree is.
 commented template carrying one example process, called from the two paths that *create* the
 project directory — New Project and Clone Repository in `ProjectSidebar` — and deliberately not
 from the two that adopt a directory the user already had. Same rule, same two call sites, as
-`Verification.Config.writeDefault`. **The template's example process is real and uncommented, and
+`Verification.Config.writeDefault`. **New Project seeds into a work tree** — that path runs
+`git init` on the directory it made, so `Project.directory` is the checkout — and that is the
+known hole above rather than a new one: a hand-written config in the same place is read
+identically, and `verification.yaml`, whose checks are commands too, is seeded on the same terms.
+Clone Repository is unaffected, because a committed config lands in the worktrees, where nothing
+reads it. **The template's example process is real and uncommented, and
 that is load-bearing**: a comments-only file — or one whose `processes:` key is null — fails to
 decode, so `namespacePresence` answers `.unknown`, and `RunCommandPlan` gates `execute` on
 `.empty` and *only* `.empty`. A commented-out template would ship every new project with an

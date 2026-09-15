@@ -270,6 +270,19 @@ extension ProcessCompose.Config {
     /// repository they merely registered. The same rule, and the same two call
     /// sites, as `Verification.Config.writeDefault`.
     ///
+    /// **New Project seeds into a work tree, and that is the known hole rather
+    /// than a new one.** That path runs `git init` on the directory it made, so
+    /// `Project.directory` *is* the checkout and this file can be committed —
+    /// after which a plain clone of that repository, registered through the
+    /// picker, would run its `bootstrap` and `dispose` unattended. The hole is
+    /// the plain-checkout layout, not the seed: a hand-written config in the same
+    /// place is read identically, and `verification.yaml` — whose checks are
+    /// commands too — is seeded there on the same terms. Clone Repository is
+    /// unaffected, because its container is not a work tree and a committed
+    /// config lands in the worktrees, where nothing reads it. Declining to seed
+    /// here would not close anything; it would only make the empty state worse on
+    /// the one path where a template helps most.
+    ///
     /// Does nothing when either name in `fileNames` is already present, and
     /// reports rather than throws: a convenience template must not fail project
     /// creation, but a write that silently did not happen is worse than one that
