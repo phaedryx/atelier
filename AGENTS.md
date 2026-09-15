@@ -332,25 +332,31 @@ upstream of `origin/<base>` — a different name from the branch itself, which m
 `@{upstream}..HEAD` range `hasUnpushedCommits` guards a purge with. `pushCurrentBranch` passes
 `-u`, so the app's own push still sets an upstream when there is something to push.
 
-**Known limitation, deliberate and unfixed:** three comparison sites in `Git.Operations` call
+**Known limitation, deliberate and unfixed:** **two** comparison sites in `Git.Operations` call
 `defaultBranch(at:)` directly and do *not* consult this setting — `mergeBase` (the Changes tab's
-diff base), `hasBranchCommits` (the ahead count), and the unmerged-commit log inside
-`worktreeDetail`. So with the setting on `develop` in a repository whose git default is `main`,
-a worktree is cut from `develop` while its diff and its ahead count are measured against `main`.
-Two reviewers disagreed on whether those sites should follow the setting — a diff base and a
-creation base are arguably different questions — so it stays a follow-up rather than a
-half-migration finished in the dark. Do not "fix" one of the three; either all of them move or
-none do.
+diff base) and `hasBranchCommits` (the ahead count). So with the setting on `develop` in a
+repository whose git default is `main`, a worktree is cut from `develop` while its diff and its
+ahead count are measured against `main`. Two reviewers disagreed on whether those sites should
+follow the setting — a diff base and a creation base are arguably different questions — so it
+stays a follow-up rather than a half-migration finished in the dark. Do not "fix" one of the two;
+either both move or neither does.
 
-**Only two of the three are visible to anyone.** `worktreeDetail` still computes
-`unmergedCommits`, but the view that rendered them — `WorktreeDetailSheet` — was deleted in
-2e6f2f8, and no view reads the field now. `worktreeDetail` itself is still live:
-`ProjectOverviewView` calls it for the project's own repository, and uses the file changes, not
-the commit log. So the wrong-base symptom a user can actually hit is the diff base and the ahead
-count. Do not take that as licence to migrate those two and leave the third — the all-or-none
-rule is about keeping one question answered one way, and a dead field is the cheapest of the
-three to move. Either delete `unmergedCommits` or move all three; do not quietly drop it from
-the count.
+**It was three, and the third was deleted rather than migrated.** `worktreeDetail` computed an
+unmerged-commit log against `defaultBranch(at:)`, but the view that rendered it —
+`WorktreeDetailSheet` — went in 2e6f2f8, and nothing read the field afterwards. So the rule was
+discharged the way it always allowed: `unmergedCommits`, `unmergedCommitsUnavailable`, the
+`UnmergedCommit` type and the `git log base..HEAD` call are **gone**, along with
+`worktreeDetail`'s `mainRepoPath:` parameter, which existed only to resolve that base.
+`worktreeDetail` itself is still live and still takes `at:` — `ProjectOverviewView` calls it for
+the project's own repository and uses the file changes — it simply no longer resolves a base
+branch at all, so it is not a comparison site and must not be counted as one.
+
+That is the *only* sanctioned way to reduce the count. The all-or-none rule is about keeping one
+question answered one way: a site may leave it by being **deleted**, never by being quietly
+migrated on its own. Both survivors are load-bearing and user-visible, so neither has that exit —
+if `mergeBase` or `hasBranchCommits` is ever pointed at `BaseBranchSetting`, the other moves in
+the same change. And if the commit log is ever wired up again, it rejoins the count and the rule
+binds three once more.
 
 `defaultBranch(at:)` is also read to export `ATELIER_DEFAULT_BRANCH` (`TerminalContainerView`,
 and `ProcessCompose.PhaseEnvironment`'s four callers — `Initialization.Runner` for a step,
@@ -361,10 +367,12 @@ follow-up: the variable means
 other rather than with the setting.
 
 **`defaultBranch(at:)` is cached, per directory, inside `Git.Operations` itself.** Resolving costs up
-to six sequential probes and the answer is a property of the repository, but the three comparison
-sites are each called *per worktree*: `refreshPathValidity` runs `hasBranchCommits` for every
+to six sequential probes and the answer is a property of the repository, but both comparison
+sites are called *per worktree*: `refreshPathValidity` runs `hasBranchCommits` for every
 worktree on a 15-second timer, and `listWorktreesWithInfo` does the same on every project-overview
 refresh. Twelve workstreams in two projects meant ~72 subprocesses a tick resolving two strings.
+(There was a third caller on that hot path, `worktreeDetail`'s commit log, until it was deleted;
+the cache predates that and is not affected by it.)
 
 The cache lives there rather than in `AppEnvironment`, which is where it started, because half the
 callers structurally cannot reach a `@MainActor` type: `diffFingerprint` is called from
