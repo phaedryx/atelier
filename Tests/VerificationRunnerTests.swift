@@ -83,14 +83,73 @@ final class VerificationRunnerTests: XCTestCase {
         )
     }
 
-    private func makeRunner(_ host: StubSurfaceHost) -> Verification.Runner {
+    private func makeRunner(
+        _ host: StubSurfaceHost,
+        killGrace: Duration = Verification.Runner.defaultKillGrace
+    ) -> Verification.Runner {
         // A fixed fingerprint rather than four git spawns against a directory that
         // is not a repository.
         let runner = Verification.Runner(
-            fingerprint: { _, _ in "head|1|digest" }, pollInterval: .milliseconds(10)
+            fingerprint: { _, _ in "head|1|digest" },
+            pollInterval: .milliseconds(10),
+            killGrace: killGrace
         )
         runner.attach(surfaces: host)
         return runner
+    }
+
+    private func makeSpawn(for check: String, command: String = "echo hi") -> Verification.Spawn {
+        Verification.Spawn.build(
+            check: Verification.Config.Check(name: check, command: command, shell: nil),
+            workstreamID: workstreamID
+        )
+    }
+
+    /// A real process group that records its own pgid exactly as the wrapper does.
+    ///
+    /// The pid file is the only handle `stop` has, so a test about what gets
+    /// signalled has to put a real group behind it. `Foundation.Process` directly
+    /// and never `ProcessRunner.capture`, which blocks the calling thread for the
+    /// child's whole life by design. `ignoringTERM` makes the group survive the
+    /// `SIGTERM` so the grace's `SIGKILL` is the thing under test — `SIG_IGN` is
+    /// inherited across `exec`, so the `sleep` ignores it too.
+    private func spawnGroup(
+        writingPIDTo path: String, ignoringTERM: Bool = false
+    ) async throws -> pid_t {
+        Verification.Spawn.ensureStateDirectory()
+        let trap = ignoringTERM ? "trap '' TERM; " : ""
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = [
+            "-c", "ps -o pgid= -p $$ | tr -d ' ' > '\(path)'; \(trap)sleep 120",
+        ]
+        try process.run()
+
+        for _ in 0 ..< 200 {
+            if let pid = pid_t(
+                (try? String(contentsOfFile: path, encoding: .utf8))?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            ), pid > 1 {
+                return pid
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("the test's process group never recorded its pgid")
+        return 0
+    }
+
+    /// Drive completion passes until `check` reaches `state`, or give up.
+    private func settles(
+        _ runner: Verification.Runner, check: String, to state: Verification.CheckResult.State
+    ) async -> Bool {
+        for _ in 0 ..< 100 {
+            await runner.completionPass()
+            if runner.state(workstreamID, check: check) == state {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return false
     }
 
     // MARK: - Refusals
@@ -329,6 +388,70 @@ final class VerificationRunnerTests: XCTestCase {
         XCTAssertTrue(
             runner.isRunning(workstreamID, check: "rspec"),
             "the previous run's verdict must not end this one"
+        )
+    }
+
+    // MARK: - Stopping
+
+    /// **The grace's `SIGKILL` belongs to the run that was stopped, not to the
+    /// check.** Stop at t=0 and press Run again inside the grace and the stale task
+    /// wakes into a check that is running for the second time. Capturing the `Spawn`
+    /// is no defence: `fileStem` is per workstream and check name, so both runs
+    /// share one pid file and the stale task would read the *new* group out of it —
+    /// and the new `LiveCheck` has `stopRequested` false, so the kill lands on the
+    /// row as `.failed(-1)`, a check apparently crashing for no stated reason.
+    func test_stop_doesNotKillALaterRunOfTheSameCheck() async throws {
+        try writeConfig()
+        let runner = makeRunner(StubSurfaceHost(), killGrace: .milliseconds(500))
+        let spawn = makeSpawn(for: "rspec", command: "echo rspec")
+        addTeardownBlock { spawn.clearState() }
+
+        // Run one: stopped, then finished, so the check is free to start again.
+        try start(runner, checks: ["rspec"])
+        runner.stop(workstreamID: workstreamID, check: "rspec")
+        Verification.Spawn.ensureStateDirectory()
+        try "0\n".write(toFile: spawn.statusPath, atomically: true, encoding: .utf8)
+        await runner.completionPass()
+        XCTAssertFalse(runner.isRunning(workstreamID, check: "rspec"))
+
+        // Run two, well inside run one's grace, with a real group behind the same
+        // pid file run one's stale task is holding a path to.
+        try start(runner, checks: ["rspec"])
+        let pgid = try await spawnGroup(writingPIDTo: spawn.pidPath)
+        addTeardownBlock { kill(-pgid, SIGKILL) }
+
+        try await Task.sleep(for: .seconds(1.5))
+        await runner.completionPass()
+
+        XCTAssertEqual(
+            runner.state(workstreamID, check: "rspec"), .running,
+            "the earlier run's grace must not kill this one"
+        )
+        XCTAssertEqual(
+            runner.records(for: workstreamID)["rspec"]?.state, .passed,
+            "and must not overwrite run one's verdict with a crash"
+        )
+    }
+
+    /// The other half of the same invariant: a run that ignores `SIGTERM` is still
+    /// killed outright once its own grace expires. Without this, a "fix" that never
+    /// fires the kill at all passes the test above.
+    func test_stop_killsTheRunItWasAskedToStopWhenSIGTERMIsIgnored() async throws {
+        try writeConfig()
+        let runner = makeRunner(StubSurfaceHost(), killGrace: .milliseconds(500))
+        let spawn = makeSpawn(for: "rspec", command: "echo rspec")
+        addTeardownBlock { spawn.clearState() }
+
+        try start(runner, checks: ["rspec"])
+        let pgid = try await spawnGroup(writingPIDTo: spawn.pidPath, ignoringTERM: true)
+        addTeardownBlock { kill(-pgid, SIGKILL) }
+
+        runner.stop(workstreamID: workstreamID, check: "rspec")
+        try await Task.sleep(for: .milliseconds(700))
+
+        let stopped = await settles(runner, check: "rspec", to: .stopped)
+        XCTAssertTrue(
+            stopped, "a check that outlives SIGTERM is killed when its own grace expires"
         )
     }
 
