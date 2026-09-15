@@ -1,8 +1,11 @@
-// ABOUTME: Locates a worktree's process-compose config and records who wrote it.
-// ABOUTME: Explicitly-named files outrank generic ones; location decides authorship.
+// ABOUTME: Locates a project's execution.process-compose.yaml — one name, one place.
+// ABOUTME: The project directory, outside every work tree, so it cannot arrive with a clone.
 
 import Foundation
+import os
 import Yams
+
+private let logger = Logger(subsystem: "atelier", category: "processcompose.config")
 
 /// The process-compose subsystem: its config schema, the client that drives
 /// the daemon, and the phased execution model built on top.
@@ -12,107 +15,61 @@ extension ProcessCompose {
     struct Config: Equatable {
         /// Absolute path of the config that will run.
         let path: String
-        /// Whether the config arrived with the repository. A config in the project
-        /// directory sits outside every worktree and was placed there by hand, so it
-        /// is the user's; one inside the worktree came with a clone. This decides
-        /// whether the unattended phases ask for approval.
-        let isRepositoryProvided: Bool
 
-        /// process-compose also discovers `compose.yaml` and `compose.yml`, but that
-        /// name belongs to docker compose far more often, and running the wrong tool
-        /// is worse than offering nothing.
+        /// The names looked for, in order. The first that exists is the one read.
         ///
-        /// Because Atelier names every file with `-f` (see `loadedFiles`), leaving
-        /// those names out of this list means process-compose never loads them
-        /// either. That is the point: while discovery was left on, a repository
-        /// could ship a benign `process-compose.yaml` for Atelier to display and
-        /// approve, and a `compose.yaml` for process-compose to actually run —
-        /// verified against v1.122.0, where `compose.yaml` wins outright and
-        /// `process-compose.yaml` is never read.
-        static let fileNames = ["process-compose.yaml", "process-compose.yml"]
-
-        /// The same file, named so that it can only be meant for Atelier.
+        /// **One name, one place, no tiers.** This replaced a four-tier search —
+        /// `atelier.process-compose.y*ml` then `process-compose.y*ml`, each in the
+        /// worktree and then in the project directory — whose precedence a reader
+        /// had to hold in their head to predict what would run. The `execution.`
+        /// prefix is what makes a single name safe to demand: a repository may run
+        /// process-compose for its own reasons, and a generic `process-compose.yaml`
+        /// is indistinguishable from an Atelier config, so nothing generic is read
+        /// at all now.
         ///
-        /// A repository may run process-compose for its own reasons — a `sfim`-style
-        /// instance manager, a docker-free dev stack — and that file declares the
-        /// project's own namespaces, not Atelier's five. Before this name existed,
-        /// such a file was indistinguishable from an Atelier config and won the
-        /// lookup outright, shadowing the user's real config in the project
-        /// directory: `prepare` silently did nothing, Verification
-        /// reported no checks, and Start ran `up -n execute` against a namespace
-        /// nobody had declared — which does not fail, it idles forever with no
-        /// output (measured against v1.122.0).
+        /// Two names process-compose itself would discover are deliberately absent:
+        /// `compose.yaml`, which belongs to docker compose far more often than not,
+        /// and the `process-compose.y*ml` pair this replaced. Because
+        /// `ProcessCompose.PhaseRunner.command` names the located file with `-f`,
+        /// process-compose's own discovery is off, so a name missing from this list
+        /// is a name that never executes — verified against v1.122.0, where
+        /// `compose.yaml` wins discovery outright and `process-compose.yaml` is
+        /// never read.
+        static let fileNames = ["execution.process-compose.yaml", "execution.process-compose.yml"]
+
+        /// Find the project's config.
         ///
-        /// The prefix is what a project uses to say which of its process-compose
-        /// files is Atelier's. Nothing requires it: a project with only one
-        /// process-compose file needs no disambiguation and the generic name still
-        /// works.
-        static let atelierFileNames = ["atelier.process-compose.yaml", "atelier.process-compose.yml"]
-
-        /// The two places a config may sit, and what each one implies about who
-        /// wrote it.
-        private enum Location {
-            /// Came with the repository, so its commands need approving before an
-            /// unattended phase runs them.
-            case worktree
-            /// Placed by hand, outside git, by the user.
-            case projectDirectory
-        }
-
-        private struct SearchTier {
-            let names: [String]
-            let location: Location
-        }
-
-        /// **Precedence follows explicitness, not location.**
+        /// **The project directory and nowhere else**, and that is a trust decision
+        /// rather than a convenience — the rule `Verification.Config` already
+        /// states, applied unchanged. `Project.directory` is the repository's *home*,
+        /// the `.bare` container in that layout, so a file there sits outside every
+        /// work tree and cannot have arrived with a clone. It was placed by hand,
+        /// which is why there is no `ScriptTrust` fingerprint, no approval sheet and
+        /// no approval precondition in `WorktreeSetup.PhasePolicy` any more: those
+        /// gated a worktree tier that no longer exists.
         ///
-        /// An `atelier.`-prefixed file is a project stating which of its
-        /// process-compose files is Atelier's, so it outranks an unprefixed file
-        /// wherever either one sits. Within a prefix, the worktree still outranks
-        /// the project directory, because a worktree carrying its own config is
-        /// being deliberate about *this* branch.
+        /// Two consequences, both wanted. One config serves every worktree of the
+        /// project, so a stack is edited in one place. And an agent confined to its
+        /// worktree by the "Restrict to worktree" system prompt cannot edit the file
+        /// whose commands Atelier runs unattended at archive.
+        /// There is deliberately no worktree tier, for exactly that reason.
         ///
-        /// The third tier beating the fourth is what it has always been, and is
-        /// kept so that a project with a single unprefixed config — the common
-        /// case, and every project that predates the prefix — is unaffected by any
-        /// of this. The consequence is worth stating plainly: a repository that
-        /// checks in a generic `process-compose.yaml` of its own still shadows an
-        /// unprefixed project-directory config, and the fix is to name the
-        /// project-directory file `atelier.process-compose.yaml` so it moves to
-        /// tier two.
-        private static let searchOrder: [SearchTier] = [
-            SearchTier(names: atelierFileNames, location: .worktree),
-            SearchTier(names: atelierFileNames, location: .projectDirectory),
-            SearchTier(names: fileNames, location: .worktree),
-            SearchTier(names: fileNames, location: .projectDirectory),
-        ]
-
-        static func locate(worktree: String, projectDirectory: String) -> ProcessCompose.Config? {
-            let worktreeURL = URL(fileURLWithPath: worktree)
-            let projectURL = URL(fileURLWithPath: projectDirectory)
-            // A plain checkout opened directly is its own project directory. The
-            // project-directory tiers are skipped there rather than deduplicated:
-            // a file in that one directory arrived with the repository, so it has
-            // to keep `isRepositoryProvided: true` and the approval gate that
-            // comes with it.
-            let projectIsDistinct = projectURL.standardizedFileURL != worktreeURL.standardizedFileURL
-
-            for tier in searchOrder {
-                let directory: URL
-                switch tier.location {
-                case .worktree:
-                    directory = worktreeURL
-                case .projectDirectory:
-                    guard projectIsDistinct else { continue }
-                    directory = projectURL
-                }
-                guard let name = firstPresent(tier.names, in: directory) else { continue }
-                return ProcessCompose.Config(
-                    path: directory.appendingPathComponent(name).path,
-                    isRepositoryProvided: tier.location == .worktree
-                )
-            }
-            return nil
+        /// **The known hole, stated rather than papered over:** for an ordinary
+        /// clone `Project.directory` *is* the checkout, so the file sits inside the
+        /// work tree and can be committed. `Verification.Config` accepts the same
+        /// hole, and the rule is applied here unchanged rather than half-tightened:
+        /// sniffing whether the file is git-tracked would make the gate depend on a
+        /// second fact the user cannot see.
+        ///
+        /// `projectDirectory` must be `Project.directory` and never
+        /// `Project.checkout`. In the container layout those differ, and passing the
+        /// checkout looks inside `main/` — a work tree, both the wrong place and the
+        /// one location this lookup exists to avoid — where the config is simply
+        /// never found.
+        static func locate(projectDirectory: String) -> ProcessCompose.Config? {
+            let directory = URL(fileURLWithPath: projectDirectory, isDirectory: true)
+            guard let name = firstPresent(fileNames, in: directory) else { return nil }
+            return ProcessCompose.Config(path: directory.appendingPathComponent(name).path)
         }
 
         static func firstPresent(_ names: [String], in directory: URL) -> String? {
@@ -218,43 +175,21 @@ extension ProcessCompose {
         ///
         /// This list is the whole contract. `ProcessCompose.PhaseRunner.command` names each entry
         /// with `-f`, which turns process-compose's own discovery off, so the files
-        /// that execute are exactly the files listed here — and `ScriptTrust`
-        /// fingerprints and `ConfigApprovalView` displays the repository-provided
-        /// subset of the same list. Approved set, displayed set, and executed set
-        /// are equal by construction rather than by Atelier mirroring discovery's
-        /// rules correctly.
+        /// that execute are exactly the files `locate` found. Located set and
+        /// executed set are equal by construction rather than by Atelier mirroring
+        /// discovery's rules correctly — and a mirror is what had to go: discovery
+        /// also loads `compose.yaml`, a name Atelier deliberately does not read, so
+        /// a repository could once have had one file displayed and a different one
+        /// run.
         ///
-        /// That mirror is what had to go. While a worktree config was left unnamed
-        /// so discovery could pick up a sibling file, the gate could only ever be as
-        /// correct as the mirror — and it was not: discovery also loads
-        /// `compose.yaml`, which Atelier deliberately does not detect, so a
-        /// repository could have one file approved and a different one run.
-        ///
-        /// One config, one file. An earlier design also loaded a
-        /// `process-compose.override.yml` from the worktree, so that a single
-        /// project-directory config could be adjusted per worktree. That is what
-        /// tier one of `searchOrder` is for now: a worktree that wants its own
-        /// arrangement names its own `atelier.process-compose.yaml` and says so
-        /// outright, rather than having two files merged by rules the user has to
-        /// hold in their head to predict what runs.
+        /// One config, one file. An earlier design merged a worktree
+        /// `process-compose.override.yml` into a project-directory base, and a later
+        /// one gave the worktree its own `atelier.process-compose.yaml`. Both are
+        /// gone: nothing inside a work tree is read at all. The array stays an array
+        /// because it, not `path`, is what `PhaseRunner.command` names with `-f`, and
+        /// the answer stays right if the loaded set ever grows past one file again.
         var loadedFiles: [String] {
             [path]
-        }
-
-        /// The loaded files that arrived with the repository, and therefore have to
-        /// be approved before an unattended phase runs them.
-        ///
-        /// The user's own project-directory config is deliberately absent: it was
-        /// placed by hand outside git, and re-asking every time they edit it is
-        /// friction with no risk behind it.
-        var repositoryProvidedFiles: [String] {
-            isRepositoryProvided ? loadedFiles : []
-        }
-
-        /// Whether anything process-compose will load here came with the repository.
-        /// The gate for `dispose`; `execute` is never gated.
-        var requiresApproval: Bool {
-            !repositoryProvidedFiles.isEmpty
         }
 
         /// Whether the files that will be loaded, taken together, declare
@@ -271,6 +206,105 @@ extension ProcessCompose {
                 }
             }
             return unknown ? .unknown : .empty
+        }
+    }
+}
+
+extension ProcessCompose.Config {
+    /// The file a newly created project starts with.
+    ///
+    /// Deliberately **not** localized, for the reason `Verification.Config`'s
+    /// template is not: this is file content the user edits, not UI, and the keys
+    /// are part of process-compose's schema.
+    ///
+    /// **The example process is real and uncommented, and that is load-bearing
+    /// rather than friendly.** A file of nothing but comments — or one whose
+    /// `processes:` key is present but null — fails to decode, so
+    /// `namespacePresence` answers `.unknown`; and `ProcessCompose.RunCommandPlan`
+    /// gates `execute` on `.empty` and **only** `.empty`, deliberately failing open
+    /// on `.unknown` so a parse bug cannot silently skip a namespace the project
+    /// really declared. A commented-out template would therefore have shipped every
+    /// new project with an enabled Start that runs `up -n execute` against a
+    /// namespace nobody declared — which does not fail and does not exit, it idles
+    /// forever with no output (measured against v1.122.0).
+    /// `ProcessComposeConfigTests` pins that this template is not `.unknown`.
+    static let defaultContents = """
+    # The processes Atelier runs for this project.
+    #
+    # Three namespaces, each run at a different moment:
+    #
+    #   prepare   to completion before each Start, ahead of execute
+    #   execute   the long-lived dev stack the Execution tab's Start button runs
+    #   dispose   once, when a workstream is purged
+    #
+    # A process with no `namespace:` belongs to none of them and is never run.
+    # What a *new worktree* needs is not here: setup steps go in an
+    # initialization.yaml beside this file.
+    #
+    # Commands run with the workstream's worktree as the working directory, and
+    # receive the ATELIER_* variables and every port named in ports.yaml.
+    # process-compose puts a command body through envsubst before the shell sees
+    # it, so a *shell* variable has to be written $$VAR rather than $VAR.
+    #
+    #   processes:
+    #     migrate:
+    #       namespace: prepare
+    #       command: bin/rails db:prepare
+    #     web:
+    #       namespace: execute
+    #       command: bun run dev --port $WEB_PORT
+    #
+    # Replace the example below with this project's real processes.
+
+    processes:
+      example:
+        namespace: execute
+        command: echo "Edit execution.process-compose.yaml to declare this project's processes."
+
+    """
+
+    /// Seed a newly created project with `defaultContents`.
+    ///
+    /// Called only by the two paths that *create* the project directory — a new
+    /// empty project and a fresh clone — and never by the paths that adopt a
+    /// directory the user already had, which would drop an untracked file into a
+    /// repository they merely registered. The same rule, and the same two call
+    /// sites, as `Verification.Config.writeDefault`.
+    ///
+    /// **New Project seeds into a work tree, and that is the known hole rather
+    /// than a new one.** That path runs `git init` on the directory it made, so
+    /// `Project.directory` *is* the checkout and this file can be committed —
+    /// after which a plain clone of that repository, registered through the
+    /// picker, would run its `dispose` unattended. The hole is
+    /// the plain-checkout layout, not the seed: a hand-written config in the same
+    /// place is read identically, and `verification.yaml` — whose checks are
+    /// commands too — is seeded there on the same terms. Clone Repository is
+    /// unaffected, because its container is not a work tree and a committed
+    /// config lands in the worktrees, where nothing reads it. Declining to seed
+    /// here would not close anything; it would only make the empty state worse on
+    /// the one path where a template helps most.
+    ///
+    /// Does nothing when either name in `fileNames` is already present, and
+    /// reports rather than throws: a convenience template must not fail project
+    /// creation, but a write that silently did not happen is worse than one that
+    /// says so.
+    @discardableResult
+    static func writeDefault(projectDirectory: String) -> Bool {
+        let fileManager = FileManager.default
+        let directory = URL(fileURLWithPath: projectDirectory, isDirectory: true)
+        guard !fileNames.contains(where: {
+            fileManager.fileExists(atPath: directory.appendingPathComponent($0).path)
+        }) else { return false }
+
+        let path = directory.appendingPathComponent(fileNames[0])
+        do {
+            try defaultContents.write(to: path, atomically: true, encoding: .utf8)
+            return true
+        } catch {
+            logger.warning(
+                "[Atelier] could not write default execution.process-compose.yaml: \(error.localizedDescription, privacy: .public)"
+            )
+            return false
         }
     }
 }

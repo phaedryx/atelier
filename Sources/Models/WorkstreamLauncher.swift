@@ -49,7 +49,7 @@ extension Workstream {
         ///
         /// `checkout` and `directory` are both here and neither is the "project
         /// path". `Git.Operations.createWorktree` needs a work tree, so it takes
-        /// `checkout`; everything that locates a `process-compose.yaml` or a
+        /// `checkout`; everything that locates an `execution.process-compose.yaml` or a
         /// `ports.yaml` needs the repository's home, so it takes `directory`. In
         /// the `.bare` container layout those are different directories, and
         /// collapsing them to one field is how the config lookups ended up

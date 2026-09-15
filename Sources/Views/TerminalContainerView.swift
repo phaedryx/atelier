@@ -290,7 +290,6 @@ struct TerminalContainerView: View {
     @State private var browserStartPending = false
     @State private var devCommandOverride: String?
     @State private var defaultBranch = "main"
-    @State private var isReviewingConfig = false
     /// Resolved once per change rather than per render: resolving binds a socket
     /// to check whether each port is free.
     @State private var portPlan: ProcessCompose.PortPlan = .empty
@@ -393,7 +392,6 @@ struct TerminalContainerView: View {
         // the view used to resolve on `.onAppear` as well. Every later
         // resolution is off the main actor. See `ProcessCompose.ResolutionModel`.
         _processComposeResolver = StateObject(wrappedValue: ProcessCompose.ResolutionModel(
-            worktree: workingDirectory,
             projectDirectory: projectDirectory,
             override: savedOverride
         ))
@@ -788,11 +786,7 @@ struct TerminalContainerView: View {
                 workstreamID: workstreamID,
                 workingDirectory: workingDirectory,
                 projectDirectory: projectDirectory,
-                repositoryConfigFiles: resolved.repositoryConfigFiles,
-                configApproved: resolved.isApproved,
                 setupState: setupState,
-                onReviewConfig: { isReviewingConfig = true },
-                onRevokeConfig: revokeProcessConfig,
                 onRerunInitialization: rerunInitialization
             )
         case .changes:
@@ -835,9 +829,6 @@ struct TerminalContainerView: View {
                     isReclaimingSocket: isReclaimingRunSocket,
                     devCommandFiles: resolved.loadedFiles,
                     startUnavailableReason: resolved.startUnavailableReason,
-                    unapprovedConfigFiles: resolved.isApproved
-                        ? [] : resolved.repositoryConfigFiles,
-                    onReviewConfig: { isReviewingConfig = true },
                     onSelectionChange: { executeSelectionChanges += 1 },
                     onStart: doStartRun,
                     onStop: stopRun,
@@ -1167,18 +1158,6 @@ struct TerminalContainerView: View {
 
     var body: some View {
         mainContent
-            // On the container rather than on either tab, because both the
-            // Execution banner and the Info row open it and Execution is a
-            // closeable tab.
-            .sheet(isPresented: $isReviewingConfig) {
-                if !resolved.repositoryConfigFiles.isEmpty {
-                    ConfigApprovalView(
-                        filePaths: resolved.repositoryConfigFiles,
-                        onApprove: approveProcessConfig,
-                        onCancel: { isReviewingConfig = false }
-                    )
-                }
-            }
             .onChange(of: devCommandOverride) { _, newValue in
                 DevCommand.Resolver.saveOverride(newValue, for: workstreamID)
                 // Passed explicitly rather than left to the resolver's stored
@@ -1977,50 +1956,6 @@ struct TerminalContainerView: View {
         return vars
     }
 
-    // MARK: - Process config approval
-
-    /// Approve the repository's process-compose config.
-    ///
-    /// It used to rerun the setup the approval was too late for. Worktree
-    /// setup now comes from `initialization.yaml` in the project directory,
-    /// which is never gated — so approval no longer decides whether a worktree
-    /// got set up, and rerunning from here would run the project's setup a
-    /// second time for a reason that no longer exists. `dispose` is the only
-    /// phase this approval still governs, and it has not run yet.
-    private func approveProcessConfig(matching reviewedFingerprint: String) -> Bool {
-        guard !resolved.repositoryConfigFiles.isEmpty else { return false }
-        // The fingerprint is of the bytes the pane displayed, and `approve`
-        // refuses if the files on disk have moved on since. Re-resolve the set
-        // before the pane reloads: what changed may be *which* files the config
-        // loads, not their contents — a worktree that gains an
-        // `atelier.process-compose.yaml` is a different set, tier 1 beating
-        // tier 3 — and the user has to review the set that will actually run.
-        guard ScriptTrust.approve(
-            configFiles: resolved.repositoryConfigFiles,
-            for: projectDirectory,
-            matching: reviewedFingerprint
-        ) else {
-            // **Synchronously, and this is the one path that needs it.** The
-            // next two lines read the result of the write that just happened;
-            // an asynchronous refresh would answer about the state before the
-            // click. Approval is also one of `PhasePolicy.plan`'s three
-            // preconditions and the one no other trigger watches — Start is
-            // never gated by it — so without a refresh here the Execution tab's
-            // banner and the Info tab's Approval row would keep telling the user
-            // to approve a config they just approved.
-            let refreshed = processComposeResolver.refreshNow(override: devCommandOverride)
-            // Nothing left to approve: the config went away while the pane was
-            // open, and an empty pane has no button to dismiss itself with.
-            if refreshed.repositoryConfigFiles.isEmpty {
-                isReviewingConfig = false
-            }
-            return false
-        }
-        isReviewingConfig = false
-        processComposeResolver.refreshNow(override: devCommandOverride)
-        return true
-    }
-
     /// Run the project's initialization steps against this worktree again.
     ///
     /// Deliberately no preconditions of its own. Every reason initialization
@@ -2046,14 +1981,6 @@ struct TerminalContainerView: View {
                 worktreePath: worktree
             )
         }
-    }
-
-    private func revokeProcessConfig() {
-        ScriptTrust.revokeConfigFiles(for: projectDirectory)
-        // Synchronous for the same reason the approval path is: the row the user
-        // just clicked has to stop saying "Approved" on this pass, not the next
-        // one.
-        processComposeResolver.refreshNow(override: devCommandOverride)
     }
 
     private func terminalLoadingView(message: String) -> some View {

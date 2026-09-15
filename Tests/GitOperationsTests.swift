@@ -1387,7 +1387,7 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertEqual(
             standardized(location.directory),
             container.standardizedFileURL.path,
-            "the container is the repository's home — where a process-compose.yaml sits beside .bare"
+            "the container is the repository's home — where the configs sit beside .bare"
         )
         XCTAssertEqual(
             standardized(location.checkoutDirectory ?? ""),
@@ -1463,25 +1463,30 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertNil(Git.Operations.projectLocation(for: repoDir.path).checkoutDirectory)
     }
 
-    /// The seam between the two creation paths in `ProjectSidebar` and the file
-    /// the Verification tab reads. Those paths write the default
-    /// `verification.yaml` to the path they created, while `addProject` re-resolves
-    /// that path through `projectLocation` before it becomes `Project.directory` —
-    /// which is what `Verification.Config.load` is handed. If the resolution moved
-    /// either one, the template would land where nothing looks for it and the
-    /// feature would be silently inert rather than visibly broken.
+    /// The seam between the two creation paths in `ProjectSidebar` and the files
+    /// the Verification and Execution tabs read. Those paths write both default
+    /// templates to the path they created, while `addProject` re-resolves that path
+    /// through `projectLocation` before it becomes `Project.directory` — which is
+    /// what both lookups are handed. If the resolution moved either one, a template
+    /// would land where nothing looks for it and the feature would be silently
+    /// inert rather than visibly broken.
     func testAFreshlyInitializedRepoIsItsOwnProjectDirectory() throws {
         let repoDir = tempDir.appendingPathComponent("new-project")
         try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
         _ = Git.Operations.initRepo(at: repoDir.path)
 
         XCTAssertTrue(Verification.Config.writeDefault(projectDirectory: repoDir.path))
+        XCTAssertTrue(ProcessCompose.Config.writeDefault(projectDirectory: repoDir.path))
 
         let resolved = Git.Operations.projectLocation(for: repoDir.path).directory
         XCTAssertEqual(standardized(resolved), repoDir.standardizedFileURL.path)
         XCTAssertNotNil(
             Verification.Config.load(projectDirectory: resolved).config,
             "the default template must be found at the path the project registers under"
+        )
+        XCTAssertNotNil(
+            ProcessCompose.Config.locate(projectDirectory: resolved),
+            "and so must the execution template"
         )
     }
 
@@ -1491,14 +1496,20 @@ final class GitOperationsTests: XCTestCase {
         let container = try makeBareContainer(named: "cloned-project")
 
         XCTAssertTrue(Verification.Config.writeDefault(projectDirectory: container.path))
+        XCTAssertTrue(ProcessCompose.Config.writeDefault(projectDirectory: container.path))
 
         let location = Git.Operations.projectLocation(for: container.path)
         XCTAssertEqual(standardized(location.directory), container.standardizedFileURL.path)
         XCTAssertNotNil(Verification.Config.load(projectDirectory: location.directory).config)
+        XCTAssertNotNil(ProcessCompose.Config.locate(projectDirectory: location.directory))
         XCTAssertEqual(
             Verification.Config.load(projectDirectory: location.checkoutDirectory ?? ""),
             .missing,
             "the template belongs outside every work tree"
+        )
+        XCTAssertNil(
+            ProcessCompose.Config.locate(projectDirectory: location.checkoutDirectory ?? ""),
+            "and so does the execution one"
         )
     }
 

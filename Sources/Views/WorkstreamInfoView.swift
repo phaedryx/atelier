@@ -63,11 +63,6 @@ struct WorkstreamInfoView: View {
     let workstreamID: UUID
     let workingDirectory: String
     let projectDirectory: String
-    /// Every repository-provided process-compose file this worktree would load.
-    /// Info is the permanent tab, so this is the approval route that survives the
-    /// user closing Execution.
-    var repositoryConfigFiles: [String] = []
-    var configApproved: Bool = false
     /// What background setup last reported for this workstream. Info is where
     /// it belongs: it is the permanent tab, and a `.completedWithNote` — "this
     /// project has no initialization.yaml, so no setup ran",
@@ -75,15 +70,9 @@ struct WorkstreamInfoView: View {
     /// about the run pane. Nothing rendered it before, so those notes were
     /// written and thrown away.
     var setupState: Initialization.State = .idle
-    /// No defaults: a call site that passes `repositoryConfigFiles` but forgets
-    /// these would render a Review button that silently does nothing, which is
-    /// the whole failure this gate exists to avoid.
-    let onReviewConfig: () -> Void
-    let onRevokeConfig: () -> Void
     /// Runs the project's initialization steps against this worktree again.
-    /// No default for the same reason as the two above, and one more: this row
-    /// always renders, so a call site that forgot it would ship a Rerun button
-    /// on every workstream that does nothing.
+    /// No default: this row always renders, so a call site that forgot it would
+    /// ship a Rerun button on every workstream that does nothing.
     let onRerunInitialization: () -> Void
 
     @EnvironmentObject var appEnv: AppEnvironment
@@ -102,7 +91,6 @@ struct WorkstreamInfoView: View {
                 githubSection
                 shortcutSection
                 setupSection
-                processConfigSection
             }
             .formStyle(.grouped)
 
@@ -427,49 +415,6 @@ struct WorkstreamInfoView: View {
                         .help(canRerun
                             ? NSLocalizedString("Run this project's initialization.yaml steps against this worktree again.", comment: "")
                             : NSLocalizedString("Initialization is already running.", comment: ""))
-                }
-            }
-        }
-    }
-
-    /// Approval for the repository's own process-compose files. The gated phase
-    /// is `dispose` — the only unattended one left, now that worktree setup
-    /// comes from `initialization.yaml` in the project directory — and approval
-    /// is keyed on the config files themselves.
-    @ViewBuilder
-    private var processConfigSection: some View {
-        if !repositoryConfigFiles.isEmpty {
-            Section {
-                // Only the unattended phase is gated. Start is
-                // attended — a deliberate press, with the output in
-                // front of the user and Stop to hand — so it is never
-                // held behind this. Not because the pane shows the
-                // command Start runs; it does not.
-                Text("Its dispose phase runs when a workstream is archived, without asking.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                LabeledContent("Approval") {
-                    HStack(spacing: 10) {
-                        if configApproved {
-                            Label("Approved", systemImage: "checkmark.shield")
-                                .foregroundStyle(.green)
-                            Button("Revoke") { onRevokeConfig() }
-                        } else {
-                            Label("Not approved", systemImage: "exclamationmark.shield")
-                                .foregroundStyle(.orange)
-                            Button("Review") { onReviewConfig() }
-                        }
-                    }
-                }
-            } header: {
-                HStack {
-                    Text("Process Config")
-                    Spacer()
-                    Text(repositoryConfigFiles
-                        .map { ($0 as NSString).lastPathComponent }
-                        .joined(separator: ", "))
-                        .font(.caption2)
-                        .foregroundStyle(.quaternary)
                 }
             }
         }

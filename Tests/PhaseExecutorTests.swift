@@ -42,9 +42,9 @@ final class PhaseExecutorTests: XCTestCase {
     }
 
     private func writeConfig(_ body: String) throws -> ProcessCompose.Config {
-        let path = dir.appendingPathComponent("process-compose.yaml")
+        let path = dir.appendingPathComponent("execution.process-compose.yaml")
         try body.write(to: path, atomically: true, encoding: .utf8)
-        return ProcessCompose.Config(path: path.path, isRepositoryProvided: true)
+        return ProcessCompose.Config(path: path.path)
     }
 
     private func runDispose(
@@ -128,7 +128,7 @@ final class PhaseExecutorTests: XCTestCase {
     /// location, which the discovery-style tests cannot distinguish. It also
     /// exercises `-f`, `--keep-project`, and `-n` together.
     func testProjectDirectoryConfigRunsInTheWorktreeNotTheProject() throws {
-        let path = projectDir.appendingPathComponent("process-compose.yaml")
+        let path = projectDir.appendingPathComponent("execution.process-compose.yaml")
         try """
         version: "0.5"
         processes:
@@ -137,7 +137,7 @@ final class PhaseExecutorTests: XCTestCase {
             command: sh -c 'touch dispose-marker'
             availability: { restart: "no" }
         """.write(to: path, atomically: true, encoding: .utf8)
-        let config = ProcessCompose.Config(path: path.path, isRepositoryProvided: false)
+        let config = ProcessCompose.Config(path: path.path)
 
         XCTAssertEqual(runDispose(config), .succeeded)
         XCTAssertTrue(

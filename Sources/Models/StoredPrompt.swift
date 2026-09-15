@@ -12,7 +12,7 @@ struct StoredPrompt: Codable, Identifiable, Equatable {
 /// Owns the user's stored prompts. Prompts are user-owned and global —
 /// deliberately not loaded from repository config: repo-provided prompt text
 /// typed into an agent would be repository-provided instructions, which is
-/// ScriptTrust territory. Keeping the source Settings-only avoids that gate.
+/// approval territory. Keeping the source Settings-only avoids that question.
 @MainActor
 final class StoredPromptStore: ObservableObject {
     static let storageKey = "atelier.storedPrompts"

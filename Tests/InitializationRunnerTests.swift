@@ -171,17 +171,8 @@ final class InitializationRunnerTests: XCTestCase {
     /// A project that never migrated its `bootstrap` namespace now gets no setup
     /// at all, and every other symptom of that is silence.
     func test_run_namesAStrandedBootstrapNamespace() async throws {
-        try """
-        version: "0.5"
-        processes:
-          deps:
-            namespace: bootstrap
-            command: echo hi
-        """.write(
-            to: projectDir.appendingPathComponent("process-compose.yaml"),
-            atomically: true,
-            encoding: .utf8
-        )
+        try writeExecutionConfig(named: "execution.process-compose.yaml")
+
         let runner = Initialization.Runner()
         await run(runner)
         guard case let .completedWithNote(note) = await runner.state(for: workstreamID) else {
@@ -189,6 +180,40 @@ final class InitializationRunnerTests: XCTestCase {
         }
         XCTAssertTrue(note.contains("bootstrap"), "\(note)")
         XCTAssertTrue(note.contains("initialization.yaml"), "\(note)")
+    }
+
+    /// The limitation that came with the one-name lookup, recorded rather than
+    /// left to be discovered. `ProcessCompose.Config.locate` reads
+    /// `execution.process-compose.yaml` and nothing else, so a project still on
+    /// the name that replaced cannot be probed for a stranded namespace and gets
+    /// the ordinary "no initialization.yaml" note. That is not a silence: such a
+    /// project's Execution tab is already saying it has no config and naming the
+    /// file to create, which is the louder of the two problems and the one to fix
+    /// first.
+    func test_run_cannotNameAStrandedNamespaceInAConfigItNoLongerReads() async throws {
+        try writeExecutionConfig(named: "process-compose.yaml")
+
+        let runner = Initialization.Runner()
+        await run(runner)
+        guard case let .completedWithNote(note) = await runner.state(for: workstreamID) else {
+            return XCTFail("Expected a note")
+        }
+        XCTAssertFalse(note.contains("bootstrap"), "\(note)")
+        XCTAssertTrue(note.contains("initialization.yaml"), "\(note)")
+    }
+
+    private func writeExecutionConfig(named name: String) throws {
+        try """
+        version: "0.5"
+        processes:
+          deps:
+            namespace: bootstrap
+            command: echo hi
+        """.write(
+            to: projectDir.appendingPathComponent(name),
+            atomically: true,
+            encoding: .utf8
+        )
     }
 
     /// **Progress must not outlive the run it describes.** Reporting each step

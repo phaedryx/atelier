@@ -41,8 +41,8 @@ func closingTabStopsRun(_ tab: WorkspaceTab, runStarted: Bool) -> Bool {
 /// loaded, and deliberately not as a command, because the string
 /// `DevCommand.Resolver` builds for that source is
 /// `process-compose up -U -f <files>` — no `-n`, so running it runs *every*
-/// namespace including `dispose`, past `PhasePolicy` and past
-/// `ScriptTrust`. `ProcessCompose.RunCommandPlan` makes it unreachable from Start; rendering it
+/// namespace including `dispose`, past `PhasePolicy`.
+/// `ProcessCompose.RunCommandPlan` makes it unreachable from Start; rendering it
 /// here made it reachable by hand, in a monospaced font that invites exactly
 /// that. The files are what `ProcessCompose.RunCommandPlan` meant the user to be able to see.
 ///
@@ -155,10 +155,6 @@ struct ExecutionTabView: View {
     /// binary the search paths do not cover, and an `execute` namespace nothing
     /// declares.
     let startUnavailableReason: String?
-    /// The repository-provided process-compose files whose unattended phases the
-    /// user has not approved, or empty when there is nothing to ask about.
-    let unapprovedConfigFiles: [String]
-    let onReviewConfig: () -> Void
     /// The checklist wrote a new selection. Forwarded so the owner can re-read
     /// the store and re-decide `hasRunnableSelection`; see
     /// `ProcessSelectionView.onSelectionChange`.
@@ -180,16 +176,6 @@ struct ExecutionTabView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            if !unapprovedConfigFiles.isEmpty {
-                configApprovalBanner(paths: unapprovedConfigFiles)
-                Divider()
-            }
-            executionContent
-        }
-    }
-
-    private var executionContent: some View {
         runPane()
     }
 
@@ -401,7 +387,7 @@ struct ExecutionTabView: View {
                     sourceTag(for: devCommand.source)
                 }
             } else {
-                Text("No dev command found. Add an atelier.process-compose.yaml, or set a command below.")
+                Text("No dev command found. Add an execution.process-compose.yaml to this project's directory, or set a command below.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
@@ -435,7 +421,7 @@ struct ExecutionTabView: View {
             NSLocalizedString("Custom", comment: "")
         case .processCompose:
             // The file name, since a repository can carry either spelling.
-            devCommand?.sourceDescription ?? "process-compose.yaml"
+            devCommand?.sourceDescription ?? "execution.process-compose.yaml"
         }
         return Text(text)
             .font(.system(size: 9, design: .monospaced))
@@ -446,45 +432,16 @@ struct ExecutionTabView: View {
             .foregroundStyle(.tertiary)
     }
 
-    /// A banner, not a gate. The unattended phase — `dispose` at archive — is
-    /// the one that needs approval, because nobody is there when it runs. Start is attended: the user presses it deliberately,
-    /// the stack's output lands in a terminal surface in front of them, and Stop
-    /// is right there — so it stays available whether or not the file has been
-    /// approved.
-    ///
-    /// That, and not "the pane shows the command Start runs", is the reason. The
-    /// pane never showed it: what Start runs is the phase-scoped
-    /// `prepare && execute`, assembled by `ProcessCompose.PhaseRunner`, while the string the
-    /// pane used to render was a display-only one that must never execute. The
-    /// decision to leave `execute` ungated stands; only the stated reason was
-    /// false, and it was load-bearing in four places.
-    private func configApprovalBanner(paths: [String]) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.shield")
-                .foregroundStyle(.orange)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(String(
-                    format: NSLocalizedString("%@ came with this repository and has not been approved", comment: ""),
-                    paths.map { ($0 as NSString).lastPathComponent }.joined(separator: ", ")
-                ))
-                .font(.system(size: 12, weight: .semibold))
-                Text("Its dispose phase will not run until you review it. Start is unaffected.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            Button("Review") { onReviewConfig() }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-        }
-        .padding(10)
-        .background(Color.orange.opacity(0.08))
-    }
-
     /// Shown whenever Start cannot run. Two shapes, one surface: with no
-    /// `reason` it names the two things that would make Start work — a
-    /// process-compose.yaml in either home, or a per-workstream override —
-    /// and with one it says what is actually in the way.
+    /// `reason` it names the two things that would make Start work — an
+    /// `execution.process-compose.yaml` in the project directory, or a
+    /// per-workstream override — and with one it says what is actually in the way.
+    ///
+    /// **That default naming is the whole migration story**, so it has to be
+    /// specific. `Config.locate` used to search four places, two of them inside
+    /// the worktree; a project whose config still sits in one of those simply
+    /// stops being found, and this sentence is what tells the user where the file
+    /// goes now.
     ///
     /// Deliberately not a new pane. Every state that lands here was previously
     /// silent, and the review that found them was specific that they belong in
@@ -498,7 +455,7 @@ struct ExecutionTabView: View {
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
             Text(reason ?? NSLocalizedString(
-                "Add an atelier.process-compose.yaml to this worktree or the project directory, or set a command with Customize above.",
+                "Add an execution.process-compose.yaml to this project's directory, or set a command with Customize above.",
                 comment: ""
             ))
             .font(.system(size: 11))

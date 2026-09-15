@@ -5,120 +5,72 @@
 import XCTest
 
 final class PhasePolicyTests: XCTestCase {
-    /// `requiresApproval` is derived from where the loaded file lives, so these
-    /// fixtures are the two shapes that differ: one in a worktree (repository
-    /// content, gated) and one in the project directory (the user's own, never
-    /// gated).
-    private let repositoryConfig = ProcessCompose.Config(
-        path: "/repo/wt/process-compose.yaml", isRepositoryProvided: true
-    )
-    private let userConfig = ProcessCompose.Config(
-        path: "/repo/process-compose.yaml", isRepositoryProvided: false
-    )
+    /// One shape now: a config is `execution.process-compose.yaml` in the project
+    /// directory, and there is nowhere else for one to come from. The fixture
+    /// used to come in two — worktree and project directory — because approval
+    /// depended on which, and that question went with the worktree tiers.
+    private let config = ProcessCompose.Config(path: "/repo/execution.process-compose.yaml")
+
     private func note(_ plan: PhasePolicy.Plan) -> String? {
         guard case let .nothingToDo(message) = plan else { return nil }
         return message
     }
 
-    /// Approval stubs. The real check hashes a file on disk; what this suite
-    /// covers is which branch the answer is consulted in, not how it is derived.
-    private let approved: (ProcessCompose.Config) -> Bool = { _ in true }
-    private let unapproved: (ProcessCompose.Config) -> Bool = { _ in false }
-
     // MARK: - Plan
 
     /// The first guard, since process-compose became a requirement and the
     /// switch that used to precede it was removed. A project that declares no
-    /// config is told that, rather than told an integration is off.
+    /// config is told that, and told the filename, which is the only pointer an
+    /// existing project gets after the lookup stopped searching four places.
     func testMissingConfigRunsNothing() {
-        let plan = PhasePolicy.plan(phase: .dispose, config: nil, binary: "/bin/pc", isApproved: approved)
+        let plan = PhasePolicy.plan(phase: .dispose, config: nil, binary: "/bin/pc")
 
-        XCTAssertEqual(note(plan)?.contains("no process-compose config"), true, String(describing: plan))
+        XCTAssertEqual(note(plan)?.contains("execution.process-compose.yaml"), true, String(describing: plan))
     }
 
     /// A missing binary must never look like a broken worktree — the worktree
-    /// exists and works, there was just nothing to run bootstrap with.
+    /// exists and works, there was just nothing to run dispose with.
     func testMissingBinaryRunsNothing() {
-        let plan = PhasePolicy.plan(phase: .dispose, config: userConfig, binary: nil, isApproved: approved)
+        let plan = PhasePolicy.plan(phase: .dispose, config: config, binary: nil)
 
         XCTAssertEqual(note(plan)?.contains("was not found"), true, String(describing: plan))
     }
 
-    /// Fail closed. `bootstrap` runs repository-provided commands unattended at
-    /// worktree creation, which is exactly what `ScriptTrust` gates elsewhere.
-    /// Cloning a repository and creating a workstream must not execute its YAML
-    /// until the user has read it.
-    func testUnapprovedRepositoryProvidedConfigIsRefused() {
-        let plan = PhasePolicy.plan(
-            phase: .dispose, config: repositoryConfig, binary: "/bin/pc", isApproved: unapproved
-        )
+    func testBothPreconditionsMetRuns() {
+        let plan = PhasePolicy.plan(phase: .dispose, config: config, binary: "/bin/pc")
 
-        XCTAssertEqual(note(plan)?.contains("have not been approved"), true, String(describing: plan))
+        XCTAssertEqual(plan, .run(config: config, binary: "/bin/pc"))
     }
 
-    /// The other half of the gate. A guard that refuses unconditionally would
-    /// pass the test above and make the approval pane do nothing.
-    func testApprovedRepositoryProvidedConfigRuns() {
-        let plan = PhasePolicy.plan(
-            phase: .dispose, config: repositoryConfig, binary: "/bin/pc", isApproved: approved
-        )
+    /// **There is no approval precondition, and this pins that it stays gone.**
+    /// It gated a config that could have arrived with a clone; `Config.locate`
+    /// reads the project directory and nowhere else, so nothing located here can
+    /// have. Putting a gate back without first putting a work-tree tier back in
+    /// `locate` would refuse a file the user placed by hand.
+    func testNothingIsRefusedForApproval() {
+        let plan = PhasePolicy.plan(phase: .dispose, config: config, binary: "/bin/pc")
 
-        XCTAssertEqual(plan, .run(config: repositoryConfig, binary: "/bin/pc"))
+        XCTAssertNil(note(plan), String(describing: plan))
     }
 
-    /// A config the user placed in the project directory is never asked about,
-    /// so the approval check must not even be consulted for it — a store that
-    /// answered "false" for everything would otherwise disable it.
-    func testUserPlacedConfigIsNotSubjectToApproval() {
-        var asked = false
-        let plan = PhasePolicy.plan(phase: .dispose, config: userConfig, binary: "/bin/pc") { _ in
-            asked = true
-            return false
-        }
+    /// The note names the phase that did not run. `dispose` is the only caller
+    /// left, but the parameter stays because the type does: naming the gate for
+    /// its single caller is what invites the next unattended phase to inline a
+    /// second copy of it.
+    func testNotesNameThePhase() {
+        let dispose = PhasePolicy.plan(phase: .dispose, config: nil, binary: nil)
+        let prepare = PhasePolicy.plan(phase: .prepare, config: nil, binary: nil)
 
-        XCTAssertEqual(plan, .run(config: userConfig, binary: "/bin/pc"))
-        XCTAssertFalse(asked, "a user-placed config must not be run past the approval store")
+        XCTAssertEqual(note(dispose)?.contains("dispose"), true, String(describing: dispose))
+        XCTAssertEqual(note(prepare)?.contains("prepare"), true, String(describing: prepare))
     }
 
-    /// `dispose` answers to the same preconditions as `bootstrap` — it is the
-    /// same unattended execution of repository-authored processes — and shares
-    /// this one implementation of them rather than an untestable copy in
-    /// `Workstream.Archiver`. Only the note's wording differs.
-    func testDisposeIsGatedByTheSamePolicy() {
-        let plan = PhasePolicy.plan(
-            phase: .dispose, config: repositoryConfig,
-            binary: "/bin/pc", isApproved: unapproved
-        )
+    /// Guard order. A missing config outranks a missing binary: the config is
+    /// what the project controls, and telling a project with neither to install
+    /// process-compose would be advice that changes nothing.
+    func testMissingConfigOutranksMissingBinary() {
+        let plan = PhasePolicy.plan(phase: .dispose, config: nil, binary: nil)
 
-        XCTAssertEqual(note(plan)?.contains("have not been approved"), true, String(describing: plan))
-        XCTAssertEqual(note(plan)?.contains("dispose"), true, String(describing: plan))
-    }
-
-    func testApprovedDisposeRuns() {
-        let plan = PhasePolicy.plan(
-            phase: .dispose, config: repositoryConfig,
-            binary: "/bin/pc", isApproved: approved
-        )
-
-        XCTAssertEqual(plan, .run(config: repositoryConfig, binary: "/bin/pc"))
-    }
-
-    /// Guard order. A missing binary outranks a missing approval: nothing can
-    /// run without the binary whatever the user approves, and saying so is more
-    /// actionable than asking for an approval that would change nothing.
-    func testMissingBinaryOutranksMissingApproval() {
-        let plan = PhasePolicy.plan(
-            phase: .dispose, config: repositoryConfig, binary: nil, isApproved: unapproved
-        )
-
-        XCTAssertEqual(note(plan)?.contains("was not found"), true, String(describing: plan))
-    }
-
-    /// A config in the project directory sits outside every worktree and outside
-    /// git: the user put it there by hand, so there is nothing to approve.
-    func testUserPlacedConfigRuns() {
-        let plan = PhasePolicy.plan(phase: .dispose, config: userConfig, binary: "/bin/pc", isApproved: approved)
-
-        XCTAssertEqual(plan, .run(config: userConfig, binary: "/bin/pc"))
+        XCTAssertEqual(note(plan)?.contains("execution.process-compose.yaml"), true, String(describing: plan))
     }
 }

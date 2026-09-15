@@ -133,7 +133,7 @@ extension Initialization {
         ) -> String {
             if case .missing = load, declaresBootstrapNamespace {
                 return NSLocalizedString(
-                    "This project's process-compose.yaml still declares a bootstrap namespace, which is no longer run. Move those steps to an initialization.yaml in the project directory.",
+                    "This project's execution.process-compose.yaml still declares a bootstrap namespace, which is no longer run. Move those steps to an initialization.yaml in the project directory.",
                     comment: "Info tab: bootstrap steps stranded by the move to initialization.yaml"
                 )
             }

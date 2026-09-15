@@ -54,13 +54,13 @@ final class ExecutionTabViewTests: XCTestCase {
 
     // MARK: - What the pane displays
 
-    private let displayCommand = "process-compose up -U -f /repo/ws/process-compose.yaml"
+    private let displayCommand = "process-compose up -U -f /repo/execution.process-compose.yaml"
 
     private func processComposeCommand() -> DevCommand {
         DevCommand(
             command: displayCommand,
             source: .processCompose,
-            sourceDescription: "process-compose.yaml"
+            sourceDescription: "execution.process-compose.yaml"
         )
     }
 
@@ -69,10 +69,10 @@ final class ExecutionTabViewTests: XCTestCase {
     func testAProcessComposeSourceIsShownAsItsFiles() {
         let display = devCommandDisplayText(
             devCommand: processComposeCommand(),
-            loadedFiles: ["/repo/atelier.process-compose.yaml"]
+            loadedFiles: ["/repo/execution.process-compose.yaml"]
         )
 
-        XCTAssertEqual(display, "/repo/atelier.process-compose.yaml")
+        XCTAssertEqual(display, "/repo/execution.process-compose.yaml")
     }
 
     /// `loadedFiles` is a list, and the display joins it, so that the pane stays
@@ -92,7 +92,7 @@ final class ExecutionTabViewTests: XCTestCase {
     /// included — with no `PhasePolicy` and no `ScriptTrust`. No input may
     /// produce it.
     func testNoProcessComposeInputIsEverDisplayedAsARunnableCommand() {
-        for files in [[], ["/repo/ws/process-compose.yaml"], ["/a.yaml", "/b.yml"]] {
+        for files in [[], ["/repo/execution.process-compose.yaml"], ["/a.yaml", "/b.yml"]] {
             let display = devCommandDisplayText(
                 devCommand: processComposeCommand(), loadedFiles: files
             ) ?? ""
@@ -109,7 +109,7 @@ final class ExecutionTabViewTests: XCTestCase {
     func testAProcessComposeSourceWithNoFilesFallsBackToTheFileName() {
         XCTAssertEqual(
             devCommandDisplayText(devCommand: processComposeCommand(), loadedFiles: []),
-            "process-compose.yaml"
+            "execution.process-compose.yaml"
         )
     }
 
@@ -119,7 +119,7 @@ final class ExecutionTabViewTests: XCTestCase {
         XCTAssertEqual(
             devCommandDisplayText(
                 devCommand: DevCommand(command: "just dev", source: .override, sourceDescription: nil),
-                loadedFiles: ["/repo/ws/process-compose.yaml"]
+                loadedFiles: ["/repo/execution.process-compose.yaml"]
             ),
             "just dev"
         )

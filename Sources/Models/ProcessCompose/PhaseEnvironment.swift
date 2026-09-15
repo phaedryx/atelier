@@ -12,7 +12,7 @@ private let logger = Logger(subsystem: "atelier", category: "phase-environment")
 /// `Workstream.Environment.variables` when it is created. The unattended phases
 /// spawn through `ProcessCompose.PhaseExecutor` instead, and until this existed they inherited
 /// nothing but the app's own environment — so the same
-/// `process-compose.yaml` ran under two different environments depending on
+/// `execution.process-compose.yaml` ran under two different environments depending on
 /// which namespace was being asked for. Concretely, the documented replacement
 /// for the seeding this integration removed,
 /// `rsync -rlpt --copy-links "$$ATELIER_PROJECT_DIR/seed-files/" .`, rsynced

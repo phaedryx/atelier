@@ -105,11 +105,10 @@ extension Initialization {
             let steps = load.steps
             guard !steps.isEmpty else {
                 // Only asked when there is nothing to run, because the answer is
-                // only ever used to explain that silence — and it parses every
-                // process-compose file the project would load.
-                let stranded = ProcessCompose.Config.locate(
-                    worktree: worktreePath, projectDirectory: projectPath
-                )?.namespacePresence("bootstrap") == .present
+                // only ever used to explain that silence — and it parses the
+                // project's execution config.
+                let stranded = ProcessCompose.Config.locate(projectDirectory: projectPath)?
+                    .namespacePresence("bootstrap") == .present
                 let note = Initialization.Run.nothingToDoNote(
                     load: load, declaresBootstrapNamespace: stranded
                 )

@@ -14,17 +14,10 @@ final class WorkstreamArchiverDisposeTests: XCTestCase {
 
     override func setUpWithError() throws {
         try super.setUpWithError()
-        // `plan` checks the binary *before* it checks approval, so on a host
-        // without process-compose the refusal tests below would report "was not
-        // found" and fail — and those are precisely the two that assert the
-        // security refusal.
-        //
-        // This used to be made host-independent by pointing
-        // `ProcessCompose.Settings.binaryPath` at `/bin/ls`. That setting is
-        // gone — the binary is auto-detected — and the injected
-        // `resolveBinary(searchPaths:)` seam does not reach here, because these
-        // tests go through `disposePlan`, which calls `resolveBinary()` with no
-        // arguments on purpose. So the honest thing is to skip, the way
+        // `plan` checks the config before the binary, but the tests that assert
+        // a *run* need a real binary: `disposePlan` calls `resolveBinary()` with
+        // no arguments on purpose, so the injected `resolveBinary(searchPaths:)`
+        // seam does not reach here. The honest thing is to skip, the way
         // `AsyncSetupRerunTests` already does.
         //
         // Skipping cannot hide these in CI: `.github/workflows/ci.yml` installs
@@ -33,7 +26,7 @@ final class WorkstreamArchiverDisposeTests: XCTestCase {
         // before it.
         try XCTSkipIf(
             ProcessCompose.Settings.resolveBinary() == nil,
-            "process-compose is not installed, so the binary precondition would mask the approval one"
+            "process-compose is not installed, so no dispose could be planned"
         )
 
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -45,16 +38,14 @@ final class WorkstreamArchiverDisposeTests: XCTestCase {
     override func tearDown() {
         // `project` is nil when setUp skipped before assigning it.
         if let project {
-            ScriptTrust.revokeConfigFiles(for: project.path)
             try? FileManager.default.removeItem(at: project.deletingLastPathComponent())
         }
         super.tearDown()
     }
 
-    /// Guards the guard: if this ever stops resolving, the refusal tests below
-    /// would start passing for the wrong reason (a missing binary, not a missing
-    /// approval). The skip above means this can only fail by the resolver
-    /// disagreeing with itself between setUp and here.
+    /// Guards the guard: if this ever stops resolving, the tests below would
+    /// start passing for the wrong reason. The skip above means this can only
+    /// fail by the resolver disagreeing with itself between setUp and here.
     func testTheBinaryPreconditionIsSatisfiedForEveryTestHere() {
         XCTAssertNotNil(ProcessCompose.Settings.resolveBinary())
     }
@@ -64,7 +55,8 @@ final class WorkstreamArchiverDisposeTests: XCTestCase {
         return message
     }
 
-    private func writeConfig(in dir: URL, named name: String = "process-compose.yaml") throws -> String {
+    @discardableResult
+    private func writeConfig(in dir: URL, named name: String = "execution.process-compose.yaml") throws -> String {
         let path = dir.appendingPathComponent(name)
         try "processes:\n  cleanup:\n    namespace: dispose\n    command: \"true\"\n"
             .write(to: path, atomically: true, encoding: .utf8)
@@ -73,83 +65,22 @@ final class WorkstreamArchiverDisposeTests: XCTestCase {
 
     /// Proves the plan was consulted at all: a `runDispose` that had kept its
     /// own inline preconditions would report something else, or nothing. The
-    /// missing-config branch is what stands in for it now that the
-    /// integration switch — the branch this used to reach — is gone; no config
-    /// is written in this worktree or this project directory.
+    /// missing-config branch is what stands in for it; no config is written in
+    /// this project directory.
     func testDisposeAsksThePolicy() {
         let plan = Workstream.Archiver.disposePlan(
             worktreePath: worktree.path, projectDirectory: project.path
         )
 
-        XCTAssertEqual(note(plan)?.contains("no process-compose config"), true, String(describing: plan))
+        XCTAssertEqual(
+            note(plan)?.contains("execution.process-compose.yaml"), true, String(describing: plan)
+        )
         XCTAssertEqual(note(plan)?.contains("dispose"), true, "the note must name the phase")
     }
 
-    func testDisposeIsRefusedForAnUnapprovedRepositoryConfig() throws {
-        _ = try writeConfig(in: worktree)
-
-        let plan = Workstream.Archiver.disposePlan(
-            worktreePath: worktree.path, projectDirectory: project.path
-        )
-
-        XCTAssertEqual(note(plan)?.contains("have not been approved"), true, String(describing: plan))
-    }
-
-    /// Approving through the same store the pane writes to has to reach the
-    /// archiver, or dispose would be permanently dead for every repository
-    /// config.
-    func testDisposeRunsOnceTheRepositoryConfigIsApproved() throws {
-        let path = try writeConfig(in: worktree)
-        let config = try XCTUnwrap(
-            ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path)
-        )
-        XCTAssertEqual(config.repositoryProvidedFiles, [path])
-        XCTAssertTrue(try ScriptTrust.approve(
-            configFiles: config.repositoryProvidedFiles,
-            for: project.path,
-            matching: XCTUnwrap(ScriptTrust.fingerprint(configFiles: config.repositoryProvidedFiles))
-        ))
-
-        let plan = Workstream.Archiver.disposePlan(
-            worktreePath: worktree.path, projectDirectory: project.path
-        )
-
-        guard case let .run(planned, _) = plan else {
-            return XCTFail("expected a run, got \(plan)")
-        }
-        XCTAssertEqual(planned.path, path)
-    }
-
-    /// The gate follows the file that will be *loaded*, not merely the files
-    /// that exist. A repository running process-compose for its own reasons
-    /// checks in a generic `process-compose.yaml`; an `atelier.`-prefixed config
-    /// in the project directory outranks it, so dispose runs the user's own file
-    /// and asks about nothing.
-    ///
-    /// Asserting only "it ran" would pass just as well if the repository's file
-    /// had been the one planned, so the planned path is checked too — being
-    /// ungated is only correct because the file is the user's.
-    func testDisposeRunsTheAtelierNamedConfigAndIgnoresTheRepositorysOwn() throws {
-        let mine = try writeConfig(in: project, named: "atelier.process-compose.yaml")
-        _ = try writeConfig(in: worktree)
-
-        let config = try XCTUnwrap(
-            ProcessCompose.Config.locate(worktree: worktree.path, projectDirectory: project.path)
-        )
-        XCTAssertEqual(config.loadedFiles, [mine])
-        XCTAssertEqual(config.repositoryProvidedFiles, [],
-                       "the repository's own file is not loaded, so there is nothing to approve")
-
-        let plan = Workstream.Archiver.disposePlan(
-            worktreePath: worktree.path, projectDirectory: project.path
-        )
-        guard case let .run(planned, _) = plan else {
-            return XCTFail("expected a run, got \(plan)")
-        }
-        XCTAssertEqual(planned.path, mine)
-    }
-
-    func testDisposeNeedsNoApprovalForTheUsersOwnConfig() throws {
+    /// The project directory is the only place a config comes from, so this is
+    /// the ordinary case and there is nothing to approve in it.
+    func testDisposeRunsTheProjectDirectoryConfig() throws {
         let path = try writeConfig(in: project)
 
         let plan = Workstream.Archiver.disposePlan(
@@ -160,5 +91,40 @@ final class WorkstreamArchiverDisposeTests: XCTestCase {
             return XCTFail("expected a run, got \(plan)")
         }
         XCTAssertEqual(planned.path, path)
+    }
+
+    /// **A config in the worktree is not dispose's to run, and nothing asks
+    /// about it.** It used to be located and then refused until the user
+    /// approved it; now it is not located at all, which is the same refusal made
+    /// one step earlier and without a question that could be answered wrongly.
+    /// A worktree tier put back here would run repository content unattended at
+    /// archive with no gate behind it.
+    func testAConfigInTheWorktreeIsNotPlanned() throws {
+        try writeConfig(in: worktree)
+        try writeConfig(in: worktree, named: "process-compose.yaml")
+
+        let plan = Workstream.Archiver.disposePlan(
+            worktreePath: worktree.path, projectDirectory: project.path
+        )
+
+        XCTAssertEqual(
+            note(plan)?.contains("execution.process-compose.yaml"), true, String(describing: plan)
+        )
+    }
+
+    /// The hard break reaches dispose too: a project still carrying one of the
+    /// old names gets the note naming the new one, not a silent run of a file
+    /// nothing located.
+    func testTheOldNamesAreNotPlanned() throws {
+        try writeConfig(in: project, named: "process-compose.yaml")
+        try writeConfig(in: project, named: "atelier.process-compose.yaml")
+
+        let plan = Workstream.Archiver.disposePlan(
+            worktreePath: worktree.path, projectDirectory: project.path
+        )
+
+        XCTAssertEqual(
+            note(plan)?.contains("execution.process-compose.yaml"), true, String(describing: plan)
+        )
     }
 }

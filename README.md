@@ -73,8 +73,7 @@ their own file and run without process-compose. See **Verification** below.
 
 | File | Where Atelier looks | What it holds |
 |------|---------------------|---------------|
-| `atelier.process-compose.yaml` | the worktree, then the project directory | the commands, in three namespaces |
-| `process-compose.yaml` | the worktree, then the project directory | the same, under the generic name |
+| `execution.process-compose.yaml` | the project directory only | the commands, in three namespaces |
 | `initialization.yaml` | the project directory only | the steps run once, when a worktree is created |
 | `verification.yaml` | the project directory only | the checks the Verification tab runs |
 | `ports.yml` (or `ports.yaml`) | the project directory only | the port variables Atelier supplies |
@@ -87,39 +86,42 @@ its own that drifts, and git cannot see it, so no ignore rule is needed. For an
 ordinary clone the repository's home *is* the checkout, and the file goes at its
 root like anything else.
 
-The first two are [process-compose](https://f1bonacc1.github.io/process-compose/)'s
-own format; the rest are Atelier's. **Exactly one config is loaded**, and it is
-the first of these four that exists:
+`execution.process-compose.yaml` is
+[process-compose](https://f1bonacc1.github.io/process-compose/)'s own format; the
+rest are Atelier's. **A new project starts with a commented template of the
+execution and verification files**, written by New Project and Clone Repository.
+Adding a directory you already have leaves it alone.
 
-1. `atelier.process-compose.yaml` in the worktree
-2. `atelier.process-compose.yaml` in the project directory
-3. `process-compose.yaml` in the worktree
-4. `process-compose.yaml` in the project directory
+**One name, one place.** The lookup is `execution.process-compose.yaml` in the
+project directory, then `execution.process-compose.yml`, and that is the whole
+of it — nothing inside a worktree is read. That is a trust decision rather than a
+convenience: a file outside every work tree cannot have arrived with a clone, so
+Atelier never has to ask you to approve the commands it runs unattended at
+archive. It also means an agent confined to its worktree cannot edit what runs
+there. It is the same rule `initialization.yaml` and `verification.yaml` follow.
 
-(`.yml` works anywhere `.yaml` does, and is checked second.)
+The `execution.` prefix is what makes a single name safe to demand. A repository
+may run process-compose for its own reasons, and a generic `process-compose.yaml`
+is indistinguishable from Atelier's — so no generic name is read at all.
 
-**Precedence follows explicitness, not location.** Within one name the worktree
-wins, because a worktree carrying its own config is being deliberate about that
-branch — but a file named `atelier.` outranks a generic one wherever either sits.
-That prefix is how a project says which of its process-compose files is
-Atelier's, and you need it when the repository already runs process-compose for
-its own reasons: a checked-in `process-compose.yaml` is tier 3, so without the
-prefix it shadows the config in your project directory, and Atelier runs a file
-that declares none of the three namespaces. A project with only one
-process-compose file needs no prefix.
+> **Upgrading.** This replaced a four-tier search over
+> `atelier.process-compose.y*ml` and `process-compose.y*ml`, in the worktree and
+> then the project directory. None of those names are read any more. Rename your
+> config to `execution.process-compose.yaml` and move it to the project directory;
+> until you do, the Execution tab says there is nothing to start and names the
+> file to create.
 
 Wherever the config lives, process-compose runs with the *worktree* as cwd, so a
 relative `working_dir` resolves inside it.
 
 The file is named with `-f`, which turns process-compose's own discovery off: the
 file Atelier shows you is the file it runs. That also means `compose.yaml` is
-never loaded, whatever process-compose would do on its own, and that a
-`process-compose.override.yml` sitting beside the config is not merged into it —
-a worktree that wants its own arrangement gets tier 1 instead. Name the file the
-same way when you run the stack yourself:
+never loaded, whatever process-compose would do on its own, and that an
+`execution.process-compose.override.yml` sitting beside the config is not merged
+into it. Name the file the same way when you run the stack yourself:
 
 ```console
-process-compose up -f ../atelier.process-compose.yaml    # from inside a worktree
+process-compose up -f ../execution.process-compose.yaml    # from inside a worktree
 ```
 
 ### Namespaces
@@ -138,7 +140,7 @@ services need to be told is either seeded from a file or supplied as a port.
 
 Worktree setup is the other file — see **Initialization** below for what this
 project's `initialization.yaml` holds. Everything from here on is
-`process-compose.yaml`:
+`execution.process-compose.yaml`:
 
 ```yaml
 version: "0.5"
@@ -248,7 +250,7 @@ ports:
 ```
 
 The names are yours, not Atelier's — they mean something only because
-`process-compose.yaml` reads them, and they have to match it exactly.
+`execution.process-compose.yaml` reads them, and they have to match it exactly.
 
 **Why the `:-3006` defaults are there.** `ports.yml` carries no number for an
 `assigned` port — Atelier picks that per worktree — so every reference in the
@@ -323,26 +325,27 @@ mise or asdf lands outside those three directories, and there is no path field t
 point at it. Such a binary is simply not found, and the fix is to put one where
 Atelier looks — a symlink into `~/.local/bin` does it.
 
-### Approval, and when there is no config
+### When there is no config
 
-`dispose` runs with its output captured rather than shown in a terminal, so a
-config that came with the repository has to be approved first, and again whenever
-it changes. A config you placed in the
-project directory by hand is never asked about — approval is gated by *where
-the file is*, not what is in it. `execute` is never gated because it is
-*attended*: you press Start, the stack's output lands in a terminal surface in
-front of you, and Stop is right there. The Execution tab shows which files are
-in play, not the command Start runs.
+`dispose` runs with its output captured rather than shown in a terminal, and
+nothing asks you to approve it. That is what the project-directory-only lookup
+buys: the file was placed there by hand, outside every work tree, so it cannot
+have arrived with a clone. Atelier used to search the worktree too, and a config
+found there had to be approved before `dispose` would run it; the tiers and the
+approval went together. Rule of thumb — if a file can arrive with a clone,
+Atelier will not run it unattended, and the way it enforces that is by not
+looking there. `initialization.yaml` and `verification.yaml` follow the same
+rule, so all three files sit in the same place for the same reason.
 
-If a project has no config at any of the four locations, worktrees are still created and the
-Execution tab says there is nothing to run; a per-workstream command typed into
-Customize is the escape hatch. When Start cannot run for some other reason —
-process-compose is not on disk where Atelier looks, or the config declares no
-`execute` processes — the tab says which, and the Info
-tab reports what background setup did or did not do. That last one is a refusal
-rather than a dead button on purpose: `process-compose up -n execute` against a
-namespace nothing declares neither fails nor exits, so starting it would give you
-an empty TUI and no explanation.
+If a project has no `execution.process-compose.yaml` in its project directory,
+worktrees are still created and the Execution tab says there is nothing to run
+and names the file to add; a per-workstream command typed into Customize is the
+escape hatch. When Start cannot run for some other reason — process-compose is
+not on disk where Atelier looks, or the config declares no `execute` processes —
+the tab says which, and the Info tab reports what initialization did or did not
+do. That last one is a refusal rather than a dead button on purpose:
+`process-compose up -n execute` against a namespace nothing declares neither
+fails nor exits, so starting it would give you an empty TUI and no explanation.
 
 ### Initialization
 
@@ -387,11 +390,13 @@ against the worktree you are in. There is no other UI: initialization is
 something that happens to a worktree, not a pane you work in.
 
 > **Moving from the `bootstrap` namespace.** Setup used to be a `bootstrap`
-> namespace in `process-compose.yaml`. That namespace is no longer run. Move each
-> of its processes into `initialization.yaml` as a step, in the order its
-> `depends_on` edges implied, and drop the `$$` doubling. A project that still
-> declares `bootstrap` and has no `initialization.yaml` is told so on the Info
-> row rather than quietly getting no setup at all.
+> namespace in the process-compose config. That namespace is no longer run. Move
+> each of its processes into `initialization.yaml` as a step, in the order its
+> `depends_on` edges implied, and drop the `$$` doubling. A project whose
+> `execution.process-compose.yaml` still declares `bootstrap` and that has no
+> `initialization.yaml` is told so on the Info row rather than quietly getting no
+> setup at all. (A project still on one of the *old* config names is not told —
+> that file is not read at all any more, which the Execution tab says outright.)
 
 ### Verification
 

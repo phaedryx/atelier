@@ -54,25 +54,24 @@ final class ProcessComposeResolutionTests: XCTestCase {
         return path
     }
 
-    /// In the *project directory*, which is the tier that needs no approval:
-    /// a config placed there was put there by hand, outside git.
+    /// In the project directory, which is the only place `Config.locate` reads.
     @discardableResult
     private func writeProjectConfig(_ yaml: String = config) throws -> String {
-        let path = projectDirectory.appendingPathComponent("process-compose.yaml").path
+        let path = projectDirectory.appendingPathComponent("execution.process-compose.yaml").path
         try yaml.write(toFile: path, atomically: true, encoding: .utf8)
         return path
     }
 
     private func resolve() -> ProcessCompose.Resolution {
         ProcessCompose.ResolutionModel.resolve(
-            worktree: worktree.path, projectDirectory: projectDirectory.path, override: nil,
+            projectDirectory: projectDirectory.path, override: nil,
             searchPaths: searchPaths
         )
     }
 
     private func makeModel() -> ProcessCompose.ResolutionModel {
         ProcessCompose.ResolutionModel(
-            worktree: worktree.path, projectDirectory: projectDirectory.path, override: nil,
+            projectDirectory: projectDirectory.path, override: nil,
             searchPaths: searchPaths
         )
     }
@@ -92,10 +91,6 @@ final class ProcessComposeResolutionTests: XCTestCase {
         XCTAssertEqual(resolution.declaredVerifyChecks, ["rspec"])
         XCTAssertNil(resolution.verifyUnavailableReason)
         XCTAssertTrue(resolution.usesProcessCompose)
-        // Nothing to approve: this config is the user's own, in the project
-        // directory, and approval is gated by location rather than content.
-        XCTAssertEqual(resolution.repositoryConfigFiles, [])
-        XCTAssertFalse(resolution.isApproved)
     }
 
     /// **Verification's half does not depend on process-compose at all.** Checks
@@ -177,7 +172,7 @@ final class ProcessComposeResolutionTests: XCTestCase {
         try writeProjectConfig()
 
         let resolution = ProcessCompose.ResolutionModel.resolve(
-            worktree: worktree.path, projectDirectory: projectDirectory.path, override: nil,
+            projectDirectory: projectDirectory.path, override: nil,
             searchPaths: ["/nonexistent/process-compose"]
         )
 
@@ -186,17 +181,26 @@ final class ProcessComposeResolutionTests: XCTestCase {
         XCTAssertNotNil(resolution.startUnavailableReason)
     }
 
-    /// A config that arrived with the repository is the one the user is asked
-    /// about. Verification has no such tier — `verification.yaml` is read from the
-    /// project directory only — so this is about Execution alone.
-    func test_resolve_asksForApprovalOfARepositoryProvidedConfig() throws {
-        let path = worktree.appendingPathComponent("process-compose.yaml").path
-        try Self.config.write(toFile: path, atomically: true, encoding: .utf8)
+    /// **Nothing in the worktree is resolved.** A config sitting in a work tree
+    /// used to be located and then held behind an approval; now it is not
+    /// located, and the pane says there is nothing to start. That is the whole of
+    /// the trust decision, so a resolution that found one would be running
+    /// repository content with no gate left behind it.
+    func test_resolve_ignoresAConfigInTheWorktree() throws {
+        try Self.config.write(
+            toFile: worktree.appendingPathComponent("execution.process-compose.yaml").path,
+            atomically: true, encoding: .utf8
+        )
 
         let resolution = resolve()
 
-        XCTAssertEqual(resolution.repositoryConfigFiles, [path])
-        XCTAssertFalse(resolution.isApproved)
+        XCTAssertFalse(resolution.plan.canRun)
+        XCTAssertEqual(resolution.loadedFiles, [])
+        // Nothing was detected at all, which is the one state
+        // `unavailableReason` deliberately leaves to the pane's own "Nothing to
+        // start" copy — and that copy is what names the file to create.
+        XCTAssertNil(resolution.devCommand)
+        XCTAssertNil(resolution.startUnavailableReason)
     }
 
     // MARK: - The model around it

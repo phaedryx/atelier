@@ -234,9 +234,8 @@ extension Workstream {
                     await withCheckedContinuation { continuation in
                         DispatchQueue.global(qos: .utility).async {
                             if let worktreePath {
-                                // Before the worktree is removed:
-                                // `ProcessCompose.Config.locate` reads the worktree, and
-                                // dispose runs in it.
+                                // Before the worktree is removed: dispose runs
+                                // in it.
                                 runDispose(
                                     workstreamID: workstreamID,
                                     projectName: projName,
@@ -335,16 +334,11 @@ extension Workstream {
         /// altogether would still pass every test of the policy itself. This is the
         /// seam a test can hold, since `runDispose` proper spawns process-compose
         /// and `purge` destroys a worktree.
-        static func disposePlan(worktreePath: String, projectDirectory: String) -> PhasePolicy.Plan {
+        static func disposePlan(worktreePath _: String, projectDirectory: String) -> PhasePolicy.Plan {
             PhasePolicy.plan(
                 phase: .dispose,
-                config: ProcessCompose.Config.locate(
-                    worktree: worktreePath, projectDirectory: projectDirectory
-                ),
-                binary: ProcessCompose.Settings.resolveBinary(),
-                isApproved: {
-                    ScriptTrust.isApproved(configFiles: $0.repositoryProvidedFiles, for: projectDirectory)
-                }
+                config: ProcessCompose.Config.locate(projectDirectory: projectDirectory),
+                binary: ProcessCompose.Settings.resolveBinary()
             )
         }
 

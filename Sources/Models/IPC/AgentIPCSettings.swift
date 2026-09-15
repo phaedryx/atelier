@@ -6,7 +6,7 @@ import Foundation
 extension IPC {
     /// Reads the agent-IPC settings and keeps `IPC.Server` in step with them.
     ///
-    /// `ScriptTrust` deliberately isn't involved. Its API fingerprints the
+    /// A config-approval fingerprint deliberately isn't involved. That API hashed the
     /// process-compose files a repository ships, and the `AGENTS.md` invariant it
     /// backs is about *repository-provided commands*. Turning on IPC is neither, so
     /// it gets its own switch and its own warning copy rather than a fabricated

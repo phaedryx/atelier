@@ -26,7 +26,7 @@ extension DevCommand {
 
         // MARK: - Per-workstream override
 
-        /// The escape hatch. A project with no `process-compose.yaml` — or one whose
+        /// The escape hatch. A project with no `execution.process-compose.yaml` — or one whose
         /// config starts the wrong subset of the stack for a particular workstream —
         /// gets a command the user types here, and it outranks detection.
         static func overrideKey(for workstreamID: UUID) -> String {
@@ -113,7 +113,6 @@ extension DevCommand {
         /// project could not opt out of; the override covers the case it was there
         /// for, explicitly.
         static func resolve(
-            workingDirectory: String,
             projectDirectory: String,
             override: String?
         ) -> DevCommand? {
@@ -128,39 +127,38 @@ extension DevCommand {
                     return DevCommand(command: override, source: .override, sourceDescription: nil)
                 }
             }
-            return detectProcessCompose(in: workingDirectory, projectDirectory: projectDirectory)
+            return detectProcessCompose(projectDirectory: projectDirectory)
         }
 
         // MARK: - process-compose detection
 
-        /// The process-compose command for a worktree.
+        /// The process-compose command for a project.
         ///
-        /// The config is looked for in the worktree first, then in the project
-        /// directory. The project directory is the useful place to keep one: in the
-        /// bare-repo layout it sits outside every worktree, so a single file serves
-        /// all of them, git cannot see it, and it never needs a gitignore rule. A
-        /// config in the worktree still wins, because a worktree that carries its
-        /// own is saying something deliberate.
+        /// The config is `execution.process-compose.yaml` in the project directory
+        /// and nowhere else — in the bare-repo layout that sits outside every
+        /// worktree, so a single file serves all of them, git cannot see it, and it
+        /// never needs a gitignore rule. It takes no worktree because there is no
+        /// longer anything to look for in one: the answer is the same for every
+        /// workstream of a project.
         ///
-        /// Either way process-compose runs with the *worktree* as its working
-        /// directory, and it resolves a relative `working_dir` against its own cwd
-        /// rather than against the config's location — so `working_dir: apps/api`
-        /// lands inside the worktree from either home.
+        /// process-compose still runs with the *worktree* as its working directory,
+        /// and it resolves a relative `working_dir` against its own cwd rather than
+        /// against the config's location — so `working_dir: apps/api` lands inside
+        /// the worktree.
         ///
         /// `-U` moves the control API onto a unix socket, so it does not add a
         /// listening TCP port for the port detector to confuse with the app's.
         ///
         /// Every file is named with `-f`, which turns process-compose's own
-        /// discovery off. That is the point: the set of files Atelier shows, gates
-        /// and runs is then exactly one set. Leaving the override to discovery
-        /// meant Start could load `compose.yaml` — a name Atelier does not detect —
-        /// while dispose ran something else for the same project.
+        /// discovery off. That is the point: the set of files Atelier shows and runs
+        /// is then exactly one set. Leaving the file to discovery meant Start could
+        /// load `compose.yaml` — a name Atelier does not detect — while dispose ran
+        /// something else for the same project.
         ///
         /// **The `command` built here carries no `-n`, so executing it would run
         /// *every* namespace the config declares — `dispose` included.** That one
-        /// is the phase `PhasePolicy` gates: it runs repository-authored processes
-        /// unattended, and only once the user has approved every
-        /// repository-provided file. This string never goes through
+        /// is the phase `PhasePolicy` decides: it runs the project's processes
+        /// unattended, with nobody watching. This string never goes through
         /// `PhasePolicy`, so it must never reach a shell.
         ///
         /// It no longer does. `ProcessCompose.RunCommandPlan` maps a `.processCompose` source to
@@ -181,6 +179,8 @@ extension DevCommand {
         /// the binary being unresolvable while it was on, and finally the
         /// Execution pane seeding its editable field from this very string,
         /// where Save turned it into a `.override` that *is* run literally.
+        /// Five different preconditions, which is why the invariant moved to
+        /// `ProcessCompose.RunCommandPlan` and stayed there.
         ///
         /// That last route is the one to keep in mind, because `.override` is an
         /// unconstrained passthrough by design: `ProcessCompose.RunCommandPlan` cannot tell a
@@ -190,9 +190,9 @@ extension DevCommand {
         /// renders instead. Reintroducing a path that executes `command` for a
         /// `.processCompose` source, or that pre-fills the override field with it,
         /// reopens the hole for the sixth time.
-        static func detectProcessCompose(in directory: String, projectDirectory: String) -> DevCommand? {
+        static func detectProcessCompose(projectDirectory: String) -> DevCommand? {
             guard let config = ProcessCompose.Config.locate(
-                worktree: directory, projectDirectory: projectDirectory
+                projectDirectory: projectDirectory
             ) else { return nil }
 
             // `loadedFiles` existence-filters, so a missing `-f` target — which
