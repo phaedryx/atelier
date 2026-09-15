@@ -224,6 +224,79 @@ final class HookChannelProbeTests: XCTestCase {
         XCTAssertEqual(publishes, 1, "a channel already known to be up has not changed")
     }
 
+    // MARK: - Late but healthy
+
+    /// A nonce landing after the `.down` verdict is evidence that *postdates*
+    /// the failure: the POST it rode reached the listener after the probe gave
+    /// up, which is exactly what a slow-but-healthy channel looks like. The
+    /// mid-check discard above is about evidence that predates a failure; this
+    /// is the opposite case, and it must clear the verdict rather than be
+    /// thrown away while the sidebar says "No Signal".
+    func test_aLateNonceFromTheFailedCheck_clearsADownChannel() throws {
+        let probe = makeProbe()
+
+        probe.verify(force: true)
+        probe.timeoutPending()
+        let retryNonce = try lastNonce()
+        probe.timeoutPending()
+        XCTAssertTrue(probe.state.isDown)
+
+        probe.noteNonce(retryNonce)
+
+        XCTAssertEqual(probe.state, .verified)
+    }
+
+    /// Both of the failed check's pings prove the same path; whichever comes
+    /// back late is enough.
+    func test_aLateNonceFromTheFirstAttempt_clearsADownChannelToo() throws {
+        let probe = makeProbe()
+
+        probe.verify(force: true)
+        let firstNonce = try lastNonce()
+        probe.timeoutPending()
+        probe.timeoutPending()
+        XCTAssertTrue(probe.state.isDown)
+
+        probe.noteNonce(firstNonce)
+
+        XCTAssertEqual(probe.state, .verified)
+    }
+
+    /// Only a nonce this probe sent is evidence about this probe's channel.
+    func test_aNonceTheProbeNeverSent_doesNotClearADownChannel() {
+        let probe = makeProbe()
+
+        probe.verify(force: true)
+        probe.timeoutPending()
+        probe.timeoutPending()
+
+        probe.noteNonce("not-one-of-ours")
+
+        XCTAssertTrue(probe.state.isDown)
+    }
+
+    /// Recovery consumes the stored nonces. A nonce from before the *latest*
+    /// failure arriving again afterwards is exactly the stale-evidence case the
+    /// mid-check discard exists for, and must not clear the newer verdict.
+    func test_aNonceFromBeforeTheLatestFailure_doesNotClearIt() throws {
+        let probe = makeProbe()
+        let start = Date()
+
+        probe.verify(force: true, now: start)
+        probe.timeoutPending()
+        let staleNonce = try lastNonce()
+        probe.timeoutPending()
+        probe.noteNonce(staleNonce)
+        XCTAssertEqual(probe.state, .verified, "precondition: the first failure was cleared late")
+
+        probe.verify(force: true, now: start.addingTimeInterval(120))
+        probe.timeoutPending()
+        probe.timeoutPending()
+        probe.noteNonce(staleNonce)
+
+        XCTAssertTrue(probe.state.isDown, "evidence predating this failure says nothing about it")
+    }
+
     /// A timeout with nothing outstanding is not evidence of anything.
     func test_aTimeoutWithNoCheckInFlight_changesNothing() {
         let probe = makeProbe()

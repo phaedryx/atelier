@@ -89,6 +89,12 @@ final class HookChannelProbe: ObservableObject {
     private var outstanding: Attempt?
     private var lastCheckStartedAt: Date?
 
+    /// Nonces sent by the current check, kept past its `.down` verdict so a
+    /// reply landing *after* the verdict can still overturn it. Reset when a
+    /// new check starts and cleared on any verification, so nothing older than
+    /// the latest failure can ever answer for it.
+    private var recentNonces: Set<String> = []
+
     init() {}
 
     // MARK: - Checking
@@ -108,13 +114,25 @@ final class HookChannelProbe: ObservableObject {
 
     /// Records that the nonce of the outstanding ping came back.
     ///
-    /// A nonce the probe is not waiting for is discarded rather than treated as
-    /// good news: a late reply from a check that already gave up would otherwise
-    /// report the channel healthy on evidence that predates the failure.
+    /// While a check is in flight, only its outstanding nonce counts: a stale
+    /// one arriving mid-check would report the channel healthy on evidence
+    /// that predates what the check is about to conclude.
+    ///
+    /// Once the check has concluded `.down`, the rule inverts. A nonce from
+    /// that failed check landing now rode a POST that reached the listener
+    /// *after* the verdict, which is exactly what a slow-but-healthy channel
+    /// looks like — evidence postdating the failure, and the only kind that
+    /// can arrive while an agent runs one long silent tool and produces no
+    /// real traffic to clear the verdict the free way.
     func noteNonce(_ nonce: String, now: Date = Date()) {
-        guard let outstanding, outstanding.nonce == nonce else { return }
-        self.outstanding = nil
-        logger.info("Hook channel verified in \(now.timeIntervalSince(outstanding.startedAt), privacy: .public)s")
+        if let outstanding, outstanding.nonce == nonce {
+            self.outstanding = nil
+            logger.info("Hook channel verified in \(now.timeIntervalSince(outstanding.startedAt), privacy: .public)s")
+            markVerified(now: now)
+            return
+        }
+        guard state == .down, recentNonces.contains(nonce) else { return }
+        logger.info("Hook channel verified by a ping that returned after the check gave up")
         markVerified(now: now)
     }
 
@@ -139,6 +157,9 @@ final class HookChannelProbe: ObservableObject {
     private func markVerified(now: Date) {
         lastVerifiedAt = now
         downSince = nil
+        // Consumed: anything still unanswered predates this verification, so it
+        // must not be able to clear a *later* failure.
+        recentNonces.removeAll()
         guard state != .verified else { return }
         state = .verified
     }
@@ -164,6 +185,11 @@ final class HookChannelProbe: ObservableObject {
     private func send(attempt: Int, now: Date) {
         let nonce = UUID().uuidString
         outstanding = Attempt(nonce: nonce, startedAt: now, number: attempt)
+        if attempt == 1 {
+            // A new check supersedes the old one's evidence entirely.
+            recentNonces.removeAll()
+        }
+        recentNonces.insert(nonce)
 
         // Shaped like a Claude Code hook payload because that is what the script
         // forwards: it wraps whatever arrives on stdin as the envelope's

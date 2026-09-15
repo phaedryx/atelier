@@ -750,15 +750,21 @@ extension Workstream {
                 var changed = false
                 let rowState = states[wsID] ?? .idle
                 for idx in updated.indices {
-                    guard updated[idx].state == .working, updated[idx].lastEventAt < silenceCutoff else { continue }
+                    guard updated[idx].lastEventAt < silenceCutoff else { continue }
 
                     // Worth asking about the channel even when something below
                     // explains the silence: a tool in flight is explained by a
                     // `PreToolUse` that arrived, but the `PostToolUse` that
                     // should have followed is exactly the kind of event a
-                    // broken channel loses.
+                    // broken channel loses. Counted for `.stalled` runs too —
+                    // deliberately, because they are the only quiet runs left
+                    // once a long silent tool outlives `longWorkGrace`, and the
+                    // probe's re-checks are then the only path by which a
+                    // `.down` verdict can clear before that tool returns. A
+                    // stalled run is peak suspicion, not resolved suspicion.
                     sawProlongedSilence = true
 
+                    guard updated[idx].state == .working else { continue }
                     guard updated[idx].lastEventAt < wedgeCutoff else { continue }
 
                     // Waiting on the user isn't stalling.
