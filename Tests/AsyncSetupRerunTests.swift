@@ -43,12 +43,10 @@ final class AsyncSetupRerunTests: XCTestCase {
         super.tearDown()
     }
 
-    /// In the project directory, not the worktree: a config that came with the
-    /// repository needs `ScriptTrust` approval, and approval is not what this
-    /// test is about.
+    /// In the project directory, which is the only place `Config.locate` reads.
     private func writeProjectConfig(_ body: String) throws {
         try body.write(
-            to: projectDir.appendingPathComponent("process-compose.yaml"),
+            to: projectDir.appendingPathComponent("execution.process-compose.yaml"),
             atomically: true,
             encoding: .utf8
         )

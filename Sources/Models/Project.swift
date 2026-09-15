@@ -73,9 +73,10 @@ struct Project: Identifiable, Hashable, Codable {
     /// checkout itself for an ordinary clone. **Not** a work tree in the
     /// container layout — read `checkout` for that.
     ///
-    /// This is the directory a `process-compose.yaml` and a `ports.yml` sit
-    /// beside `.bare` and the worktrees in, and the key `ScriptTrust` records
-    /// config approvals under.
+    /// This is the directory an `execution.process-compose.yaml`, a
+    /// `verification.yaml` and a `ports.yml` sit beside `.bare` and the worktrees
+    /// in — outside every work tree, which is what lets Atelier run those commands
+    /// without asking.
     var directory: String
     /// The checkout that stands in for `directory` wherever a work tree is
     /// required. Nil when `directory` is itself one.

@@ -1341,7 +1341,7 @@ extension Git {
         /// Worktrees resolve to their main repository. A `.bare` container
         /// resolves to *itself*: it is the repository's home, the directory that
         /// holds `.bare`, the default checkout and every workstream worktree as
-        /// peers, and the one place a `process-compose.yaml` or `ports.yml` can
+        /// peers, and the one place an `execution.process-compose.yaml` or `ports.yml` can
         /// sit and serve all of them while staying outside git.
         ///
         /// This used to resolve *forward*, registering the container's default

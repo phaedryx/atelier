@@ -394,12 +394,8 @@
 "Pulling…" = "Pulling…";
 "… %d more lines …" = "… %d more lines …";
 
-/* Script approval */
-"Approval" = "Approval";
+/* PR review decision */
 "Approved" = "Approved";
-"Not approved" = "Not approved";
-"Approve" = "Approve";
-"Revoke" = "Revoke";
 
 /* Agent roster */
 "Editing %@" = "Editing %@";
@@ -516,12 +512,12 @@
 
 /* Runner selection */
 "process-compose" = "process-compose";
-"No dev command found. Add an atelier.process-compose.yaml, or set a command below." = "No dev command found. Add an atelier.process-compose.yaml, or set a command below.";
+"No dev command found. Add an execution.process-compose.yaml to this project's directory, or set a command below." = "No dev command found. Add an execution.process-compose.yaml to this project's directory, or set a command below.";
 "Nothing to start" = "Nothing to start";
-"Add an atelier.process-compose.yaml to this worktree or the project directory, or set a command with Customize above." = "Add an atelier.process-compose.yaml to this worktree or the project directory, or set a command with Customize above.";
-"This project's process-compose config could not be located, so there is nothing to start." = "This project's process-compose config could not be located, so there is nothing to start.";
+"Add an execution.process-compose.yaml to this project's directory, or set a command with Customize above." = "Add an execution.process-compose.yaml to this project's directory, or set a command with Customize above.";
+"This project has no execution.process-compose.yaml in its directory, so there is nothing to start." = "This project has no execution.process-compose.yaml in its directory, so there is nothing to start.";
 "process-compose was not found. Install it, then refresh Detected Tools in Settings." = "process-compose was not found. Install it, then refresh Detected Tools in Settings.";
-"This project's process-compose config declares no execute processes, so there is nothing to start." = "This project's process-compose config declares no execute processes, so there is nothing to start.";
+"This project's execution.process-compose.yaml declares no execute processes, so there is nothing to start." = "This project's execution.process-compose.yaml declares no execute processes, so there is nothing to start.";
 
 /* ports.yaml */
 "ports.yaml could not be read: %@" = "ports.yaml could not be read: %@";
@@ -551,24 +547,9 @@
 "%@ failed." = "%@ failed.";
 "%1$@ exited with code %2$d." = "%1$@ exited with code %2$d.";
 
-/* Process-compose config approval */
-"Approve this repository's process config?" = "Approve this repository's process config?";
-"%@ came with this repository. Its bootstrap phase runs automatically when a workstream is created, and its dispose phase when one is archived — both without asking. They run on your machine under your user account." = "%@ came with this repository. Its bootstrap phase runs automatically when a workstream is created, and its dispose phase when one is archived — both without asking. They run on your machine under your user account.";
-"Not Now" = "Not Now";
-"Approve and Run Bootstrap" = "Approve and Run Bootstrap";
-"Could not read this file." = "Could not read this file.";
-"These files changed while you were reviewing them, so nothing was approved. What is shown above is what is on disk now — review it and approve again." = "These files changed while you were reviewing them, so nothing was approved. What is shown above is what is on disk now — review it and approve again.";
-"%@ came with this repository and has not been approved" = "%@ came with this repository and has not been approved";
-"Its bootstrap and dispose phases will not run until you review it. Start is unaffected." = "Its bootstrap and dispose phases will not run until you review it. Start is unaffected.";
-"Process Config" = "Process Config";
-"Bootstrap runs when a workstream is created and dispose when one is archived, both without asking." = "Bootstrap runs when a workstream is created and dispose when one is archived, both without asking.";
-"Review" = "Review";
-
 /* Unattended phase policy — shared by bootstrap and dispose */
-"This project has no process-compose config, so no %@ ran." = "This project has no process-compose config, so no %@ ran.";
+"This project has no execution.process-compose.yaml, so no %@ ran." = "This project has no execution.process-compose.yaml, so no %@ ran.";
 "process-compose was not found, so no %@ ran." = "process-compose was not found, so no %@ ran.";
-"This project's process-compose files came with the repository and have not been approved, so no %@ ran." = "This project's process-compose files came with the repository and have not been approved, so no %@ ran.";
-"Approval covers this repository until any of these files changes. Start is never gated by it." = "Approval covers this repository until any of these files changes. Start is never gated by it.";
 
 /* Verification runner */
 "“%@” is already running." = "“%@” is already running.";

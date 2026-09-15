@@ -290,7 +290,6 @@ struct TerminalContainerView: View {
     @State private var browserStartPending = false
     @State private var devCommandOverride: String?
     @State private var defaultBranch = "main"
-    @State private var isReviewingConfig = false
     /// Resolved once per change rather than per render: resolving binds a socket
     /// to check whether each port is free.
     @State private var portPlan: ProcessCompose.PortPlan = .empty
@@ -395,7 +394,6 @@ struct TerminalContainerView: View {
         // the view used to resolve on `.onAppear` as well. Every later
         // resolution is off the main actor. See `ProcessCompose.ResolutionModel`.
         _processComposeResolver = StateObject(wrappedValue: ProcessCompose.ResolutionModel(
-            worktree: workingDirectory,
             projectDirectory: projectDirectory,
             override: savedOverride
         ))
@@ -790,11 +788,7 @@ struct TerminalContainerView: View {
                 workstreamID: workstreamID,
                 workingDirectory: workingDirectory,
                 projectDirectory: projectDirectory,
-                repositoryConfigFiles: resolved.repositoryConfigFiles,
-                configApproved: resolved.isApproved,
                 setupState: setupState,
-                onReviewConfig: { isReviewingConfig = true },
-                onRevokeConfig: revokeProcessConfig,
                 onRerunBootstrap: rerunBootstrap
             )
         case .changes:
@@ -837,9 +831,6 @@ struct TerminalContainerView: View {
                     isReclaimingSocket: isReclaimingRunSocket,
                     devCommandFiles: resolved.loadedFiles,
                     startUnavailableReason: resolved.startUnavailableReason,
-                    unapprovedConfigFiles: resolved.isApproved
-                        ? [] : resolved.repositoryConfigFiles,
-                    onReviewConfig: { isReviewingConfig = true },
                     onSelectionChange: { executeSelectionChanges += 1 },
                     onStart: doStartRun,
                     onStop: stopRun,
@@ -1169,18 +1160,6 @@ struct TerminalContainerView: View {
 
     var body: some View {
         mainContent
-            // On the container rather than on either tab, because both the
-            // Execution banner and the Info row open it and Execution is a
-            // closeable tab.
-            .sheet(isPresented: $isReviewingConfig) {
-                if !resolved.repositoryConfigFiles.isEmpty {
-                    ConfigApprovalView(
-                        filePaths: resolved.repositoryConfigFiles,
-                        onApprove: approveProcessConfig,
-                        onCancel: { isReviewingConfig = false }
-                    )
-                }
-            }
             .onChange(of: devCommandOverride) { _, newValue in
                 DevCommand.Resolver.saveOverride(newValue, for: workstreamID)
                 // Passed explicitly rather than left to the resolver's stored
@@ -1979,68 +1958,14 @@ struct TerminalContainerView: View {
         return vars
     }
 
-    // MARK: - Process config approval
-
-    /// Approve the repository's config, then run the bootstrap it was refused.
-    ///
-    /// Bootstrap already ran — and reported that it did nothing — by the time
-    /// anyone can see this, so approval on its own would only help the *next*
-    /// worktree. `setupExistingWorktree` recomputes the plan against the
-    /// worktree that already exists, which is what makes this one recoverable.
-    private func approveProcessConfig(matching reviewedFingerprint: String) -> Bool {
-        guard !resolved.repositoryConfigFiles.isEmpty else { return false }
-        // The fingerprint is of the bytes the pane displayed, and `approve`
-        // refuses if the files on disk have moved on since. Re-resolve the set
-        // before the pane reloads: what changed may be *which* files the config
-        // loads, not their contents — a worktree that gains an
-        // `atelier.process-compose.yaml` is a different set, tier 1 beating
-        // tier 3 — and the user has to review the set that will actually run.
-        guard ScriptTrust.approve(
-            configFiles: resolved.repositoryConfigFiles,
-            for: projectDirectory,
-            matching: reviewedFingerprint
-        ) else {
-            // **Synchronously, and this is the one path that needs it.** The
-            // next two lines read the result of the write that just happened;
-            // an asynchronous refresh would answer about the state before the
-            // click. Approval is also one of `PhasePolicy.plan`'s four facts and
-            // the one no other trigger watches — Start is never gated by it — so
-            // without a refresh here the Verification tab would keep telling the
-            // user to approve a config they just approved.
-            let refreshed = processComposeResolver.refreshNow(override: devCommandOverride)
-            // Nothing left to approve: the config went away while the pane was
-            // open, and an empty pane has no button to dismiss itself with.
-            if refreshed.repositoryConfigFiles.isEmpty {
-                isReviewingConfig = false
-            }
-            return false
-        }
-        isReviewingConfig = false
-        let refreshed = processComposeResolver.refreshNow(override: devCommandOverride)
-        // `approve` returning true means the fingerprint was stored, so this is
-        // now only reachable if the file vanished between the two reads. Do not
-        // run anything on the strength of a button press that did not take.
-        guard refreshed.isApproved else { return true }
-        rerunBootstrap()
-        return true
-    }
-
     /// Run the project's `bootstrap` namespace against this worktree again.
     ///
-    /// Two callers, and deliberately no preconditions of its own.
-    /// `approveProcessConfig` calls it to recover the bootstrap its approval
-    /// was too late for; the Info tab's Rerun button and the palette's Rerun
-    /// Bootstrap call it because the user asked.
-    ///
-    /// In particular this is **not** behind the resolution's `isApproved`.
-    /// `approveProcessConfig` checks that before calling, because there the
-    /// guard is asking whether the approval it just wrote actually took — an
-    /// unreadable file has no fingerprint, so `approve` was a no-op. A manual
-    /// rerun has no approval to doubt, and every reason bootstrap might do
-    /// nothing is `PhasePolicy.plan`'s to decide and report as a
-    /// `.completedWithNote` the Info row renders. Guarding here would trade
-    /// that explanation for a button that silently does nothing, in the one
-    /// state where the user most needs to be told why.
+    /// Deliberately no preconditions of its own. The Info tab's Rerun button and
+    /// the palette's Rerun Bootstrap are the callers, and both mean the user
+    /// asked. Every reason bootstrap might do nothing is `PhasePolicy.plan`'s to
+    /// decide and report as a `.completedWithNote` the Info row renders; guarding
+    /// here would trade that explanation for a button that silently does nothing,
+    /// in the one state where the user most needs to be told why.
     private func rerunBootstrap() {
         let id = workstreamID
         let project = projectDirectory
@@ -2058,14 +1983,6 @@ struct TerminalContainerView: View {
                 worktreePath: worktree
             )
         }
-    }
-
-    private func revokeProcessConfig() {
-        ScriptTrust.revokeConfigFiles(for: projectDirectory)
-        // Synchronous for the same reason the approval path is: the row the user
-        // just clicked has to stop saying "Approved" on this pass, not the next
-        // one.
-        processComposeResolver.refreshNow(override: devCommandOverride)
     }
 
     private func terminalLoadingView(message: String) -> some View {

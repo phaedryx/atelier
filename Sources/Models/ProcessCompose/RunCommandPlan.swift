@@ -12,7 +12,7 @@ extension ProcessCompose {
     /// `-n`, so process-compose runs every namespace it finds, `bootstrap` and
     /// `dispose` included. Those two are exactly what `PhasePolicy` gates behind the
     /// user having approved every repository-provided file, and that string reaches
-    /// process-compose without passing through `PhasePolicy` or `ScriptTrust` at
+    /// process-compose without passing through `PhasePolicy` at
     /// all. It is a display string: the pane shows it so the user can see which
     /// files are in play. It is not a runnable one.
     ///
@@ -92,7 +92,7 @@ extension ProcessCompose {
             case .processCompose:
                 if config == nil {
                     return NSLocalizedString(
-                        "This project's process-compose config could not be located, so there is nothing to start.",
+                        "This project has no execution.process-compose.yaml in its directory, so there is nothing to start.",
                         comment: ""
                     )
                 }
@@ -108,7 +108,7 @@ extension ProcessCompose {
                 // answer the same question for this case.
                 if config?.namespacePresence(ProcessCompose.Phase.execute.namespace) == .empty {
                     return NSLocalizedString(
-                        "This project's process-compose config declares no execute processes, so there is nothing to start.",
+                        "This project's execution.process-compose.yaml declares no execute processes, so there is nothing to start.",
                         comment: ""
                     )
                 }

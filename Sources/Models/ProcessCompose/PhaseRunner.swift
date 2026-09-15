@@ -58,15 +58,14 @@ extension ProcessCompose {
         ///
         /// **Every file is named with `-f`, always.** That turns process-compose's
         /// own discovery off, which is the point: the files that execute are then
-        /// exactly `config.loadedFiles`, which is what `ScriptTrust` fingerprints
-        /// and what `ConfigApprovalView` displays.
+        /// exactly `config.loadedFiles` — the file `locate` found and nothing else.
         ///
-        /// A worktree config used to be left unnamed so discovery could pick up its
-        /// sibling override. That was sound while honouring overrides was the only
-        /// goal, but it made the approval gate a mirror of discovery's rules, and a
+        /// A config used to be left unnamed so discovery could pick up its sibling
+        /// override. That was sound while honouring overrides was the only goal, but
+        /// it made the set Atelier displayed a *mirror* of discovery's rules, and a
         /// mirror can be stepped around: discovery also loads `compose.yaml`, a name
         /// Atelier deliberately does not detect, so a repository could ship a benign
-        /// `process-compose.yaml` to be approved and a `compose.yaml` to be run.
+        /// `process-compose.yaml` to be shown and a `compose.yaml` to be run.
         /// Verified against v1.122.0 — with both present, `compose.yaml` wins and
         /// `process-compose.yaml` is never read. Naming the files closes the class,
         /// not just that instance.

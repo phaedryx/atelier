@@ -65,27 +65,16 @@ struct WorkstreamInfoView: View {
     let workstreamID: UUID
     let workingDirectory: String
     let projectDirectory: String
-    /// Every repository-provided process-compose file this worktree would load.
-    /// Info is the permanent tab, so this is the approval route that survives the
-    /// user closing Execution.
-    var repositoryConfigFiles: [String] = []
-    var configApproved: Bool = false
     /// What background setup last reported for this workstream. Info is where
     /// it belongs: it is the permanent tab, and a `.completedWithNote` — "this
-    /// project has no process-compose config, so no bootstrap ran",
+    /// project has no execution.process-compose.yaml, so no bootstrap ran",
     /// "process-compose was not found" — is a fact about the workstream, not
     /// about the run pane. Nothing rendered it before, so those notes were
     /// written and thrown away.
     var setupState: AsyncSetupState = .idle
-    /// No defaults: a call site that passes `repositoryConfigFiles` but forgets
-    /// these would render a Review button that silently does nothing, which is
-    /// the whole failure this gate exists to avoid.
-    let onReviewConfig: () -> Void
-    let onRevokeConfig: () -> Void
     /// Runs the project's `bootstrap` namespace against this worktree again.
-    /// No default for the same reason as the two above, and one more: this row
-    /// always renders, so a call site that forgot it would ship a Rerun button
-    /// on every workstream that does nothing.
+    /// No default: this row always renders, so a call site that forgot it would
+    /// ship a Rerun button on every workstream that does nothing.
     let onRerunBootstrap: () -> Void
 
     @EnvironmentObject var appEnv: AppEnvironment
@@ -104,7 +93,6 @@ struct WorkstreamInfoView: View {
                 githubSection
                 shortcutSection
                 setupSection
-                processConfigSection
             }
             .formStyle(.grouped)
 
@@ -429,48 +417,6 @@ struct WorkstreamInfoView: View {
                         .help(canRerun
                             ? NSLocalizedString("Run this project's bootstrap namespace against this worktree again.", comment: "")
                             : NSLocalizedString("Bootstrap is already running.", comment: ""))
-                }
-            }
-        }
-    }
-
-    /// Approval for the repository's own process-compose files. Replaces the
-    /// `.atelier.json` scripts section: the gated phases are now `bootstrap`
-    /// and `dispose`, and approval is keyed on the config files themselves.
-    @ViewBuilder
-    private var processConfigSection: some View {
-        if !repositoryConfigFiles.isEmpty {
-            Section {
-                // Only the unattended phases are gated. Start is
-                // attended — a deliberate press, with the output in
-                // front of the user and Stop to hand — so it is never
-                // held behind this. Not because the pane shows the
-                // command Start runs; it does not.
-                Text("Bootstrap runs when a workstream is created and dispose when one is archived, both without asking.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                LabeledContent("Approval") {
-                    HStack(spacing: 10) {
-                        if configApproved {
-                            Label("Approved", systemImage: "checkmark.shield")
-                                .foregroundStyle(.green)
-                            Button("Revoke") { onRevokeConfig() }
-                        } else {
-                            Label("Not approved", systemImage: "exclamationmark.shield")
-                                .foregroundStyle(.orange)
-                            Button("Review") { onReviewConfig() }
-                        }
-                    }
-                }
-            } header: {
-                HStack {
-                    Text("Process Config")
-                    Spacer()
-                    Text(repositoryConfigFiles
-                        .map { ($0 as NSString).lastPathComponent }
-                        .joined(separator: ", "))
-                        .font(.caption2)
-                        .foregroundStyle(.quaternary)
                 }
             }
         }

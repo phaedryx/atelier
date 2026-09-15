@@ -600,14 +600,17 @@ final class ProjectTests: XCTestCase {
         XCTAssertEqual(decoded.checkoutDirectory, container.path)
     }
 
-    /// The bug the whole change exists for. A `process-compose.yaml` placed where
-    /// the README says — beside `.bare` and the worktrees — was invisible,
-    /// because `ProcessCompose.Config.locate` was handed `<container>/main` as
-    /// the project directory and looked for it there.
+    /// The bug the whole change exists for, and it matters more now than it did.
+    /// An `execution.process-compose.yaml` placed where the README says — beside
+    /// `.bare` and the worktrees — was invisible, because
+    /// `ProcessCompose.Config.locate` was handed `<container>/main` as the project
+    /// directory and looked for it there. With a single project-directory lookup
+    /// there is no worktree tier left to accidentally rescue it: passing
+    /// `checkout` means the config is never found at all.
     func testAConfigInTheContainerIsFoundForAPeerWorktree() throws {
         let (container, checkout) = try makeContainerLayout()
         try "processes:\n  web:\n    command: echo hi\n".write(
-            to: container.appendingPathComponent("process-compose.yaml"),
+            to: container.appendingPathComponent("execution.process-compose.yaml"),
             atomically: true,
             encoding: .utf8
         )
@@ -622,21 +625,14 @@ final class ProjectTests: XCTestCase {
         """
         let project = try JSONDecoder().decode(Project.self, from: Data(json.utf8))
 
-        let config = try XCTUnwrap(ProcessCompose.Config.locate(
-            worktree: peer.path,
-            projectDirectory: project.directory
-        ))
+        let config = try XCTUnwrap(ProcessCompose.Config.locate(projectDirectory: project.directory))
         XCTAssertEqual(
             config.path,
-            container.standardizedFileURL.appendingPathComponent("process-compose.yaml").path
-        )
-        XCTAssertFalse(
-            config.isRepositoryProvided,
-            "a config in the container sits outside git, so it needs no approval"
+            container.standardizedFileURL.appendingPathComponent("execution.process-compose.yaml").path
         )
 
         XCTAssertNil(
-            ProcessCompose.Config.locate(worktree: peer.path, projectDirectory: project.checkout),
+            ProcessCompose.Config.locate(projectDirectory: project.checkout),
             "and the binding this change replaced still finds nothing"
         )
     }

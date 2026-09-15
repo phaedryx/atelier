@@ -195,7 +195,14 @@ it receives only the `X.Y.Z` core; the suffix naming the commit rides on
   that workstream. Gated by `atelier.notifyOnPermission`, which **defaults on**.
 - **Tool detection** runs at startup in `AppEnvironment.refresh()`
 - **Sidebar state** (selection, expanded sections) stored in UserDefaults (`atelier.selection`, `atelier.expandedProjects`)
-- **Process-compose approval** stored in UserDefaults (`atelier.approvedConfigFiles`), keyed by project directory against a SHA-256 of every repository-provided file the config will load
+- **Process-compose approval is gone**, with `ScriptTrust` and `ConfigApprovalView`.
+  `atelier.approvedConfigFiles` held a SHA-256 of every repository-provided file a config would
+  load, keyed by project directory, and gated `bootstrap` and `dispose`. It gated the two
+  work-tree tiers of `ProcessCompose.Config.locate`, and went when they did: the config is
+  `execution.process-compose.yaml` in the **project directory** and nowhere else, so it cannot
+  have arrived with a clone and there is nothing left to approve. Do not reintroduce the key,
+  do not read a stale copy as meaning anything, and do not add a gate back without first
+  putting a work-tree tier back in `locate` — location is the whole of the trust decision
 - **Verification** keeps **one** per-workstream key, `atelier.verifyChecks.<workstreamID>`:
   one blob keyed by check name, carrying each check's latest verdict, duration, stamp and
   run id. A run started for one check contains only that check, so rows read off a run's
@@ -382,7 +389,8 @@ what `defaultBranch(at:)` would have returned leaves the question byte-identical
 commit that touches it, because a reviewer will pattern-match it to the forbidden migration.
 
 ### process-compose is a requirement, not an integration
-Everything a project asks Atelier to run lives in one **`process-compose.yaml`**, read by
+Everything a project asks Atelier to run lives in one **`execution.process-compose.yaml`** in the
+project directory, read by
 [process-compose](https://f1bonacc1.github.io/process-compose/).
 `ProcessCompose.Settings.resolveBinary()` finds the binary, and **there is no process-compose
 setting of any kind** — no switch, no path. Two UserDefaults keys were removed, and neither
@@ -427,19 +435,16 @@ purpose) and `XCTSkipIf`s instead; that is safe only because `ci.yml` installs p
 and hard-fails if it is not on `searchPaths`, in the same job and immediately before the tests.
 
 Removing the flag took out a guard in each of three places — `PhasePolicy.plan` (so no
-unattended phase runs), the approval resolution (so nothing asks for approval it will not use),
-and `DevCommand.Resolver.detectProcessCompose` (so Start has nothing to detect). Only the third
-was ever near a security boundary, and it stopped being the boundary when
-`ProcessCompose.RunCommandPlan` took the invariant to the consumer — see below. A consequence
-worth knowing rather than fixing: the approval resolution now runs for a project that ships its
-own `process-compose.yaml` for its own reasons, so such a project gets an approval prompt where
-it previously got silence.
+unattended phase runs), the approval resolution (since removed outright) and
+`DevCommand.Resolver.detectProcessCompose` (so Start has nothing to detect). Only the third was
+ever near a security boundary, and it stopped being the boundary when
+`ProcessCompose.RunCommandPlan` took the invariant to the consumer — see below.
 
 **The un-`-n`'d command must never be executed, and is no longer displayed either.**
 `DevCommand.Resolver.detectProcessCompose` builds `process-compose up -U -f <files>` as the
 `.processCompose` source's `command`. It carries no `-n`, so running it would run **every**
-namespace — `bootstrap` and `dispose` included — without passing through `PhasePolicy` or
-`ScriptTrust`. It is not a runnable string, and the pane no longer renders it: for a
+namespace — `bootstrap` and `dispose` included — without passing through `PhasePolicy`. It is
+not a runnable string, and the pane no longer renders it: for a
 `.processCompose` source `devCommandDisplayText` shows the *files* that will be loaded, which
 is what the user needed to see. Rendering the command was a copy-paste hazard on its own, and
 Customize seeded its editable field from it — and Save turns that field into an `.override`,
@@ -470,19 +475,19 @@ pane's Start button, and `doStartRun` refuses on the same stored plan, so the tw
 disagree — they did, for a round: the button was enabled on `devCommand?.command != nil` while
 the run guarded the resolved command, and an unresolvable binary rendered an enabled Start that
 did nothing in silence. `ProcessCompose.ResolutionModel` resolves the dev command, the plan, the
-reason, the execute checklist, the declared verification checks and the approval together and publishes
+reason, the execute checklist and the declared verification checks together and publishes
 them as **one `Resolution` value**, because *agreement* is the invariant here rather than
 freshness — one struct assigned in one statement holds by construction what eight separate
 `@State`s in `TerminalContainerView.refreshDevCommand` held by convention. That is also what
 makes it safe for the resolution to run off the main actor, which it now does: a consumer reading
 mid-flight reads the previous pass whole rather than a half-updated one. The **first** resolution
 is synchronous, in the model's `init`, because a pane with nothing resolved is not neutral — a nil
-verification reason reads as "everything is fine" and put an enabled Run over an empty check list. The
-approval paths re-resolve synchronously too (`refreshNow`), because they read the result of the
-write they just made. `ProcessCompose.RunCommandPlan.unavailableReason` explains a `.nothing`, and
+verification reason reads as "everything is fine" and put an enabled Run over an empty check list. `refreshNow` exists for a caller that needs the result of a write it just made rather than the
+world before it. `ProcessCompose.RunCommandPlan.unavailableReason` explains a `.nothing`, and
 `ExecutionTabView.scriptInstructions` — the surface that already drew for "nothing to run" —
-renders it: a config that cannot be located, a binary that is not where the search looks, an
-`execute` namespace nothing declares. Background setup's own outcome, including `.completedWithNote`, is
+renders it, naming `execution.process-compose.yaml` where there is no config: a config that
+cannot be located, a binary that is not where the search looks, an `execute` namespace nothing
+declares. Background setup's own outcome, including `.completedWithNote`, is
 rendered on the Info tab, which is permanent; nothing observed `.asyncSetupStateChanged` before,
 so those notes were written and discarded.
 
@@ -543,50 +548,68 @@ Three facts about this are load-bearing and easy to lose:
    variable in a command body must be written `$$VAR`. A backslash does not escape it.
 2. **Every file is named with `-f`, always** (`ProcessCompose.PhaseRunner.command`, `DevCommand.Resolver.detectProcessCompose`).
    That turns process-compose's own discovery *off*, which is the point: the set of files
-   `ScriptTrust` fingerprints, `ConfigApprovalView` displays, and process-compose executes is
-   then one set. Do not reintroduce discovery. Leaving a worktree config unnamed so discovery
-   could pick up a sibling file made the approval gate a *mirror* of discovery's rules,
-   and a mirror can be stepped around — discovery also loads `compose.yaml`, a name Atelier
-   deliberately does not detect, so a repository could ship a benign `process-compose.yaml` to
-   be approved and a `compose.yaml` to be run. Verified against v1.122.0.
-3. **Approval is gated by the config's *location*, not its content.** A config in the worktree
-   arrived with the repository and requires approval before `bootstrap` or `dispose` runs; a
-   config in the project directory was placed there by hand, outside git, and is never asked
-   about. `execute` is never gated in either case, because it is **attended**: a deliberate
-   press, output in a terminal surface in front of the user, Stop to hand. That, and not "the
-   pane shows the command Start runs", is the reason — the pane shows the loaded *files*, and
-   even before that it showed a display-only string rather than what Start runs. The false
-   version of this sentence was load-bearing in four places (`ScriptTrust`,
-   `ConfigApprovalView`, `ExecutionTabView`, `WorkstreamInfoView`) and is corrected in all of
-   them. The decision to leave `execute` ungated stands; only its stated reason was wrong.
+   Atelier locates, displays and executes is then one set. Do not reintroduce discovery.
+   Leaving a config unnamed so discovery could pick up a sibling file made the displayed set a
+   *mirror* of discovery's rules, and a mirror can be stepped around — discovery also loads
+   `compose.yaml`, a name Atelier deliberately does not detect, so a repository could ship a
+   benign `process-compose.yaml` to be shown and a `compose.yaml` to be run. Verified against
+   v1.122.0.
+3. **The config's *location* is the trust decision, and there is no approval gate left.**
+   `execute` was never gated, because it is **attended**: a deliberate press, output in a
+   terminal surface in front of the user, Stop to hand. That, and not "the pane shows the
+   command Start runs", is the reason — the pane shows the loaded *file*, and even before that
+   it showed a display-only string rather than what Start runs. `bootstrap` and `dispose` *were*
+   gated, because a config could arrive with a clone; now it cannot, so they are not. See below.
 
-**`ProcessCompose.Config.locate` loads exactly one file**, the first of four tiers that exists:
-`atelier.process-compose.y*ml` in the worktree, the same name in the project directory, then
-`process-compose.y*ml` in the worktree, then in the project directory. It records `loadedFiles`
-(that one file) and `repositoryProvidedFiles` (it, when it is in the worktree). The project
-directory is the better home in the bare-repo layout: it sits outside every worktree, so git
-cannot see it, no ignore rule is needed, and one file serves every worktree.
+**`ProcessCompose.Config.locate` reads one name in one place**: `execution.process-compose.yaml`
+in the **project directory**, then `execution.process-compose.yml`. Nothing inside a work tree is
+read, and `Config` carries a `path` and nothing else — `isRepositoryProvided`,
+`repositoryProvidedFiles` and `requiresApproval` are gone with the tiers that produced them.
 
-**Precedence follows explicitness, not location**, and the `atelier.` prefix is the whole point
-of the type. A repository may run process-compose for its own reasons — an instance manager, a
-docker-free dev stack — and that file declares the project's own namespaces, not Atelier's five.
-Before tiers 1 and 2 existed such a file was indistinguishable from an Atelier config and won
-outright: `bootstrap` and `prepare` silently did nothing, Verification reported no checks, and
-Start ran `up -n execute` against a namespace nobody had declared — which does not fail, it
-**idles forever with no output** (measured against v1.122.0). Tier 3 still beating tier 4 is
-deliberate, so a project with a single unprefixed config is unaffected; the consequence is that
-a repository's own generic config still shadows an unprefixed project-directory one, and the fix
-is the prefix.
+**That is a trust decision, and it is the same one `Verification.Config` states.**
+`Project.directory` is the repository's *home*, so a file there sits outside every work tree and
+cannot have arrived with a clone: it was placed by hand. So `bootstrap` and `dispose` run the
+project's commands unattended with **no approval step at all** — no `ScriptTrust` fingerprint, no
+approval sheet, no precondition in `PhasePolicy.plan`. Two consequences, both wanted: one config
+serves every worktree, and an agent confined to its worktree by the "Restrict to worktree" prompt
+cannot edit what runs there. The known hole, stated rather than papered over: for an ordinary
+clone `Project.directory` *is* the checkout, so the file can be committed. `Verification.Config`
+accepts the same hole and the rule is applied here unchanged rather than half-tightened —
+sniffing whether the file is git-tracked would make the gate depend on a fact the user cannot
+see. **Do not add a work-tree tier back**, and do not add an approval gate without adding one
+first; each is the other's only justification.
+
+**The `execution.` prefix is what makes a single name safe to demand.** A repository may run
+process-compose for its own reasons — an instance manager, a docker-free dev stack — and that
+file declares the project's own namespaces, not Atelier's four. Such a file was once
+indistinguishable from an Atelier config and won the lookup outright: `bootstrap` and `prepare`
+silently did nothing, and Start ran `up -n execute` against a namespace nobody had declared —
+which does not fail, it **idles forever with no output** (measured against v1.122.0). No generic
+name is read now, so that cannot recur.
+
+**This replaced a four-tier search**, and the break is hard: `atelier.process-compose.y*ml` and
+`process-compose.y*ml`, in the worktree and then the project directory, are all inert. A project
+still carrying one gets `nil` from `locate`, and the wording is the whole migration story —
+`RunCommandPlan.unavailableReason` and `ExecutionTabView.scriptInstructions` both name
+`execution.process-compose.yaml` and the project directory. Do not reintroduce a deprecated
+fallback tier; the precedence a reader has to hold in their head is what this removed.
 
 **There is no override file.** An earlier design merged a worktree `process-compose.override.yml`
-into a project-directory base. Tier 1 replaces it: a worktree that wants its own arrangement
-names its own `atelier.process-compose.yaml` and says so, rather than having two files merged by
-rules a reader has to hold in their head to predict what runs. `loadedFiles` stays an array
-because it, not `path`, is what `PhaseRunner.command` names with `-f` and what `ScriptTrust`
-fingerprints — the approved set, the displayed set and the executed set are the same *set*.
-`Tests/ProcessComposeConfigTests.swift` pins that a `process-compose.override.yml` beside the
-config is neither loaded nor approved; a file that silently rejoined `loadedFiles` would be
-repository content executing unattended.
+into a project-directory base, and a later one gave the worktree its own
+`atelier.process-compose.yaml`. Both are gone. `loadedFiles` stays an array because it, not
+`path`, is what `PhaseRunner.command` names with `-f`, so the located set and the executed set
+are the same *set*. `Tests/ProcessComposeConfigTests.swift` pins that an override file beside the
+config is never loaded, and that nothing in a work tree is.
+
+**A newly created project starts with one.** `ProcessCompose.Config.writeDefault` drops a
+commented template carrying one example process, called from the two paths that *create* the
+project directory — New Project and Clone Repository in `ProjectSidebar` — and deliberately not
+from the two that adopt a directory the user already had. Same rule, same two call sites, as
+`Verification.Config.writeDefault`. **The template's example process is real and uncommented, and
+that is load-bearing**: a comments-only file — or one whose `processes:` key is null — fails to
+decode, so `namespacePresence` answers `.unknown`, and `RunCommandPlan` gates `execute` on
+`.empty` and *only* `.empty`. A commented-out template would ship every new project with an
+enabled Start that idles forever.
 
 **Which directory that is, is load-bearing.** `Project.directory` means the repository's
 *home* — the `.bare` container, not the default checkout inside it — and every caller that
@@ -596,22 +619,21 @@ fixed: `projectLocation` resolved a container forward to its checkout, so the lo
 against `<container>/main` and a config placed where the README says was never found. Passing
 `checkout` to `Config.locate` or `PortsConfig.load` reintroduces exactly that bug.
 
-Within one name a config in the worktree still wins, because a worktree carrying its own is
-saying something deliberate. Wherever it lives, process-compose runs with the *worktree* as cwd
-and resolves a relative `working_dir` against its own cwd, so `working_dir: apps/api` lands
-inside the worktree from either home.
+Wherever the config lives, process-compose runs with the *worktree* as cwd and resolves a
+relative `working_dir` against its own cwd, so `working_dir: apps/api` lands inside the
+worktree.
 
 `-u <path>` names the control socket explicitly. `-U` alone generates a path containing
 process-compose's PID, which Atelier cannot predict and so cannot connect to. The headless
 phases get namespace-suffixed paths, because a `bootstrap` still running when the user presses
 Start would otherwise rebind `execute`'s socket and strand the first server.
 
-**The one gate.** `PhasePolicy.plan` answers the three preconditions — a config located, a
-binary to run it with, and approval of every repository-provided file — for both unattended
-phases. There were four until the process-compose switch went; nothing else changed, but the
-two hand-written mirrors below (`RunCommandPlan.unavailableReason` and
-`verificationUnavailableReason`) had to lose the same guard by hand, because neither of them
-fails to compile when they disagree with this. It is deliberately the *only* copy: a second, inlined set in
+**The one gate.** `PhasePolicy.plan` answers the two preconditions — a config located and a
+binary to run it with — for both unattended phases. There were four: the process-compose switch
+went first, then approval of every repository-provided file went with the work-tree tiers.
+`RunCommandPlan.unavailableReason` hand-mirrors the surviving two and does not fail to compile
+when it disagrees, which is what `Tests/RunCommandPlanTests.swift` pins in both directions. It is
+deliberately the *only* copy: a second, inlined set in
 `Workstream.Archiver` could not be tested and would not follow a change made here. Any new
 unattended execution path for repository-provided commands must go through it.
 **Verification does not go through it**, and that is not an omission: a check's commands come
@@ -631,19 +653,21 @@ rspec:
 ```
 
 **The file lives in the project directory and nowhere else** — beside `.bare`,
-`process-compose.yaml` and `ports.yml` — and that is a trust decision rather than a
+`execution.process-compose.yaml` and `ports.yml` — and that is a trust decision rather than a
 convenience. `Project.directory` is the repository's *home*, so a file there sits outside every
-work tree and cannot have arrived with the repository. The existing rule therefore settles it:
-approval is gated by a config's **location**, not its content, and a config in the project
-directory "was placed there by hand, outside git, and is never asked about". So there is **no
-`ScriptTrust` fingerprint and no `PhasePolicy` gate** on this path, and adding one would be
-answering a question that cannot arise. Two consequences, both wanted: one set of checks serves
-every worktree, and an agent confined to its worktree by the "Restrict to worktree" prompt
-cannot edit the file that decides whether its own work passes. There is deliberately **no
-worktree tier** mirroring `ProcessCompose.Config.locate`'s — adding one would hand it exactly
-that. The known hole, stated rather than papered over: for an ordinary clone `Project.directory`
-*is* the checkout, so the file can be committed. That hole already exists for process-compose's
-project-directory tier and the rule is applied here unchanged rather than half-tightened.
+work tree and cannot have arrived with the repository. It was placed there by hand, so there is
+**no approval gate** on this path and adding one would be answering a question that cannot arise.
+Two consequences, both wanted: one set of checks serves every worktree, and an agent confined to
+its worktree by the "Restrict to worktree" prompt cannot edit the file that decides whether its
+own work passes. There is deliberately **no worktree tier**, the same decision
+`ProcessCompose.Config.locate` now makes — adding one would hand it exactly that. The known hole,
+stated rather than papered over: for an ordinary clone `Project.directory` *is* the checkout, so
+the file can be committed. Both configs accept that hole rather than half-tightening it.
+
+This rule used to run the other way: process-compose *did* read the worktree, and a config found
+there was gated by a `ScriptTrust` fingerprint the user approved in a sheet. Verification was
+written to the project-directory-only rule first; the execution config then followed it, and the
+gate went with the tiers it existed for.
 
 **A newly created project starts with one.** The two paths that *create* the project
 directory — "New Project" and Clone Repository, both in `ProjectSidebar` — call
@@ -824,7 +848,7 @@ last so it never lags behind.
 **And every declared name reaches all four namespaces, and the verification checks too.**
 `prepare` and `execute` run in a Ghostty surface, which is handed those variables when it is
 created; `bootstrap` and `dispose` spawn through `ProcessCompose.PhaseExecutor`, and until
-`ProcessCompose.PhaseEnvironment` existed their children inherited only the app's own environment. One `process-compose.yaml` therefore ran under two different
+`ProcessCompose.PhaseEnvironment` existed their children inherited only the app's own environment. One `execution.process-compose.yaml` therefore ran under two different
 environments depending on which namespace was asked for: the documented replacement for the
 seeding this integration removed, `rsync -rlpt --copy-links "$$ATELIER_PROJECT_DIR/seed-files/" .`,
 rsynced from `/seed-files/`. `ProcessCompose.PhaseEnvironment.variables` assembles the same set for the
@@ -1260,9 +1284,9 @@ consequences worth keeping:
   `TerminalSurfaceCache.retrySurface` already does), so a tab can be spawned into a workstream
   the user is not looking at. What is view-bound is *rendering*, not surface creation.
 
-**`create_workstream` inherits `bootstrap`'s approval gate by not touching it.** Creating a
-workstream runs the project's `bootstrap` namespace, which is repository-provided
-process-compose commands — the thing `ProcessCompose.PhasePolicy.plan` exists to gate. The
+**`create_workstream` inherits `bootstrap`'s policy by not touching it.** Creating a
+workstream runs the project's `bootstrap` namespace — the thing `PhasePolicy.plan` exists to
+decide. The
 handler never calls `AsyncSetupService.setupExistingWorktree`. It posts `.workstreamCreated`,
 does the git work off the main thread, and posts `.workstreamWorktreeReady`; `ContentView`'s
 handler for that notification is what calls `AsyncSetupService`, and therefore what runs
@@ -1335,7 +1359,7 @@ that does not is a completion notice that never arrives.
 
 **There is no approval gate to recheck.** `verification.yaml` lives in the project
 directory, outside every work tree, so it cannot have arrived with the repository — the
-same location rule that leaves a project-directory process-compose config unasked-about.
+same location rule that leaves the execution config unasked-about.
 `Verification.Runner.start` is the only legal entrance to the runner and the handler passes
 its refusals through verbatim; adding a check in `IPC.Service` is the inlined second copy
 that section forbids.

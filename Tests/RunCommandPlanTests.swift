@@ -5,20 +5,17 @@
 import XCTest
 
 final class RunCommandPlanTests: XCTestCase {
-    private let config = ProcessCompose.Config(
-        path: "/repo/ws/process-compose.yaml",
-        isRepositoryProvided: true
-    )
+    private let config = ProcessCompose.Config(path: "/repo/execution.process-compose.yaml")
 
     /// The string a `.processCompose` source carries, for reference. It is what
     /// the Execution pane *displays*; nothing may execute it.
-    private let displayCommand = "process-compose up -U -f /repo/ws/process-compose.yaml"
+    private let displayCommand = "process-compose up -U -f /repo/execution.process-compose.yaml"
 
     private func processComposeCommand() -> DevCommand {
         DevCommand(
             command: displayCommand,
             source: .processCompose,
-            sourceDescription: "process-compose.yaml"
+            sourceDescription: "execution.process-compose.yaml"
         )
     }
 
@@ -38,9 +35,9 @@ final class RunCommandPlanTests: XCTestCase {
     }
 
     private func writtenConfig(_ body: String) throws -> ProcessCompose.Config {
-        let path = tmpDir.appendingPathComponent("process-compose.yaml")
+        let path = tmpDir.appendingPathComponent("execution.process-compose.yaml")
         try body.write(to: path, atomically: true, encoding: .utf8)
-        return ProcessCompose.Config(path: path.path, isRepositoryProvided: true)
+        return ProcessCompose.Config(path: path.path)
     }
 
     // MARK: - The execute namespace has to exist
@@ -276,7 +273,7 @@ final class RunCommandPlanTests: XCTestCase {
     /// so the switched-off case was the one this function explained. The switch
     /// is gone with the integration, so the only way here is a project with no
     /// config and no override typed, which is what the pane's own "add an
-    /// atelier.process-compose.yaml" copy already says.
+    /// execution.process-compose.yaml" copy already says.
     func testANilDevCommandIsLeftToThePanesOwnCopy() {
         XCTAssertNil(ProcessCompose.RunCommandPlan.unavailableReason(
             devCommand: nil, config: nil, binary: nil

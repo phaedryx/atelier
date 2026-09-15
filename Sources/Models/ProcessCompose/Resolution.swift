@@ -54,13 +54,6 @@ extension ProcessCompose {
         /// `Verification.Runner.start` performs and refuses on.
         var declaredVerifyChecks: [String] = []
         var verifyUnavailableReason: String?
-        /// Every repository-provided file process-compose would load here, or
-        /// empty when there is nothing to approve.
-        var repositoryConfigFiles: [String] = []
-        /// Whether those files are approved. False when there are none: nothing
-        /// to approve is not approval, and `WorkstreamInfoView` renders the
-        /// difference.
-        var isApproved = false
         /// Whether this workstream's run is a process-compose run — i.e. the
         /// dev command came from a config rather than the user's own override —
         /// which is what decides whether there is a control socket worth
@@ -70,9 +63,8 @@ extension ProcessCompose {
 
     /// Resolves a workstream's `Resolution` and publishes it.
     ///
-    /// The work is a `Config.locate` (a handful of `stat`s), a YAML decode per
-    /// namespace question, a binary lookup and a SHA-256 over the
-    /// approval-relevant files. All of it ran synchronously on the main actor,
+    /// The work is a `Config.locate` (a couple of `stat`s), a YAML decode per
+    /// namespace question and a binary lookup. All of it ran synchronously on the main actor,
     /// on every tab switch, because the view refreshed it from
     /// `.onChange(of: model.activeTab)`. Here it runs off the actor and lands as
     /// one assignment.
@@ -80,8 +72,7 @@ extension ProcessCompose {
     /// **The first resolution is synchronous, and that is not an oversight.**
     /// A pane with nothing resolved yet is not a neutral state: a nil
     /// `verifyUnavailableReason` reads as "everything is fine", which put an
-    /// enabled Run over an empty check list — observed, on a workstream whose
-    /// repository-provided config was unapproved, which is why the view took to
+    /// enabled Run over an empty check list — which is why the view took to
     /// resolving on `.onAppear` as well. Resolving in `init` closes that window
     /// rather than widening it; the cost the follow-up is about is per tab
     /// switch, not per mount.
@@ -89,7 +80,6 @@ extension ProcessCompose {
     final class ResolutionModel: ObservableObject {
         @Published private(set) var resolution: Resolution
 
-        private let worktree: String
         private let projectDirectory: String
         /// The per-workstream override, as the caller last passed it.
         ///
@@ -106,12 +96,13 @@ extension ProcessCompose {
         /// newer answer.
         private var generation = 0
 
+        /// **No worktree.** Everything resolved here is a property of the
+        /// *project*: `execution.process-compose.yaml` and `verification.yaml` both
+        /// live in the project directory, and the override is passed in. The model
+        /// took a worktree while `Config.locate` had a work-tree tier; putting one
+        /// back would mean putting that tier back first.
+        ///
         /// - Parameters:
-        ///   - worktree: fixed for this model's life, which is safe because
-        ///     `ContentView` gives the container `.id(workstreamID)` and only
-        ///     renders it once the workstream's `worktreePath` exists on disk —
-        ///     so the path cannot change under an instance, and another
-        ///     workstream gets another instance.
         ///   - searchPaths: where to look for the process-compose binary.
         ///     Defaulted, and injected only by tests, for the reason
         ///     `ProcessCompose.Settings.resolveBinary` takes the same parameter:
@@ -119,17 +110,15 @@ extension ProcessCompose {
         ///     assertion about a resolved plan would depend on what the host
         ///     happens to have installed.
         init(
-            worktree: String,
             projectDirectory: String,
             override: String?,
             searchPaths: [String] = ProcessCompose.Settings.searchPaths
         ) {
-            self.worktree = worktree
             self.projectDirectory = projectDirectory
             self.override = override
             self.searchPaths = searchPaths
             resolution = Self.resolve(
-                worktree: worktree, projectDirectory: projectDirectory, override: override,
+                projectDirectory: projectDirectory, override: override,
                 searchPaths: searchPaths
             )
         }
@@ -145,13 +134,12 @@ extension ProcessCompose {
             self.override = override
             generation += 1
             let token = generation
-            let worktree = worktree
             let projectDirectory = projectDirectory
             let override = self.override
             let searchPaths = searchPaths
             DispatchQueue.global(qos: .userInitiated).async {
                 let resolved = Self.resolve(
-                    worktree: worktree, projectDirectory: projectDirectory, override: override,
+                    projectDirectory: projectDirectory, override: override,
                     searchPaths: searchPaths
                 )
                 DispatchQueue.main.async { [weak self] in
@@ -163,26 +151,23 @@ extension ProcessCompose {
 
         /// Re-resolve now, on the caller's actor, and return the answer.
         ///
-        /// For the approval paths only. `approveProcessConfig` writes an
-        /// approval and then *reads the result of that write* — whether the
-        /// fingerprint took, and whether there is anything left to approve —
-        /// before deciding whether to rerun bootstrap and whether to close the
-        /// sheet. An asynchronous refresh would make those reads answer about
-        /// the state before the click. It bumps the generation too, so a refresh
-        /// already in flight cannot land on top of it.
+        /// For a caller that needs the result of a write it just made, rather
+        /// than the state before it. An asynchronous refresh would answer about
+        /// the world as it was before the click. It bumps the generation too, so a
+        /// refresh already in flight cannot land on top of it.
         @discardableResult
         func refreshNow(override: String?) -> Resolution {
             self.override = override
             generation += 1
             resolution = Self.resolve(
-                worktree: worktree, projectDirectory: projectDirectory, override: override,
+                projectDirectory: projectDirectory, override: override,
                 searchPaths: searchPaths
             )
             return resolution
         }
 
-        /// The whole resolution, as a pure function of the worktree, the project
-        /// directory, the override and what is on disk.
+        /// The whole resolution, as a pure function of the project directory, the
+        /// override and what is on disk.
         ///
         /// `nonisolated` because it is the half that must not run on the main
         /// actor. It touches UserDefaults (thread-safe), the file system and
@@ -195,24 +180,21 @@ extension ProcessCompose {
         /// arrives on, and splitting it out would mean a second resolver with the
         /// same lifecycle.
         nonisolated static func resolve(
-            worktree: String,
             projectDirectory: String,
             override: String?,
             searchPaths: [String] = ProcessCompose.Settings.searchPaths
         ) -> Resolution {
             let devCommand = DevCommand.Resolver.resolve(
-                workingDirectory: worktree, projectDirectory: projectDirectory, override: override
+                projectDirectory: projectDirectory, override: override
             )
             let binary = ProcessCompose.Settings.resolveBinary(searchPaths: searchPaths)
             // **One locate, two questions.** The run's config is this same
             // config narrowed to the *run* — it disappears behind a
             // per-workstream override, which is right for Start and wrong for
-            // verify and for approval, since bootstrap and dispose locate
+            // the unattended phases, since bootstrap and dispose locate
             // unconditionally. Locating twice was two answers to the same
             // question from the same directory.
-            let located = ProcessCompose.Config.locate(
-                worktree: worktree, projectDirectory: projectDirectory
-            )
+            let located = ProcessCompose.Config.locate(projectDirectory: projectDirectory)
             let runConfig = devCommand?.source == .processCompose ? located : nil
 
             let plan = ProcessCompose.RunCommandPlan.plan(
@@ -229,13 +211,6 @@ extension ProcessCompose {
                 []
             }
 
-            // Hashed once and used twice. The approval row and the verify gate
-            // ask the same question of the same files, and this is a SHA-256
-            // over each of them.
-            let approvalFiles = located?.repositoryProvidedFiles ?? []
-            let isApproved = approvalFiles.isEmpty
-                ? false
-                : ScriptTrust.isApproved(configFiles: approvalFiles, for: projectDirectory)
             // The project's own checks, from the project directory and nowhere
             // else — never the worktree. See `Verification.Config`.
             let verification = Verification.Config.load(projectDirectory: projectDirectory)
@@ -250,8 +225,6 @@ extension ProcessCompose {
                 declaredExecuteProcesses: declaredExecute,
                 declaredVerifyChecks: verification.checkNames,
                 verifyUnavailableReason: verification.unavailableReason,
-                repositoryConfigFiles: approvalFiles,
-                isApproved: isApproved,
                 usesProcessCompose: devCommand?.source == .processCompose
             )
         }

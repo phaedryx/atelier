@@ -90,7 +90,7 @@ on app termination to prevent orphaned sessions.
 ## 4. ScriptConfig error surfacing
 
 > **Moot.** `ScriptConfig` and `.atelier.json` no longer exist; a project's
-> commands come from its `process-compose.yaml`. The equivalent concern lives on
+> commands come from its `execution.process-compose.yaml`. The equivalent concern lives on
 > in `ProcessCompose.PortsConfig`, which throws typed `LoadError`s rather than swallowing them.
 
 **Current behavior:** `try?` everywhere. Malformed `.atelier.json` silently

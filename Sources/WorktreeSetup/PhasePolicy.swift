@@ -25,29 +25,30 @@ enum PhasePolicy {
     /// Whether an unattended phase may run, and what to report when it may not.
     ///
     /// Shared by `bootstrap` at worktree creation and `dispose` at archive.
-    /// Both run repository-authored processes with nobody watching, so both
-    /// answer to the same three preconditions and there is deliberately only one
-    /// copy of them: a second, inlined set in `Workstream.Archiver` could not be
-    /// tested and would not follow a change made here.
+    /// Both run the project's processes with nobody watching, so both answer to
+    /// the same two preconditions and there is deliberately only one copy of
+    /// them: a second, inlined set in `Workstream.Archiver` could not be tested
+    /// and would not follow a change made here.
+    ///
+    /// **There were three.** The third was approval of every repository-provided
+    /// file process-compose would load, and it went with the worktree tiers it
+    /// gated: `ProcessCompose.Config.locate` now reads `execution.process-compose.yaml`
+    /// in the project directory and nowhere else, so a config cannot have arrived
+    /// with a clone and there is nothing left to approve. Do not add a gate back
+    /// here without first putting a work-tree tier back in `locate`, because
+    /// location is the whole of the trust decision.
     ///
     /// - Parameter phase: named only so the note can say which phase did not
     ///   run. It does not change any decision.
-    /// - Parameter isApproved: whether the user has approved the
-    ///   repository-provided files this config will load. Passed in as a closure
-    ///   rather than a `Bool` so it is only asked where a config exists, and so
-    ///   this stays testable without a defaults store. No default value: every
-    ///   call site has to state its policy, because the one that forgets is the
-    ///   one that runs a repository's YAML unattended.
     static func plan(
         phase: ProcessCompose.Phase,
         config: ProcessCompose.Config?,
-        binary: String?,
-        isApproved: (ProcessCompose.Config) -> Bool
+        binary: String?
     ) -> Plan {
         let name = phase.namespace
         guard let config else {
             return .nothingToDo(String(format: NSLocalizedString(
-                "This project has no process-compose config, so no %@ ran.", comment: ""
+                "This project has no execution.process-compose.yaml, so no %@ ran.", comment: ""
             ), name))
         }
         guard let binary else {
@@ -55,26 +56,9 @@ enum PhasePolicy {
                 "process-compose was not found, so no %@ ran.", comment: ""
             ), name))
         }
-        // Fail closed. These phases execute processes that arrived with the
-        // repository, unattended and with nobody watching. So they run only
-        // once the user has approved the contents of every repository-provided
-        // file process-compose will load, which is not the same as the config
-        // `locate` recorded: see `repositoryProvidedFiles`. A config the user
-        // placed in the project directory contributes nothing to that list and
-        // needs no approval — location is what decides, not content.
-        //
         // This is the only gate. Adding a second one in `AsyncSetupService` or
-        // `Workstream.Archiver` would sit behind this guard and never be reached.
-        //
-        // Ordered after the binary check on purpose: when process-compose is
-        // missing, nothing can run whatever the user approves, and saying so is
-        // more actionable than asking for an approval that would change nothing.
-        guard !config.requiresApproval || isApproved(config) else {
-            return .nothingToDo(String(format: NSLocalizedString(
-                "This project's process-compose files came with the repository and have not been approved, so no %@ ran.",
-                comment: ""
-            ), name))
-        }
+        // `Workstream.Archiver` would sit behind these guards and never be
+        // reached.
         return .run(config: config, binary: binary)
     }
 

@@ -46,7 +46,7 @@ prevent session inheritance from a parent tmux.
 ### 2. Run Session
 
 `DevCommand.Resolver` resolves it — the per-workstream override, else the
-`process-compose.yaml` located for the worktree — and it only starts when the
+`execution.process-compose.yaml` located for the project — and it only starts when the
 user clicks "Start". A project's `bootstrap` and `prepare` phases run headless
 through `ProcessCompose.PhaseExecutor` rather than in a surface; see the process-compose section
 of `AGENTS.md`.

@@ -12,7 +12,7 @@ enum AsyncSetupState: Equatable {
     case inProgress(step: String, progress: Double)
     case completed
     /// Setup finished without doing anything, and the note says why: no
-    /// `process-compose.yaml` was found, the binary is missing, the config
+    /// `execution.process-compose.yaml` was found, the binary is missing, the config
     /// came with the repository and is unapproved, or it declares no
     /// `bootstrap` processes. The worktree
     /// exists and is usable either way — this is deliberately neither
@@ -77,7 +77,7 @@ actor AsyncSetupService {
     /// install dependencies, run post-setup commands — with a hard-coded
     /// notion of what a worktree needs. It is now one step: run
     /// whatever the project declares in the `bootstrap` namespace of its own
-    /// `process-compose.yaml`. A project that declares nothing gets nothing,
+    /// `execution.process-compose.yaml`. A project that declares nothing gets nothing,
     /// which is the point.
     ///
     /// Nothing here can stop the worktree from being usable. It already exists
@@ -109,11 +109,8 @@ actor AsyncSetupService {
 
         let plan = PhasePolicy.plan(
             phase: .bootstrap,
-            config: ProcessCompose.Config.locate(worktree: worktreePath, projectDirectory: projectPath),
-            binary: ProcessCompose.Settings.resolveBinary(),
-            isApproved: {
-                ScriptTrust.isApproved(configFiles: $0.repositoryProvidedFiles, for: projectPath)
-            }
+            config: ProcessCompose.Config.locate(projectDirectory: projectPath),
+            binary: ProcessCompose.Settings.resolveBinary()
         )
         // Exhaustive on purpose. A nested `guard case` would leave the
         // workstream reporting `.inProgress` forever if a third `Plan` case
