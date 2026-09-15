@@ -34,23 +34,98 @@ final class PromptInjector {
         state.map(\.turnHasEnded) ?? true
     }
 
+    /// Why a prompt cannot be delivered to `surfaceID` right now, or `.ready`.
+    ///
+    /// The palette renders the reason on the row rather than dropping the
+    /// command, so a gated prompt reads as gated instead of missing.
+    enum Deliverability: Equatable {
+        case ready
+        /// No live Coding Agent surface to type into.
+        case noAgent
+        /// The agent is working, so typed input would land in its turn.
+        case midTurn
+        /// The agent is stopped on a permission prompt, where a synthetic
+        /// Return would answer the prompt itself.
+        case awaitingPermission
+
+        /// Present-tense wording for why nothing can be typed, or nil when it
+        /// can. The palette shows this on a disabled row.
+        var reason: String? {
+            switch self {
+            case .ready:
+                nil
+            case .noAgent:
+                NSLocalizedString(
+                    "No Coding Agent is running in this workstream.",
+                    comment: "Palette: stored prompt refused, no agent surface"
+                )
+            case .midTurn:
+                NSLocalizedString(
+                    "The Coding Agent is mid-turn.",
+                    comment: "Palette: stored prompt refused, agent is working"
+                )
+            case .awaitingPermission:
+                NSLocalizedString(
+                    "The Coding Agent is waiting on a permission prompt.",
+                    comment: "Palette: stored prompt refused, agent is blocked on permission"
+                )
+            }
+        }
+    }
+
+    /// The whole decision, as a pure function of the three facts it rests on.
+    ///
+    /// **`channelDown` masks `.working` and `.stalled`, and nothing else** — the
+    /// same rule `AgentStatusLabel` applies to the sidebar's status word, for the
+    /// same reason. Both are held up by the *continued arrival* of hook events:
+    /// `.working` means no `Stop` has come in, and `.stalled` is inferred from
+    /// absence outright. Neither survives learning that the app has stopped
+    /// hearing, and `surfaceStates` has no decay path — `sweepForStalls` never
+    /// writes it, so a `Stop` dropped by `atelier-hook`'s one-second curl leaves
+    /// a surface reading `.working` for the rest of the session. Without this
+    /// mask that is a stored prompt the palette refuses forever, silently.
+    /// `.needsAttention(.permission)` is *not* masked: it is a positive fact a
+    /// delivered hook established, and losing the channel afterwards does not
+    /// unmake it — the agent is stopped until someone answers.
+    nonisolated static func deliverability(
+        state: Workstream.AgentStateTracker.AgentRunState?,
+        hasSurface: Bool,
+        channelDown: Bool
+    ) -> Deliverability {
+        guard hasSurface else { return .noAgent }
+        if state?.isAwaitingPermission == true {
+            return .awaitingPermission
+        }
+        if channelDown {
+            return .ready
+        }
+        return canInject(state: state) ? .ready : .midTurn
+    }
+
+    /// `deliverability` for a live surface, reading the app's current state.
+    func deliverability(to surfaceID: UUID) -> Deliverability {
+        Self.deliverability(
+            state: Workstream.AgentStateTracker.shared.state(forSurface: surfaceID),
+            hasSurface: surfaceCache?.hasLiveSurface(surfaceID) == true,
+            channelDown: HookChannelProbe.shared.state.isDown
+        )
+    }
+
     /// Whether a prompt can be delivered to `surfaceID` right now: a live
-    /// surface must exist, and the agent must not be mid-turn. The palette
-    /// gates its stored-prompt commands on this, so a prompt is never offered
-    /// where running it would silently do nothing.
+    /// surface must exist, and the agent must not be mid-turn.
     func canDeliver(to surfaceID: UUID) -> Bool {
-        guard surfaceCache?.hasLiveSurface(surfaceID) == true else { return false }
-        return Self.canInject(state: Workstream.AgentStateTracker.shared.state(forSurface: surfaceID))
+        deliverability(to: surfaceID) == .ready
     }
 
     func inject(_ text: String, into surfaceID: UUID) {
-        guard let surfaceCache, canDeliver(to: surfaceID) else {
-            logger.detailed("Prompt not delivered to \(surfaceID): no live surface, or the agent is mid-turn")
+        let verdict = deliverability(to: surfaceID)
+        guard let surfaceCache, verdict == .ready else {
+            logger.detailed("Prompt not delivered to \(surfaceID): \(String(describing: verdict))")
             return
         }
 
         surfaceCache.typeAndSubmit(text, into: surfaceID) {
-            Self.canInject(state: Workstream.AgentStateTracker.shared.state(forSurface: surfaceID))
+            PromptInjector.shared.deliverability(to: surfaceID) == .ready
         }
     }
 }

@@ -32,6 +32,13 @@ extension Notification.Name {
     static let toggleFileFinder = Notification.Name("atelier.toggleFileFinder")
     /// Object is a stored prompt's id (uuidString): run it in the active workstream.
     static let runStoredPrompt = Notification.Name("atelier.runStoredPrompt")
+    /// Object is a `QuickAction.rawValue`: run it against the active workstream.
+    /// Received here rather than in `ContentView` because the runner, the tool
+    /// paths and the branch name are all already assembled here for
+    /// `GitHubActionMenu`.
+    static let runQuickAction = Notification.Name("atelier.runQuickAction")
+    /// Object is a declared check's name: start it in the active workstream.
+    static let runVerificationCheck = Notification.Name("atelier.runVerificationCheck")
 }
 
 enum RestorableWorkspaceTab: String, Codable {
@@ -976,6 +983,64 @@ struct TerminalContainerView: View {
                 model.activeTab = .agent
                 PromptInjector.shared.inject(prompt.text, into: workstreamID)
             }
+            .onReceive(NotificationCenter.default.publisher(for: .runQuickAction)) { note in
+                guard isActive else { return }
+                guard let raw = note.object as? String,
+                      let action = QuickAction(rawValue: raw) else { return }
+                runQuickAction(action)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .runVerificationCheck)) { note in
+                guard isActive else { return }
+                guard let name = note.object as? String else { return }
+                startVerificationCheck(named: name)
+            }
+    }
+
+    /// Runs one quick action against this workstream, for the palette command
+    /// that names it.
+    ///
+    /// Refuses on the same `QuickAction.unavailableReason` the toolbar menu
+    /// disables its buttons with, so the palette row and the menu item cannot
+    /// disagree about whether an action can run.
+    private func runQuickAction(_ action: QuickAction) {
+        guard QuickAction.unavailableReason(
+            for: action,
+            claudeInstalled: appEnv.toolStatus.claude.path != nil,
+            ghInstalled: appEnv.toolStatus.gh.path != nil,
+            bypassPermissions: bypassPermissions
+        ) == nil else { return }
+        quickActionRunner.run(
+            action: action,
+            claudePath: appEnv.toolStatus.claude.path,
+            ghPath: appEnv.toolStatus.gh.path,
+            workingDirectory: workingDirectory,
+            branchName: appEnv.branchName(for: workingDirectory)
+        )
+    }
+
+    /// Starts one declared check, for the palette command that names it.
+    ///
+    /// Opens the Verification tab first, and that is the point rather than a
+    /// courtesy: a check's output lives only in its own terminal surface, and
+    /// the runner's refusals — a check already running, a config that does not
+    /// parse — are states that tab already draws. Starting one from the palette
+    /// into a hidden tab would be a press with nothing to show for it either
+    /// way. `Runner.start` is still the only thing that decides whether it runs.
+    private func startVerificationCheck(named name: String) {
+        model.activateSingleton(.verification)
+        do {
+            try verificationRunner.start(
+                workstreamID: workstreamID,
+                projectName: projectName,
+                workstreamName: workstreamName,
+                worktreePath: workingDirectory,
+                projectDirectory: projectDirectory,
+                defaultBranch: Git.Operations.defaultBranch(at: workingDirectory),
+                checks: [name]
+            )
+        } catch {
+            logger.warning("Verification check \(name, privacy: .public) refused: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     /// The half of the chain that opens, closes and reruns tabs. See
@@ -2203,18 +2268,12 @@ private struct GitHubActionMenu: View {
     }
 
     private func disabledReason(for action: QuickAction) -> String? {
-        if action.usesLLM {
-            if claudePath == nil {
-                return NSLocalizedString("Claude Code is not installed.", comment: "Quick actions unavailable because the Claude Code CLI is missing")
-            }
-            if !bypassPermissions {
-                return NSLocalizedString("Enable \"Bypass permission prompts\" in Settings.", comment: "")
-            }
-        }
-        if action == .closePR, ghPath == nil {
-            return NSLocalizedString("gh CLI is not installed.", comment: "")
-        }
-        return nil
+        QuickAction.unavailableReason(
+            for: action,
+            claudeInstalled: claudePath != nil,
+            ghInstalled: ghPath != nil,
+            bypassPermissions: bypassPermissions
+        )
     }
 
     private func runAction(_ action: QuickAction) {

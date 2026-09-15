@@ -57,24 +57,39 @@ final class CommandRegistry: ObservableObject {
         }
     }
 
-    /// Available commands matching `query`, best first. An empty query lists
-    /// everything available, most-used first, then alphabetically.
+    /// Listable commands matching `query`, best first. An empty query lists
+    /// everything, most-used first, then alphabetically.
+    ///
+    /// `.hidden` commands are dropped; `.disabled` ones are kept and always sort
+    /// *below* every runnable result, whatever they score. A refused command is
+    /// there to explain itself, not to take the row Return is aimed at.
     func search(_ query: String, context: PaletteContext) -> [PaletteCommand] {
-        let available = commands.filter { $0.isAvailable(context) }
-        if query.isEmpty {
-            return available.sorted {
-                let (ua, ub) = (usage[$0.id, default: 0], usage[$1.id, default: 0])
-                return ua == ub ? $0.title < $1.title : ua > ub
+        let listable = commands.compactMap { command -> (command: PaletteCommand, runnable: Bool)? in
+            switch command.availability(context) {
+            case .available: (command, true)
+            case .disabled: (command, false)
+            case .hidden: nil
             }
         }
-        return available
-            .compactMap { command -> (PaletteCommand, Int)? in
-                let score = FuzzyMatcher.score(query: query, candidate: command.title)
+        if query.isEmpty {
+            return listable.sorted {
+                if $0.runnable != $1.runnable {
+                    return $0.runnable
+                }
+                let (ua, ub) = (usage[$0.command.id, default: 0], usage[$1.command.id, default: 0])
+                return ua == ub ? $0.command.title < $1.command.title : ua > ub
+            }.map(\.command)
+        }
+        return listable
+            .compactMap { entry -> (command: PaletteCommand, runnable: Bool, score: Int)? in
+                let score = FuzzyMatcher.score(query: query, candidate: entry.command.title)
                 guard score > 0 else { return nil }
-                return (command, score + usage[command.id, default: 0])
+                return (entry.command, entry.runnable, score + usage[entry.command.id, default: 0])
             }
-            .sorted { $0.1 > $1.1 }
-            .map(\.0)
+            .sorted {
+                $0.runnable == $1.runnable ? $0.score > $1.score : $0.runnable
+            }
+            .map(\.command)
     }
 
     func recordUsage(_ commandID: String) {

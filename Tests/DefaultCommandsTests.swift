@@ -182,6 +182,111 @@ final class DefaultCommandsTests: XCTestCase {
         XCTAssertEqual(reached.count, SettingsPane.allCases.count)
     }
 
+    /// Destructive, and one fuzzy match from "Archive Workstream" — so what it
+    /// posts matters: `.purgeWorkstream` with no payload, which `ContentView`
+    /// resolves to the selection and hands to `confirmPurge`. A command closure
+    /// is built once and can never know which workstream is active.
+    @MainActor
+    func testPurgeCommandPostsWithNoPayloadAndIsWorkstreamGated() throws {
+        let command = try XCTUnwrap(defaultPaletteCommands().first { $0.id == "workstream.purge" })
+
+        XCTAssertFalse(command.isAvailable(PaletteContext(workstreamActive: false, editorActive: false)))
+        XCTAssertTrue(command.isAvailable(PaletteContext(workstreamActive: true, editorActive: false)))
+
+        let posted = expectation(forNotification: .purgeWorkstream, object: nil) { $0.object == nil }
+        command.action()
+        wait(for: [posted], timeout: 1)
+    }
+
+    /// The add menu's two variants carry their choice as `.addNew`'s payload.
+    /// Absent means "the default", which is what `create.new` posts — reading a
+    /// missing payload as `false` would silently strip permissions from ⌘N.
+    @MainActor
+    func testNewWorkstreamVariantsCarryTheirPermissionChoice() throws {
+        let commands = defaultPaletteCommands()
+        for (id, expected) in [("create.newFullPermissions", true), ("create.newWithPrompts", false)] {
+            let command = try XCTUnwrap(commands.first { $0.id == id }, id)
+            let posted = expectation(forNotification: .addNew, object: nil) {
+                $0.object as? Bool == expected
+            }
+            command.action()
+            wait(for: [posted], timeout: 1)
+        }
+
+        let plain = try XCTUnwrap(commands.first { $0.id == "create.new" })
+        let posted = expectation(forNotification: .addNew, object: nil) { $0.object == nil }
+        plain.action()
+        wait(for: [posted], timeout: 1)
+    }
+
+    /// One row per quick action, posting the raw value the receiver resolves.
+    @MainActor
+    func testQuickActionCommandsPostTheirOwnAction() throws {
+        let commands = defaultPaletteCommands()
+        for action in QuickAction.allCases {
+            let command = try XCTUnwrap(commands.first { $0.id == "git.\(action.rawValue)" }, action.rawValue)
+            let posted = expectation(forNotification: .runQuickAction, object: nil) {
+                $0.object as? String == action.rawValue
+            }
+            command.action()
+            wait(for: [posted], timeout: 1)
+        }
+    }
+
+    /// Missing tools disable the row and say so, rather than dropping it: "gh is
+    /// not installed" is a condition the user can act on, and the wording is
+    /// `QuickAction.unavailableReason`'s — the same copy the toolbar menu
+    /// disables its own buttons with.
+    @MainActor
+    func testQuickActionCommandsAreDisabledWithTheMenusOwnReason() throws {
+        let commands = defaultPaletteCommands()
+        let ready = PaletteContext(
+            workstreamActive: true, editorActive: false,
+            claudeInstalled: true, ghInstalled: true, bypassPermissions: true
+        )
+        let noTools = PaletteContext(
+            workstreamActive: true, editorActive: false,
+            claudeInstalled: false, ghInstalled: false, bypassPermissions: false
+        )
+
+        for action in QuickAction.allCases {
+            let command = try XCTUnwrap(commands.first { $0.id == "git.\(action.rawValue)" }, action.rawValue)
+            XCTAssertEqual(command.availability(ready), .available, action.rawValue)
+            XCTAssertEqual(
+                command.availability(noTools).reason,
+                QuickAction.unavailableReason(
+                    for: action, claudeInstalled: false, ghInstalled: false, bypassPermissions: false
+                ),
+                action.rawValue
+            )
+            // Hidden outside a workspace: there is nothing to act on, and
+            // nothing the user could do about it from there.
+            XCTAssertEqual(
+                command.availability(PaletteContext(workstreamActive: false, editorActive: false)),
+                .hidden,
+                action.rawValue
+            )
+        }
+    }
+
+    /// Hidden rather than disabled when there is nothing to open — the same
+    /// choice the sidebar's context menu makes by omitting the item.
+    @MainActor
+    func testOpenCommandsAreHiddenWhenThereIsNothingToOpen() throws {
+        let commands = defaultPaletteCommands()
+        let bare = PaletteContext(workstreamActive: true, editorActive: false)
+        let everything = PaletteContext(
+            workstreamActive: true, editorActive: false,
+            hasGitHubRemote: true, hasPullRequest: true, hasShortcutStory: true
+        )
+
+        for id in ["workstream.openOnGitHub", "workstream.openPullRequest", "workstream.openInShortcut"] {
+            let command = try XCTUnwrap(commands.first { $0.id == id }, id)
+            XCTAssertEqual(command.availability(bare), .hidden, id)
+            XCTAssertEqual(command.availability(everything), .available, id)
+        }
+    }
+
     @MainActor
     func testSubmitReviewCommandIsWorkstreamGated() {
         let commands = defaultPaletteCommands()
@@ -317,5 +422,47 @@ final class GotoPaletteCommandTests: XCTestCase {
         }
         command.action()
         wait(for: [posted], timeout: 1)
+    }
+}
+
+/// The verification family: one command per check `verification.yaml` declares,
+/// synced into the registry under `verificationCommandPrefix`.
+@MainActor
+final class VerificationPaletteCommandTests: XCTestCase {
+    func testEmitsOneCommandPerCheckUnderItsOwnPrefix() {
+        let commands = verificationPaletteCommands(for: ["rspec", "rubocop"])
+
+        XCTAssertEqual(commands.count, 2)
+        XCTAssertTrue(commands.allSatisfy { $0.id.hasPrefix(verificationCommandPrefix) })
+        XCTAssertEqual(Set(commands.map(\.id)).count, 2)
+    }
+
+    /// `CommandRegistry.sync` clears every id under the prefix it is handed, so
+    /// a family under `run.` would delete `run.startRerun` and
+    /// `run.rerunInitialization` on its first emission — the hazard the go-to
+    /// family documents, one prefix over.
+    func testNoBuiltInCommandSitsUnderTheVerificationPrefix() {
+        let builtIns = defaultPaletteCommands().map(\.id)
+        XCTAssertTrue(builtIns.allSatisfy { !$0.hasPrefix(verificationCommandPrefix) })
+    }
+
+    func testCommandPostsItsCheckName() throws {
+        let command = try XCTUnwrap(verificationPaletteCommands(for: ["rspec"]).first)
+
+        let posted = expectation(forNotification: .runVerificationCheck, object: nil) { note in
+            note.object as? String == "rspec"
+        }
+        command.action()
+        wait(for: [posted], timeout: 1)
+    }
+
+    /// Workstream-gated and nothing more: whether *this* check can run right now
+    /// is `Verification.Runner.start`'s decision, and it loads the config again
+    /// rather than trusting the list the palette drew from.
+    func testCommandsAreWorkstreamGated() throws {
+        let command = try XCTUnwrap(verificationPaletteCommands(for: ["rspec"]).first)
+
+        XCTAssertFalse(command.isAvailable(PaletteContext(workstreamActive: false, editorActive: false)))
+        XCTAssertTrue(command.isAvailable(PaletteContext(workstreamActive: true, editorActive: false)))
     }
 }

@@ -55,6 +55,40 @@ enum QuickAction: String, CaseIterable, Identifiable {
 }
 
 extension QuickAction {
+    /// Why this action cannot run, or nil when it can.
+    ///
+    /// One copy, three consumers: the toolbar menu's `.disabled` and help text,
+    /// the palette row that shows the reason instead of vanishing, and the
+    /// notification receiver that runs it. The menu used to own this privately,
+    /// so the palette command that reaches the same runner would have been a
+    /// second spelling of it — and an action refused for a reason nothing states
+    /// is the silence this feature's palette rows exist to break.
+    ///
+    /// Stated as installed-or-not rather than as paths, because that is all the
+    /// decision rests on and it is what a `PaletteContext` can carry.
+    static func unavailableReason(
+        for action: QuickAction,
+        claudeInstalled: Bool,
+        ghInstalled: Bool,
+        bypassPermissions: Bool
+    ) -> String? {
+        if action.usesLLM {
+            if !claudeInstalled {
+                return NSLocalizedString(
+                    "Claude Code is not installed.",
+                    comment: "Quick actions unavailable because the Claude Code CLI is missing"
+                )
+            }
+            if !bypassPermissions {
+                return NSLocalizedString("Enable \"Bypass permission prompts\" in Settings.", comment: "")
+            }
+        }
+        if action == .closePR, !ghInstalled {
+            return NSLocalizedString("gh CLI is not installed.", comment: "")
+        }
+        return nil
+    }
+
     enum State: Equatable {
         case idle
         case running(QuickAction)

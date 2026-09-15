@@ -608,13 +608,18 @@ struct ProjectSidebar: View {
             .onReceive(NotificationCenter.default.publisher(for: .addProject)) { _ in
                 showingAddProjectChoice = true
             }
-            .onReceive(NotificationCenter.default.publisher(for: .addNew)) { _ in
+            // The object, when present, is the `bypassPermissions` choice the add
+            // menu's two variants make; the palette posts it for those two rows.
+            // Absent means "use the `atelier.bypassPermissions` default", which is
+            // what every other producer of this notification wants.
+            .onReceive(NotificationCenter.default.publisher(for: .addNew)) { note in
+                let bypass = note.object as? Bool
                 if case let .workstream(wsID) = selection,
                    let project = projects.first(where: { $0.workstreams.contains(where: { $0.id == wsID }) })
                 {
-                    addWorkstream(for: project.id)
+                    addWorkstream(for: project.id, bypassPermissions: bypass)
                 } else if case let .project(pid) = selection {
-                    addWorkstream(for: pid)
+                    addWorkstream(for: pid, bypassPermissions: bypass)
                 } else {
                     showingAddProjectChoice = true
                 }

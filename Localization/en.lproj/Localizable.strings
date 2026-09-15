@@ -483,6 +483,18 @@
 "Previous Project" = "Previous Project";
 "Toggle Sidebar" = "Toggle Sidebar";
 "Settings: %@" = "Settings: %@";
+"Git" = "Git";
+"New Workstream (Full Permissions)" = "New Workstream (Full Permissions)";
+"New Workstream (With Prompts)" = "New Workstream (With Prompts)";
+"Purge Workstream" = "Purge Workstream";
+"Open Pull Request" = "Open Pull Request";
+"Copy Branch Name" = "Copy Branch Name";
+"Copy Worktree Path" = "Copy Worktree Path";
+"Run Check: %@" = "Run Check: %@";
+/* Command palette: why a stored prompt cannot be typed right now */
+"No Coding Agent is running in this workstream." = "No Coding Agent is running in this workstream.";
+"The Coding Agent is mid-turn." = "The Coding Agent is mid-turn.";
+"The Coding Agent is waiting on a permission prompt." = "The Coding Agent is waiting on a permission prompt.";
 
 /* Clone from GitHub repo */
 "Clone from GitHub repo" = "Clone from GitHub repo";
