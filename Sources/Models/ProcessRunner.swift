@@ -66,6 +66,58 @@ enum ProcessRunner {
         static let suite: TimeInterval = 1800
     }
 
+    /// Lets a caller stop a chain of subprocesses in flight.
+    ///
+    /// Cancellation and the deadline answer different questions, which is why
+    /// this is not a shorter timeout. The deadline exists to break a wedge and
+    /// is sized for the slowest legitimate run — `Timeout.install` is half an
+    /// hour — so a caller that has learned the work is no longer wanted (the
+    /// user archived the worktree it was setting up) has nothing to wait for and
+    /// nowhere to say so. Terminating the running child makes that step fail,
+    /// which unwinds through the caller's ordinary failure path.
+    ///
+    /// Lifted out of `BareRepoClone`, which still uses it and still spawns its
+    /// own `Process` — that exemption is about a clone having no honest deadline,
+    /// not about cancelling, so sharing the handle does not narrow it.
+    final class Cancellation: @unchecked Sendable {
+        private let lock = NSLock()
+        private var running: Process?
+        private var isCancelled = false
+
+        init() {}
+
+        var cancelled: Bool {
+            lock.withLock { isCancelled }
+        }
+
+        func cancel() {
+            let process: Process? = lock.withLock {
+                isCancelled = true
+                return running
+            }
+            // `track` registers the process before `run()`, so a cancel landing in
+            // that window sees a `Process` with no PID — `terminate()` on one of
+            // those raises NSInvalidArgumentException. Every launch site re-checks
+            // `cancelled` after `run()`, so nothing is stranded by skipping it here.
+            guard process?.isRunning == true else { return }
+            process?.terminate()
+        }
+
+        /// Returns false when cancellation already happened, so the caller can
+        /// stop before launching another subprocess.
+        func track(_ process: Process) -> Bool {
+            lock.withLock {
+                guard !isCancelled else { return false }
+                running = process
+                return true
+            }
+        }
+
+        func clearTracking() {
+            lock.withLock { running = nil }
+        }
+    }
+
     /// A finished child: its exit status and both streams.
     struct Output {
         let status: Int32
@@ -88,17 +140,23 @@ enum ProcessRunner {
     }
 
     /// Runs `executable` and returns its status and both streams, or nil if it
-    /// could not be launched or outlived `timeout`.
+    /// could not be launched, outlived `timeout`, or was cancelled.
     ///
     /// Use this when a failure's stderr matters. When only stdout-on-success
     /// does, `run` is the narrower form.
+    ///
+    /// `cancellation`, when given, lets another thread terminate this child
+    /// before its deadline; see `Cancellation`. A cancelled call returns whatever
+    /// the killed child managed to write, with its signal status — the caller
+    /// asked for it to stop, so this is not the deadline's `nil`.
     static func capture(
         executable: String,
         arguments: [String],
         environment: [String: String]? = nil,
         currentDirectory: URL? = nil,
         standardInput: Data? = nil,
-        timeout: TimeInterval
+        timeout: TimeInterval,
+        cancellation: Cancellation? = nil
     ) -> Output? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -124,11 +182,26 @@ enum ProcessRunner {
         let exited = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in exited.signal() }
 
+        // Registered before `run()` so a cancel arriving mid-launch is not lost.
+        // A `Cancellation` already cancelled refuses, and nothing is spawned.
+        guard cancellation?.track(process) ?? true else { return nil }
+        defer { cancellation?.clearTracking() }
+
         do {
             try process.run()
         } catch {
             logger.warning("\(executable, privacy: .public) failed to launch: \(error, privacy: .public)")
             return nil
+        }
+
+        // Closes the window `track` opens: a `cancel()` between tracking and
+        // launch could not terminate a process that had no PID yet, so it only
+        // set the flag. Now that there is a PID, honour it — and go through
+        // `kill`, not `terminate()`, so a child that has already backgrounded a
+        // grandchild does not leave it holding the pipe this call is about to
+        // wait on.
+        if cancellation?.cancelled == true {
+            kill(process)
         }
 
         // stdin, stdout and stderr are pumped together, on **this** thread, by

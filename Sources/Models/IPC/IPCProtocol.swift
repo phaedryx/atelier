@@ -87,7 +87,7 @@ extension IPC {
         case openEditor = "open_editor"
         /// Raises a notification asking the user to come and look.
         case requestAttention = "request_attention"
-        /// Creates a new workstream — worktree, branch, `bootstrap` — and
+        /// Creates a new workstream — worktree, branch, initialization — and
         /// optionally starts an agent there.
         case createWorkstream = "create_workstream"
         /// Starts a verification run — the `verify` namespace — in the caller's

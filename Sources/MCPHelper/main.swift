@@ -295,7 +295,7 @@ let toolDefinitions: [ToolDefinition] = [
         already on: a tab shares your worktree, a workstream does not, and one
         worktree cannot hold two branches. The agent starts in the new
         workstream's Coding Agent tab, so the user opening that workstream lands
-        on its conversation. The new workstream's `bootstrap` runs in the
+        on its conversation. The new workstream's initialization runs in the
         background, so its dependencies may not be installed the moment the agent
         starts. Creating it does not move the user's view — the row appears in
         the sidebar and whatever they are looking at stays put. Returns the

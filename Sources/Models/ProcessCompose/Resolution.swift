@@ -166,7 +166,7 @@ extension ProcessCompose {
         /// For the approval paths only. `approveProcessConfig` writes an
         /// approval and then *reads the result of that write* — whether the
         /// fingerprint took, and whether there is anything left to approve —
-        /// before deciding whether to rerun bootstrap and whether to close the
+        /// before deciding whether to close the
         /// sheet. An asynchronous refresh would make those reads answer about
         /// the state before the click. It bumps the generation too, so a refresh
         /// already in flight cannot land on top of it.
@@ -207,7 +207,7 @@ extension ProcessCompose {
             // **One locate, two questions.** The run's config is this same
             // config narrowed to the *run* — it disappears behind a
             // per-workstream override, which is right for Start and wrong for
-            // verify and for approval, since bootstrap and dispose locate
+            // verify and for approval, since dispose locates
             // unconditionally. Locating twice was two answers to the same
             // question from the same directory.
             let located = ProcessCompose.Config.locate(

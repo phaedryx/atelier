@@ -627,17 +627,17 @@ struct ContentView: View {
                       let worktreePath = info["worktreePath"] as? String,
                       let found = attachWorktreePath(worktreePath, to: workstreamID) else { return }
                 logger.warning("[Atelier] workstreamWorktreeReady: updated \(workstreamID, privacy: .public) with path \(worktreePath, privacy: .public)")
-                // Run the project's `bootstrap` namespace in the background. This is
-                // the half `attachWorktreePath` deliberately leaves to its callers —
-                // see its doc for why a repair must not do it.
+                // Run the project's initialization steps in the background. This
+                // is the half `attachWorktreePath` deliberately leaves to its
+                // callers — see its doc for why a repair must not do it.
                 let projectPath = projects[found.project].directory
-                // Names, not just paths: bootstrap runs with the same
+                // Names, not just paths: a step runs with the same
                 // `ATELIER_PROJECT` / `ATELIER_WORKSTREAM` the workstream's
                 // terminals get, and only the project model knows them.
                 let projectName = projects[found.project].name
                 let workstreamName = projects[found.project].workstreams[found.workstream].name
                 Task {
-                    await AsyncSetupService.shared.setupExistingWorktree(
+                    await Initialization.Runner.shared.run(
                         workstreamID: workstreamID,
                         projectName: projectName,
                         workstreamName: workstreamName,
@@ -705,13 +705,13 @@ struct ContentView: View {
 
     /// Writes a resolved worktree path onto a workstream, and runs everything that
     /// has to happen the moment a workstream first has one — **except**
-    /// `bootstrap`.
+    /// initialization.
     ///
     /// Two callers, and the exclusion is the reason this is a helper rather than a
-    /// copy. `.workstreamWorktreeReady` runs `bootstrap` itself afterwards, because
+    /// copy. `.workstreamWorktreeReady` runs initialization itself afterwards, because
     /// the worktree it is announcing was created seconds ago and has never been set
     /// up. `reconcileStrandedWorkstreams` must not: the worktree it repairs predates
-    /// this launch, so its `bootstrap` either ran or was declined, and re-running a
+    /// this launch, so its initialization either ran or was declined, and re-running a
     /// repository's own commands unprompted at startup is not a repair's business.
     /// The Info tab's Re-run is how a user asks for that.
     ///

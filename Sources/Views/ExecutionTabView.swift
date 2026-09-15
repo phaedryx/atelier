@@ -41,7 +41,7 @@ func closingTabStopsRun(_ tab: WorkspaceTab, runStarted: Bool) -> Bool {
 /// loaded, and deliberately not as a command, because the string
 /// `DevCommand.Resolver` builds for that source is
 /// `process-compose up -U -f <files>` — no `-n`, so running it runs *every*
-/// namespace including `bootstrap` and `dispose`, past `PhasePolicy` and past
+/// namespace including `dispose`, past `PhasePolicy` and past
 /// `ScriptTrust`. `ProcessCompose.RunCommandPlan` makes it unreachable from Start; rendering it
 /// here made it reachable by hand, in a monospaced font that invites exactly
 /// that. The files are what `ProcessCompose.RunCommandPlan` meant the user to be able to see.
@@ -379,7 +379,7 @@ struct ExecutionTabView: View {
                         // user the un-`-n`'d string in an editable field, and
                         // Save turns whatever is in that field into an
                         // `.override`, which `ProcessCompose.RunCommandPlan` runs literally.
-                        // Three clicks, no typing, and `bootstrap` and `dispose`
+                        // Three clicks, no typing, and `dispose`
                         // run with no approval.
                         devCommandEditText = devCommand?.source == .override
                             ? (devCommand?.command ?? "")
@@ -446,9 +446,8 @@ struct ExecutionTabView: View {
             .foregroundStyle(.tertiary)
     }
 
-    /// A banner, not a gate. The unattended phases — bootstrap at creation,
-    /// dispose at archive — are the ones that need approval, because nobody is
-    /// there when they run. Start is attended: the user presses it deliberately,
+    /// A banner, not a gate. The unattended phase — `dispose` at archive — is
+    /// the one that needs approval, because nobody is there when it runs. Start is attended: the user presses it deliberately,
     /// the stack's output lands in a terminal surface in front of them, and Stop
     /// is right there — so it stays available whether or not the file has been
     /// approved.
@@ -469,7 +468,7 @@ struct ExecutionTabView: View {
                     paths.map { ($0 as NSString).lastPathComponent }.joined(separator: ", ")
                 ))
                 .font(.system(size: 12, weight: .semibold))
-                Text("Its bootstrap and dispose phases will not run until you review it. Start is unaffected.")
+                Text("Its dispose phase will not run until you review it. Start is unaffected.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }

@@ -28,7 +28,7 @@ final class PhaseExecutorTests: XCTestCase {
         // `shutDownWhenDone: false` deliberately leaves the control server up, so
         // any test that spawns one has to be sure it is gone even if it failed
         // early.
-        for phase in [ProcessCompose.Phase.bootstrap, .dispose] {
+        for phase in [ProcessCompose.Phase.dispose] {
             ProcessCompose.PhaseExecutor.shutDown(
                 binary: binary,
                 socketPath: ProcessCompose.PhaseRunner.socketPath(for: workstreamID, phase: phase),
@@ -37,7 +37,7 @@ final class PhaseExecutorTests: XCTestCase {
         }
         try? FileManager.default.removeItem(at: dir)
         try? FileManager.default.removeItem(at: projectDir)
-        try? FileManager.default.removeItem(atPath: ProcessCompose.PhaseRunner.socketPath(for: workstreamID, phase: .bootstrap))
+        try? FileManager.default.removeItem(atPath: ProcessCompose.PhaseRunner.socketPath(for: workstreamID, phase: .dispose))
         super.tearDown()
     }
 
@@ -47,12 +47,12 @@ final class PhaseExecutorTests: XCTestCase {
         return ProcessCompose.Config(path: path.path, isRepositoryProvided: true)
     }
 
-    private func runBootstrap(
+    private func runDispose(
         _ config: ProcessCompose.Config,
         environment: [String: String] = [:]
     ) -> ProcessCompose.PhaseExecutor.Outcome {
         ProcessCompose.PhaseExecutor.run(
-            phase: .bootstrap,
+            phase: .dispose,
             config: config,
             binary: binary,
             workstreamID: workstreamID,
@@ -67,7 +67,7 @@ final class PhaseExecutorTests: XCTestCase {
 
     /// C1, end to end: the phase's own processes must be able to read the
     /// workstream's variables. They could not — `ProcessCompose.PhaseExecutor` built the child
-    /// environment from `ProcessInfo` plus a `PATH` override, so `bootstrap`
+    /// environment from `ProcessInfo` plus a `PATH` override, so `dispose`
     /// and `dispose` saw no `ATELIER_*` and nothing from `ports.yaml`, while
     /// `prepare` and `execute` in a Ghostty surface saw all of it.
     ///
@@ -75,18 +75,18 @@ final class PhaseExecutorTests: XCTestCase {
     /// envsubst before the shell sees it, so a single `$` would be substituted
     /// away at config load and the shell would receive an empty string. That is
     /// the failure this test would otherwise have reported as "no environment".
-    func testBootstrapProcessesSeeTheWorkstreamEnvironment() throws {
+    func testDisposeProcessesSeeTheWorkstreamEnvironment() throws {
         let config = try writeConfig("""
         version: "0.5"
         processes:
           record:
-            namespace: bootstrap
+            namespace: dispose
             command: sh -c 'echo "$$ATELIER_WORKTREE_DIR" > seen-dir.txt; echo "$$BFF_PORT" > seen-port.txt'
             availability: { restart: "no" }
         """)
 
         XCTAssertEqual(
-            runBootstrap(config, environment: [
+            runDispose(config, environment: [
                 "ATELIER_WORKTREE_DIR": dir.path,
                 "BFF_PORT": "41476",
             ]),
@@ -102,24 +102,24 @@ final class PhaseExecutorTests: XCTestCase {
     /// Succeeding is not just an exit code: the processes must actually have run
     /// in the worktree, so this asserts on the side effect rather than on the
     /// report alone.
-    func testSucceedingBootstrapRunsInTheWorktree() throws {
+    func testSucceedingDisposeRunsInTheWorktree() throws {
         let config = try writeConfig("""
         version: "0.5"
         processes:
           ok:
-            namespace: bootstrap
-            command: sh -c 'touch bootstrap-marker'
+            namespace: dispose
+            command: sh -c 'touch dispose-marker'
             availability: { restart: "no" }
         """)
 
-        XCTAssertEqual(runBootstrap(config), .succeeded)
+        XCTAssertEqual(runDispose(config), .succeeded)
         XCTAssertTrue(
-            FileManager.default.fileExists(atPath: dir.appendingPathComponent("bootstrap-marker").path),
-            "bootstrap must run with the worktree as its working directory"
+            FileManager.default.fileExists(atPath: dir.appendingPathComponent("dispose-marker").path),
+            "dispose must run with the worktree as its working directory"
         )
     }
 
-    /// The only shape that reaches bootstrap in production until config
+    /// The only shape that reaches dispose in production until config
     /// approval exists: a config the user placed in the project directory,
     /// named with `-f` rather than discovered. It is worth its own test because
     /// it is the one case where the config's directory and the working
@@ -133,37 +133,37 @@ final class PhaseExecutorTests: XCTestCase {
         version: "0.5"
         processes:
           ok:
-            namespace: bootstrap
-            command: sh -c 'touch bootstrap-marker'
+            namespace: dispose
+            command: sh -c 'touch dispose-marker'
             availability: { restart: "no" }
         """.write(to: path, atomically: true, encoding: .utf8)
         let config = ProcessCompose.Config(path: path.path, isRepositoryProvided: false)
 
-        XCTAssertEqual(runBootstrap(config), .succeeded)
+        XCTAssertEqual(runDispose(config), .succeeded)
         XCTAssertTrue(
-            FileManager.default.fileExists(atPath: dir.appendingPathComponent("bootstrap-marker").path),
-            "bootstrap must run in the worktree"
+            FileManager.default.fileExists(atPath: dir.appendingPathComponent("dispose-marker").path),
+            "dispose must run in the worktree"
         )
         XCTAssertFalse(
-            FileManager.default.fileExists(atPath: projectDir.appendingPathComponent("bootstrap-marker").path),
-            "bootstrap must not run in the project directory"
+            FileManager.default.fileExists(atPath: projectDir.appendingPathComponent("dispose-marker").path),
+            "dispose must not run in the project directory"
         )
     }
 
     /// With `availability.restart: exit_on_failure` the project shuts itself
     /// down and propagates the exit code, so the server is gone before it can
     /// be asked anything — the spawned command's own status is all there is.
-    func testFailingBootstrapReportsFailure() throws {
+    func testFailingDisposeReportsFailure() throws {
         let config = try writeConfig("""
         version: "0.5"
         processes:
           bad:
-            namespace: bootstrap
+            namespace: dispose
             command: sh -c 'echo boom >&2; exit 3'
             availability: { restart: "exit_on_failure" }
         """)
 
-        let outcome = runBootstrap(config)
+        let outcome = runDispose(config)
         guard case let .failed(detail) = outcome else {
             return XCTFail("expected failure, got \(outcome)")
         }
@@ -175,7 +175,7 @@ final class PhaseExecutorTests: XCTestCase {
 
     /// The case the exit code cannot see. Under the default `restart: "no"`,
     /// `process-compose up` exits 0 even though the process exited 3 — so a
-    /// bootstrap whose install failed would look exactly like one that worked.
+    /// dispose whose command failed would look exactly like one that worked.
     /// `--keep-project` holds the control server open past the last process so
     /// the real exit code can be read from the API, which is the only thing
     /// that makes this reportable. If this test ever passes by reporting
@@ -185,12 +185,12 @@ final class PhaseExecutorTests: XCTestCase {
         version: "0.5"
         processes:
           installer:
-            namespace: bootstrap
+            namespace: dispose
             command: sh -c 'exit 3'
             availability: { restart: "no" }
         """)
 
-        let outcome = runBootstrap(config)
+        let outcome = runDispose(config)
         guard case let .failed(detail) = outcome else {
             return XCTFail("expected failure, got \(outcome)")
         }
@@ -205,17 +205,17 @@ final class PhaseExecutorTests: XCTestCase {
         version: "0.5"
         processes:
           first:
-            namespace: bootstrap
+            namespace: dispose
             command: sh -c 'exit 4'
             availability: { restart: "no" }
           second:
-            namespace: bootstrap
+            namespace: dispose
             command: sh -c 'touch should-not-exist'
             depends_on: { first: { condition: process_completed_successfully } }
             availability: { restart: "no" }
         """)
 
-        let outcome = runBootstrap(config)
+        let outcome = runDispose(config)
         guard case let .failed(detail) = outcome else {
             return XCTFail("expected failure, got \(outcome)")
         }
@@ -238,7 +238,7 @@ final class PhaseExecutorTests: XCTestCase {
             command: sh -c 'exit 0'
         """)
 
-        XCTAssertEqual(runBootstrap(config), .skipped)
+        XCTAssertEqual(runDispose(config), .skipped)
     }
 
     /// A config that predates namespaces entirely declares none, so every phase
@@ -251,7 +251,7 @@ final class PhaseExecutorTests: XCTestCase {
             command: sh -c 'exit 0'
         """)
 
-        XCTAssertEqual(runBootstrap(config), .skipped)
+        XCTAssertEqual(runDispose(config), .skipped)
     }
 
     /// A namespace given as a list is legal process-compose and undecodable by
@@ -259,8 +259,8 @@ final class PhaseExecutorTests: XCTestCase {
     /// `.unknown`. The phase runs — refusing would silently skip work a project
     /// may really have declared — and the running project's own answer, zero
     /// processes in the namespace, ends it as a skip. Reporting a timeout here
-    /// would blame a project that has no bootstrap at all.
-    func testUnparseableConfigWithNoBootstrapIsSkippedNotTimedOut() throws {
+    /// would blame a project that has no dispose at all.
+    func testUnparseableConfigWithNoDisposeIsSkippedNotTimedOut() throws {
         let config = try writeConfig("""
         version: "0.5"
         processes:
@@ -268,21 +268,20 @@ final class PhaseExecutorTests: XCTestCase {
             namespace: [execute, other]
             command: sh -c 'exit 0'
         """)
-        XCTAssertEqual(config.namespacePresence("bootstrap"), .unknown)
+        XCTAssertEqual(config.namespacePresence("dispose"), .unknown)
 
         let started = Date()
-        XCTAssertEqual(runBootstrap(config), .skipped)
+        XCTAssertEqual(runDispose(config), .skipped)
         XCTAssertLessThan(Date().timeIntervalSince(started), 30, "must not wait out the deadline")
     }
 
-    /// Regression guard: `run`'s two-caller shape (bootstrap and dispose) must
-    /// stay callable without the new `selectedProcesses`/`shutDownWhenDone`
-    /// arguments. Reaches `.skipped` honestly, via a real config with no
-    /// processes in the `bootstrap` namespace — a nonexistent config path
+    /// Regression guard: `run` must stay callable without the
+    /// `selectedProcesses`/`shutDownWhenDone` arguments. Reaches `.skipped`
+    /// honestly, via a real config with no processes in the `dispose` namespace — a nonexistent config path
     /// would instead yield `.unknown` presence, which spawns on a shortened
     /// budget rather than returning early, asserting the right outcome for
     /// the wrong reason.
-    func test_run_defaultsKeepBootstrapAndDisposeCallableUnchanged() throws {
+    func test_run_defaultsKeepDisposeCallableUnchanged() throws {
         let config = try writeConfig("""
         version: "0.5"
         processes:
@@ -292,7 +291,7 @@ final class PhaseExecutorTests: XCTestCase {
         """)
 
         let outcome = ProcessCompose.PhaseExecutor.run(
-            phase: .bootstrap,
+            phase: .dispose,
             config: config,
             binary: binary,
             workstreamID: workstreamID,
@@ -319,14 +318,14 @@ final class PhaseExecutorTests: XCTestCase {
         version: "0.5"
         processes:
           rspec:
-            namespace: bootstrap
+            namespace: dispose
             command: sh -c 'echo "1 example, 1 failure"; exit 4'
             availability: { restart: "no" }
         """)
-        let socketPath = ProcessCompose.PhaseRunner.socketPath(for: workstreamID, phase: .bootstrap)
+        let socketPath = ProcessCompose.PhaseRunner.socketPath(for: workstreamID, phase: .dispose)
 
         let outcome = ProcessCompose.PhaseExecutor.run(
-            phase: .bootstrap, config: config, binary: binary, workstreamID: workstreamID,
+            phase: .dispose, config: config, binary: binary, workstreamID: workstreamID,
             workingDirectory: dir.path, environment: [:], timeout: 60,
             selectedProcesses: [], shutDownWhenDone: false
         )
@@ -402,13 +401,13 @@ final class PhaseOutcomeReportingTests: XCTestCase {
         _ poll: ProcessCompose.PhaseExecutor.PollResult,
         _ output: ProcessRunner.Output?
     ) -> ProcessCompose.PhaseExecutor.Outcome {
-        ProcessCompose.PhaseExecutor.outcome(for: .bootstrap, poll: poll, output: output)
+        ProcessCompose.PhaseExecutor.outcome(for: .dispose, poll: poll, output: output)
     }
 
     /// The regression guard. A nil status means `down` did not land inside the
     /// shutdown grace — nothing about the work. The poll watched every process
     /// exit zero, so reporting "did not finish in time" here would call a
-    /// bootstrap that demonstrably succeeded a failure.
+    /// dispose that demonstrably succeeded a failure.
     func testSlowShutdownDoesNotTurnASuccessIntoATimeout() {
         XCTAssertEqual(outcome(.finished([]), nil), .succeeded)
     }
@@ -483,7 +482,7 @@ final class PhaseOutcomeReportingTests: XCTestCase {
         read: () -> ProcessRunner.Output?
     ) -> ProcessRunner.Output? {
         ProcessCompose.PhaseExecutor.settledOutput(
-            poll: poll, phase: .bootstrap, finished: finished, grace: grace, read: read
+            poll: poll, phase: .dispose, finished: finished, grace: grace, read: read
         )
     }
 

@@ -38,7 +38,7 @@ extension ProcessCompose {
         /// project's own namespaces, not Atelier's five. Before this name existed,
         /// such a file was indistinguishable from an Atelier config and won the
         /// lookup outright, shadowing the user's real config in the project
-        /// directory: `bootstrap` and `prepare` silently did nothing, Verification
+        /// directory: `prepare` silently did nothing, Verification
         /// reported no checks, and Start ran `up -n execute` against a namespace
         /// nobody had declared — which does not fail, it idles forever with no
         /// output (measured against v1.122.0).
@@ -252,7 +252,7 @@ extension ProcessCompose {
         }
 
         /// Whether anything process-compose will load here came with the repository.
-        /// The gate for `bootstrap` and `dispose`; `execute` is never gated.
+        /// The gate for `dispose`; `execute` is never gated.
         var requiresApproval: Bool {
             !repositoryProvidedFiles.isEmpty
         }

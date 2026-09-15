@@ -22,11 +22,11 @@ extension Notification.Name {
     static let submitChangeReview = Notification.Name("atelier.submitChangeReview")
     static let toggleExecution = Notification.Name("atelier.toggleExecution")
     static let toggleVerification = Notification.Name("atelier.toggleVerification")
-    /// Runs the active workstream's `bootstrap` namespace again. Declared here
-    /// rather than beside `.asyncSetupStateChanged`, which `AsyncSetupService`
-    /// posts: like `.rerunScript`, this one is posted by the palette and named
-    /// in the file whose view receives it.
-    static let rerunBootstrap = Notification.Name("atelier.rerunBootstrap")
+    /// Runs the active workstream's initialization steps again. Declared here
+    /// rather than beside `.initializationStateChanged`, which
+    /// `Initialization.Runner` posts: like `.rerunScript`, this one is posted by
+    /// the palette and named in the file whose view receives it.
+    static let rerunInitialization = Notification.Name("atelier.rerunInitialization")
     static let saveEditor = Notification.Name("atelier.saveEditor")
     static let saveEditorAs = Notification.Name("atelier.saveEditorAs")
     static let toggleFileFinder = Notification.Name("atelier.toggleFileFinder")
@@ -351,14 +351,12 @@ struct TerminalContainerView: View {
     /// has to be there: `.rerunScript` (⌘⇧⏎) reaches `startRunIfNeeded` without
     /// going through the button at all.
     @State private var isReclaimingRunSocket = false
-    /// The last thing background setup said about this workstream.
+    /// The last thing initialization said about this workstream.
     ///
-    /// `AsyncSetupService` has posted `.asyncSetupStateChanged` since it
-    /// existed, and until now nothing listened — so `.completedWithNote`, the
-    /// state whose whole job is to say *why* no bootstrap ran, was written and
-    /// discarded. It is read here and rendered on the Info tab, which is
-    /// permanent and cannot be closed out from under the message.
-    @State private var setupState: AsyncSetupState = .idle
+    /// `.completedWithNote`, the state whose whole job is to say *why* nothing
+    /// ran, is read here and rendered on the Info tab, which is permanent and
+    /// cannot be closed out from under the message.
+    @State private var setupState: Initialization.State = .idle
     @StateObject private var processTable: ProcessCompose.TableModel
     init(
         workstreamID: UUID,
@@ -795,7 +793,7 @@ struct TerminalContainerView: View {
                 setupState: setupState,
                 onReviewConfig: { isReviewingConfig = true },
                 onRevokeConfig: revokeProcessConfig,
-                onRerunBootstrap: rerunBootstrap
+                onRerunInitialization: rerunInitialization
             )
         case .changes:
             if let bridge = model.diffBridge {
@@ -1039,9 +1037,9 @@ struct TerminalContainerView: View {
             // way the rest of this file's palette commands split it:
             // `DefaultCommands` asks whether there is a workspace to act on,
             // and the receiver asks whether there is something to do right now.
-            .onReceive(NotificationCenter.default.publisher(for: .rerunBootstrap)) { _ in
-                guard isActive, canRerunBootstrap(setupState) else { return }
-                rerunBootstrap()
+            .onReceive(NotificationCenter.default.publisher(for: .rerunInitialization)) { _ in
+                guard isActive, canRerunInitialization(setupState) else { return }
+                rerunInitialization()
             }
             .onReceive(NotificationCenter.default.publisher(for: .closeTerminal)) { _ in
                 guard isActive else { return }
@@ -1057,18 +1055,18 @@ struct TerminalContainerView: View {
             Divider()
             tabContent
         }
-        .onReceive(NotificationCenter.default.publisher(for: .asyncSetupStateChanged)) { notification in
+        .onReceive(NotificationCenter.default.publisher(for: .initializationStateChanged)) { notification in
             guard let info = notification.userInfo,
                   info["workstreamID"] as? UUID == workstreamID,
-                  let state = info["state"] as? AsyncSetupState else { return }
+                  let state = info["state"] as? Initialization.State else { return }
             setupState = state
         }
         .task(id: workstreamID) {
-            // Seeded as well as observed: bootstrap for a brand-new workstream
+            // Seeded as well as observed: initialization for a brand-new workstream
             // can finish before this view exists, and a note nobody was
             // listening for is the bug being fixed rather than a smaller
             // version of it.
-            setupState = await AsyncSetupService.shared.state(for: workstreamID)
+            setupState = await Initialization.Runner.shared.state(for: workstreamID)
         }
         // Through `AppEnvironment` rather than straight to git, and that is the
         // point rather than a tidying. `Task.detached` here started a *new*
@@ -1523,7 +1521,7 @@ struct TerminalContainerView: View {
     /// that matters is not about the table: it is that the un-`-n`'d
     /// `process-compose up -U -f <files>` string is never executed. Back then
     /// `resolvedRunCommand` did fall through to exactly that string when the
-    /// binary was unresolvable, which ran `bootstrap` and `dispose` with no
+    /// binary was unresolvable, which ran `dispose` with no
     /// approval — and `scriptCommand` wrapped it in `$SHELL -lic`, so PATH
     /// resolved the very binary `resolveBinary` had just failed to find.
     /// Reasoning about the process table hid that for a whole review round.
@@ -1981,12 +1979,14 @@ struct TerminalContainerView: View {
 
     // MARK: - Process config approval
 
-    /// Approve the repository's config, then run the bootstrap it was refused.
+    /// Approve the repository's process-compose config.
     ///
-    /// Bootstrap already ran — and reported that it did nothing — by the time
-    /// anyone can see this, so approval on its own would only help the *next*
-    /// worktree. `setupExistingWorktree` recomputes the plan against the
-    /// worktree that already exists, which is what makes this one recoverable.
+    /// It used to rerun the setup the approval was too late for. Worktree
+    /// setup now comes from `initialization.yaml` in the project directory,
+    /// which is never gated — so approval no longer decides whether a worktree
+    /// got set up, and rerunning from here would run the project's setup a
+    /// second time for a reason that no longer exists. `dispose` is the only
+    /// phase this approval still governs, and it has not run yet.
     private func approveProcessConfig(matching reviewedFingerprint: String) -> Bool {
         guard !resolved.repositoryConfigFiles.isEmpty else { return false }
         // The fingerprint is of the bytes the pane displayed, and `approve`
@@ -2003,10 +2003,11 @@ struct TerminalContainerView: View {
             // **Synchronously, and this is the one path that needs it.** The
             // next two lines read the result of the write that just happened;
             // an asynchronous refresh would answer about the state before the
-            // click. Approval is also one of `PhasePolicy.plan`'s four facts and
-            // the one no other trigger watches — Start is never gated by it — so
-            // without a refresh here the Verification tab would keep telling the
-            // user to approve a config they just approved.
+            // click. Approval is also one of `PhasePolicy.plan`'s three
+            // preconditions and the one no other trigger watches — Start is
+            // never gated by it — so without a refresh here the Execution tab's
+            // banner and the Info tab's Approval row would keep telling the user
+            // to approve a config they just approved.
             let refreshed = processComposeResolver.refreshNow(override: devCommandOverride)
             // Nothing left to approve: the config went away while the pane was
             // open, and an empty pane has no button to dismiss itself with.
@@ -2016,32 +2017,19 @@ struct TerminalContainerView: View {
             return false
         }
         isReviewingConfig = false
-        let refreshed = processComposeResolver.refreshNow(override: devCommandOverride)
-        // `approve` returning true means the fingerprint was stored, so this is
-        // now only reachable if the file vanished between the two reads. Do not
-        // run anything on the strength of a button press that did not take.
-        guard refreshed.isApproved else { return true }
-        rerunBootstrap()
+        processComposeResolver.refreshNow(override: devCommandOverride)
         return true
     }
 
-    /// Run the project's `bootstrap` namespace against this worktree again.
+    /// Run the project's initialization steps against this worktree again.
     ///
-    /// Two callers, and deliberately no preconditions of its own.
-    /// `approveProcessConfig` calls it to recover the bootstrap its approval
-    /// was too late for; the Info tab's Rerun button and the palette's Rerun
-    /// Bootstrap call it because the user asked.
-    ///
-    /// In particular this is **not** behind the resolution's `isApproved`.
-    /// `approveProcessConfig` checks that before calling, because there the
-    /// guard is asking whether the approval it just wrote actually took — an
-    /// unreadable file has no fingerprint, so `approve` was a no-op. A manual
-    /// rerun has no approval to doubt, and every reason bootstrap might do
-    /// nothing is `PhasePolicy.plan`'s to decide and report as a
-    /// `.completedWithNote` the Info row renders. Guarding here would trade
-    /// that explanation for a button that silently does nothing, in the one
-    /// state where the user most needs to be told why.
-    private func rerunBootstrap() {
+    /// Deliberately no preconditions of its own. Every reason initialization
+    /// might do nothing — no `initialization.yaml`, one that could not be read,
+    /// one declaring no steps — is `Initialization.Config.Load`'s to decide and
+    /// report as a `.completedWithNote` the Info row renders. Guarding here
+    /// would trade that explanation for a button that silently does nothing, in
+    /// the one state where the user most needs to be told why.
+    private func rerunInitialization() {
         let id = workstreamID
         let project = projectDirectory
         let worktree = workingDirectory
@@ -2050,7 +2038,7 @@ struct TerminalContainerView: View {
         let capturedProjectName = projectName
         let capturedWorkstreamName = workstreamName
         Task {
-            await AsyncSetupService.shared.setupExistingWorktree(
+            await Initialization.Runner.shared.run(
                 workstreamID: id,
                 projectName: capturedProjectName,
                 workstreamName: capturedWorkstreamName,

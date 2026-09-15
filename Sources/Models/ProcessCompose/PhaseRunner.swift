@@ -1,11 +1,10 @@
 // ABOUTME: Builds the process-compose command for each lifecycle phase.
-// ABOUTME: One config, four namespaces, one predictable control socket.
+// ABOUTME: One config, three namespaces, one predictable control socket.
 
 import Foundation
 
 extension ProcessCompose {
     enum Phase: String, CaseIterable {
-        case bootstrap
         case prepare
         case execute
         case dispose
@@ -38,12 +37,12 @@ extension ProcessCompose {
         /// practical concern at 8 hex digits.
         ///
         /// Only `execute` gets the bare path, because it is the one the UI attaches
-        /// to. The headless phases are namespaced, so a `bootstrap` that is still
-        /// running when the user presses Start cannot collide with `execute` on one
-        /// socket: they overlap in time now that bootstrap runs in the background
-        /// behind an already-open terminal, and a second `up` on a path a live
-        /// server holds rebinds it, stranding the first server with no way to
-        /// reach it.
+        /// to. The headless phases are namespaced, so a `dispose` cannot collide
+        /// with `execute` on one socket: a second `up` on a path a live server
+        /// holds rebinds it, stranding the first server with no way to reach it.
+        /// The suffix stays even though `dispose` is the only headless phase
+        /// left — `prepare` is chained into `execute`'s own command and shares its
+        /// socket by design.
         static func socketPath(for workstreamID: UUID, phase: ProcessCompose.Phase = .execute) -> String {
             let short = workstreamID.uuidString.prefix(8).lowercased()
             let suffix = phase.isInteractive ? "" : "-\(phase.namespace)"
@@ -82,7 +81,7 @@ extension ProcessCompose {
         /// namespace has finished, so a caller can read their exit codes before
         /// shutting it down. `process-compose up` exits 0 whatever the processes
         /// did unless the config opts into `restart: exit_on_failure`, so the API
-        /// is the only honest way to tell a clean bootstrap from a broken one; see
+        /// is the only honest way to tell a clean dispose from a broken one; see
         /// `ProcessCompose.PhaseExecutor`. It must stay off for the chained `startCommand`, where
         /// `prepare` has to exit on its own for `execute` to follow it.
         static func command(

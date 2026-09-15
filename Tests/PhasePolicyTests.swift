@@ -1,5 +1,5 @@
-// ABOUTME: Tests the decisions around a new worktree's bootstrap phase.
-// ABOUTME: Branch order and reporting only — no actor, no subprocess, no worktree.
+// ABOUTME: Tests the decision around the `dispose` phase — its only caller.
+// ABOUTME: Branch order only — no actor, no subprocess, no worktree.
 
 @testable import Atelier
 import XCTest
@@ -31,7 +31,7 @@ final class PhasePolicyTests: XCTestCase {
     /// switch that used to precede it was removed. A project that declares no
     /// config is told that, rather than told an integration is off.
     func testMissingConfigRunsNothing() {
-        let plan = PhasePolicy.plan(phase: .bootstrap, config: nil, binary: "/bin/pc", isApproved: approved)
+        let plan = PhasePolicy.plan(phase: .dispose, config: nil, binary: "/bin/pc", isApproved: approved)
 
         XCTAssertEqual(note(plan)?.contains("no process-compose config"), true, String(describing: plan))
     }
@@ -39,7 +39,7 @@ final class PhasePolicyTests: XCTestCase {
     /// A missing binary must never look like a broken worktree — the worktree
     /// exists and works, there was just nothing to run bootstrap with.
     func testMissingBinaryRunsNothing() {
-        let plan = PhasePolicy.plan(phase: .bootstrap, config: userConfig, binary: nil, isApproved: approved)
+        let plan = PhasePolicy.plan(phase: .dispose, config: userConfig, binary: nil, isApproved: approved)
 
         XCTAssertEqual(note(plan)?.contains("was not found"), true, String(describing: plan))
     }
@@ -50,7 +50,7 @@ final class PhasePolicyTests: XCTestCase {
     /// until the user has read it.
     func testUnapprovedRepositoryProvidedConfigIsRefused() {
         let plan = PhasePolicy.plan(
-            phase: .bootstrap, config: repositoryConfig, binary: "/bin/pc", isApproved: unapproved
+            phase: .dispose, config: repositoryConfig, binary: "/bin/pc", isApproved: unapproved
         )
 
         XCTAssertEqual(note(plan)?.contains("have not been approved"), true, String(describing: plan))
@@ -60,7 +60,7 @@ final class PhasePolicyTests: XCTestCase {
     /// pass the test above and make the approval pane do nothing.
     func testApprovedRepositoryProvidedConfigRuns() {
         let plan = PhasePolicy.plan(
-            phase: .bootstrap, config: repositoryConfig, binary: "/bin/pc", isApproved: approved
+            phase: .dispose, config: repositoryConfig, binary: "/bin/pc", isApproved: approved
         )
 
         XCTAssertEqual(plan, .run(config: repositoryConfig, binary: "/bin/pc"))
@@ -71,7 +71,7 @@ final class PhasePolicyTests: XCTestCase {
     /// answered "false" for everything would otherwise disable it.
     func testUserPlacedConfigIsNotSubjectToApproval() {
         var asked = false
-        let plan = PhasePolicy.plan(phase: .bootstrap, config: userConfig, binary: "/bin/pc") { _ in
+        let plan = PhasePolicy.plan(phase: .dispose, config: userConfig, binary: "/bin/pc") { _ in
             asked = true
             return false
         }
@@ -103,26 +103,12 @@ final class PhasePolicyTests: XCTestCase {
         XCTAssertEqual(plan, .run(config: repositoryConfig, binary: "/bin/pc"))
     }
 
-    /// The note names the phase that did not run, so a dispose skipped at
-    /// archive is not reported as a bootstrap that did not happen.
-    func testNotesNameThePhase() {
-        let bootstrap = PhasePolicy.plan(
-            phase: .bootstrap, config: nil, binary: nil, isApproved: approved
-        )
-        let dispose = PhasePolicy.plan(
-            phase: .dispose, config: nil, binary: nil, isApproved: approved
-        )
-
-        XCTAssertEqual(note(bootstrap)?.contains("bootstrap"), true, String(describing: bootstrap))
-        XCTAssertEqual(note(dispose)?.contains("dispose"), true, String(describing: dispose))
-    }
-
     /// Guard order. A missing binary outranks a missing approval: nothing can
     /// run without the binary whatever the user approves, and saying so is more
     /// actionable than asking for an approval that would change nothing.
     func testMissingBinaryOutranksMissingApproval() {
         let plan = PhasePolicy.plan(
-            phase: .bootstrap, config: repositoryConfig, binary: nil, isApproved: unapproved
+            phase: .dispose, config: repositoryConfig, binary: nil, isApproved: unapproved
         )
 
         XCTAssertEqual(note(plan)?.contains("was not found"), true, String(describing: plan))
@@ -131,44 +117,8 @@ final class PhasePolicyTests: XCTestCase {
     /// A config in the project directory sits outside every worktree and outside
     /// git: the user put it there by hand, so there is nothing to approve.
     func testUserPlacedConfigRuns() {
-        let plan = PhasePolicy.plan(phase: .bootstrap, config: userConfig, binary: "/bin/pc", isApproved: approved)
+        let plan = PhasePolicy.plan(phase: .dispose, config: userConfig, binary: "/bin/pc", isApproved: approved)
 
         XCTAssertEqual(plan, .run(config: userConfig, binary: "/bin/pc"))
-    }
-
-    // MARK: - Reporting
-
-    func testSuccessCompletes() {
-        XCTAssertEqual(PhasePolicy.state(for: .succeeded), .completed)
-    }
-
-    /// "Nothing ran" is neither success nor failure: reporting `.completed`
-    /// would claim work that never happened, and `.failed` would claim a broken
-    /// worktree.
-    func testSkippedIsANoteNotASuccessAndNotAFailure() {
-        let state = PhasePolicy.state(for: .skipped)
-
-        guard case let .completedWithNote(message) = state else {
-            return XCTFail("expected a note, got \(state)")
-        }
-        XCTAssertTrue(message.contains("nothing ran"), message)
-        XCTAssertNotEqual(state, .completed)
-    }
-
-    func testFailureCarriesTheDetail() {
-        let state = PhasePolicy.state(for: .failed("installer exited with code 3."))
-
-        guard case let .failed(message) = state else {
-            return XCTFail("expected a failure, got \(state)")
-        }
-        XCTAssertTrue(message.contains("installer exited with code 3."), message)
-    }
-
-    /// Two notes with different text are different states. The hand-written
-    /// `==` on `AsyncSetupState` has a `default: return false` arm, so a missing
-    /// case would compile and quietly compare unequal instead.
-    func testNotesCompareByTheirText() {
-        XCTAssertEqual(AsyncSetupState.completedWithNote("a"), .completedWithNote("a"))
-        XCTAssertNotEqual(AsyncSetupState.completedWithNote("a"), .completedWithNote("b"))
     }
 }

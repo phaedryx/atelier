@@ -15,11 +15,12 @@ extension Workstream {
     /// (`ProjectSidebar.launchWorkstream` and `ProjectOverviewView`), so a third
     /// is not a new pattern. Posting them gets append-and-persist, path storage,
     /// the HeadWatcher/agent-state/Shortcut refreshes, and — the part that
-    /// matters most — `AsyncSetupService.setupExistingWorktree`, which runs
-    /// `bootstrap` through `ProcessCompose.PhasePolicy.plan`. That gate is
-    /// deliberately the only copy of those preconditions, so this type reaches it
-    /// by *not* running bootstrap itself. Do not add a `setupExistingWorktree`
-    /// call here.
+    /// matters most — `Initialization.Runner.run`, which runs the project's
+    /// `initialization.yaml` steps. There is deliberately one path into that
+    /// runner and this type reaches it by *not* calling it: a second call site
+    /// would be a second creation path, and the list above is what the first one
+    /// already remembers to do. Do not add an `Initialization.Runner.run` call
+    /// here.
     ///
     /// **The read half is what needs a bridge.** `IPC.Service` is an actor that
     /// only ever compares `ClientIdentity.projectDirectory` strings for
@@ -58,7 +59,7 @@ extension Workstream {
             let projectName: String
             /// `Project.checkout` — passed to `Git.Operations.createWorktree`.
             let checkout: String
-            /// `Project.directory` — the repository's home, passed to bootstrap.
+            /// `Project.directory` — the repository's home, where `initialization.yaml` lives.
             let directory: String
             let existingWorkstreamNames: Set<String>
         }
@@ -97,7 +98,7 @@ extension Workstream {
             }
         }
 
-        /// A workstream that exists, with a worktree on disk and `bootstrap`
+        /// A workstream that exists, with a worktree on disk and initialization
         /// already dispatched.
         struct Launched: Equatable {
             let workstreamID: UUID
@@ -267,7 +268,7 @@ extension Workstream {
         /// place first, or it loses a race to a user clicking the sidebar row
         /// that has been sitting there since `.workstreamCreated`. Errors are
         /// deliberately not propagated: the worktree exists either way and still
-        /// needs its `bootstrap`, so the notification posts regardless and the
+        /// needs its initialization, so the notification posts regardless and the
         /// caller reports the failure itself.
         ///
         /// It is `@Sendable`, so it runs **off** the main actor and the hitch of
@@ -332,8 +333,8 @@ extension Workstream {
             let launched = Launched(workstreamID: workstream.id, name: name, worktreePath: worktreePath)
             await beforeReady?(launched)
 
-            // This is what runs `bootstrap`, via ContentView's handler and
-            // `AsyncSetupService`. It is also what makes the workstream
+            // This is what runs initialization, via ContentView's handler and
+            // `Initialization.Runner`. It is also what makes the workstream
             // renderable, since `renderableWorkstreamID` requires a usable path
             // — which is why `beforeReady` runs above it and not below.
             NotificationCenter.default.post(

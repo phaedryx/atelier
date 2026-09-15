@@ -3,29 +3,29 @@
 
 import SwiftUI
 
-/// One row's worth of what background setup did.
+/// One row's worth of what initialization did.
 ///
 /// Every state speaks, including the two that used to be silent. While this was
 /// only a report, `.idle` and `.completed` returned nothing and the row did not
-/// render — nothing had happened yet, or bootstrap did what the project asked
+/// render — nothing had happened yet, or setup did what the project asked
 /// and the worktree was the evidence.
 ///
 /// The row carries Rerun now, so silence is no longer free. `.completed` is the
 /// state a manual re-run is most often wanted from — a clobbered
 /// `node_modules`, a schema that needs reseeding — and a control that hides
 /// there is no control at all. `.idle` is not an edge case either:
-/// `AsyncSetupService.states` lives in memory, so after a relaunch every
+/// `Initialization.Runner.states` lives in memory, so after a relaunch every
 /// existing workstream reports `.idle` and this is the default text on every
 /// Info tab.
 ///
 /// `.idle`'s copy is deliberately about the report and not about the run.
-/// Nothing here knows whether a bootstrap ever happened for this worktree, only
-/// that this session has not seen one, and "bootstrap never ran" would be a
+/// Nothing here knows whether initialization ever happened for this worktree,
+/// only that this session has not seen it, and "setup never ran" would be a
 /// claim the state cannot support.
 ///
 /// A free function, so the copy for all five states can be pinned without a
 /// view.
-func bootstrapRow(for state: AsyncSetupState) -> (detail: String, icon: String, tint: Color) {
+func initializationRow(for state: Initialization.State) -> (detail: String, icon: String, tint: Color) {
     switch state {
     case .idle:
         (NSLocalizedString("Nothing reported this session.", comment: ""), "questionmark.circle", .secondary)
@@ -43,18 +43,16 @@ func bootstrapRow(for state: AsyncSetupState) -> (detail: String, icon: String, 
 /// Whether Rerun may be pressed.
 ///
 /// One state refuses, and it is the actor's own rule surfaced rather than a
-/// second opinion about it: `AsyncSetupService` already ignores a second
-/// bootstrap for a workstream that has one in flight, because both would share
-/// `<id>-bootstrap.sock` and the second would strand the first's control
-/// server. Disabling the button is how that refusal reads as unavailable
-/// instead of as a press that did nothing.
+/// second opinion about it: `Initialization.Runner` already ignores a second
+/// run for a workstream that has one in flight, because both would execute the
+/// project's setup commands twice over one directory. Disabling the button is
+/// how that refusal reads as unavailable instead of as a press that did nothing.
 ///
-/// Nothing else is checked. A missing binary, a missing config, a config that
-/// came with the repository and has not been approved — those are
-/// `PhasePolicy.plan`'s to decide, and it reports each one as a
-/// `.completedWithNote` that lands in the row above. Refusing the press for
-/// them would trade an explanation for silence.
-func canRerunBootstrap(_ state: AsyncSetupState) -> Bool {
+/// Nothing else is checked. A missing `initialization.yaml`, one that could not
+/// be read, one declaring no steps — those are `Initialization.Config.Load`'s to
+/// decide, and each is reported as a `.completedWithNote` that lands in the row
+/// above. Refusing the press for them would trade an explanation for silence.
+func canRerunInitialization(_ state: Initialization.State) -> Bool {
     if case .inProgress = state {
         return false
     }
@@ -72,21 +70,21 @@ struct WorkstreamInfoView: View {
     var configApproved: Bool = false
     /// What background setup last reported for this workstream. Info is where
     /// it belongs: it is the permanent tab, and a `.completedWithNote` — "this
-    /// project has no process-compose config, so no bootstrap ran",
+    /// project has no initialization.yaml, so no setup ran",
     /// "process-compose was not found" — is a fact about the workstream, not
     /// about the run pane. Nothing rendered it before, so those notes were
     /// written and thrown away.
-    var setupState: AsyncSetupState = .idle
+    var setupState: Initialization.State = .idle
     /// No defaults: a call site that passes `repositoryConfigFiles` but forgets
     /// these would render a Review button that silently does nothing, which is
     /// the whole failure this gate exists to avoid.
     let onReviewConfig: () -> Void
     let onRevokeConfig: () -> Void
-    /// Runs the project's `bootstrap` namespace against this worktree again.
+    /// Runs the project's initialization steps against this worktree again.
     /// No default for the same reason as the two above, and one more: this row
     /// always renders, so a call site that forgot it would ship a Rerun button
     /// on every workstream that does nothing.
-    let onRerunBootstrap: () -> Void
+    let onRerunInitialization: () -> Void
 
     @EnvironmentObject var appEnv: AppEnvironment
     @AppStorage("atelier.defaultTerminal") private var defaultTerminal: String = ""
@@ -414,39 +412,40 @@ struct WorkstreamInfoView: View {
     /// the ordinary ones, so the section would have been missing in exactly the
     /// case someone came looking for Rerun.
     private var setupSection: some View {
-        let row = bootstrapRow(for: setupState)
-        let canRerun = canRerunBootstrap(setupState)
+        let row = initializationRow(for: setupState)
+        let canRerun = canRerunInitialization(setupState)
         return Section("Setup") {
-            LabeledContent("Bootstrap") {
+            LabeledContent("Initialization") {
                 HStack(spacing: 6) {
                     Image(systemName: row.icon)
                         .foregroundStyle(row.tint)
                     Text(row.detail)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.trailing)
-                    Button("Rerun") { onRerunBootstrap() }
+                    Button("Rerun") { onRerunInitialization() }
                         .disabled(!canRerun)
                         .help(canRerun
-                            ? NSLocalizedString("Run this project's bootstrap namespace against this worktree again.", comment: "")
-                            : NSLocalizedString("Bootstrap is already running.", comment: ""))
+                            ? NSLocalizedString("Run this project's initialization.yaml steps against this worktree again.", comment: "")
+                            : NSLocalizedString("Initialization is already running.", comment: ""))
                 }
             }
         }
     }
 
-    /// Approval for the repository's own process-compose files. Replaces the
-    /// `.atelier.json` scripts section: the gated phases are now `bootstrap`
-    /// and `dispose`, and approval is keyed on the config files themselves.
+    /// Approval for the repository's own process-compose files. The gated phase
+    /// is `dispose` — the only unattended one left, now that worktree setup
+    /// comes from `initialization.yaml` in the project directory — and approval
+    /// is keyed on the config files themselves.
     @ViewBuilder
     private var processConfigSection: some View {
         if !repositoryConfigFiles.isEmpty {
             Section {
-                // Only the unattended phases are gated. Start is
+                // Only the unattended phase is gated. Start is
                 // attended — a deliberate press, with the output in
                 // front of the user and Stop to hand — so it is never
                 // held behind this. Not because the pane shows the
                 // command Start runs; it does not.
-                Text("Bootstrap runs when a workstream is created and dispose when one is archived, both without asking.")
+                Text("Its dispose phase runs when a workstream is archived, without asking.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 LabeledContent("Approval") {

@@ -8,9 +8,8 @@ enum ScriptTrust {
     private static let configFileKey = "atelier.approvedConfigFiles"
 
     /// Whether the repository-provided process-compose files a config will load
-    /// may run their unattended phases — `bootstrap` at worktree creation,
-    /// `dispose` at archive — for this project. These are the only gated
-    /// phases: `execute` is *attended* — a deliberate press, output in a
+    /// may run their unattended phase — `dispose` at archive — for this
+    /// project. It is the only gated phase: `execute` is *attended* — a deliberate press, output in a
     /// terminal surface the user is looking at, Stop within reach — and is never
     /// held behind approval. It is attendance that decides, not display: the
     /// string the Execution pane renders is not the command Start runs, which
@@ -47,7 +46,7 @@ enum ScriptTrust {
     /// open for minutes, and the coding agent runs in the same worktree, so the
     /// file on disk at the moment of the click is not necessarily the file that
     /// was on screen. Approving the disk copy would fingerprint content nobody
-    /// saw and hand it straight to `bootstrap`, which runs unattended — the one
+    /// saw and hand it straight to `dispose`, which runs unattended — the one
     /// outcome the pane exists to prevent.
     ///
     /// There is deliberately no overload that approves whatever is on disk. The

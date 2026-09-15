@@ -78,8 +78,8 @@ final class DefaultCommandsTests: XCTestCase {
     /// wrong notification name is invisible until someone presses it.
     func testRerunBootstrapCommandPostsRerunBootstrap() throws {
         let commands = defaultPaletteCommands()
-        let rerun = try XCTUnwrap(commands.first { $0.id == "run.rerunBootstrap" })
-        let posted = expectation(forNotification: .rerunBootstrap, object: nil)
+        let rerun = try XCTUnwrap(commands.first { $0.id == "run.rerunInitialization" })
+        let posted = expectation(forNotification: .rerunInitialization, object: nil)
 
         rerun.action()
 
@@ -90,12 +90,12 @@ final class DefaultCommandsTests: XCTestCase {
     /// notification Start/Rerun posts.
     func testRerunBootstrapIsNotTheSameCommandAsStartRerun() throws {
         let commands = defaultPaletteCommands()
-        let rerunBootstrap = try XCTUnwrap(commands.first { $0.id == "run.rerunBootstrap" })
+        let rerunInitialization = try XCTUnwrap(commands.first { $0.id == "run.rerunInitialization" })
         let startRerun = try XCTUnwrap(commands.first { $0.id == "run.startRerun" })
 
-        XCTAssertNotEqual(rerunBootstrap.title, startRerun.title)
-        XCTAssertFalse(rerunBootstrap.isAvailable(PaletteContext(workstreamActive: false, editorActive: false)))
-        XCTAssertTrue(rerunBootstrap.isAvailable(PaletteContext(workstreamActive: true, editorActive: false)))
+        XCTAssertNotEqual(rerunInitialization.title, startRerun.title)
+        XCTAssertFalse(rerunInitialization.isAvailable(PaletteContext(workstreamActive: false, editorActive: false)))
+        XCTAssertTrue(rerunInitialization.isAvailable(PaletteContext(workstreamActive: true, editorActive: false)))
     }
 
     /// The four cycling commands work from a project row as well as a

@@ -1,5 +1,5 @@
 // ABOUTME: Runs a headless process-compose phase and waits for it to finish.
-// ABOUTME: Used for bootstrap at worktree creation and dispose at archive.
+// ABOUTME: Used for dispose at archive — the only unattended namespace left.
 
 import Foundation
 import OSLog
@@ -11,7 +11,7 @@ private let logger = Logger(subsystem: "atelier", category: "phase-executor")
 ///
 /// The hard part is that last clause. `process-compose up` exits 0 whatever its
 /// processes did, unless the config opts each one into `availability.restart:
-/// exit_on_failure` or `exit_on_end` — so a bootstrap whose `pnpm install`
+/// exit_on_failure` or `exit_on_end` — so a phase whose `pnpm install`
 /// failed would look identical to one that worked, and the built-in setup
 /// sequence this replaces *did* report that failure. The exit code alone is
 /// therefore not enough.
@@ -32,11 +32,11 @@ extension ProcessCompose {
         }
 
         /// How much of the tail of a phase's output is kept for a failure message.
-        /// A bootstrap that installs dependencies prints megabytes; the interesting
+        /// A phase that installs dependencies prints megabytes; the interesting
         /// part is always at the end.
         private static let detailLimit = 2000
 
-        /// Gap between `GET /processes` calls. Short enough that a fast bootstrap is
+        /// Gap between `GET /processes` calls. Short enough that a fast phase is
         /// not padded, long enough that a slow one is not a busy-wait.
         private static let pollInterval: TimeInterval = 0.2
 
@@ -135,7 +135,7 @@ extension ProcessCompose {
             // PATH is injected instead, so the phase's own processes still find
             // tools installed by version managers — a GUI app inherits only
             // launchd's minimal PATH.
-            let childEnv = childEnvironment(
+            let childEnv = ProcessCompose.PhaseEnvironment.childEnvironment(
                 workstreamEnvironment: environment,
                 loginPath: CommandLineTools.loginShellPath(shell: CommandBuilder.userShell)
             )
@@ -184,7 +184,7 @@ extension ProcessCompose {
                 // Deliberately not merged with the branch above into one call. That
                 // branch has already spent `shutdownGrace` waiting on the same
                 // semaphore, and routing it through here would let a `.serverGone`
-                // bootstrap wait a second one — 15s added to the wall-clock worst
+                // phase wait a second one — 15s added to the wall-clock worst
                 // case this function's own doc comment states.
                 output = settledOutput(
                     poll: poll,
@@ -247,38 +247,6 @@ extension ProcessCompose {
             // its own deadline signals with nothing stored — and a status that
             // landed just after the grace expired is still better than none.
             return read()
-        }
-
-        // MARK: - Environment
-
-        /// The child's environment, in three layers: the app's own, then the
-        /// workstream's variables, then the login `PATH`.
-        ///
-        /// The order is the whole content. The workstream's variables go *over* the
-        /// inherited ones, so a `ports.yaml` that declares `ATELIER_PORT` means what
-        /// the project says rather than what the app happened to launch with. `PATH`
-        /// goes last and unconditionally, because it is the one variable the
-        /// workstream layer must not be able to set: a phase whose PATH came from a
-        /// declaration would resolve tools from somewhere the user never chose, and
-        /// nothing in `Workstream.Environment` produces a `PATH` for it to have meant.
-        ///
-        /// Internal, and taking its base environment as a parameter, so the layering
-        /// can be tested without spawning anything or reading the host's real
-        /// environment.
-        static func childEnvironment(
-            workstreamEnvironment: [String: String],
-            loginPath: String?,
-            baseEnvironment: [String: String] = ProcessInfo.processInfo.environment
-        ) -> [String: String] {
-            var environment = baseEnvironment
-            environment.merge(workstreamEnvironment) { _, workstream in workstream }
-            // Assigned unconditionally, which is the whole claim above. `if let`
-            // left the *workstream's* PATH standing whenever the login-shell
-            // lookup failed — the one outcome this layering exists to prevent.
-            // With nothing to fall back to, the child gets no PATH rather than a
-            // declared one; assigning nil removes the key.
-            environment["PATH"] = loginPath ?? baseEnvironment["PATH"]
-            return environment
         }
 
         // MARK: - Polling
@@ -404,7 +372,7 @@ extension ProcessCompose {
                 // process in the namespace reach a terminal state with exit code
                 // zero. A nil `output` at this point means only that `down` did not
                 // land inside `shutdownGrace` — reporting that as "did not finish in
-                // time" would call a bootstrap that demonstrably succeeded a
+                // time" would call a phase that demonstrably succeeded a
                 // failure. So a missing status is ignored, and only a status that
                 // actually says something (process-compose refusing the config,
                 // say) can overturn the poll.
@@ -473,7 +441,7 @@ extension ProcessCompose {
             // This preferred stderr whenever stderr was non-empty, contradicting
             // the paragraph above, and CI proved it: on a runner with no
             // process-compose config home the binary logs a debug line to stderr,
-            // so a failing bootstrap reported `{"level":"debug","message":"Path
+            // so a failing phase reported `{"level":"debug","message":"Path
             // not found for process compose config home"}` instead of the output
             // that explained the failure. Any stderr chatter — a warning, a
             // deprecation — was enough to hide the real reason.
