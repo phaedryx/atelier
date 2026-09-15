@@ -4,6 +4,315 @@ Atelier was forked from [Factory Floor](https://github.com/alltuner/factoryfloor
 at v0.1.79. Everything below that release is Factory Floor's history; those links
 point at the upstream repository.
 
+## [0.2.3](https://github.com/phaedryx/atelier/compare/v0.2.2...v0.2.3) (2026-09-15)
+
+### ⚠ BREAKING CHANGES
+
+* **process-compose is a requirement, not an integration.** Two UserDefaults
+  keys are removed with their settings UI. `atelier.processCompose.enabled`
+  defaulted off, so "off" was a supported state in which a worktree got no
+  setup at all, nothing ran, and five surfaces each explained the silence a
+  different way — an existing user who never found the switch goes from
+  "nothing runs" to everything running. `atelier.processCompose.binaryPath`
+  named a binary explicitly and was the escape hatch for the installs the
+  search misses — `go install`, nix, mise and asdf shims all sit on PATH but
+  outside the three searched directories — and those are now simply not found;
+  the fix is a symlink into `~/.local/bin`. process-compose appears instead in
+  Settings → Environment under Detected Tools, between `git` and `tmux`, and on
+  the onboarding screen as a required prerequisite with an install link. Both
+  rows are fed by `ProcessCompose.Settings.resolveBinary()` rather than the
+  generic binary search, so a green row above a Start button reporting "not
+  found" is unreachable.
+
+* **One `execution.process-compose.yaml`, in the project directory, and no
+  approval gate.** The lookup was four tiers — `atelier.process-compose.y*ml`
+  then `process-compose.y*ml`, each in the worktree and then the project
+  directory — and a reader had to hold that precedence in their head to predict
+  what would run. It now reads one name in one place, and nothing inside a work
+  tree is read at all. A project still carrying any of the old names goes
+  inert, and the refusal is the migration story: `RunCommandPlan.unavailableReason`
+  and the Execution tab both name `execution.process-compose.yaml` and the
+  project directory, so such a project is told what to create and where. The
+  `execution.` prefix exists because a repository may run process-compose for
+  its own reasons, and such a file declares the project's namespaces rather
+  than Atelier's. **The approval machinery goes with the tiers it gated** —
+  `ScriptTrust`, `ConfigApprovalView` and the `atelier.approvedConfigFiles` key
+  are gone, and `PhasePolicy.plan` drops from four preconditions to two. A
+  config could once arrive with a clone; it cannot now, because
+  `Project.directory` sits outside every work tree, so the file was placed by
+  hand. That is the same rule `verification.yaml` already stated, and it now
+  serves three config files with no exemption. The regression that comes with
+  it, stated rather than buried: an ordinary (non-bare) clone's committed
+  `process-compose.yaml` used to arrive in each worktree and was gated before
+  `dispose` ran it, and is no longer read. Sniffing whether the file is
+  git-tracked was rejected for the reason it was rejected for verification — it
+  makes the gate depend on a fact the user cannot see. There is still no
+  override file.
+
+* **The `bootstrap` namespace is gone; worktree setup is `initialization.yaml`.**
+  Setup is an ordered list of commands, which is not what a process supervisor
+  is for: the namespace had to carry `depends_on` graphs to express "then", it
+  cost four preconditions before anything could run, a control socket and a
+  `--keep-project` poll to discover whether the processes had succeeded — and
+  `up -n bootstrap` against a namespace nobody declares does not fail, it idles
+  forever with no output. A file whose whole schema is name, command and shell
+  says the same thing without any of it. `ProcessCompose.Phase.bootstrap`,
+  `AsyncSetupService`, `AsyncSetupState` and `PhasePolicy.state(for:)` are
+  removed. A project that still declares a `bootstrap` namespace is told so on
+  the Info tab's Setup row rather than quietly stopping getting setup, since
+  the namespace is simply never named on a command line again.
+
+* **The `verify` namespace is gone; checks are `verification.yaml`.** Almost
+  every hard part of verification existed to work around running it through a
+  process supervisor. Checks are N independent one-shot commands whose output
+  you want to watch, so each now runs as a single command in its own Ghostty
+  surface — and with them go the control server, `liveClients`, `sealedRunIDs`,
+  the `restart: exit_on_failure` trap that sealed watched failures as `.notRun`,
+  and the empty-namespace idle gate. **A check's output lives in that surface
+  and nowhere else.** It is never captured, never persisted, does not survive
+  quitting, is destroyed when the check is re-run, and no output crosses the IPC
+  boundary at all — which retires `outputTruncated`, the 200-line tail and the
+  one-shot log window with it. `atelier.verifyRun.<workstreamID>` and
+  `atelier.verifySelection.<workstreamID>` are dropped, with `Verification.Store`
+  and the checklist they served; one key survives, `atelier.verifyChecks.<workstreamID>`,
+  holding each check's latest verdict, duration, stamp and run id. There is no
+  Run all and no top-bar Stop: every row carries its own button, gated on
+  whether *that check* is running.
+
+* **Five process-compose namespaces become three** — `prepare`, `execute`,
+  `dispose`. The two that left are the two above, and both left the supervisor
+  rather than the app.
+
+### Features
+
+* **verification:** a project declares its checks in a `verification.yaml` in
+  the project directory, and each one runs as `<shell> -lic '<command>'` in its
+  own terminal, with the worktree as cwd and every `ports.yaml` name in scope.
+  The row is one line — glyph, name, run button, stale marker, duration — and
+  the triangle is the only toggle, which is a deliberate reversal of the shape
+  this replaced, where the whole row was an invisible button and there was no
+  triangle at all. The run button follows the *name* rather than the trailing
+  edge, so it is unmistakably that check's button; the ragged column it forms is
+  the cost, and the trailing edge belongs to what a user scans down. Expanding
+  shows that check's terminal, read-only and scrolling inside itself, so colour,
+  progress bars and cursor addressing all render — it is a real terminal rather
+  than a pipe. Checks are independent: any number run at once, each stops on its
+  own, and a stopped check offers Run rather than Re-run, because a stop is the
+  user deciding this check should not have run. Three things measured rather
+  than reasoned about, each of which fails *silently* when it is wrong — the
+  process **group** id is read with `ps -o pgid=` and never `$$` (measured: a
+  backgrounded `sh -c` reported `$$` as 56980 against a real pgid of 56974, and
+  under `$$` `stop` signals nothing and `isAlive` reads the same ESRCH as
+  "gone"); a check with no pid file yet is *starting*, never finished; and the
+  exit code comes from a file, because ghostty's own source says its macOS exit
+  detection does not work.
+* **worktree:** a project declares what a new worktree needs in an
+  `initialization.yaml`, and the steps run once, in the background, the moment
+  the worktree exists. Sequential, file order, halt on the first failure — the
+  one deliberate difference from verification's checks, because setup steps
+  normally depend on each other and running the rest after a failure works
+  against a half-built worktree and buries the error that mattered. Each step is
+  `<shell> -lc` through `ProcessRunner.capture`; `-lc` and not the `-lic` a
+  check gets, because a step has no tty and an interactive shell without one
+  writes job-control warnings to the stream a failure's message is read from.
+  There is no UI and that is the design rather than an omission: setup is
+  something that happens to a worktree, not a pane anyone works in, so the Info
+  tab's Setup row names the running step and its position, carries the tail of a
+  failed one, and offers Rerun.
+* **project:** a newly created project starts with one commented template per
+  config file the app reads — `verification.yaml`, `initialization.yaml`,
+  `ports.yaml` and `execution.process-compose.yaml`. Scope is the two paths that
+  *create* the directory, and deliberately not the picker or the drag-and-drop,
+  which adopt a directory the user already had: writing there would leave
+  untracked files in a repository they merely registered. Each writer lives on
+  its config type beside that type's `fileNames`, so one place knows each
+  filename, and each refuses when *either* spelling is already present — seeding
+  a `ports.yaml` beside an existing `ports.yml` would win the lookup and hide the
+  project's real declarations. Whether a template's example is commented out is a
+  per-file safety decision rather than style: verification's check and
+  process-compose's process are live (an all-comments file would replace the
+  actionable empty state with a dead end, and a process-compose config that
+  fails to decode makes Start idle forever), while initialization's step and
+  ports' entry are commented, because one would *execute* behind every new
+  worktree and the other would claim a real port.
+* **ipc:** `list_verification_checks` and `open_tab`. The first is the only way
+  an agent can learn a check's name at all — `verification.yaml` lives outside
+  every work tree and "Restrict to worktree" is on by default, so before this a
+  name could only be found by guessing one and reading the refusal. It carries
+  `Load.unavailableReason` verbatim, so a missing file, an unparseable one and
+  one declaring nothing stay three answers rather than collapsing into "declares
+  no checks", and an agent and its human are told the same sentence about the
+  same file. `open_tab` opens Changes, Execution or Verification, keyed by the
+  same `WorkspaceTabKind.id` `list_tabs` reports so there is one vocabulary
+  rather than two; it goes through `ensureSingleton` and never
+  `activateSingleton`, and the answer says so, because an agent that reads
+  "opened" as "they are looking at it" waits for a reaction nobody had.
+* **ipc:** a verification result is posted **per check**, as that check
+  finishes, rather than as one summary when the suite ends — and for every run,
+  including the ones the user pressed Run for, which used to finish silently. A
+  run an agent started is addressed to the surface that asked, because two
+  agents in one worktree report the same workstream name; a run nobody asked for
+  goes to the Coding Agent surface. One run-level notice survives, for a run
+  that completed nothing and was not stopped, because "0 of 0 failed" is both
+  true and a green suite.
+* **palette:** a refused command says why, and eleven more commands reach the
+  palette. `PaletteCommand.availability` answers with three cases rather than
+  two — `.available`, `.hidden` and `.disabled(reason)` — because the stored
+  prompts were hidden whenever the agent could not take the text, which is the
+  common case, so the palette simply came up shorter with nothing to say why.
+  Worse, nothing decays `surfaceStates`: a `Stop` hook that is lost or never
+  sent hid every stored prompt for the rest of the session. Disabled rows now
+  sort below every runnable one whatever they score, and running one refuses
+  *without dismissing*, so the reason stays on screen. New: Purge Workstream,
+  New Workstream in both permission modes, Commit/Push/Create PR/Close PR under
+  a Git category reading `QuickAction.unavailableReason`, the six
+  selection-scoped actions the sidebar's context menu already had, and one
+  `Run Check: <name>` per check the project declares, rebuilt per selection.
+* **execution:** the process checklist can select nothing, and Start is what
+  goes quiet. The last checked box used to be disabled, explained only by a
+  tooltip on a disabled control, because the store had two states for three
+  meanings — `PhaseRunner` reads an empty name list as *start everything*, so an
+  empty selection came back from UserDefaults as "all", re-ticked every box and
+  ran the whole namespace. `ProcessSelection` gives it the third state, and
+  `namesToRun` is where the distinction stops being losable: `[]` for `.all` and
+  **nil** for `.nothing`, so a caller cannot flatten them into the one value a
+  runner reads as everything.
+
+### Bug Fixes
+
+* **hooks:** the port file is deleted only when it still names the quitting
+  instance. `~/Library/Caches/atelier/hook-port` is one rendezvous shared by
+  every Atelier on the machine, and `stop()` unlinked it on quit whatever it
+  held — so quitting a worktree's debug build deleted the *running* release
+  app's port, and because `atelier-hook` exits 0 without posting when the file
+  is missing, that silenced hook delivery for every Claude Code session on the
+  machine. The surviving app reported "No Signal" and was right, with nothing
+  able to say why. One release app plus one `./scripts/dev.sh br` reached it.
+  The comparison is exact on the trimmed contents; a prefix match would read
+  `607980` as `60798`.
+* **agent:** a false No Signal verdict recovers during a long silent tool call.
+  Once a silent tool outlived `longWorkGrace` the run flipped `.stalled`, and
+  the sweep's guard then stopped it ever asking `HookChannelProbe` again — so a
+  `.down` verdict was frozen until the tool returned, in exactly the scenario
+  where real traffic is by definition absent. The probe also now accepts a ping
+  reply that lands after its check concluded `.down`: such a nonce is evidence
+  that *postdates* the failure, the opposite of the stale mid-check case the
+  discard was written for.
+* **verification:** a stop's kill grace no longer kills the next run. `stop`
+  schedules a SIGKILL five seconds out, and the task guarded on "is *a* run of
+  this check going" — so a stop at t=0 and a re-run at t=2 had the stale task
+  fire into the new run at t=5. Capturing the `Spawn` is no defence: its file
+  stem carries no run id, so both runs share one pid file and the stale task
+  reads the new group out of it. The damage was silent and misattributed — the
+  new check has `stopRequested` false and a killed wrapper writes no status, so
+  the row recorded `.failed(-1)`, a check apparently crashing, with nothing
+  tying it to a Stop press two runs ago.
+* **verification:** a check already running refuses by name, and the rest still
+  start. The guard threw on the first clash while its own doc comment said
+  otherwise, which bit hardest on the IPC path: `start_verification` with no
+  `checks` means all of them, so one running check refused an agent's entire
+  run. The refused names come back on the run, the whole call is refused only
+  when there is nothing left to start, and the refusal names *every* clash
+  rather than the first, so a caller does not retry into the second.
+* **verification:** re-running a check attaches its new terminal instead of the
+  dead one. The surface id is derived from the workstream and the check's name,
+  so it is identical across a re-run and SwiftUI was never told the surface had
+  been replaced — the open group kept the destroyed terminal on screen, frozen
+  on the previous run's output, while the new check ran unseen.
+* **verification:** the stale marker can clear on a workstream whose last
+  session quit mid-run. Per-check records are written as each check finishes
+  while the run was stored only at seal, so a quit in between left records with
+  no run, which the staleness gate read as "nothing to compare" — every row on
+  that workstream wore the stale marker permanently, across relaunches, with no
+  edit able to clear it. A check covered by the live run no longer renders
+  "running" and "stale" at once either.
+* **verification:** the staleness watcher is released rather than only disarmed.
+  Disarming clears the FSEvents callback but cannot clear `onChange`, which
+  captures the view, so a watcher still held in `@State` retained a copy of the
+  view per Verification-tab mount.
+* **workstream:** a purge stops verification through its runner. The archiver
+  reached past the runner to shut the socket down directly, and that call
+  returns immediately when the socket does not exist yet — so a purge landing in
+  the window before the run bound reported it dealt with and went on to `dispose`
+  and `git worktree remove --force` with a suite still coming up in that tree.
+  The wait is bounded, and `forget` runs before the destructive work so a check
+  outliving an expired wait finishes into nothing rather than announcing a
+  result for a worktree being deleted.
+* **ipc:** `open_editor` stores a worktree-relative path, matching the unit every
+  other producer of that list uses. The absolute path was stored, the worktree
+  was prepended a second time, and the tab opened onto "no such file" even
+  though the tool call had just verified the file existed.
+* **tabs:** the tab strip's scroll arrows are drawn as indicators rather than
+  buttons. They were `Button`s with an empty action, so each chevron took press
+  feedback and a hit target and did nothing when clicked; they also leave the
+  keyboard and accessibility order, where they were focusable controls that did
+  nothing.
+* **execution:** Stop and Rerun read as buttons. They were borderless and
+  transparent until hovered, at 10/11pt, so the two controls that matter while a
+  stack is up were the least visible things in the pane and Start was the only
+  one that looked pressable.
+* **process-compose:** a run whose namespace shut itself down is no longer
+  reported as a timeout. `PhaseExecutor.run` returned as soon as the poll
+  concluded without waiting for the capture, so a nil output reached the outcome
+  merely because the store had not happened yet — and the run was persisted with
+  a diagnosis of an event that never occurred, which is its only explanation.
+
+### Performance
+
+* **hooks:** a request's headers are scanned once, and what it may buffer is
+  bounded. The scan copied the whole accumulated buffer and restarted from byte
+  0 on every chunk, so a request delivered in N chunks cost N scans and N copies
+  of a growing buffer; it now resumes from three bytes behind the last position,
+  three being the most of `\r\n\r\n` that can lie behind a chunk boundary, and
+  subscripts `Data` directly. Nothing bounded the buffer at all — a client could
+  accumulate without limit and a `Content-Length` was waited on however large it
+  claimed to be. The 4 MiB ceiling is argued from the cost of being *under* it:
+  refusing a real `PostToolUse` drops the event and leaves a tool bracket open,
+  which the stall sweep reads as a wedged agent.
+
+### Refactoring
+
+* **process-compose:** the config cluster resolves off the main actor, as one
+  value. The locate, the YAML parse and the binary lookup all ran synchronously
+  on the main actor on every tab switch. `ProcessCompose.ResolutionModel` owns
+  that work now, and the eight `@State`s three refresh functions wrote become
+  one `Resolution` published in one assignment — so *agreement*, the invariant
+  those functions existed to hold, is held by construction rather than by
+  convention, and a consumer reading mid-refresh sees the previous pass whole
+  rather than a half-updated one.
+* **workstream:** the archiver clears a workstream's agent state itself, instead
+  of four call sites remembering to. It is cleanup belonging to archiving, and a
+  third archive path would have forgotten it — a forgotten `clear` fails
+  silently, leaving stale states and rosters and a permission edge never posted.
+* **git:** the dead unmerged-commit log is deleted. Nothing had read it since
+  `WorktreeDetailSheet` went in 2e6f2f8. The point of the change is the docs
+  rather than the deletion: that log was one of three sites named in the
+  `BaseBranchSetting` all-or-none rule, which allowed exactly two ways out —
+  delete it, or move all three — and a deletion that left the docs saying three
+  would be the failure that rule exists to prevent. All six places asserting the
+  claim move together, and the rule now says deletion is the only sanctioned way
+  to reduce the count.
+
+### Documentation
+
+* **security:** `SECURITY.md` describes the location rule, not the approval gate
+  that went with it. It promised a `ScriptTrust` approval sheet, fingerprints
+  over the loaded YAML, and re-asking when their contents change — none of which
+  exists — named five process-compose namespaces when there are three, and said
+  a verification run's output is captured rather than shown in a terminal, which
+  is now exactly backwards. Worst of it was the closing line, "a path that runs
+  any of them without approval is a vulnerability; please report it", which
+  invited reports against the shipped design. The replacement states the
+  argument the code actually makes, which is the stronger one, and names an
+  invariant that can actually be violated: a path by which Atelier reads or
+  executes one of these files from inside a work tree.
+* **verification:** the citations, counts and retention claims in `AGENTS.md`
+  that drifted across the verify rewrite are corrected against the current
+  files, including a reversed claim about what a live read keeps on screen and
+  the precondition counts left stale by removing the process-compose switch.
+  Five doc comments absorbed into the wrong functions are reunited with the ones
+  they describe.
+
 ## [0.2.2](https://github.com/phaedryx/atelier/compare/v0.2.1...v0.2.2) (2026-09-12)
 
 ### ⚠ BREAKING CHANGES
