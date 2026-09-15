@@ -51,7 +51,7 @@ extension ProcessCompose {
         /// Two consequences, both wanted. One config serves every worktree of the
         /// project, so a stack is edited in one place. And an agent confined to its
         /// worktree by the "Restrict to worktree" system prompt cannot edit the file
-        /// whose commands Atelier runs unattended at worktree creation and archive.
+        /// whose commands Atelier runs unattended at archive.
         /// There is deliberately no worktree tier, for exactly that reason.
         ///
         /// **The known hole, stated rather than papered over:** for an ordinary
@@ -231,14 +231,15 @@ extension ProcessCompose.Config {
     static let defaultContents = """
     # The processes Atelier runs for this project.
     #
-    # Four namespaces, each run at a different moment:
+    # Three namespaces, each run at a different moment:
     #
-    #   bootstrap  once, in the background, when a workstream's worktree is created
-    #   prepare    to completion before each Start, ahead of execute
-    #   execute    the long-lived dev stack the Execution tab's Start button runs
-    #   dispose    once, when a workstream is purged
+    #   prepare   to completion before each Start, ahead of execute
+    #   execute   the long-lived dev stack the Execution tab's Start button runs
+    #   dispose   once, when a workstream is purged
     #
     # A process with no `namespace:` belongs to none of them and is never run.
+    # What a *new worktree* needs is not here: setup steps go in an
+    # initialization.yaml beside this file.
     #
     # Commands run with the workstream's worktree as the working directory, and
     # receive the ATELIER_* variables and every port named in ports.yaml.
@@ -246,9 +247,9 @@ extension ProcessCompose.Config {
     # it, so a *shell* variable has to be written $$VAR rather than $VAR.
     #
     #   processes:
-    #     install:
-    #       namespace: bootstrap
-    #       command: bun install
+    #     migrate:
+    #       namespace: prepare
+    #       command: bin/rails db:prepare
     #     web:
     #       namespace: execute
     #       command: bun run dev --port $WEB_PORT
@@ -274,7 +275,7 @@ extension ProcessCompose.Config {
     /// than a new one.** That path runs `git init` on the directory it made, so
     /// `Project.directory` *is* the checkout and this file can be committed —
     /// after which a plain clone of that repository, registered through the
-    /// picker, would run its `bootstrap` and `dispose` unattended. The hole is
+    /// picker, would run its `dispose` unattended. The hole is
     /// the plain-checkout layout, not the seed: a hand-written config in the same
     /// place is read identically, and `verification.yaml` — whose checks are
     /// commands too — is seeded there on the same terms. Clone Repository is

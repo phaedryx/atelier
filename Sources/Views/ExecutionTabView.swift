@@ -41,8 +41,8 @@ func closingTabStopsRun(_ tab: WorkspaceTab, runStarted: Bool) -> Bool {
 /// loaded, and deliberately not as a command, because the string
 /// `DevCommand.Resolver` builds for that source is
 /// `process-compose up -U -f <files>` — no `-n`, so running it runs *every*
-/// namespace including `bootstrap` and `dispose`, past `PhasePolicy` and past
-/// `ScriptTrust`. `ProcessCompose.RunCommandPlan` makes it unreachable from Start; rendering it
+/// namespace including `dispose`, past `PhasePolicy`.
+/// `ProcessCompose.RunCommandPlan` makes it unreachable from Start; rendering it
 /// here made it reachable by hand, in a monospaced font that invites exactly
 /// that. The files are what `ProcessCompose.RunCommandPlan` meant the user to be able to see.
 ///
@@ -365,7 +365,7 @@ struct ExecutionTabView: View {
                         // user the un-`-n`'d string in an editable field, and
                         // Save turns whatever is in that field into an
                         // `.override`, which `ProcessCompose.RunCommandPlan` runs literally.
-                        // Three clicks, no typing, and `bootstrap` and `dispose`
+                        // Three clicks, no typing, and `dispose`
                         // run with no approval.
                         devCommandEditText = devCommand?.source == .override
                             ? (devCommand?.command ?? "")

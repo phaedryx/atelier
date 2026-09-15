@@ -73,7 +73,8 @@ their own file and run without process-compose. See **Verification** below.
 
 | File | Where Atelier looks | What it holds |
 |------|---------------------|---------------|
-| `execution.process-compose.yaml` | the project directory only | the commands, in four namespaces |
+| `execution.process-compose.yaml` | the project directory only | the commands, in three namespaces |
+| `initialization.yaml` | the project directory only | the steps run once, when a worktree is created |
 | `verification.yaml` | the project directory only | the checks the Verification tab runs |
 | `ports.yml` (or `ports.yaml`) | the project directory only | the port variables Atelier supplies |
 
@@ -86,8 +87,8 @@ ordinary clone the repository's home *is* the checkout, and the file goes at its
 root like anything else.
 
 `execution.process-compose.yaml` is
-[process-compose](https://f1bonacc1.github.io/process-compose/)'s own format;
-`ports.yml` is Atelier's. **A new project starts with a commented template of the
+[process-compose](https://f1bonacc1.github.io/process-compose/)'s own format; the
+rest are Atelier's. **A new project starts with a commented template of the
 execution and verification files**, written by New Project and Clone Repository.
 Adding a directory you already have leaves it alone.
 
@@ -96,8 +97,8 @@ project directory, then `execution.process-compose.yml`, and that is the whole
 of it — nothing inside a worktree is read. That is a trust decision rather than a
 convenience: a file outside every work tree cannot have arrived with a clone, so
 Atelier never has to ask you to approve the commands it runs unattended at
-worktree creation and archive. It also means an agent confined to its worktree
-cannot edit what runs there.
+archive. It also means an agent confined to its worktree cannot edit what runs
+there. It is the same rule `initialization.yaml` and `verification.yaml` follow.
 
 The `execution.` prefix is what makes a single name safe to demand. A repository
 may run process-compose for its own reasons, and a generic `process-compose.yaml`
@@ -127,7 +128,6 @@ process-compose up -f ../execution.process-compose.yaml    # from inside a workt
 
 | Namespace | When it runs |
 |-----------|--------------|
-| `bootstrap` | Once, in the background, when a workstream is created |
 | `prepare` | Before every Start, to completion; a failure stops `execute` |
 | `execute` | The long-lived stack, shown in the Execution tab's process table |
 | `dispose` | Once, when a workstream is archived |
@@ -138,34 +138,14 @@ A pnpm monorepo with a Rails API: `apps/api` (Rails + Sidekiq), a bff that serve
 the SPA and proxies the API, Vite, and an html-to-json service. Everything the
 services need to be told is either seeded from a file or supplied as a port.
 
+Worktree setup is the other file — see **Initialization** below for what this
+project's `initialization.yaml` holds. Everything from here on is
+`execution.process-compose.yaml`:
+
 ```yaml
 version: "0.5"
 
 processes:
-
-  # Once, at worktree creation. `seed/` sits in the project directory and holds
-  # the .env files the services need — real secrets, so it stays out of git and
-  # out of every worktree. ATELIER_PROJECT_DIR is how the phase finds it.
-  #
-  # --ignore-existing means anything already in the worktree wins, so a re-run
-  # never clobbers a local edit; --copy-links turns a seeded symlink into a real
-  # file. Populate `seed/` once, by hand or with whatever the repo uses to fetch
-  # env files, and every worktree from then on gets them for free.
-  #
-  # Dependency installs live here too: this phase already runs once, in the
-  # background, at exactly the moment a fresh worktree has none, and Atelier
-  # gives it a 30-minute budget for exactly that reason.
-  seed:
-    namespace: bootstrap
-    command: |
-      set -e
-      rsync -rlpt --omit-dir-times --copy-links --ignore-existing \
-        "$$ATELIER_PROJECT_DIR/seed/" .
-      pnpm install
-      pnpm build
-      (cd apps/api && mise exec -- bundle install)
-    availability:
-      restart: "no"
 
   # Before every Start. Fails once with an actionable message rather than
   # letting five services each produce their own confusing error — a bff with
@@ -175,7 +155,7 @@ processes:
     namespace: prepare
     command: |
       set -e
-      test -f .env || { echo "missing .env — bootstrap did not seed"; exit 1; }
+      test -f .env || { echo "missing .env — initialization did not seed"; exit 1; }
       test -f apps/api/.env || { echo "missing apps/api/.env"; exit 1; }
       redis-cli -u "$${REDIS_URL:-redis://localhost:6379}" ping >/dev/null 2>&1 \
         || { echo "redis is not answering — brew services start redis"; exit 1; }
@@ -184,8 +164,8 @@ processes:
       # without Atelier. Under Atelier the names ports.yml declares are always
       # set, so a fallback that fires means ports.yml misspelled or forgot one —
       # which would otherwise be invisible, and would land every worktree on the
-      # same repo default. ATELIER_WORKTREE_DIR is set in all five namespaces
-      # under Atelier and in no plain shell, so it is what tells the two apart.
+      # same repo default. ATELIER_WORKTREE_DIR is set everywhere Atelier runs
+      # a project's command and in no plain shell, so it tells the two apart.
       # Add a line here for each port ports.yml gains, or the new one is exactly
       # the case this guard was written to catch.
       if [ -n "$${ATELIER_WORKTREE_DIR:-}" ]; then
@@ -286,18 +266,18 @@ What it cannot do is tell "no Atelier" from "declared it wrong". A name
 repo default, in every worktree at once: exactly the collision the mechanism
 exists to prevent, arrived at silently. So `preflight` asserts the fallbacks go
 *unused* whenever Atelier is running the stack, branching on
-`ATELIER_WORKTREE_DIR` because it is set in all five namespaces under Atelier and
-in no plain shell. Keep the defaults; make them prove they were unnecessary.
+`ATELIER_WORKTREE_DIR` because it is set everywhere Atelier runs a project's
+command and in no plain shell. Keep the defaults; make them prove they were unnecessary.
 
 An `assigned` port gets its own number per worktree; a `fixed: 4000` one is that
 number everywhere, for values registered off the machine such as an OAuth
 redirect URI. At most one port may set `browser: true` — that is the one the
 embedded browser opens, and here it is the bff, because the bff is what serves
 the app. Pointing it at Vite gets you the dev server without the API. Every
-declared name is exported to every terminal surface and to all five namespaces,
-alongside `ATELIER_PROJECT_DIR`, `ATELIER_WORKTREE_DIR` and the rest of the
-`ATELIER_*` set, so `bootstrap`, `dispose` and `verify` see the same environment
-`prepare` and `execute` do.
+declared name is exported to every terminal surface, to all three namespaces, to
+every initialization step and to every verification check, alongside
+`ATELIER_PROJECT_DIR`, `ATELIER_WORKTREE_DIR` and the rest of the `ATELIER_*`
+set — so one worktree has one environment, whatever is running in it.
 
 ### Three things that will bite you
 
@@ -326,8 +306,9 @@ resolves per invocation, from `working_dir`.
 ### Prerequisites this particular stack assumes
 
 Postgres and Redis answering on localhost, `pnpm` and a Node matching `.nvmrc`,
-and a Ruby matching `apps/api/.ruby-version`. `bootstrap` installs the project's
-own dependencies; it does not install the toolchain or start the daemons.
+and a Ruby matching `apps/api/.ruby-version`. `initialization.yaml` installs the
+project's own dependencies; it does not install the toolchain or start the
+daemons.
 `prepare` is the right place to check for those — a stack that fails on a
 missing daemon should say so once, before five processes each fail differently.
 
@@ -346,24 +327,76 @@ Atelier looks — a symlink into `~/.local/bin` does it.
 
 ### When there is no config
 
-`bootstrap` and `dispose` both run with their output captured rather than shown
-in a terminal, and nothing asks you to approve them. That is what the
-project-directory-only lookup buys: the file was placed there by hand, outside
-every work tree, so it cannot have arrived with a clone. Atelier used to search
-the worktree too, and a config found there had to be approved before those two
-phases would run it; the tiers and the approval went together. Rule of thumb —
-if a file can arrive with a clone, Atelier will not run it unattended, and the
-way it enforces that is by not looking there.
+`dispose` runs with its output captured rather than shown in a terminal, and
+nothing asks you to approve it. That is what the project-directory-only lookup
+buys: the file was placed there by hand, outside every work tree, so it cannot
+have arrived with a clone. Atelier used to search the worktree too, and a config
+found there had to be approved before `dispose` would run it; the tiers and the
+approval went together. Rule of thumb — if a file can arrive with a clone,
+Atelier will not run it unattended, and the way it enforces that is by not
+looking there. `initialization.yaml` and `verification.yaml` follow the same
+rule, so all three files sit in the same place for the same reason.
 
 If a project has no `execution.process-compose.yaml` in its project directory,
 worktrees are still created and the Execution tab says there is nothing to run
 and names the file to add; a per-workstream command typed into Customize is the
 escape hatch. When Start cannot run for some other reason — process-compose is
 not on disk where Atelier looks, or the config declares no `execute` processes —
-the tab says which, and the Info tab reports what background setup did or did not
+the tab says which, and the Info tab reports what initialization did or did not
 do. That last one is a refusal rather than a dead button on purpose:
 `process-compose up -n execute` against a namespace nothing declares neither
 fails nor exits, so starting it would give you an empty TUI and no explanation.
+
+### Initialization
+
+What a new worktree needs before anyone works in it — dependencies installed, env
+files seeded, a database prepared — is declared in an **`initialization.yaml`** in
+the project directory, beside `.bare` and the worktrees rather than inside one:
+
+```yaml
+seed:
+  command: |
+    rsync -rlpt --omit-dir-times --copy-links --ignore-existing \
+      "$ATELIER_PROJECT_DIR/seed/" .
+deps:
+  command: pnpm install && pnpm build
+gems:
+  shell: fish
+  command: cd apps/api && mise exec -- bundle install
+```
+
+A name, a command, and optionally the shell to run it in (`$SHELL` by default) —
+the same schema `verification.yaml` uses. It runs once, in the background, the
+moment a workstream's worktree exists, so the Coding Agent is usable while setup
+is still going.
+
+**Steps run in the order the file declares them, and the first failure stops the
+rest.** That is the difference from verification's checks, which are independent
+and run at once: setup steps normally depend on each other, and running the rest
+after a failure works against a half-built worktree and buries the error that
+mattered. Each step gets the worktree as its working directory and the same
+`ATELIER_*` and `ports.yaml` variables every other Atelier-launched command does.
+A single `$VAR` is right here — this file is Atelier's, not process-compose's, so
+there is no envsubst pass to double the `$` for.
+
+Like `verification.yaml`, the file is deliberately **not** read from the worktree.
+It sits outside git, so one set of steps serves every worktree, nothing asks you
+to approve it, and an agent working inside a worktree cannot rewrite what runs
+when the next one is made.
+
+The Info tab's **Setup** row is where this reports — running, succeeded, or which
+step failed and what it said — and its Rerun button runs the whole file again
+against the worktree you are in. There is no other UI: initialization is
+something that happens to a worktree, not a pane you work in.
+
+> **Moving from the `bootstrap` namespace.** Setup used to be a `bootstrap`
+> namespace in the process-compose config. That namespace is no longer run. Move
+> each of its processes into `initialization.yaml` as a step, in the order its
+> `depends_on` edges implied, and drop the `$$` doubling. A project whose
+> `execution.process-compose.yaml` still declares `bootstrap` and that has no
+> `initialization.yaml` is told so on the Info row rather than quietly getting no
+> setup at all. (A project still on one of the *old* config names is not told —
+> that file is not read at all any more, which the Execution tab says outright.)
 
 ### Verification
 

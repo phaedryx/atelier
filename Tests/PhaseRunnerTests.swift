@@ -36,20 +36,17 @@ final class PhaseRunnerTests: XCTestCase {
         XCTAssertTrue(path.contains(String(shortUUID)), "first 8 characters must be present")
     }
 
-    /// Only `execute` gets the bare path. bootstrap now runs in the background
-    /// behind an already-open terminal, so it and execute overlap in time, and
-    /// a second `up` on a path a live server holds rebinds it — stranding the
-    /// first server rather than refusing.
+    /// Only `execute` gets the bare path. A second `up` on a path a live server
+    /// holds rebinds it — stranding the first server rather than refusing — so a
+    /// `dispose` must not be able to land on `execute`'s socket.
     func testHeadlessPhasesGetTheirOwnSocketPath() {
         let execute = ProcessCompose.PhaseRunner.socketPath(for: workstreamID, phase: .execute)
-        let bootstrap = ProcessCompose.PhaseRunner.socketPath(for: workstreamID, phase: .bootstrap)
         let dispose = ProcessCompose.PhaseRunner.socketPath(for: workstreamID, phase: .dispose)
 
         XCTAssertEqual(execute, ProcessCompose.PhaseRunner.socketPath(for: workstreamID))
-        XCTAssertEqual(Set([execute, bootstrap, dispose]).count, 3)
-        XCTAssertTrue(bootstrap.hasSuffix("-bootstrap.sock"), bootstrap)
-        XCTAssertLessThan(bootstrap.utf8.count, 104, "the longest suffix must still fit sun_path")
+        XCTAssertEqual(Set([execute, dispose]).count, 2)
         XCTAssertTrue(dispose.hasSuffix("-dispose.sock"), dispose)
+        XCTAssertLessThan(dispose.utf8.count, 104, "the longest suffix must still fit sun_path")
     }
 
     /// `--keep-project` is off by default, because `startCommand` chains
@@ -57,11 +54,11 @@ final class PhaseRunnerTests: XCTestCase {
     /// never let execute start.
     func testKeepProjectIsOptInAndAbsentFromTheStartChain() {
         let plain = ProcessCompose.PhaseRunner.command(
-            phase: .bootstrap, config: config, binary: binary,
+            phase: .dispose, config: config, binary: binary,
             workstreamID: workstreamID, selectedProcesses: []
         )
         let kept = ProcessCompose.PhaseRunner.command(
-            phase: .bootstrap, config: config, binary: binary,
+            phase: .dispose, config: config, binary: binary,
             workstreamID: workstreamID, selectedProcesses: [], keepProject: true
         )
         let start = ProcessCompose.PhaseRunner.startCommand(
@@ -130,7 +127,7 @@ final class PhaseRunnerTests: XCTestCase {
     }
 
     func testHeadlessPhasesDisableTheTUI() {
-        for phase in [ProcessCompose.Phase.bootstrap, .prepare, .dispose] {
+        for phase in [ProcessCompose.Phase.prepare, .dispose] {
             let command = ProcessCompose.PhaseRunner.command(
                 phase: phase, config: config, binary: binary,
                 workstreamID: workstreamID, selectedProcesses: []
@@ -157,10 +154,10 @@ final class PhaseRunnerTests: XCTestCase {
         XCTAssertTrue(command.hasSuffix("bff api"), command)
     }
 
-    /// Selection applies only to execute — bootstrap runs whole or not at all.
+    /// Selection applies only to execute — dispose runs whole or not at all.
     func testSelectionIsIgnoredForOtherPhases() {
         let command = ProcessCompose.PhaseRunner.command(
-            phase: .bootstrap, config: config, binary: binary,
+            phase: .dispose, config: config, binary: binary,
             workstreamID: workstreamID, selectedProcesses: ["bff"]
         )
 
@@ -201,9 +198,9 @@ final class PhaseRunnerTests: XCTestCase {
     /// The whole point of the integration: with a config present and a binary
     /// available, Start runs process-compose rather than a dev script. Real
     /// config content (not a synthetic nonexistent path), so this exercises
-    /// genuine `.present` parsing rather than the `.unknown` branch of
-    /// `namespacePresence`, and pins the `-f` shape and process selection
-    /// together.
+    /// genuine `.present` parsing rather than the `.unknown` branch
+    /// of `namespacePresence` — a project-directory-style config
+    /// and pins the `-f` shape and process selection together.
     func testStartCommandIsUsedWhenAConfigExists() throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -334,7 +331,7 @@ final class PhaseRunnerTests: XCTestCase {
     /// The trade this makes, stated so it is not mistaken for an oversight: a
     /// config that really does declare `prepare` but cannot be parsed loses its
     /// prepare phase rather than hanging Start. `ProcessCompose.PhaseExecutor` answers the same
-    /// question the other way for `bootstrap` and `dispose`, where a deadline
+    /// question the other way for `dispose`, where a deadline
     /// and a grace period bound the cost of being wrong.
     func testStartCommandStillRunsExecuteWhenNothingCanBeParsedAtAll() {
         let config = ProcessCompose.Config(path: "/nonexistent/execution.process-compose.yaml")

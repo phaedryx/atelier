@@ -71,6 +71,25 @@ struct CommandBuilder {
         ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
     }
 
+    /// Turn a `shell:` declaration into something executable, or nil when none
+    /// was given so the caller can fall back to `userShell`.
+    ///
+    /// A bare `fish` names a shell on PATH; a path names one outright. Bare names
+    /// are resolved against the common prefixes rather than left to PATH, because
+    /// the callers spawn from a GUI app's minimal environment — `/usr/bin:/bin:
+    /// /usr/sbin:/sbin` — where a Homebrew fish would not be found.
+    ///
+    /// Shared by `verification.yaml`'s checks and `initialization.yaml`'s steps,
+    /// which is the whole reason it lives here: both files offer the same
+    /// `shell:` key and it has to mean the same thing in each.
+    static func resolveShell(_ named: String?) -> String? {
+        guard let named, !named.isEmpty else { return nil }
+        guard !named.contains("/") else { return named }
+        let candidates = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+            .map { "\($0)/\(named)" }
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) } ?? named
+    }
+
     static func shellQuote(_ s: String) -> String {
         let simple = !s.isEmpty && s.allSatisfy {
             $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" || $0 == "." || $0 == "/" || $0 == ":" || $0 == "~" || $0 == "@" || $0 == "+" || $0 == "="

@@ -6,7 +6,7 @@ import OSLog
 
 private let logger = Logger(subsystem: "atelier", category: "phase-environment")
 
-/// The `ATELIER_*` and `ports.yaml` variables `bootstrap` and `dispose` see.
+/// The `ATELIER_*` and `ports.yaml` variables `dispose` sees.
 ///
 /// `prepare` and `execute` run in a Ghostty surface, which is handed
 /// `Workstream.Environment.variables` when it is created. The unattended phases
@@ -51,6 +51,36 @@ extension ProcessCompose {
                 defaultBranch: defaultBranch,
                 portPlan: portPlan(projectDirectory: projectDirectory, worktreePath: worktreePath)
             )
+        }
+
+        /// The child's environment, in three layers: the app's own, then the
+        /// workstream's variables, then the login `PATH`.
+        ///
+        /// The order is the whole content. The workstream's variables go *over* the
+        /// inherited ones, so a `ports.yaml` that declares `ATELIER_PORT` means what
+        /// the project says rather than what the app happened to launch with. `PATH`
+        /// goes last and unconditionally, because it is the one variable the
+        /// workstream layer must not be able to set: a phase whose PATH came from a
+        /// declaration would resolve tools from somewhere the user never chose, and
+        /// nothing in `Workstream.Environment` produces a `PATH` for it to have meant.
+        ///
+        /// Internal, and taking its base environment as a parameter, so the layering
+        /// can be tested without spawning anything or reading the host's real
+        /// environment.
+        static func childEnvironment(
+            workstreamEnvironment: [String: String],
+            loginPath: String?,
+            baseEnvironment: [String: String] = ProcessInfo.processInfo.environment
+        ) -> [String: String] {
+            var environment = baseEnvironment
+            environment.merge(workstreamEnvironment) { _, workstream in workstream }
+            // Assigned unconditionally, which is the whole claim above. `if let`
+            // left the *workstream's* PATH standing whenever the login-shell
+            // lookup failed — the one outcome this layering exists to prevent.
+            // With nothing to fall back to, the child gets no PATH rather than a
+            // declared one; assigning nil removes the key.
+            environment["PATH"] = loginPath ?? baseEnvironment["PATH"]
+            return environment
         }
 
         /// Resolve `ports.yaml` for this worktree, or nothing if it cannot be read.

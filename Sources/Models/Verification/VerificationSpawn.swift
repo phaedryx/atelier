@@ -122,7 +122,7 @@ extension Verification.Spawn {
         let stem = fileStem(for: workstreamID, check: check.name)
         let pidPath = stateDirectory.appendingPathComponent("\(stem).pid").path
         let statusPath = stateDirectory.appendingPathComponent("\(stem).status").path
-        let shell = check.shell.map(resolveShell) ?? defaultShell
+        let shell = CommandBuilder.resolveShell(check.shell) ?? defaultShell
 
         let script = [
             "ps -o pgid= -p $$ | tr -d ' ' > \(CommandBuilder.shellQuote(pidPath))",
@@ -136,20 +136,6 @@ extension Verification.Spawn {
             pidPath: pidPath,
             statusPath: statusPath
         )
-    }
-
-    /// A bare `shell: fish` names a shell on PATH; a path names one outright.
-    ///
-    /// Left to PATH resolution rather than searched for here: the wrapper's `sh`
-    /// inherits the app's environment, which is a GUI app's minimal PATH — so a
-    /// bare name is resolved against `/usr/bin:/bin:/usr/sbin:/sbin` and a
-    /// Homebrew fish would not be found. Naming the common prefixes is what makes
-    /// `shell: fish` mean what the user expects.
-    private static func resolveShell(_ named: String) -> String {
-        guard !named.contains("/") else { return named }
-        let candidates = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
-            .map { "\($0)/\(named)" }
-        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) } ?? named
     }
 
     /// Create the directory the pid and status files live in.

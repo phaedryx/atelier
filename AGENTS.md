@@ -153,7 +153,7 @@ it receives only the `X.Y.Z` core; the suffix naming the commit rides on
 - `Sources/Views/` - SwiftUI views (sidebar, settings, project overview, workspace, browser, editor)
 - `Sources/Palette/` - Command palette (registry, default commands, fuzzy matcher)
 - `Sources/PixelAgents/` - Claude Code hook receiver, router, and installer; the status line channel and the transcript reader behind it
-- `Sources/WorktreeSetup/` - Background worktree setup (the `bootstrap` phase, and the policy that gates it)
+- `Sources/WorktreeSetup/` - `initialization.yaml`: the steps run once behind a new worktree, and `PhasePolicy`, which now gates `dispose` alone
 - `Sources/Launcher/` - `atelier-run` helper binary (port detection)
 - `Sources/MCPHelper/` - `atelier-mcp` helper binary (IPC bridge for agents)
 - `Localization/en.lproj/` - Localizable.strings and InfoPlist.strings (English only)
@@ -232,7 +232,7 @@ it receives only the `X.Y.Z` core; the suffix naming the commit rides on
   migration was needed, because the empty case used to *remove* the key.
 
 ### Workstream lifecycle
-1. Creating a workstream: generates name, runs `git worktree add`; `AsyncSetupService` then runs the project's `bootstrap` namespace in the background
+1. Creating a workstream: generates name, runs `git worktree add`; `Initialization.Runner` then runs the project's `initialization.yaml` steps in the background
 2. Workspace view: a workstream opens with only Info (Cmd+I) and Agent (Cmd+Return), which are also the only permanent tabs. Changes, Execution and Verification are singletons — at most one of each — opened on demand from the tab bar's quick-add buttons, the command palette, or their toggles, and they close and reorder like terminals/browsers once open. `startupWorkspaceTabState` seeds the two permanent tabs and clamps the restored `activeTab` into that list; the seed and the clamp move together, because a saved `.changes` restored onto a strip with no Changes tab renders the pane with nothing selected
 3. Tmux mode: wraps Coding Agent only in `tmux new-session -A` on socket `-L atelier`
 4. Terminal tabs: close on shell exit (Ctrl+D). Agent respawns.
@@ -284,7 +284,7 @@ a decision spelled inline in a row body is one nothing can pin.
 | Reached by | ⌘⇧W, the menu's "Archive Workstream", the palette, the sidebar context menu's "Remove" | the sidebar context menu's "Purge", and the Purge button on `WorkstreamInfoView`'s merged-PR banner |
 | Runs `dispose`? | no | yes, before the worktree goes |
 | Files on disk | **kept** | `git worktree remove`, local branch deleted, default branch re-fetched |
-| Also | kills tmux sessions, evicts surfaces (including check terminals, via `Verification.Runner.forget` — nothing else can reach them), drops `IPC.Config` and the launch log | same, plus cancels a running `bootstrap`, stops the dev stack, waits out running verification checks through `Verification.Runner.stopAndWait`, then `forget`s that workstream in the runner and drops the Execution checklist's selection key and the per-check verification records |
+| Also | kills tmux sessions, evicts surfaces (including check terminals, via `Verification.Runner.forget` — nothing else can reach them), drops `IPC.Config` and the launch log | same, plus cancels a running initialization through `Initialization.Runner.cancel`, stops the dev stack, waits out running verification checks through `Verification.Runner.stopAndWait`, then `forget`s that workstream in the runner and drops the Execution checklist's selection key and the per-check verification records |
 | Guarded by | nothing — it destroys nothing | `purgeWarning` / `destroyableWorktreePath` |
 
 The naming is not self-consistent and reading it as such is the trap: the *menu*
@@ -353,7 +353,7 @@ three to move. Either delete `unmergedCommits` or move all three; do not quietly
 the count.
 
 `defaultBranch(at:)` is also read to export `ATELIER_DEFAULT_BRANCH` (`TerminalContainerView`,
-and `ProcessCompose.PhaseEnvironment`'s four callers — `AsyncSetupService` for `bootstrap`,
+and `ProcessCompose.PhaseEnvironment`'s four callers — `Initialization.Runner` for a step,
 `WorkstreamArchiver` for `dispose`, `WorkspaceActions` for `open_agent_tab`'s spawned terminal, and
 `WorkspaceActions.verificationTarget` for a check's environment). Those are *not* part of that
 follow-up: the variable means
@@ -443,7 +443,7 @@ ever near a security boundary, and it stopped being the boundary when
 **The un-`-n`'d command must never be executed, and is no longer displayed either.**
 `DevCommand.Resolver.detectProcessCompose` builds `process-compose up -U -f <files>` as the
 `.processCompose` source's `command`. It carries no `-n`, so running it would run **every**
-namespace — `bootstrap` and `dispose` included — without passing through `PhasePolicy`. It is
+namespace — `dispose` included — without passing through `PhasePolicy`. It is
 not a runnable string, and the pane no longer renders it: for a
 `.processCompose` source `devCommandDisplayText` shows the *files* that will be loaded, which
 is what the user needed to see. Rendering the command was a copy-paste hazard on its own, and
@@ -487,8 +487,8 @@ world before it. `ProcessCompose.RunCommandPlan.unavailableReason` explains a `.
 `ExecutionTabView.scriptInstructions` — the surface that already drew for "nothing to run" —
 renders it, naming `execution.process-compose.yaml` where there is no config: a config that
 cannot be located, a binary that is not where the search looks, an `execute` namespace nothing
-declares. Background setup's own outcome, including `.completedWithNote`, is
-rendered on the Info tab, which is permanent; nothing observed `.asyncSetupStateChanged` before,
+declares. Initialization's own outcome, including `.completedWithNote`, is
+rendered on the Info tab, which is permanent; nothing observed `.initializationStateChanged` before,
 so those notes were written and discarded.
 
 **The checklist's own gate is deliberately *not* in that plan**, and a reviewer will
@@ -505,13 +505,13 @@ tick one again — and `canRun` removes the Start button rather than disabling i
 answer "nothing to run" where the honest answer is "nothing selected". The two gates dim different
 things on purpose.
 
-**Four namespaces**, driven by `ProcessCompose.PhaseRunner` and `ProcessCompose.PhaseExecutor`.
-There was a fifth, `verify`; verification no longer runs through process-compose at all — see
-**verification.yaml** below:
+**Three namespaces**, driven by `ProcessCompose.PhaseRunner` and `ProcessCompose.PhaseExecutor`.
+There were five. `verify` went when verification stopped running through process-compose, and
+`bootstrap` went when worktree setup did — see **verification.yaml** and **initialization.yaml**
+below:
 
 | Namespace | When | Interactive? |
 |-----------|------|--------------|
-| `bootstrap` | once, in the background, at worktree creation (`AsyncSetupService`) | no |
 | `prepare` | to completion before each Start, chained `&&` ahead of `execute` | no |
 | `execute` | the long-lived stack, attached to a terminal surface and a process table | yes |
 | `dispose` | once, at archive (`Workstream.Archiver.runDispose`) | no |
@@ -534,7 +534,7 @@ silence, not the skip, that was the problem. **Nothing but a test enforces that 
 `verificationUnavailableReason` does; `Tests/RunCommandPlanTests.swift` pins both directions.
 
 **`.unknown` fails closed here and open in `ProcessCompose.PhaseExecutor`, and that asymmetry is deliberate.**
-A config Yams cannot decode still gets its `bootstrap` or `dispose` run, because refusing would
+A config Yams cannot decode still gets its `dispose` run, because refusing would
 silently skip work the project may really have declared — and being wrong there costs a bounded
 wait, `min(timeout, userCommand)` plus a grace period that ends in `.skipped`. Nothing bounds
 the chained Start command: it runs in a terminal surface with no deadline, so failing open
@@ -558,8 +558,8 @@ Three facts about this are load-bearing and easy to lose:
    `execute` was never gated, because it is **attended**: a deliberate press, output in a
    terminal surface in front of the user, Stop to hand. That, and not "the pane shows the
    command Start runs", is the reason — the pane shows the loaded *file*, and even before that
-   it showed a display-only string rather than what Start runs. `bootstrap` and `dispose` *were*
-   gated, because a config could arrive with a clone; now it cannot, so they are not. See below.
+   it showed a display-only string rather than what Start runs. `dispose` *was* gated, because a
+   config could arrive with a clone; now it cannot, so it is not. See below.
 
 **`ProcessCompose.Config.locate` reads one name in one place**: `execution.process-compose.yaml`
 in the **project directory**, then `execution.process-compose.yml`. Nothing inside a work tree is
@@ -568,9 +568,11 @@ read, and `Config` carries a `path` and nothing else — `isRepositoryProvided`,
 
 **That is a trust decision, and it is the same one `Verification.Config` states.**
 `Project.directory` is the repository's *home*, so a file there sits outside every work tree and
-cannot have arrived with a clone: it was placed by hand. So `bootstrap` and `dispose` run the
-project's commands unattended with **no approval step at all** — no `ScriptTrust` fingerprint, no
-approval sheet, no precondition in `PhasePolicy.plan`. Two consequences, both wanted: one config
+cannot have arrived with a clone: it was placed by hand. So `dispose` runs the project's
+commands unattended with **no approval step at all** — no `ScriptTrust` fingerprint, no approval
+sheet, no precondition in `PhasePolicy.plan`. That is the same rule `initialization.yaml` and
+`verification.yaml` already state, so it is now three files answering to one rule rather than one
+file with an exemption. Two consequences, both wanted: one config
 serves every worktree, and an agent confined to its worktree by the "Restrict to worktree" prompt
 cannot edit what runs there. The known hole, stated rather than papered over: for an ordinary
 clone `Project.directory` *is* the checkout, so the file can be committed. `Verification.Config`
@@ -581,8 +583,8 @@ first; each is the other's only justification.
 
 **The `execution.` prefix is what makes a single name safe to demand.** A repository may run
 process-compose for its own reasons — an instance manager, a docker-free dev stack — and that
-file declares the project's own namespaces, not Atelier's four. Such a file was once
-indistinguishable from an Atelier config and won the lookup outright: `bootstrap` and `prepare`
+file declares the project's own namespaces, not Atelier's three. Such a file was once
+indistinguishable from an Atelier config and won the lookup outright: `prepare`
 silently did nothing, and Start ran `up -n execute` against a namespace nobody had declared —
 which does not fail, it **idles forever with no output** (measured against v1.122.0). No generic
 name is read now, so that cannot recur.
@@ -630,8 +632,10 @@ worktree.
 
 `-u <path>` names the control socket explicitly. `-U` alone generates a path containing
 process-compose's PID, which Atelier cannot predict and so cannot connect to. The headless
-phases get namespace-suffixed paths, because a `bootstrap` still running when the user presses
-Start would otherwise rebind `execute`'s socket and strand the first server.
+phases get namespace-suffixed paths, because a phase still running when the user presses Start
+would otherwise rebind `execute`'s socket and strand the first server. `dispose` is the only
+headless phase left and the suffix stays regardless — `prepare` is chained into `execute`'s own
+command and shares its socket by design.
 
 **The one gate.** `PhasePolicy.plan` answers the two preconditions — a config located and a
 binary to run it with — for both unattended phases. There were four: the process-compose switch
@@ -644,6 +648,112 @@ unattended execution path for repository-provided commands must go through it.
 **Verification does not go through it**, and that is not an omission: a check's commands come
 from `verification.yaml` in the *project directory*, which is outside every work tree, so the
 location rule this gate implements already answers the question. See **verification.yaml** below.
+
+### initialization.yaml
+Worktree setup does **not** go through process-compose. A project declares what a new
+worktree needs in an `initialization.yaml`, and the steps run once, in the background,
+the moment the worktree exists.
+
+```yaml
+deps:
+  command: bundle install
+assets:
+  shell: fish
+  command: bun install && bun run build
+```
+
+**The file lives in the project directory and nowhere else**, on exactly the trust
+argument `verification.yaml` makes and for the same reasons: `Project.directory` is the
+repository's *home*, so a file there sits outside every work tree and cannot have arrived
+with the repository, and the existing rule therefore settles it — approval is gated by a
+config's **location**, not its content. So there is **no `ScriptTrust` fingerprint and no
+`PhasePolicy` gate** on this path. Two consequences, both wanted: one set of steps serves
+every worktree, and an agent confined to its worktree by the "Restrict to worktree" prompt
+cannot rewrite what runs when the next worktree is made. There is deliberately **no
+worktree tier** mirroring `ProcessCompose.Config.locate`'s. The known hole is the same one
+`verification.yaml` documents and is left unchanged rather than half-tightened: for an
+ordinary clone `Project.directory` *is* the checkout.
+
+`Initialization.Config.load` returns **three** cases and never two — `.missing`,
+`.invalid(reason:)`, `.loaded` — because a file Atelier cannot read must never render as
+"this project declares no setup", which is the same sentence a project with genuinely none
+gets and, here, the *only* diagnostic either one has: one line on the Info tab.
+`Load.unavailableReason` **is** the availability decision rather than a mirror of one.
+Parsed as YAML nodes rather than decoded as a dictionary, and here order is not cosmetic
+the way it is for verification's rows — it is run order.
+
+**Sequential, file order, halt on first failure.** This is the one deliberate difference
+from `Verification.Runner`, whose checks are independent and run at once. Setup steps are
+the opposite: `bundle install` before `rails db:prepare` is the ordinary case, and it is
+what the `depends_on: process_completed_successfully` graphs in the old `bootstrap`
+namespace existed to express. Running the rest after a failure works against a half-built
+worktree and buries the error that mattered under the ones it caused.
+`Initialization.Run.drive` is the pure loop; `Initialization.Runner` is the actor.
+
+**Each step is `<shell> -lc '<command>'` through `ProcessRunner.capture`**, with the
+worktree as cwd, `ProcessCompose.PhaseEnvironment`'s variables layered by
+`childEnvironment`, and `Timeout.install` — the same deadline `bootstrap` had. **`-lc`,
+not the `-lic` a verification check gets**, and the difference is the terminal: a check
+runs in a Ghostty surface where `-i` is honest and is what makes a zsh user's `.zshrc`
+PATH apply, while a step here has no tty and an interactive shell without one prints
+job-control warnings to stderr — the stream a failure's message is read from. The PATH
+`-i` was there for arrives another way, through `childEnvironment`'s injected login PATH.
+There is no `sh -c` wrapper, no pid file and no status file: `capture` returns the exit
+code, so the three layers `Verification.Spawn` needs have nothing to do here.
+`CommandBuilder.resolveShell` is shared by both files, because both offer `shell:` and it
+has to mean the same thing in each.
+
+**There is no UI**, and that is the design rather than an omission. Setup is something that
+happens to a worktree, not a pane anyone works in. The Info tab's **Setup** row is the only
+surface — `initializationRow(for:)` and `canRerunInitialization(_:)` — fed by
+`Initialization.State` over `.initializationStateChanged`, with a Rerun button and a
+`Rerun Initialization` palette command. `.inProgress` names the running step and its
+position; `.failed` names the step and carries the tail of its output; `.completedWithNote`
+covers no file, an unreadable file, a file declaring no steps, and a cancelled run.
+
+**Progress crosses back from the worker thread through an `AsyncStream`, not a `Task` per
+report.** `Task { await updateState(...) }` per step has no ordering against the final
+`updateState`, so a late one overwrote `.completed` and left the row stuck on "Running
+“assets” (2 of 2)" for a run that had finished — and it reported to `Runner.shared` rather
+than to the instance running, which is invisible in production and wrong under test. The
+stream is ordered, and `finish()` plus awaiting the consumer is what makes "every progress
+update has been applied" something the method can wait for.
+
+**A purge cancels through `ProcessRunner.Cancellation`.** `Archiver.purge` calls
+`Initialization.Runner.cancel`, which terminates the running step's process *group* —
+`ProcessRunner`'s own kill, so a step that backgrounded a server goes with it — making
+`capture` return and the loop finish as `.cancelled`. The poll reads the claim in
+`running`, which `run`'s `defer` clears, so it observes the real end of the work rather
+than the signal, and it is bounded at 30s because a step wedged past SIGKILL must not block
+an archive forever. The `Cancellation` class was lifted out of `BareRepoClone`, which still
+uses it: that type's exemption from `ProcessRunner` is about a clone having no honest
+deadline, not about cancelling, so sharing the handle does not narrow it.
+
+**`isCancelled` is consulted before each step and again when one fails, never after one
+succeeds.** A cancel kills the running command, so it comes back as an ordinary non-zero
+exit and the flag is the only discriminator; asking after a step that *succeeded* would
+name it as the one stopped, when the step actually stopped is the one that never started. A
+cancel arriving after the last step has already succeeded yields `.succeeded`, and that is
+right rather than a gap — every step ran and the cancel was too late to stop anything.
+
+**A project that still declares a `bootstrap` namespace is told so.** Setup would otherwise
+stop happening in silence, since the namespace is simply never named on a command line
+again. `Run.nothingToDoNote` keys on `namespacePresence("bootstrap") == .present` and
+replaces only the "there is no file" reason — a file that is present and broken has its own,
+and that is the one the user needs. `.unknown` deliberately gets the generic note: this one
+makes a factual claim about the user's file, and `.unknown` is exactly where that claim is
+unverified.
+
+**The `bootstrap` namespace is gone** from `ProcessCompose.Phase`, and with it
+`AsyncSetupService`, `AsyncSetupState`, `.asyncSetupStateChanged`, `cancelBootstrap` and its
+socket-shutdown-and-poll, `runningBootstraps`, and `PhasePolicy.state(for:)` — which mapped
+a `PhaseExecutor.Outcome` into `AsyncSetupState` and was bootstrap's alone. `PhasePolicy.plan`
+survives with `dispose` as its **only** caller; the name stays phase-neutral rather than
+becoming `DisposePolicy`, because naming a gate for its single caller is what invites the next
+unattended phase to inline a second copy of it. Approving a repository's process-compose
+config no longer reruns anything: `approveProcessConfig` used to call `rerunBootstrap`, and
+worktree setup is not gated any more, so rerunning from there would run the project's setup a
+second time for a reason that no longer exists.
 
 ### verification.yaml
 Verification does **not** go through process-compose. A project declares its checks in a
@@ -850,7 +960,8 @@ terminal tab. Declarations merge *over* Atelier's own variables, so a project th
 `ATELIER_PORT` to mean something specific may say so, and the legacy `FF_*` mirror is built
 last so it never lags behind.
 
-**And every declared name reaches all four namespaces, and the verification checks too.**
+**And every declared name reaches all three namespaces, every initialization step and every
+verification check.**
 `prepare` and `execute` run in a Ghostty surface, which is handed those variables when it is
 created; `bootstrap` and `dispose` spawn through `ProcessCompose.PhaseExecutor`, and until
 `ProcessCompose.PhaseEnvironment` existed their children inherited only the app's own environment. One `execution.process-compose.yaml` therefore ran under two different
@@ -1294,12 +1405,11 @@ workstream runs the project's `bootstrap` namespace — the thing `PhasePolicy.p
 decide. The
 handler never calls `AsyncSetupService.setupExistingWorktree`. It posts `.workstreamCreated`,
 does the git work off the main thread, and posts `.workstreamWorktreeReady`; `ContentView`'s
-handler for that notification is what calls `AsyncSetupService`, and therefore what runs
-`PhasePolicy`. Those three notifications are the seam — `ProjectSidebar.launchWorkstream` and
+handler for that notification is what calls `Initialization.Runner`. Those three notifications are the seam — `ProjectSidebar.launchWorkstream` and
 `ProjectOverviewView` are the other two producers — and going through them is also what gets
 path persistence, the HeadWatcher, the agent-state lookup and the Shortcut story id, none of
-which a second creation path would remember. Adding a `PhasePolicy` check here, or calling
-`setupExistingWorktree` directly, is the inlined second copy that section forbids.
+which a second creation path would remember. Calling `Initialization.Runner.run` directly here
+is the inlined second copy that section forbids.
 
 Two further things about it that are not guesses:
 

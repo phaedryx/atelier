@@ -191,7 +191,7 @@ extension ProcessCompose {
             // **One locate, two questions.** The run's config is this same
             // config narrowed to the *run* — it disappears behind a
             // per-workstream override, which is right for Start and wrong for
-            // the unattended phases, since bootstrap and dispose locate
+            // dispose, which locates
             // unconditionally. Locating twice was two answers to the same
             // question from the same directory.
             let located = ProcessCompose.Config.locate(projectDirectory: projectDirectory)

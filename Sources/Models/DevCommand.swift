@@ -94,7 +94,7 @@ extension DevCommand {
             // Requiring the word `up` was wrong, and verified so against
             // process-compose 1.122.0: `process-compose -f x.yaml` with **no
             // subcommand** runs the project through the root command, and a
-            // `bootstrap` process in that file executes. So a flag straight after
+            // `dispose` process in that file executes. So a flag straight after
             // the binary — or nothing at all — is every bit as unscoped as `up`,
             // while a real subcommand like `down` is not.
             guard let next = words.dropFirst(binary + 1).first else { return true }
@@ -152,14 +152,14 @@ extension DevCommand {
         /// Every file is named with `-f`, which turns process-compose's own
         /// discovery off. That is the point: the set of files Atelier shows and runs
         /// is then exactly one set. Leaving the file to discovery meant Start could
-        /// load `compose.yaml` — a name Atelier does not detect — while bootstrap
-        /// and dispose ran something else for the same project.
+        /// load `compose.yaml` — a name Atelier does not detect — while dispose ran
+        /// something else for the same project.
         ///
         /// **The `command` built here carries no `-n`, so executing it would run
-        /// *every* namespace the config declares — `bootstrap` and `dispose`
-        /// included.** Those two are the phases `PhasePolicy` gates: they run the
-        /// project's processes unattended, with nobody watching. This string never
-        /// goes through `PhasePolicy`, so it must never reach a shell.
+        /// *every* namespace the config declares — `dispose` included.** That one
+        /// is the phase `PhasePolicy` decides: it runs the project's processes
+        /// unattended, with nobody watching. This string never goes through
+        /// `PhasePolicy`, so it must never reach a shell.
         ///
         /// It no longer does. `ProcessCompose.RunCommandPlan` maps a `.processCompose` source to
         /// `.phaseScoped`, and the command Start actually runs is built by
