@@ -57,6 +57,17 @@ extension Verification {
         var checks: [CheckResult]
         /// True once any check in this run was stopped by hand.
         var wasStopped: Bool
+        /// The names this call asked for that were already running, and so belong
+        /// to an earlier run rather than this one.
+        ///
+        /// **A partial start is the design**, per `Runner.start`: a check already
+        /// running is refused *by name* and the rest still go, so an agent's
+        /// re-request of two checks does not fail for the one already in flight.
+        /// These names appear in no `checks` row, because the seven
+        /// `CheckResult.State` cases describe a check's progress and none of them
+        /// honestly says "not part of this run". `start_verification` reports them
+        /// once, in its answer; nothing later in the run's life mentions them.
+        var refused: [String] = []
 
         var isFinished: Bool {
             !checks.contains { $0.state == .running || $0.state == .pending }

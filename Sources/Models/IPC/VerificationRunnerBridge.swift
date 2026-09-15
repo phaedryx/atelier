@@ -111,7 +111,11 @@ extension IPC {
             register(runID: started.id, onFinish: onFinish)
             register(runID: started.id, requesterSurfaceID: requesterSurfaceID)
 
-            return VerificationStart(runID: started.id, started: started.checks.map(\.name))
+            return VerificationStart(
+                runID: started.id,
+                started: started.checks.map(\.name),
+                refused: started.refused
+            )
         }
 
         func verificationChecks(in workstreamID: UUID) async throws -> VerificationChecksInfo {

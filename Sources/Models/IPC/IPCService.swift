@@ -1048,15 +1048,28 @@ extension IPC {
         private nonisolated func startAnswer(for start: VerificationStart, deliverable: Bool) -> String {
             // `started` is the *resolved* list and is never empty — an agent that
             // omitted `checks` still needs to see what it set running, and a start
-            // that would resolve to nothing is refused rather than minted.
+            // that would resolve to nothing is refused rather than minted. That
+            // still holds now a start is partial: a call with every name already
+            // running throws `alreadyRunning` and never reaches this.
             let names = start.started.joined(separator: ", ")
             let delivery = deliverable
                 ? "Each check posts its own verdict to your inbox from \(VerificationSummary.sender) as it finishes — "
                 + "receive_messages to read them, and remember delivery is a pull, so check at your next natural boundary."
                 : "Nothing will be posted to your inbox: Atelier does not know which terminal you are running in. "
                 + "check_verification is how you read this run."
-            return "Started verification run \(start.runID): \(names). It runs in the background — do not wait on it. "
-                + delivery
+            // **Said, not implied.** A refused check's verdict is posted under the
+            // run that started it, so it will never arrive under this run id and
+            // `check_verification` on this run will never list it. An agent told
+            // only "refused: rspec" would sit waiting for a notice that cannot
+            // come — the same silence the run-level notice exists to break.
+            let refusals = start.refused.isEmpty
+                ? ""
+                : " Already running, so not part of this run: \(start.refused.joined(separator: ", ")). "
+                + "Those belong to the run that started them: their verdicts arrive under that run id, "
+                + "not this one, and check_verification on this run will not list them."
+            return "Started verification run \(start.runID): \(names). It runs in the background — do not wait on it."
+                + refusals
+                + " " + delivery
                 + " check_verification(run_id: \"\(start.runID)\") reads the whole run at any point, "
                 + "including while it is still running."
         }
