@@ -205,6 +205,57 @@ final class WorkspaceActions {
         return resolved
     }
 
+    /// The tab kinds `open_tab` will open, keyed by the id `list_tabs` reports.
+    ///
+    /// **The keys are `WorkspaceTabKind.id`, deliberately**, because `list_tabs`
+    /// already renders that string as a tab's `kind` — so the name an agent reads
+    /// off a tab is the name it passes back to open one, and there is no second
+    /// vocabulary to keep in step.
+    ///
+    /// Only the three singletons are here, and the two exclusions are different
+    /// refusals rather than one. Info and Agent are **permanent** — they are
+    /// always open, so opening them is a request that cannot fail and cannot do
+    /// anything. Terminal, browser and editor are **instanced**: there can be many
+    /// of each, so "the" tab is meaningless, and two of the three already have a
+    /// tool that says which one (`open_agent_tab`, `open_editor`).
+    nonisolated static let openableTabs: [String: WorkspaceTab] = [
+        WorkspaceTabKind.changes.id: .changes,
+        WorkspaceTabKind.execution.id: .execution,
+        WorkspaceTabKind.verification.id: .verification,
+    ]
+
+    /// Opens one of the singleton tabs, **without taking the selection**.
+    ///
+    /// `ensureSingleton` and never `activateSingleton`: an agent opening a tab is
+    /// making something available, not deciding what the user should be looking
+    /// at. Pulling the view off the pane they are working in is the bug
+    /// `create_workstream` avoids by not taking the selection either, and the
+    /// tool for asking for their eyes is `request_attention`.
+    ///
+    /// Returns the canonical kind id and whether the tab had to be opened, so the
+    /// answer can say "already open" rather than claiming an action it did not take.
+    ///
+    /// **The id, not `WorkspaceTabKind.staticLabel`.** That label is an
+    /// `NSLocalizedString`, and every other agent-facing string on this surface is
+    /// deliberately unlocalized — adding a locale would have `open_tab` replying in
+    /// it while `list_tabs` went on reporting `"verification"`, which is the one
+    /// vocabulary this tool exists to share.
+    func openTab(workstreamID: UUID, kind: String) throws -> (kind: String, wasAlreadyOpen: Bool) {
+        guard let tab = Self.openableTabs[kind] else {
+            throw Failure.invalidArgument(
+                name: "kind",
+                reason: "expected one of \(Self.openableTabs.keys.sorted().joined(separator: ", ")), got \(kind)."
+            )
+        }
+        let context = try context(workstreamID: workstreamID)
+        let wasAlreadyOpen = context.model.tabs.contains(tab)
+        context.model.ensureSingleton(tab)
+        logger.detailed("open_tab: \(kind) alreadyOpen=\(wasAlreadyOpen)")
+        // The kind's own id rather than the argument, so the answer cannot echo
+        // back a spelling the lookup only tolerated.
+        return (tab.kind.id, wasAlreadyOpen)
+    }
+
     // MARK: - Spawning an agent
 
     /// What `open_agent_tab` needs about a workstream before it leaves the main

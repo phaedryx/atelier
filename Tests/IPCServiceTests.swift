@@ -324,4 +324,32 @@ final class IPCServiceTests: XCTestCase {
         guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
         XCTAssertEqual(peer.pendingMessages, 1)
     }
+
+    // MARK: - open_tab
+
+    func test_openTab_withoutAKind_saysWhichArgumentIsMissing() async {
+        let response = await call(.openTab, [:], as: client(project: projectA))
+
+        XCTAssertNil(response.payload)
+        XCTAssertTrue(response.error?.contains("kind") == true, String(describing: response.error))
+    }
+
+    func test_openTab_outsideAWorkstream_refuses() async {
+        let stranger = IPC.ClientIdentity(
+            workstreamID: nil, workstreamName: nil, projectDirectory: projectA, surfaceID: nil, peerID: nil
+        )
+
+        let response = await call(.openTab, ["kind": "verification"], as: stranger)
+
+        XCTAssertNil(response.payload)
+        XCTAssertTrue(response.error?.contains("inside an Atelier workstream") == true, String(describing: response.error))
+    }
+
+    /// An empty string is a missing argument, not a kind to look up — otherwise
+    /// the refusal would name the legal values for an agent that named nothing.
+    func test_openTab_treatsAnEmptyKindAsMissing() async {
+        let response = await call(.openTab, ["kind": ""], as: client(project: projectA))
+
+        XCTAssertTrue(response.error?.contains("kind") == true, String(describing: response.error))
+    }
 }

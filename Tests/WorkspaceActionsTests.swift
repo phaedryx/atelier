@@ -48,6 +48,61 @@ final class WorkspaceActionsResolveTests: XCTestCase {
     }
 }
 
+/// `open_tab`'s pure half: which kinds it will open, and how it refuses the rest.
+///
+/// The opening itself is `WorkspaceModel.ensureSingleton`, already pinned in
+/// `WorkspaceModelTests` — including that it leaves `activeTab` alone, which is
+/// the whole behavioural claim this tool makes.
+@MainActor
+final class WorkspaceActionsOpenTabTests: XCTestCase {
+    /// The three on-demand singletons, and nothing else.
+    func testOpensExactlyTheSingletonTabs() {
+        XCTAssertEqual(
+            WorkspaceActions.openableTabs,
+            ["changes": .changes, "execution": .execution, "verification": .verification]
+        )
+    }
+
+    /// The keys must be `WorkspaceTabKind.id`, because `list_tabs` reports that
+    /// string as a tab's `kind` — so the name an agent reads off a tab is the
+    /// name it passes back to open one. A second vocabulary here would be one
+    /// nothing keeps in step.
+    func testTheKeysAreTheKindIDsListTabsReports() {
+        for (key, tab) in WorkspaceActions.openableTabs {
+            XCTAssertEqual(key, tab.kind.id, "\(key) is not the id list_tabs would report for that tab")
+        }
+    }
+
+    /// Two different reasons, both ending in "not here". Info and Agent are
+    /// permanent, so opening them can neither fail nor do anything; terminal,
+    /// browser and editor are instanced, so "the" tab is meaningless and two of
+    /// them have their own tool.
+    func testPermanentAndInstancedKindsAreNotOpenable() {
+        for kind in [WorkspaceTabKind.info, .agent, .terminal, .browser, .editor] {
+            XCTAssertNil(WorkspaceActions.openableTabs[kind.id], "\(kind.id) must not be openable by name")
+        }
+    }
+
+    /// The kind is validated *before* the workstream is resolved, so an agent
+    /// with a typo is told what the legal values are rather than being handed
+    /// whatever the app's readiness happens to be. This test relies on that
+    /// ordering: `WorkspaceActions.shared` has no `projectList` here, so a guard
+    /// in the other order would answer `appNotReady`.
+    func testAnUnknownKindIsRefusedByNamingTheLegalOnes() {
+        XCTAssertThrowsError(try WorkspaceActions.shared.openTab(workstreamID: UUID(), kind: "logs")) { error in
+            let message = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+            XCTAssertTrue(message.contains("logs"), message)
+            XCTAssertTrue(message.contains("changes, execution, verification"), message)
+        }
+    }
+
+    /// `open_agent_tab` and `open_editor` are the tools for the instanced kinds,
+    /// and this one must not look like a third way to reach them.
+    func testAskingForATerminalIsRefusedRatherThanGuessingWhichOne() {
+        XCTAssertThrowsError(try WorkspaceActions.shared.openTab(workstreamID: UUID(), kind: "terminal"))
+    }
+}
+
 final class WorkspaceActionsPathTests: XCTestCase {
     private let worktree = "/repos/app/feature"
 

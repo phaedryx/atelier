@@ -78,6 +78,15 @@ extension IPC {
         case readReviewComments = "read_review_comments"
         /// A verification run's state and per-check results, by run id.
         case checkVerification = "check_verification"
+        /// The checks this project declares — names, commands, shells — without
+        /// running any of them.
+        ///
+        /// **An agent has no other way to learn them.** `verification.yaml` lives
+        /// in the project directory, which is outside every work tree, and the
+        /// "Restrict to worktree" system prompt is on by default — so a check's
+        /// name could previously only be discovered by guessing one and reading
+        /// `start_verification`'s refusal.
+        case listVerificationChecks = "list_verification_checks"
 
         /// Workspace actions.
         /// Opens a terminal tab in the caller's own workstream, optionally
@@ -85,13 +94,24 @@ extension IPC {
         case openAgentTab = "open_agent_tab"
         /// Opens a file in the workstream's editor, optionally at a line.
         case openEditor = "open_editor"
+        /// Opens one of the workstream's singleton tabs — Changes, Execution or
+        /// Verification — without taking the selection.
+        ///
+        /// Those three start *closed*: `startupWorkspaceTabState` seeds Info and
+        /// Agent alone. So a tool an agent already has could produce something
+        /// with no visible surface to read it in — `start_verification` spawns a
+        /// terminal per check, and no output crosses IPC, so "look at the
+        /// Verification tab" was the only pointer the agent had and the one thing
+        /// it could not act on.
+        case openTab = "open_tab"
         /// Raises a notification asking the user to come and look.
         case requestAttention = "request_attention"
         /// Creates a new workstream — worktree, branch, initialization — and
         /// optionally starts an agent there.
         case createWorkstream = "create_workstream"
-        /// Starts a verification run — the `verify` namespace — in the caller's
-        /// own workstream, and answers with a run id rather than the result.
+        /// Starts a verification run — some or all of the checks
+        /// `verification.yaml` declares — in the caller's own workstream, and
+        /// answers with a run id rather than the result.
         case startVerification = "start_verification"
 
         /// Which of the three surfaces above this tool belongs to.
@@ -104,9 +124,9 @@ extension IPC {
             switch self {
             case .registerPeer, .listPeers, .sendMessage, .receiveMessages, .broadcast, .getPeerStatus:
                 .messaging
-            case .listTabs, .readReviewComments, .checkVerification:
+            case .listTabs, .readReviewComments, .checkVerification, .listVerificationChecks:
                 .workspaceRead
-            case .openAgentTab, .openEditor, .requestAttention, .createWorkstream, .startVerification:
+            case .openAgentTab, .openEditor, .openTab, .requestAttention, .createWorkstream, .startVerification:
                 .workspaceAction
             }
         }
@@ -135,12 +155,12 @@ extension IPC {
             // Actor hops and store reads. The original 15 seconds, which was
             // always right for these.
             case .registerPeer, .listPeers, .sendMessage, .receiveMessages, .broadcast, .getPeerStatus,
-                 .listTabs, .readReviewComments, .checkVerification:
+                 .listTabs, .readReviewComments, .checkVerification, .listVerificationChecks:
                 15
             // Main-actor work with a process-compose probe behind the worst of
             // them (`start_verification` resolves a binary and parses a config
             // before it answers with a run id).
-            case .openAgentTab, .openEditor, .requestAttention, .startVerification:
+            case .openAgentTab, .openEditor, .openTab, .requestAttention, .startVerification:
                 60
             // `git worktree add` under `ProcessRunner.Timeout.userCommand` (300s)
             // after a fetch under `.network` (120s). Named as literals because
@@ -194,8 +214,8 @@ extension IPC {
         var isSafeToReplay: Bool {
             switch self {
             case .registerPeer, .listPeers, .getPeerStatus,
-                 .listTabs, .readReviewComments, .checkVerification,
-                 .openEditor, .requestAttention:
+                 .listTabs, .readReviewComments, .checkVerification, .listVerificationChecks,
+                 .openEditor, .openTab, .requestAttention:
                 true
             case .sendMessage, .receiveMessages, .broadcast,
                  .openAgentTab, .createWorkstream, .startVerification:
@@ -346,6 +366,47 @@ extension IPC {
         let isOrphaned: Bool
     }
 
+    /// What a project declares in its `verification.yaml`, as an agent sees it.
+    ///
+    /// **Shaped like `Verification.Config.Load`, deliberately.** That type spends a
+    /// paragraph on why `.missing`, `.invalid(reason:)` and a file declaring zero
+    /// checks must stay three distinguishable answers rather than collapsing into
+    /// one empty list — a file Atelier cannot read must never render as "this
+    /// project declares no checks". So this carries the same pair the tab draws
+    /// from: `checks`, and `unavailableReason`, which is non-nil exactly when
+    /// `checks` is empty. The wording is `Load.unavailableReason`'s own, not a
+    /// fourth copy of it.
+    ///
+    /// Declared here rather than beside the seam for the same reason
+    /// `VerificationRunInfo` is: `renderText` in `Sources/MCPHelper/main.swift`
+    /// renders it, and `AtelierMCP` compiles exactly one file out of
+    /// `Models/IPC/` — this one (`project.yml:198-200`).
+    struct VerificationChecksInfo: Codable, Equatable {
+        /// Where the checks were read from, or nil when there is no file.
+        let configPath: String?
+        /// Every declared check, **in file order** — which is the order the
+        /// Verification tab draws its rows in. Never routed through a dictionary,
+        /// which would shuffle them between launches.
+        let checks: [VerificationCheckDeclaration]
+        /// Why nothing can run, or nil when something can. Empty `checks`
+        /// whenever this is set, so the two cannot describe different states.
+        let unavailableReason: String?
+    }
+
+    /// One declared check: what it is called, and what it runs.
+    ///
+    /// No verdict and no staleness. `check_verification` answers verdicts, and
+    /// staleness costs four-plus git spawns — too much for a call an agent makes
+    /// casually to find out what the names are.
+    struct VerificationCheckDeclaration: Codable, Equatable {
+        let name: String
+        /// The command, as `verification.yaml` writes it.
+        let command: String
+        /// The shell named for this check, or nil for the user's `$SHELL`.
+        /// Carried because it changes how the command runs.
+        let shell: String?
+    }
+
     /// A verification run as reported to an agent.
     ///
     /// A **projection** of the runner's `Verification.Run`, not that type: the
@@ -443,6 +504,7 @@ extension IPC {
         case tabs([TabInfo])
         case reviewComments([ReviewCommentInfo])
         case verificationRun(VerificationRunInfo)
+        case verificationChecks(VerificationChecksInfo)
         case text(String)
     }
 

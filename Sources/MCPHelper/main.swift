@@ -250,6 +250,31 @@ let toolDefinitions: [ToolDefinition] = [
         required: ["path"]
     ),
     ToolDefinition(
+        tool: .openTab,
+        description: """
+        Open one of this workstream's panes: "changes" (the diff and the user's
+        review comments), "execution" (the dev stack) or "verification" (the
+        checks and each one's terminal). They start CLOSED, so a thing you set
+        running may have no pane the user can watch it in — most of all
+        verification, whose output lives only in those terminals and never
+        reaches you.
+
+        It does NOT switch the user's view. The tab appears in the strip behind
+        whatever they are working in, which is the point: opening a pane is not a
+        reason to pull someone off what they are doing. If you need them to
+        actually look, call request_attention as well.
+
+        Opening a tab that is already open does nothing and says so. Use
+        open_agent_tab for a terminal and open_editor for a file; those are
+        instanced, so they need to know WHICH one, and this tool does not take
+        them.
+        """,
+        properties: [
+            "kind": ["type": "string", "description": "One of \"changes\", \"execution\", \"verification\" — the same string list_tabs reports as a tab's kind."],
+        ],
+        required: ["kind"]
+    ),
+    ToolDefinition(
         tool: .openAgentTab,
         description: """
         Open a terminal tab in the workstream you are already in. With `prompt`,
@@ -313,16 +338,18 @@ let toolDefinitions: [ToolDefinition] = [
         tool: .startVerification,
         description: """
         Run this project's verification checks — its specs, linters and type
-        checks, whatever the `verify` namespace declares — against the worktree
-        you are in, and get a run id back IMMEDIATELY. It does not wait for the
-        suite: a real one takes minutes and this tool call does not. Each check
+        checks, whatever `verification.yaml` declares — against the worktree you
+        are in, and get a run id back IMMEDIATELY. list_verification_checks is
+        how you find out what it declares before naming any. It does not wait
+        for the suite: a real one takes minutes and this tool call does not.
+        Each check
         posts its own verdict to your inbox from atelier/verification as it
         finishes, so a failure reaches you while the rest of the suite is still
         going — carry on with something else and call receive_messages at your
         next natural boundary. check_verification reads the whole run at any
-        time, including while it is still going. One run at a time per
-        workstream — starting a second while one is live is refused rather than
-        allowed to kill it.
+        time, including while it is still going. Checks are independent and any
+        number run at once; starting a check that is already running is refused
+        rather than allowed to kill it, per check.
 
         If you are this workstream's Coding Agent, you will also receive these
         notices for runs the USER started from the Verification tab, which you
@@ -337,23 +364,42 @@ let toolDefinitions: [ToolDefinition] = [
     ToolDefinition(
         tool: .checkVerification,
         description: """
-        Read a verification run: its state, and each check's verdict, duration
-        and the tail of its output. Works while the run is still going — checks
-        report as running or waiting until they finish — so this is also how you
-        watch one without blocking. Only runs in your own workstream are
-        readable.
+        Read a verification run: its state, and each check's verdict, exit code
+        and duration. Works while the run is still going — checks report as
+        running until they finish — so this is also how you watch one without
+        blocking. Only runs in your own workstream are readable.
 
-        Output is the tail captured while the check ran, and that is ALL that
-        exists: the log lives in process-compose's control server, which goes
-        away when the run ends. A check reporting truncated output means there
-        was more at the time, not that a fuller copy can be fetched now — from
-        here, from the Verification tab, or from disk. If you need more of it,
-        re-run that one check.
+        NO OUTPUT. A check runs in its own terminal surface in the Verification
+        tab and Atelier keeps no copy of what it printed, so there is nothing to
+        send you and nothing to fetch later — not from here, not from disk. To
+        see why a check failed, ask the user to look at that tab while Atelier is
+        still running, or re-run the one check. Only runs from this session
+        resolve; ids from before a restart are gone.
         """,
         properties: [
             "run_id": ["type": "string", "description": "The run id start_verification returned."],
         ],
         required: ["run_id"]
+    ),
+    ToolDefinition(
+        tool: .listVerificationChecks,
+        description: """
+        List the verification checks this project declares — each one's name, the
+        command it runs, and the shell it runs in — WITHOUT running any of them.
+
+        Call this before start_verification. The checks are declared in a
+        verification.yaml in the project directory, which is OUTSIDE your
+        worktree, so you almost certainly cannot read it yourself: this is how
+        you learn what the names are. Then start_verification runs all of them,
+        or the subset you name.
+
+        The answer is in file order, which is the order the user sees in the
+        Verification tab. If the project declares nothing, or its
+        verification.yaml is missing or unreadable, you are told which — those
+        are three different problems.
+        """,
+        properties: [:],
+        required: []
     ),
 ]
 
@@ -367,11 +413,13 @@ You can also act on the workstream you are running in. list_tabs shows its tabs 
 
 open_editor puts a file on screen in front of the user, and request_attention raises a desktop notification asking them to come and look. Both change what the user sees, so use them when you have something for them rather than to narrate progress. request_attention does not block: it notifies and returns, and one workstream can raise it only every 30 seconds.
 
+open_tab opens this workstream's Changes, Execution or Verification pane, which all start closed. It does not switch the user's view — pair it with request_attention when you need their eyes, rather than assuming a tab you opened is a tab they saw.
+
 open_agent_tab opens a terminal tab in your workstream, and with a prompt it starts another agent there. That agent shares your worktree, so give it work that collaborates on the change you are already making — a reviewer, a test-writer, a second pair of hands on the same branch. Work that belongs on its own branch needs its own workstream, not a tab. Poll list_tabs for the new surface's peer id before trying to message it.
 
 create_workstream is the exception to that: it makes a NEW workstream, with its own worktree and its own branch, and with a prompt it starts an agent in that workstream's Coding Agent tab. Reach for it when the work needs a branch of its own, and for open_agent_tab when it belongs on yours.
 
-start_verification runs the project's checks against your worktree and answers with a run id rather than a result — a real suite outlives a tool call. Each check's verdict arrives in your inbox from atelier/verification as that check finishes; that is a reserved sender inside Atelier and not a peer you can reply to. If you are this workstream's Coding Agent, you will also get these for runs the user starts in the Verification tab. check_verification(run_id) reads the whole run whenever you want, so you are never stuck waiting for a message that has not arrived.
+list_verification_checks names the checks this project declares and the command each one runs, without running anything — the declarations live outside your worktree, so this is how you find out what is there. start_verification then runs the project's checks against your worktree and answers with a run id rather than a result — a real suite outlives a tool call. Each check's verdict arrives in your inbox from atelier/verification as that check finishes; that is a reserved sender inside Atelier and not a peer you can reply to. If you are this workstream's Coding Agent, you will also get these for runs the user starts in the Verification tab. check_verification(run_id) reads the whole run whenever you want, so you are never stuck waiting for a message that has not arrived.
 
 The rest of these tools act on your own workstream and no other. There is no way to reach another agent's tabs — to coordinate with an agent elsewhere, send it a message.
 """
@@ -471,6 +519,30 @@ func renderText(_ payload: IPC.Payload?) -> String {
         }
         // No output: a check runs in its own terminal surface in the Verification
         // tab, and Atelier keeps no copy of what it printed.
+        return lines.joined(separator: "\n")
+    case let .verificationChecks(declared):
+        // The three load cases stay three answers. A file that is present and
+        // broken must never render as "this project declares no checks" — that
+        // is the same sentence a project with genuinely none gets, and it sends
+        // an agent looking for a file that is right there.
+        if let reason = declared.unavailableReason {
+            return reason
+        }
+        var lines: [String] = []
+        if let path = declared.configPath {
+            lines.append("Declared in \(path), in file order:")
+        }
+        lines += declared.checks.map { check in
+            var line = "\(check.name): \(check.command)"
+            if let shell = check.shell {
+                line += " [shell: \(shell)]"
+            }
+            return line
+        }
+        lines.append(
+            "Run them with start_verification — all of them by omitting `checks`, "
+                + "or any subset by naming them."
+        )
         return lines.joined(separator: "\n")
     case let .text(text):
         return text

@@ -1,4 +1,4 @@
-// ABOUTME: Tests for start_verification and check_verification against a stub runner.
+// ABOUTME: Tests for the three verification tools against a stub runner.
 // ABOUTME: Covers scoping, the seam's refusals, and the app-originated completion notice.
 
 @testable import Atelier
@@ -7,7 +7,7 @@ import XCTest
 /// Stands in for the check runner behind `IPC.VerificationControlling`.
 ///
 /// The whole point of declaring the seam on this side: none of these tests need
-/// a `verify` namespace, a process-compose binary, or a worktree.
+/// a `verification.yaml`, a shell, or a worktree.
 private actor StubVerificationRunner: IPC.VerificationControlling {
     var startedWorkstreams: [UUID] = []
     var startedChecks: [[String]] = []
@@ -21,6 +21,18 @@ private actor StubVerificationRunner: IPC.VerificationControlling {
     var startedRequesterSurfaceIDs: [String?] = []
     var refusal: Error?
     var runs: [String: IPC.VerificationRunInfo] = [:]
+    /// Which workstreams `list_verification_checks` asked about, so a test can
+    /// pin that the service scopes the read to the caller's own rather than
+    /// taking a workstream id off the wire.
+    var listedWorkstreams: [UUID] = []
+    var declared = IPC.VerificationChecksInfo(
+        configPath: "/repos/atelier/verification.yaml",
+        checks: [
+            IPC.VerificationCheckDeclaration(name: "rspec", command: "bundle exec rspec", shell: nil),
+            IPC.VerificationCheckDeclaration(name: "rubocop", command: "bundle exec rubocop", shell: "fish"),
+        ],
+        unavailableReason: nil
+    )
 
     private var start: IPC.VerificationStart
     private var onFinish: (@Sendable (IPC.VerificationRunInfo) -> Void)?
@@ -42,6 +54,10 @@ private actor StubVerificationRunner: IPC.VerificationControlling {
 
     func store(_ run: IPC.VerificationRunInfo) {
         runs[run.runID] = run
+    }
+
+    func declare(_ info: IPC.VerificationChecksInfo) {
+        declared = info
     }
 
     /// Fires the completion callback the way a sealed run does.
@@ -67,6 +83,14 @@ private actor StubVerificationRunner: IPC.VerificationControlling {
 
     func verificationRun(id: String, in _: UUID) async -> IPC.VerificationRunInfo? {
         runs[id]
+    }
+
+    func verificationChecks(in workstreamID: UUID) async throws -> IPC.VerificationChecksInfo {
+        listedWorkstreams.append(workstreamID)
+        if let refusal {
+            throw refusal
+        }
+        return declared
     }
 
     nonisolated func observeCheckCompletions(_ handler: @escaping @MainActor @Sendable (IPC.VerificationCheckNotice) -> Void) {
@@ -219,7 +243,7 @@ final class IPCVerificationToolsTests: XCTestCase {
         XCTAssertEqual(startedRequesterSurfaceIDs, [surfaceID.uuidString])
     }
 
-    func test_startVerification_withNoChecks_startsTheWholeNamespace() async throws {
+    func test_startVerification_withNoChecks_startsEveryDeclaredCheck() async throws {
         await service.setVerificationRunner(runner)
         let caller = try await register(surfaceID: UUID(), name: "builder")
 
@@ -516,5 +540,97 @@ final class IPCVerificationToolsTests: XCTestCase {
 
         XCTAssertNil(response.payload)
         XCTAssertTrue(response.error?.contains("different workstream") == true, String(describing: response.error))
+    }
+
+    // MARK: - list_verification_checks
+
+    func test_listVerificationChecks_returnsEachDeclarationInFileOrder() async throws {
+        await service.setVerificationRunner(runner)
+        let caller = try await register(surfaceID: UUID(), name: "builder")
+
+        let response = await call(.listVerificationChecks, [:], as: caller)
+
+        guard case let .verificationChecks(declared) = response.payload else {
+            return XCTFail("expected a declaration payload, got: \(String(describing: response.payload))")
+        }
+        XCTAssertEqual(declared.checks.map(\.name), ["rspec", "rubocop"], "file order, never a dictionary's")
+        XCTAssertEqual(declared.checks.map(\.command), ["bundle exec rspec", "bundle exec rubocop"])
+        XCTAssertEqual(declared.checks.map(\.shell), [nil, "fish"], "the shell changes how the command runs")
+        XCTAssertNil(declared.unavailableReason)
+    }
+
+    /// The read is scoped the way every other tool in this group is: the caller's
+    /// own workstream, taken from its identity rather than from an argument.
+    func test_listVerificationChecks_asksAboutTheCallersOwnWorkstream() async throws {
+        await service.setVerificationRunner(runner)
+        let caller = try await register(surfaceID: UUID(), name: "builder")
+
+        _ = await call(.listVerificationChecks, [:], as: caller)
+
+        let listed = await runner.listedWorkstreams
+        XCTAssertEqual(listed, [workstreamID])
+    }
+
+    /// The whole reason the payload carries a reason rather than a bare list.
+    /// `.missing`, `.invalid` and a file declaring nothing all yield no checks,
+    /// and an agent told "this project declares no checks" for the middle one
+    /// goes looking for a file that is right there and broken.
+    func test_listVerificationChecks_distinguishesABrokenFileFromAnEmptyOne() async throws {
+        await service.setVerificationRunner(runner)
+        await runner.declare(
+            IPC.VerificationChecksInfo(
+                configPath: nil,
+                checks: [],
+                unavailableReason: "This project's verification.yaml could not be read: mapping values are not allowed here"
+            )
+        )
+        let caller = try await register(surfaceID: UUID(), name: "builder")
+
+        let response = await call(.listVerificationChecks, [:], as: caller)
+
+        guard case let .verificationChecks(declared) = response.payload else {
+            return XCTFail("expected a declaration payload, got: \(String(describing: response.payload))")
+        }
+        XCTAssertEqual(declared.checks, [])
+        XCTAssertTrue(
+            declared.unavailableReason?.contains("could not be read") == true,
+            "a broken file must not render as a project with no checks: \(String(describing: declared.unavailableReason))"
+        )
+    }
+
+    func test_listVerificationChecks_outsideAWorkstream_refuses() async {
+        await service.setVerificationRunner(runner)
+        let stranger = IPC.ClientIdentity(
+            workstreamID: nil, workstreamName: nil, projectDirectory: project, surfaceID: nil, peerID: nil
+        )
+
+        let response = await call(.listVerificationChecks, [:], as: stranger)
+
+        XCTAssertNotNil(response.error)
+        let listed = await runner.listedWorkstreams
+        XCTAssertEqual(listed, [])
+    }
+
+    func test_listVerificationChecks_withNoRunnerWiredUp_saysSoRatherThanFailingObscurely() async throws {
+        let caller = try await register(surfaceID: UUID(), name: "builder")
+
+        let response = await call(.listVerificationChecks, [:], as: caller)
+
+        XCTAssertTrue(
+            response.error?.contains("no check runner") == true,
+            "got: \(String(describing: response.error))"
+        )
+    }
+
+    /// Reading the declarations must never start anything. It is the tool an
+    /// agent reaches for *before* deciding whether to run a suite at all.
+    func test_listVerificationChecks_startsNothing() async throws {
+        await service.setVerificationRunner(runner)
+        let caller = try await register(surfaceID: UUID(), name: "builder")
+
+        _ = await call(.listVerificationChecks, [:], as: caller)
+
+        let startedWorkstreams = await runner.startedWorkstreams
+        XCTAssertEqual(startedWorkstreams, [], "listing is a read")
     }
 }
