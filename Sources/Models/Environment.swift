@@ -409,7 +409,7 @@ final class AppEnvironment: ObservableObject {
                 // chain, so it would keep doing that. Not surfacing a shortcut costs the
                 // user a menu; nothing is lost or hidden.
                 hasUncommittedChanges: Git.Operations.hasUncommittedChanges(at: path) ?? false,
-                hasUnpushedCommits: Git.Operations.hasUnpushedCommits(at: path),
+                hasUnpushedCommits: Git.Operations.hasUnpushedCommits(at: path) ?? false,
                 hasBranchCommits: Git.Operations.hasBranchCommits(at: path, projectPath: projectDir) ?? false,
                 hasRemote: Git.Operations.hasRemote(at: path)
             )
@@ -603,7 +603,7 @@ final class AppEnvironment: ObservableObject {
                             // chain, so it would keep doing that. Not surfacing a shortcut costs the
                             // user a menu; nothing is lost or hidden.
                             hasUncommittedChanges: Git.Operations.hasUncommittedChanges(at: path) ?? false,
-                            hasUnpushedCommits: Git.Operations.hasUnpushedCommits(at: path),
+                            hasUnpushedCommits: Git.Operations.hasUnpushedCommits(at: path) ?? false,
                             hasBranchCommits: Git.Operations.hasBranchCommits(at: path, projectPath: projectDir) ?? false,
                             hasRemote: Git.Operations.hasRemote(at: path)
                         )

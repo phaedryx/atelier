@@ -30,6 +30,7 @@
 "Purge Anyway" = "Purge Anyway";
 "uncommitted changes" = "uncommitted changes";
 "unpushed commits" = "unpushed commits";
+"possibly unpushed commits" = "possibly unpushed commits";
 " and " = " and ";
 "This workstream has %@ that will be lost." = "This workstream has %@ that will be lost.";
 "Purge Worktree" = "Purge Worktree";

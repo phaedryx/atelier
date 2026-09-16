@@ -168,6 +168,26 @@ final class WorkstreamArchiverPurgeTests: XCTestCase {
         XCTAssertNil(Workstream.Archiver.orphanPurgeWarning(at: repo.path))
     }
 
+    /// `hasUncommittedChanges` can succeed (a clean tree, `git status` ran fine)
+    /// while `hasUnpushedCommits` cannot answer at all — a repository with an
+    /// unborn HEAD makes both of its log probes fail the same way a genuine
+    /// probe failure would. Dropping that out of the warning silently is the
+    /// exact defect this fix closes: the user must be told commits might be
+    /// unpushed, not shown a warning-free purge.
+    func testPurgeWarnsWhenUnpushedStatusIsUnknownEvenWithNoUncommittedChanges() throws {
+        let repo = try makeNonRepositoryDirectory()
+        XCTAssertTrue(runGit(["init", "-b", "main"], in: repo))
+
+        let warning = try XCTUnwrap(
+            Workstream.Archiver.purgeWarning(for: workstream(worktreePath: repo.path)),
+            "unpushed status could not be established, so this must not purge silently"
+        )
+        XCTAssertTrue(warning.contains("possibly unpushed"), "warning was: \(warning)")
+
+        let orphanWarning = try XCTUnwrap(Workstream.Archiver.orphanPurgeWarning(at: repo.path))
+        XCTAssertTrue(orphanWarning.contains("possibly unpushed"), "warning was: \(orphanWarning)")
+    }
+
     private func makeNonRepositoryDirectory() throws -> URL {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

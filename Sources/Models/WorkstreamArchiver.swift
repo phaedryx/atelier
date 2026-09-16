@@ -98,8 +98,16 @@ extension Workstream {
             if uncommitted {
                 warnings.append(NSLocalizedString("uncommitted changes", comment: ""))
             }
-            if Git.Operations.hasUnpushedCommits(at: path) {
+            // A probe that could not run must not drop out of the warning
+            // silently — that is exactly the bug this half of the check exists
+            // to close. Say "possibly unpushed" rather than staying quiet.
+            switch Git.Operations.hasUnpushedCommits(at: path) {
+            case true:
                 warnings.append(NSLocalizedString("unpushed commits", comment: ""))
+            case false:
+                break
+            case nil:
+                warnings.append(NSLocalizedString("possibly unpushed commits", comment: ""))
             }
             guard !warnings.isEmpty else { return nil }
             let list = warnings.joined(separator: NSLocalizedString(" and ", comment: ""))
@@ -452,8 +460,15 @@ extension Workstream {
             if uncommitted {
                 warnings.append(NSLocalizedString("uncommitted changes", comment: ""))
             }
-            if Git.Operations.hasUnpushedCommits(at: path) {
+            // See `purgeWarning` above: a probe that could not run must not
+            // drop out of the warning silently.
+            switch Git.Operations.hasUnpushedCommits(at: path) {
+            case true:
                 warnings.append(NSLocalizedString("unpushed commits", comment: ""))
+            case false:
+                break
+            case nil:
+                warnings.append(NSLocalizedString("possibly unpushed commits", comment: ""))
             }
             guard !warnings.isEmpty else { return nil }
             let list = warnings.joined(separator: NSLocalizedString(" and ", comment: ""))
