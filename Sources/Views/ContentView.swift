@@ -958,16 +958,7 @@ struct ContentView: View {
             nil
         }
         guard let dir else { return }
-        let terminalBundleID = UserDefaults.standard.string(forKey: "atelier.defaultTerminal") ?? ""
-        if !terminalBundleID.isEmpty,
-           let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: terminalBundleID)
-        {
-            let config = NSWorkspace.OpenConfiguration()
-            NSWorkspace.shared.open([URL(fileURLWithPath: dir)], withApplicationAt: appURL, configuration: config)
-        } else if let terminalURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") {
-            let config = NSWorkspace.OpenConfiguration()
-            NSWorkspace.shared.open([URL(fileURLWithPath: dir)], withApplicationAt: terminalURL, configuration: config)
-        }
+        ExternalTerminal.open(directory: dir)
     }
 
     /// Creates the HEAD watcher and points it at the current worktrees.

@@ -1140,6 +1140,51 @@ Two sites are exempt and say so where they spawn: `BareRepoClone.run` and
 both give the user a cancel instead. If you add a third, it needs the same two
 properties and the same comment.
 
+### AppleScript
+
+Everything that runs AppleScript goes through `AppleScriptRunner`, which is to
+`NSAppleScript` what `ProcessRunner` is to `Process`: **the source is a constant
+and every value travels as an `NSAppleEventDescriptor` parameter to a named
+handler**. There are two call sites — `ExternalTerminal.run`, which opens a file
+in an editor in Apple Terminal, and `SettingsView`'s CLI install, which runs
+`do shell script … with administrator privileges`.
+
+Interpolating into the source is what this replaced, and it is two nested
+languages deep: a Swift value lands inside an AppleScript string literal, which
+lands inside a shell command. Escaping for one layer looks exactly like escaping
+for both, and only the shell layer was ever escaped. A file named
+`z" & (do shell script "touch atelier-pwned") & "` closed the AppleScript literal and the
+rest **compiled** — verified, along with the everyday half of the same bug: an
+ordinary name like `say"hi.txt` produced a script that did not compile at all and
+the row silently did nothing. Atelier runs coding agents against cloned
+repositories, so every name in a work tree is untrusted input.
+
+The shell layer is closed the same way rather than by a second escaper:
+AppleScript's own `quoted form of` does the POSIX quoting **inside** the script,
+so no Swift caller assembles a command line either. `CommandBuilder.shellQuote`
+is deliberately not used here — it leaves a leading `~` unquoted on purpose,
+which is right for the commands it serves and wrong for a file name.
+
+Three things that are easy to undo:
+
+- **A handler called inside a `tell application` block is dispatched to that
+  application**, which answers "Can't continue" for a name it has never heard of.
+  `ExternalTerminal.runScript` resolves the command *before* its `tell` block for
+  exactly that reason. The unit tests do not catch this, because they call the
+  command handler directly; only running it against Terminal does.
+- **`AppleScriptRunner.run` compiles up front.** `NSAppleScript` otherwise
+  compiles lazily on execute and reports a syntax error as an execution failure,
+  hiding the one failure mode that is always a bug in Atelier's own constant
+  source.
+- **Failures are logged, never swallowed.** `runLoggingFailure` exists because
+  discarding the error dictionary is precisely how the escaping bug presented —
+  as ordinary files quietly failing to open.
+
+`ExternalTerminal` also owns opening a *directory* in the user's terminal, which
+is an `NSWorkspace` call carrying a `URL` and has no injection to speak of. It
+lives there because the same eight lines had been copied into four views, and a
+fifth copy is how the hardened path above eventually gets worked around.
+
 ### Paths
 - Persistent data: UserDefaults (projects, sidebar state, workspace tabs)
 - Cache: `~/Library/Caches/<AppConstants.appID>/` — `atelier` for a release

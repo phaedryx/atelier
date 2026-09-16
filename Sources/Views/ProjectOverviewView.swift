@@ -969,17 +969,7 @@ private struct FileChangeRow: View {
     }
 
     private func openInTerminalWithNvim(nvimPath: String, filePath: String) {
-        let escaped = filePath.replacingOccurrences(of: "'", with: "'\\''")
-        let script = """
-        tell application "Terminal"
-            activate
-            do script "\(nvimPath) '\(escaped)'"
-        end tell
-        """
-        if let appleScript = NSAppleScript(source: script) {
-            var error: NSDictionary?
-            appleScript.executeAndReturnError(&error)
-        }
+        ExternalTerminal.run(executablePath: nvimPath, on: filePath)
     }
 }
 

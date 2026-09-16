@@ -1363,15 +1363,7 @@ func copyTextToPasteboard(_ text: String) {
 
 /// Opens a directory in the user's configured terminal, falling back to Apple Terminal.
 func openDirectoryInTerminal(_ directory: String) {
-    let terminalBundleID = UserDefaults.standard.string(forKey: "atelier.defaultTerminal") ?? ""
-    let appURL: URL? = if !terminalBundleID.isEmpty {
-        NSWorkspace.shared.urlForApplication(withBundleIdentifier: terminalBundleID)
-    } else {
-        NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal")
-    }
-    guard let appURL else { return }
-    let config = NSWorkspace.OpenConfiguration()
-    NSWorkspace.shared.open([URL(fileURLWithPath: directory)], withApplicationAt: appURL, configuration: config)
+    ExternalTerminal.open(directory: directory)
 }
 
 private struct ProjectHeaderRow: View {
