@@ -1655,6 +1655,16 @@ extension Git {
 
         // MARK: - Private
 
+        /// Strips a leading `"origin/"` from `ref`, leaving any other occurrence of
+        /// that substring untouched. `git fetch origin <ref>` wants the bare name,
+        /// and a prefix check is required rather than a blanket substring removal
+        /// because `"origin/"` can legally recur inside the ref itself — a branch
+        /// literally named `feature/origin/thing` must come back unchanged, not as
+        /// `feature/thing`.
+        static func stripOriginPrefix(_ ref: String) -> String {
+            ref.hasPrefix("origin/") ? String(ref.dropFirst("origin/".count)) : ref
+        }
+
         /// Fetch a branch from origin. Fails silently when there is no remote or
         /// the network is unreachable.
         ///
@@ -1668,11 +1678,10 @@ extension Git {
             // Determine which branch to fetch. `fetchBranch` makes the no-remote check, so
             // there is no guard here — asking twice was one git spawn per call for nothing.
             let branchToFetch: String = if let branch {
-                branch.hasPrefix("origin/") ? String(branch.dropFirst("origin/".count)) : branch
+                stripOriginPrefix(branch)
             } else if let ref = run(args: ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], in: path) {
                 // e.g. "origin/main" -> "main"
-                ref.trimmingCharacters(in: .whitespacesAndNewlines)
-                    .replacingOccurrences(of: "origin/", with: "")
+                stripOriginPrefix(ref.trimmingCharacters(in: .whitespacesAndNewlines))
             } else {
                 "main"
             }
@@ -1688,8 +1697,7 @@ extension Git {
         /// report the miss, so waiting two minutes on a wedged link buys nothing.
         private static func fetchBranch(at path: String, branch: String) {
             guard run(args: ["remote", "get-url", "origin"], in: path) != nil else { return }
-            let ref = branch.hasPrefix("origin/") ? String(branch.dropFirst("origin/".count)) : branch
-            runWithTimeout(args: ["fetch", "origin", ref, "--no-tags"], in: path, timeout: 5)
+            runWithTimeout(args: ["fetch", "origin", stripOriginPrefix(branch), "--no-tags"], in: path, timeout: 5)
         }
 
         /// Runs git and returns stdout, or nil if git is missing, exited non-zero,
