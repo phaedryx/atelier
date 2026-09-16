@@ -24,9 +24,43 @@ extension Port {
 }
 
 extension Port {
+    /// Whether the browser pane should keep showing "Starting dev server…"
+    /// rather than navigating (or falling through to a connection-error retry).
+    ///
+    /// A declared `browser: true` port is known from `ports.yaml`, ahead of any
+    /// detection. `RunState.PortSelectionTracker` can only ever resolve
+    /// `selectedPort` when exactly one process is listening, or the port the
+    /// launcher expected (`ATELIER_PORT`) is among them — never true for a stack
+    /// that declares several named ports, so `status` stays `.starting` forever
+    /// and a caller waiting on it would too. A known browser port instead checks
+    /// its own liveness — whether it is among the ports atelier-run has actually
+    /// observed listening — rather than the tracker's guess at which one to show.
+    static func isWaitingForServer(
+        browserPort: Int?,
+        status: Status,
+        detectedPorts: [Int],
+        browserStartPending: Bool
+    ) -> Bool {
+        guard let browserPort else {
+            return status == .starting || (status == .none && browserStartPending)
+        }
+        if status == .none {
+            return browserStartPending
+        }
+        return !detectedPorts.contains(browserPort)
+    }
+}
+
+extension Port {
     final class Detector: ObservableObject, @unchecked Sendable {
         @Published private(set) var selectedPort: Int?
         @Published private(set) var status: Port.Status = .none
+        /// Every port atelier-run currently observes listening, not just the one
+        /// `status`/`selectedPort` resolved to. A declared `browser: true` port is
+        /// known ahead of detection, so a caller with one in hand can check its own
+        /// liveness here instead of waiting on the single-port selection heuristic
+        /// below, which never resolves for a stack with several named ports.
+        @Published private(set) var detectedPorts: [Int] = []
 
         private let workstreamID: UUID
         private let queue: DispatchQueue
@@ -139,9 +173,11 @@ extension Port {
 
             let nextPort = state?.selectedPort
             let nextStatus: Port.Status = state == nil ? .none : (state?.selectedPort != nil ? .running : .starting)
+            let nextDetectedPorts = state?.detectedPorts ?? []
             DispatchQueue.main.async { [weak self] in
                 self?.selectedPort = nextPort
                 self?.status = nextStatus
+                self?.detectedPorts = nextDetectedPorts
             }
         }
     }

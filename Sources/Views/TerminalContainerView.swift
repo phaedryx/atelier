@@ -456,8 +456,16 @@ struct TerminalContainerView: View {
     /// The dev server is coming up but has not exposed a port yet. Covers the
     /// window between a browser-triggered start and the first atelier-run state
     /// write, so the browser never navigates to the placeholder port.
+    ///
+    /// With a declared `browser: true` port, waiting is decided by that port's
+    /// own liveness rather than by `portDetector.status` — see `Port.isWaitingForServer`.
     private var isWaitingForServer: Bool {
-        portDetector.status == .starting || (portDetector.status == .none && browserStartPending)
+        Port.isWaitingForServer(
+            browserPort: portPlan.browserPort,
+            status: portDetector.status,
+            detectedPorts: portDetector.detectedPorts,
+            browserStartPending: browserStartPending
+        )
     }
 
     /// The processes Start will launch, reconciled against what the config
