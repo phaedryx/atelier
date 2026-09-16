@@ -172,19 +172,38 @@ private struct EnvironmentSettingsPane: View {
         installWithPrivileges(source: tempPath)
     }
 
+    /// Installs the CLI as root.
+    ///
+    /// Both paths are Atelier's own, but this is the same two-layer shape that
+    /// made a repository's file names executable in `ExternalTerminal` — and
+    /// here the command runs with administrator privileges, which is the worst
+    /// place to leave the pattern standing. So it goes the same way: the paths
+    /// are event parameters, and `quoted form of` inside the script does the
+    /// shell quoting. Nothing is interpolated and nothing is escaped in Swift.
     private func installWithPrivileges(source: String) {
         let destination = "/usr/local/bin/\(Self.cliName)"
-        let quotedSource = source.replacingOccurrences(of: "'", with: "'\\''")
-        let quotedDest = destination.replacingOccurrences(of: "'", with: "'\\''")
-        let script = "do shell script \"install -m 755 '\(quotedSource)' '\(quotedDest)'\" with administrator privileges"
-        if let appleScript = NSAppleScript(source: script) {
-            var error: NSDictionary?
-            appleScript.executeAndReturnError(&error)
-            if error == nil {
-                cliInstalled = true
-            }
+        let installed = AppleScriptRunner.runLoggingFailure(
+            source: Self.installScript,
+            handler: Self.installHandler,
+            arguments: [source, destination]
+        )
+        if installed != nil {
+            cliInstalled = true
         }
     }
+
+    private static let installHandler = "atelierinstallcli"
+
+    /// Constant source; the paths arrive as parameters. Returns a value so a
+    /// successful install is distinguishable from a failed one — `do shell
+    /// script` yields the command's output, which is empty here, so the handler
+    /// answers with a token of its own.
+    private static let installScript = """
+    on \(installHandler)(sourcePath, destinationPath)
+        do shell script "install -m 755 " & (quoted form of sourcePath) & " " & (quoted form of destinationPath) with administrator privileges
+        return "installed"
+    end \(installHandler)
+    """
 
     private func chmod(_ path: String, _ mode: mode_t) {
         Darwin.chmod(path, mode)

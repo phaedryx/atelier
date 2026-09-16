@@ -350,15 +350,7 @@ struct WorkstreamInfoView: View {
     }
 
     private func openInTerminal(path: String) {
-        if !defaultTerminal.isEmpty,
-           let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: defaultTerminal)
-        {
-            let config = NSWorkspace.OpenConfiguration()
-            NSWorkspace.shared.open([URL(fileURLWithPath: path)], withApplicationAt: appURL, configuration: config)
-        } else if let terminalURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") {
-            let config = NSWorkspace.OpenConfiguration()
-            NSWorkspace.shared.open([URL(fileURLWithPath: path)], withApplicationAt: terminalURL, configuration: config)
-        }
+        ExternalTerminal.open(directory: path, preferredBundleID: defaultTerminal)
     }
 
     private func loadInfo() {
@@ -482,15 +474,7 @@ struct DirectoryRow: View {
     }
 
     private func openInTerminal() {
-        if !defaultTerminal.isEmpty,
-           let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: defaultTerminal)
-        {
-            let config = NSWorkspace.OpenConfiguration()
-            NSWorkspace.shared.open([URL(fileURLWithPath: path)], withApplicationAt: appURL, configuration: config)
-        } else if let terminalURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") {
-            let config = NSWorkspace.OpenConfiguration()
-            NSWorkspace.shared.open([URL(fileURLWithPath: path)], withApplicationAt: terminalURL, configuration: config)
-        }
+        ExternalTerminal.open(directory: path, preferredBundleID: defaultTerminal)
     }
 }
 
