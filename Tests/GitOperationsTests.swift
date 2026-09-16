@@ -926,6 +926,119 @@ final class GitOperationsTests: XCTestCase {
             "renamed file should be listed under its new path"
         )
         XCTAssertFalse(files.contains { $0.relativePath == "old.swift" })
+
+        // A pure rename changes no content, so both counts are zero. Keyed off the
+        // combined `old => new` numstat field this file missed the map entirely and
+        // fell through to the untracked fallback, which reported the whole file as
+        // added.
+        let renamed = try XCTUnwrap(files.first { $0.relativePath == "new.swift" })
+        XCTAssertEqual(renamed.status, .renamed)
+        XCTAssertEqual(renamed.added, 0, "a pure rename adds no lines")
+        XCTAssertEqual(renamed.deleted, 0, "a pure rename deletes no lines")
+        XCTAssertEqual(renamed.changedLines, 0)
+    }
+
+    func testBranchDiffFilesCountsOnlyTheEditOnARenamedFile() throws {
+        // The failure this guards: a large renamed file with a one-line edit reported
+        // `added` = its entire line count, which feeds the Changes tab's large-file
+        // guard and could refuse to render a file that barely changed.
+        let projectDir = tempDir.appendingPathComponent("proj-ren-edit")
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: projectDir)
+        // Long enough that a single changed line still scores as a rename rather
+        // than as a delete plus an add.
+        let body = (1 ... 50).map { "let line\($0) = \($0)\n" }.joined()
+        try body.write(to: projectDir.appendingPathComponent("old.swift"), atomically: true, encoding: .utf8)
+        git(["add", "."], in: projectDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "-m", "base"], in: projectDir)
+
+        let wt = tempDir.appendingPathComponent("wt-ren-edit")
+        git(["worktree", "add", "-b", "feature-ren-edit", wt.path], in: projectDir)
+        git(["mv", "old.swift", "new.swift"], in: wt)
+        let edited = body.replacingOccurrences(of: "let line1 = 1\n", with: "let line1 = 99\n")
+        try edited.write(to: wt.appendingPathComponent("new.swift"), atomically: true, encoding: .utf8)
+
+        let files = Git.Operations.branchDiffFiles(worktreePath: wt.path, projectPath: projectDir.path)
+        let renamed = try XCTUnwrap(files.first { $0.relativePath == "new.swift" })
+        XCTAssertEqual(renamed.status, .renamed, "git must still see this as a rename, not a delete + add")
+        XCTAssertEqual(renamed.added, 1, "only the edited line is added")
+        XCTAssertEqual(renamed.deleted, 1, "only the edited line is deleted")
+        XCTAssertEqual(renamed.changedLines, 2)
+    }
+
+    func testBranchDiffFilesCountsARenameIntoAnotherDirectory() throws {
+        // A rename that only moves a file between directories: `git diff --numstat`
+        // without `-z` compacts this to `src/{old => new}/file.swift`, a third
+        // spelling of the same field.
+        let projectDir = tempDir.appendingPathComponent("proj-ren-dir")
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: projectDir)
+        let oldDir = projectDir.appendingPathComponent("src/old")
+        try FileManager.default.createDirectory(at: oldDir, withIntermediateDirectories: true)
+        let body = (1 ... 50).map { "let line\($0) = \($0)\n" }.joined()
+        try body.write(to: oldDir.appendingPathComponent("file.swift"), atomically: true, encoding: .utf8)
+        git(["add", "."], in: projectDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "-m", "base"], in: projectDir)
+
+        let wt = tempDir.appendingPathComponent("wt-ren-dir")
+        git(["worktree", "add", "-b", "feature-ren-dir", wt.path], in: projectDir)
+        git(["mv", "src/old", "src/new"], in: wt)
+        let edited = body + "let extra = 0\n"
+        try edited.write(to: wt.appendingPathComponent("src/new/file.swift"), atomically: true, encoding: .utf8)
+
+        let files = Git.Operations.branchDiffFiles(worktreePath: wt.path, projectPath: projectDir.path)
+        let renamed = try XCTUnwrap(files.first { $0.relativePath == "src/new/file.swift" })
+        XCTAssertEqual(renamed.status, .renamed)
+        XCTAssertEqual(renamed.added, 1)
+        XCTAssertEqual(renamed.deleted, 0)
+        XCTAssertEqual(renamed.changedLines, 1)
+    }
+
+    func testBranchDiffFilesMarksARenamedBinaryFileBinary() throws {
+        // Binary renames print `-\t-\t` ahead of the paths, so the rename parse and
+        // the binary sentinel have to survive together.
+        let projectDir = tempDir.appendingPathComponent("proj-ren-bin")
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: projectDir)
+        var bytes = Data([0x00, 0x01, 0x02, 0x03])
+        bytes.append(Data(repeating: 0x42, count: 512))
+        try bytes.write(to: projectDir.appendingPathComponent("old.bin"))
+        git(["add", "."], in: projectDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "-m", "base"], in: projectDir)
+
+        let wt = tempDir.appendingPathComponent("wt-ren-bin")
+        git(["worktree", "add", "-b", "feature-ren-bin", wt.path], in: projectDir)
+        git(["mv", "old.bin", "new.bin"], in: wt)
+
+        let files = Git.Operations.branchDiffFiles(worktreePath: wt.path, projectPath: projectDir.path)
+        let renamed = try XCTUnwrap(files.first { $0.relativePath == "new.bin" })
+        XCTAssertTrue(renamed.isBinary, "a renamed binary file is still binary")
+        XCTAssertEqual(renamed.changedLines, 0)
+    }
+
+    func testUncommittedDiffFilesReportsNonASCIIPathsUnquoted() throws {
+        // `core.quotePath` defaults on, so git's text output C-quotes a non-ASCII
+        // name (`"caf\303\251.txt"`). A quoted path is not a path: it cannot be
+        // opened, handed to `git show <ref>:<path>`, or matched against anything
+        // that holds the real name.
+        let repoDir = tempDir.appendingPathComponent("uncommitted-unicode")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: repoDir)
+        let unicodePath = repoDir.appendingPathComponent("café.txt")
+        try "one\n".write(to: unicodePath, atomically: true, encoding: .utf8)
+        git(["add", "."], in: repoDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "-m", "base"], in: repoDir)
+        try "one\ntwo\n".write(to: unicodePath, atomically: true, encoding: .utf8)
+
+        let files = Git.Operations.uncommittedDiffFiles(at: repoDir.path)
+        let file = try XCTUnwrap(files.first { $0.relativePath.hasSuffix(".txt") })
+        XCTAssertEqual(file.relativePath, "café.txt")
+        XCTAssertEqual(file.added, 1)
+        XCTAssertEqual(file.deleted, 0)
     }
 
     func testBranchDiffFilesReturnsEmptyForNonGitDirectory() throws {
