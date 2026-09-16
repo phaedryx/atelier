@@ -103,7 +103,8 @@ private struct EnvironmentSettingsPane: View {
                     name: "gh",
                     status: appEnv.toolStatus.gh,
                     version: appEnv.toolStatus.ghVersion,
-                    detail: appEnv.toolStatus.ghAuthDetail
+                    detail: appEnv.toolStatus.ghAuthDetail,
+                    isAuthenticated: appEnv.toolStatus.ghAuthenticated
                 )
                 ToolRow(
                     name: "git",
@@ -1042,7 +1043,7 @@ struct ToolStatus {
     /// usable read the flag, so rewording the detail cannot switch them off.
     private static func checkGhAuth(_ ghPath: String) -> (authenticated: Bool, detail: String) {
         guard let output = runCommand(ghPath, args: ["auth", "status"], includeStderr: true) else {
-            return (false, "Not authenticated")
+            return (false, NSLocalizedString("Not authenticated", comment: "gh CLI auth status"))
         }
         if let range = output.range(of: "account ") {
             let afterAccount = output[range.upperBound...]
@@ -1052,9 +1053,9 @@ struct ToolStatus {
             }
         }
         if output.contains("Logged in") {
-            return (true, "Authenticated")
+            return (true, NSLocalizedString("Authenticated", comment: "gh CLI auth status"))
         }
-        return (false, "Not authenticated")
+        return (false, NSLocalizedString("Not authenticated", comment: "gh CLI auth status"))
     }
 
     /// Bounded: these probes run when the Environment pane appears, and
@@ -1076,11 +1077,19 @@ struct ToolStatus {
     }
 }
 
-private struct ToolRow: View {
+struct ToolRow: View {
     let name: String
     let status: BinaryStatus
     var version: String?
     var detail: String?
+    var isAuthenticated: Bool = false
+
+    /// Pure so it can be tested directly: the dot must track `isAuthenticated`,
+    /// the flag `checkGhAuth` computes, and never the free-to-reword `detail`
+    /// string — see `ghAuthDetail`'s doc comment.
+    static func authenticationDotColor(isAuthenticated: Bool) -> Color {
+        isAuthenticated ? .green : .orange
+    }
 
     var body: some View {
         HStack {
@@ -1101,12 +1110,11 @@ private struct ToolRow: View {
 
             if status.isInstalled {
                 if let detail {
-                    let isAuth = detail != "Not authenticated"
                     HStack(spacing: 4) {
                         Circle()
-                            .fill(isAuth ? .green : .orange)
+                            .fill(Self.authenticationDotColor(isAuthenticated: isAuthenticated))
                             .frame(width: 6, height: 6)
-                            .accessibilityLabel(isAuth ? "Authenticated" : "Not authenticated")
+                            .accessibilityLabel(isAuthenticated ? "Authenticated" : "Not authenticated")
                         Text(detail)
                             .font(.caption)
                             .foregroundStyle(.secondary)
