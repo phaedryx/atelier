@@ -4,6 +4,95 @@ Atelier was forked from [Factory Floor](https://github.com/alltuner/factoryfloor
 at v0.1.79. Everything below that release is Factory Floor's history; those links
 point at the upstream repository.
 
+## [0.2.4](https://github.com/phaedryx/atelier/compare/v0.2.3...v0.2.4) (2026-09-16)
+
+### Bug Fixes
+
+* **editor:** an agent-opened editor loads the file tree. `open_editor` calls
+  `addEditor` directly and cannot reach the view-local refresh that fills it,
+  so a file an agent opened got a tab and a git-decoration-free, permanently
+  empty tree beside it. The watcher's lifetime is now derived from
+  `model.hasEditorTabs` instead of started by whichever caller happened to add
+  the first tab, deliberately not gated on the view being active — `open_editor`
+  paired with `request_attention` opens a file in a workstream the user is not
+  looking at yet, which is the case this fixes.
+* **quick-actions:** a shell that will not launch no longer kills the app.
+  `runShellCommand` read `terminationStatus` outside the do/catch around
+  `process.run()`, so a `$SHELL` naming a binary that is gone — an uninstalled
+  fish, a Homebrew shell moved by an upgrade — raised an uncatchable
+  Objective-C exception instead of landing in the already-written failure
+  path. Commit, Push, Create PR and Close PR all spawn through here.
+* **changes:** a renamed file's +/− counts are the edit, not the whole file.
+  `git diff --numstat` without `-z` prints a rename as one combined field,
+  `old => new`, which never matched the map keyed on the last tab-separated
+  field; the file fell through to the untracked fallback and was reported as
+  added in full, a count that also feeds the large-file guard. `--numstat`,
+  `--name-status` and `ls-files --others` all take `-z` now, which as a side
+  effect stops non-ASCII paths from being quoted into keys that can't match
+  either.
+* **security:** file names can no longer become AppleScript code. Opening a
+  file in Terminal with nvim built its script by interpolating a Swift value
+  into an AppleScript literal into a shell command, escaping only the shell
+  layer — a file named `z" & (do shell script "touch atelier-pwned") & "`
+  closed the AppleScript literal and the rest compiled. Both layers now leave
+  Swift entirely: values travel as `NSAppleEventDescriptor` parameters into a
+  constant script, and the shell layer is closed by AppleScript's own `quoted
+  form of`. The same conversion covers Settings' CLI install, which runs as
+  root.
+* **verification:** a check whose wrapper never writes a pid is no longer
+  stuck forever. A missing pid file correctly means "still starting," but
+  nothing bounded how long that could go on being true — a surface that failed
+  to spawn its child left the row on Running for the rest of the session, with
+  Stop and its SIGKILL grace both no-oping on a group that never existed.
+  `completionPass` now retires such a check after a 30s `startupGrace`,
+  recording it exactly as a check whose process disappeared.
+* **initialization:** cancel waits on the run it cancelled, not on the slot.
+  The cancellation poll waited for `running[workstreamID]` to go nil, which a
+  new run claiming the freed slot — a manual Rerun, a late worktree-ready
+  racing a purge — kept it from ever seeing, burning the full 30s before a
+  purge proceeded believing setup was still live in the tree it was about to
+  remove. The poll now compares run identity instead of slot occupancy.
+* **ipc:** retiring a peer no longer wipes a surface its successor occupies. A
+  helper's documented reconnect re-registers under a new peer id carrying the
+  same surface before the old socket's close lands, and the unconditional
+  clear on release reached past the live agent that had already taken the pane
+  over — silencing nudges there for the rest of the session with no event left
+  to restore them. Release now skips the clear while another context still
+  names that surface.
+* **hooks:** removal only strips atelier's own commands from an entry. Install
+  and uninstall both dropped a whole hooks-array entry once any command inside
+  it was recognized as Atelier's, taking a user's own appended command down
+  with it. Both paths now filter the inner array and drop the entry only when
+  that empties it.
+* **git:** `hasUnpushedCommits` fails closed instead of reporting false, the
+  same fix already made for `hasUncommittedChanges`: a probe that cannot run
+  at all — git missing, the deadline hit — now returns nil rather than
+  claiming nothing is unpushed, and `purgeWarning`/`orphanPurgeWarning`, the
+  only warnings shown before an irreversible `git worktree remove --force`,
+  surface "possibly unpushed commits" instead of silently dropping it.
+* **settings:** the `gh` auth dot follows the `ghAuthenticated` flag, not the
+  detail string. `ToolRow` compared the display text to the literal "Not
+  authenticated," contradicting its own contract that the string is free to be
+  reworded — localizing it, as the project's own rules require, would have
+  silently flipped the dot green for a `gh` that isn't authenticated.
+* **ipc:** `roundTrip`'s receive timeout now bounds total elapsed time rather
+  than being rearmed on every chunk, so a reply trickling in over many small
+  reads could no longer stretch a tool call's 15s deadline to several times
+  that and block every other MCP call behind it — the helper is a
+  single-threaded read loop.
+* **launcher:** `PortScanner.active` is confined to one queue instead of being
+  read on a timer and written from the caller's thread under an
+  unsynchronized race masked only by the timer's initial delay. Also drops a
+  `.stopped` snapshot write that raced the same file's deletion for no
+  observable effect — deletion alone is the signal every consumer already
+  relies on.
+* **git:** `fetchDefaultBranch` strips only a leading `origin/` prefix, not
+  every occurrence. A branch legally named `feature/origin/thing` was mangled
+  by a `replacingOccurrences` that deletes every match, into a name that
+  doesn't exist on the remote, so the fetch silently did nothing. Pulled into
+  the `stripOriginPrefix` helper the file's two other call sites already used
+  correctly.
+
 ## [0.2.3](https://github.com/phaedryx/atelier/compare/v0.2.2...v0.2.3) (2026-09-15)
 
 ### ⚠ BREAKING CHANGES
