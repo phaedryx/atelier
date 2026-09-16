@@ -263,18 +263,51 @@ extension IPC {
         /// closes — the socket a helper holds open for its whole session is a far
         /// better liveness signal than the TTL, which would otherwise leave a ghost
         /// that `list_peers` advertises and `send_message` reports delivering to.
+        ///
+        /// **Its surface state goes with it only if no successor has taken the pane
+        /// over.** A peer being retired is by definition the older of any two that
+        /// name one surface: registration happens on a live connection, and this
+        /// runs when a connection closes. So a surviving context for the same
+        /// surface belongs to whoever is sitting there now, and clearing it would
+        /// reach past them — see `surfaceStillOccupied`.
         func release(peerID: UUID) async {
             await store.removePeer(id: peerID)
             let context = contexts.removeValue(forKey: peerID)
 
-            // Its surface state goes with it. Otherwise the tracker keeps reporting
-            // whatever that agent last said — usually .idle — and a nudge arriving
-            // afterwards would type into a pane whose agent has gone.
-            if let surfaceID = context?.surfaceID {
+            // Otherwise the tracker keeps reporting whatever that agent last said —
+            // usually .idle — and a nudge arriving afterwards would type into a pane
+            // whose agent has gone.
+            if let surfaceID = context?.surfaceID, !surfaceStillOccupied(surfaceID) {
                 await MainActor.run {
                     Workstream.AgentStateTracker.shared.clear(surfaceID: surfaceID)
                 }
             }
+        }
+
+        /// Whether any peer still registered names `surfaceID`.
+        ///
+        /// Read **after** the departing peer's own context has been removed, so it
+        /// can never match itself — checking first would make every release a no-op
+        /// and leave every surface behind forever.
+        ///
+        /// `contexts` is the whole of the answer, and deliberately not intersected
+        /// with the store's live peers. The two failure directions are not
+        /// symmetric. Counting a context whose peer has quietly expired costs one
+        /// *missed* clear, which is bounded and self-healing: Claude Code's
+        /// `agentSessionEnded` clears the surface on its own, `Archiver` clears the
+        /// whole workstream, and the successor's own release finds the predecessor's
+        /// context already gone and clears it then. Failing to count a live peer is
+        /// the defect this guard exists for, and it lasts the session: the nudge
+        /// takes an unreported surface as "do not interrupt", so the pane waiting on
+        /// a message is exactly the one that stops being told. Erring towards
+        /// occupied is therefore the correct direction.
+        ///
+        /// Nothing can be stranded by a context outliving its peer for good, either:
+        /// the store's `pin` exempts a connected helper's peer from the TTL, so a
+        /// context and its peer are dropped together by this method, by `touch` when
+        /// the store has already expired it, and by `pruneContexts`.
+        private func surfaceStillOccupied(_ surfaceID: UUID) -> Bool {
+            contexts.values.contains { $0.surfaceID == surfaceID }
         }
 
         /// Drops every peer. Called when the listener stops — nothing can reach the
@@ -285,7 +318,9 @@ extension IPC {
             // Same reason `release(peerID:)` clears it: a surface left in the tracker
             // keeps reporting whatever its agent last said — usually .idle — and a
             // later nudge would type into a pane whose agent has gone. Shutdown drops
-            // every peer at once, so it has the same exposure for all of them.
+            // every peer at once, so it has the same exposure for all of them — and
+            // unconditionally, unlike `release(peerID:)`: there is no successor to
+            // reach past when every context is going in the same breath.
             let surfaceIDs = contexts.values.compactMap(\.surfaceID)
             contexts.removeAll()
             if !surfaceIDs.isEmpty {

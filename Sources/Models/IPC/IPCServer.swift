@@ -245,7 +245,10 @@ extension IPC {
 
             // One connection speaks for one peer. Registering a second time on the
             // same socket abandons the first, which would otherwise stay pinned with
-            // nobody left to close it.
+            // nobody left to close it. This runs after the service has recorded the
+            // new peer's context, so it is the second producer of the shape
+            // `Service.release` guards: the abandoned peer and its replacement can
+            // name the same surface, and retiring the first must not clear it.
             if let previous = connectionPeers[key], previous != peerID {
                 peerOwners.removeValue(forKey: previous)
                 retire(previous)

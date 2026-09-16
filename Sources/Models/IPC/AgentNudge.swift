@@ -81,9 +81,11 @@ final class AgentNudge {
     /// Types a one-line notice into the surface the recipient occupies, if that
     /// surface reports a turn has ended.
     ///
-    /// **On typing into a pane whose agent has quit.** Retiring a peer clears
-    /// its surface state, so a nudge that arrives afterwards finds no evidence
-    /// and does nothing. The window is not zero: this hops from the service's
+    /// **On typing into a pane whose agent has quit.** Retiring the last peer on
+    /// a surface clears its state, so a nudge that arrives afterwards finds no
+    /// evidence and does nothing. A retirement whose surface a newer peer has
+    /// already claimed deliberately leaves that state alone — the agent there is
+    /// live, and it is the one this nudge is for. The window is not zero: this hops from the service's
     /// actor to the main actor, and a peer can be released during that hop.
     /// What is left in that window is the Coding Agent surface, which respawns
     /// its agent on exit (`surfaceCache.respawnableIDs`), so the pane is an

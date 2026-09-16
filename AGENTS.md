@@ -1804,6 +1804,29 @@ is the only way a caller turns a tab it just created into a peer it can address.
 worktree cannot hold is two *branches*, which is why work needing its own branch needs its own
 workstream.
 
+**Retiring a peer clears the tracker state for its surface — unless a live peer has already
+taken that surface over.** Closing a helper's socket is how a peer is retired
+(`IPC.Server.forget` → `retire` → `Service.release`), and the clear exists because a surface
+left reporting its dead agent's last state — usually `.idle` — is a pane `AgentNudge` would
+type into after the agent has gone. But the close is not ordered against the *next*
+registration: the helper whose id is refused as belonging to another session drops that
+identity, re-registers under a **new** peer id carrying the **same** `ATELIER_SURFACE_ID`, and
+the old socket's close lands afterwards (`Sources/MCPHelper/main.swift`). `claim`'s
+one-peer-per-connection rule is a second producer of exactly that shape. Retiring the older
+peer must therefore reach past nobody: `release` consults `contexts` *after* removing the
+departing peer's own entry, and skips the clear while any other context names that surface.
+
+The two directions cost differently, which is why the guard errs towards "occupied".
+Over-counting is one *missed* clear and is self-healing — `agentSessionEnded` clears the
+surface, `Archiver` clears the workstream, and the successor's own release finds the
+predecessor gone and clears it then. Under-counting is the bug: the nudge treats an unreported
+surface as "do not interrupt", so a wiped state kills nudging for the rest of the session in
+exactly the pane that is waiting on a message, and nothing restores it until a hook event that
+the skipped nudge was meant to provoke. Contexts cannot outlive their peers for good in any
+case — a connected helper's peer is pinned past the TTL, and the context goes with it in
+`release`, in `touch`, or in `pruneContexts`. `releaseAll` clears unconditionally and stays
+that way: at shutdown every context goes at once, so there is no successor to reach past.
+
 ## Localization
 
 All user-facing strings MUST use localization. Never hardcode strings directly in SwiftUI views or code.
