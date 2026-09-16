@@ -1214,6 +1214,29 @@ struct TerminalContainerView: View {
             guard isActive else { return }
             editorFileDirty = model.isActiveEditorDirty
         }
+        // The watcher's lifetime is derived from "this workstream has an editor
+        // tab", not started by whoever opened one. `WorkspaceActions.openEditor`
+        // — the path `open_editor` reaches — structurally cannot start it: the
+        // tree is `@State` on this view and an IPC handler has no view to touch.
+        // With the start hung off the tab-bar button's own handler instead, an
+        // agent-opened editor rendered with an empty file tree and no git
+        // decorations for the life of the pane, and the button worked, so the
+        // two paths disagreed about what opening an editor means. One
+        // `refreshFileTree` restores both the tree and its decorations.
+        //
+        // Deliberately **not** gated on `isActive`, for the same reason
+        // `onAppear`'s copy is not: `open_editor` paired with
+        // `request_attention` opens a file in a workstream the user is not
+        // looking at yet, and that is the case this fixes. `onAppear` still
+        // starts it for a pane mounted with editor tabs already restored, which
+        // is a change this never observes.
+        .onChange(of: model.hasEditorTabs) { _, hasEditors in
+            if hasEditors {
+                startFileTreeWatcherIfNeeded()
+            } else {
+                stopFileTreeWatcher()
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .terminalActivity)) { notification in
             guard isActive else { return }
             guard let wsID = notification.object as? UUID, wsID == workstreamID else { return }
@@ -1761,7 +1784,8 @@ struct TerminalContainerView: View {
         // Create bridge before adding the tab — never during body evaluation
         createEditorBridgeIfNeeded()
         _ = model.addEditor(filePath: filePath)
-        startFileTreeWatcherIfNeeded()
+        // `startFileTreeWatcherIfNeeded` is deliberately not called here: the
+        // watcher follows `model.hasEditorTabs`, which this has just changed.
     }
 
     private func startFileTreeWatcherIfNeeded() {
@@ -1815,17 +1839,15 @@ struct TerminalContainerView: View {
         }
     }
 
-    private func stopFileTreeWatcherIfUnneeded() {
-        if !model.hasEditorTabs {
-            refreshGeneration += 1
-            directoryWatcher?.stop()
-            directoryWatcher = nil
-            fileTree = []
-            gitFileStatuses = Git.FileStatusProvider()
-            // The Monaco bridge is deliberately untouched here: it lives on
-            // WorkspaceModel (model.editorBridge) precisely so closing the
-            // last editor tab never tears down the ~17 MB WebView.
-        }
+    private func stopFileTreeWatcher() {
+        refreshGeneration += 1
+        directoryWatcher?.stop()
+        directoryWatcher = nil
+        fileTree = []
+        gitFileStatuses = Git.FileStatusProvider()
+        // The Monaco bridge is deliberately untouched here: it lives on
+        // WorkspaceModel (model.editorBridge) precisely so closing the
+        // last editor tab never tears down the ~17 MB WebView.
     }
 
     private func createEditorBridgeIfNeeded() {
@@ -1923,7 +1945,6 @@ struct TerminalContainerView: View {
         if closingTabStopsRun(tab, runStarted: model.runStarted) {
             stopRun()
         }
-        stopFileTreeWatcherIfUnneeded()
     }
 
     private func moveCustomTab(to targetTab: WorkspaceTab) {
