@@ -335,6 +335,54 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertNotEqual(beforeSHA, remoteSHA, "Remote tracking ref should have advanced")
     }
 
+    /// A naive `replacingOccurrences(of: "origin/", with: "")` deletes every match, not just a
+    /// leading one. A remote whose default branch is itself named `feature/origin/thing` would
+    /// have that resolved to the nonexistent `feature/thing`, so the fetch below would silently
+    /// do nothing and the remote-tracking ref would never advance.
+    func testFetchDefaultBranchStripsOnlyALeadingOriginPrefix() throws {
+        let remoteDir = tempDir.appendingPathComponent("remote-embedded-origin")
+        try FileManager.default.createDirectory(at: remoteDir, withIntermediateDirectories: true)
+        git(["init", "-b", "feature/origin/thing"], in: remoteDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "--allow-empty", "-m", "init"], in: remoteDir)
+
+        let repoDir = tempDir.appendingPathComponent("cloned-embedded-origin")
+        git(["clone", remoteDir.path, repoDir.path], in: tempDir)
+
+        let beforeSHA = gitOutput(["rev-parse", "refs/remotes/origin/feature/origin/thing"], in: repoDir)
+
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "--allow-empty", "-m", "second"], in: remoteDir)
+
+        // Resolves via the symbolic-ref branch of `fetchDefaultBranch`, since no `branch:` is given.
+        Git.Operations.fetchDefaultBranch(at: repoDir.path)
+
+        let afterSHA = gitOutput(["rev-parse", "refs/remotes/origin/feature/origin/thing"], in: repoDir)
+        XCTAssertNotEqual(
+            beforeSHA, afterSHA,
+            "fetchDefaultBranch must fetch \"feature/origin/thing\" by its real name; a substring " +
+                "strip mangles it into \"feature/thing\", which does not exist on the remote"
+        )
+    }
+
+    // MARK: - stripOriginPrefix
+
+    func testStripOriginPrefixRemovesOnlyALeadingMatch() {
+        XCTAssertEqual(Git.Operations.stripOriginPrefix("origin/main"), "main")
+        XCTAssertEqual(
+            Git.Operations.stripOriginPrefix("origin/feature/origin/thing"), "feature/origin/thing",
+            "an origin/ occurring again inside the ref must survive the strip"
+        )
+        XCTAssertEqual(
+            Git.Operations.stripOriginPrefix("origin/origin/main"), "origin/main",
+            "only the leading occurrence is a prefix; the second is part of the name"
+        )
+        XCTAssertEqual(
+            Git.Operations.stripOriginPrefix("main"), "main",
+            "a ref with no origin/ prefix at all must pass through unchanged"
+        )
+    }
+
     // MARK: - fileStatuses
 
     func testFileStatusesReturnsModifiedForTrackedChanges() throws {
