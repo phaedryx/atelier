@@ -247,7 +247,11 @@ extension QuickAction {
             }
         }
 
-        private func runShellCommand(
+        /// Not private so the tests can reach it: the launch-failure path has no
+        /// other entrance, since `runClaudeAction` always spawns
+        /// `CommandBuilder.userShell` and a test cannot make that name a binary
+        /// that is missing.
+        func runShellCommand(
             action: QuickAction,
             shell: String,
             arguments: [String],
@@ -275,6 +279,7 @@ extension QuickAction {
 
                 let success: Bool
                 let output: String
+                let exitCode: Int32
                 do {
                     try process.run()
                     await MainActor.run { self.runningProcess = process }
@@ -288,13 +293,24 @@ extension QuickAction {
                     process.waitUntilExit()
                     let data = await reader.value
                     output = String(data: data, encoding: .utf8) ?? ""
-                    success = Self.parseSuccess(output: output, exitCode: process.terminationStatus)
+                    exitCode = process.terminationStatus
+                    success = Self.parseSuccess(output: output, exitCode: exitCode)
                 } catch {
                     output = "Failed to launch: \(error.localizedDescription)"
                     success = false
+                    // Deliberately not `process.terminationStatus`. Reading it on
+                    // a `Process` that never launched raises
+                    // `NSInvalidArgumentException: task not launched` — an
+                    // Objective-C exception Swift cannot catch, so it takes the
+                    // whole app down rather than landing in this block. It was
+                    // read below, outside the `do`, so every failed launch
+                    // crashed Atelier: a `$SHELL` naming an uninstalled fish, or
+                    // a Homebrew shell moved by an upgrade, was enough.
+                    // 1 is what `fail` reports for the other failure that never
+                    // spawns anything.
+                    exitCode = 1
                 }
 
-                let exitCode = process.terminationStatus
                 await MainActor.run {
                     if let idx = self.log.firstIndex(where: { $0.id == entryID }) {
                         self.log[idx].output = output
