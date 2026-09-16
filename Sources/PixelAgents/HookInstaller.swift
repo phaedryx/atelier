@@ -1,6 +1,7 @@
-// ABOUTME: Installs and uninstalls atelier-hook entries in ~/.claude/settings.json.
-// ABOUTME: Idempotent — detects existing entries by command containing "atelier-hook",
-// ABOUTME: and by which of the two invocations (report or decide) that command asks for.
+// ABOUTME: Installs and uninstalls atelier-hook commands in ~/.claude/settings.json.
+// ABOUTME: Idempotent — detects our commands by "atelier-hook" and by which of the two
+// ABOUTME: invocations (report or decide) they ask for, and touches only those commands,
+// ABOUTME: never a whole entry a user has appended their own command into.
 
 import Foundation
 import os
@@ -132,18 +133,25 @@ enum HookInstaller {
         for (eventName, kind) in hookEvents {
             var eventEntries = entries(in: hooks[eventName])
 
-            // An atelier-hook entry of the *wrong* kind for this event was left
+            // An atelier-hook command of the *wrong* kind for this event was left
             // by a build that invoked the script differently here — a plain
-            // entry under PermissionRequest, from before this hook could answer
+            // command under PermissionRequest, from before this hook could answer
             // anything. Leaving it in place means Claude Code runs the hook
             // twice, and the extra run is the one that returns no decision, so
             // it is replaced rather than added beside.
             //
+            // Only the wrong-kind *command* comes out of an entry's `hooks`
+            // array, never the whole entry: Claude Code's settings UI and docs
+            // both point a user at appending their own command into the same
+            // entry we created, and dropping the entry would take that command
+            // down with it. The entry itself goes only when removing ours
+            // leaves it with nothing left to run.
+            //
             // The *path* deliberately stays out of the comparison. An entry
             // pointing at another copy of Atelier is that copy's to manage, and
             // rewriting it here would have two installs fighting over the file.
-            eventEntries.removeAll { entry in
-                kinds(in: entry).contains { $0 != kind }
+            eventEntries = eventEntries.compactMap { entry in
+                removingAtelierHooks(from: entry) { $0 != kind }.entry
             }
 
             let alreadyInstalled = eventEntries.contains { entry in
@@ -206,14 +214,24 @@ enum HookInstaller {
             let eventEntries = entries(in: hooks[eventName])
             guard !eventEntries.isEmpty else { continue }
 
-            let filtered = eventEntries.filter { entry in
-                guard let entryHooks = entry["hooks"] as? [[String: Any]] else { return true }
-                return !entryHooks.contains { hook in
-                    (hook["command"] as? String)?.contains("atelier-hook") == true
+            // Removes our commands from inside each entry's `hooks` array
+            // rather than dropping entries that contain one: a user who
+            // appended their own command into the same entry we created must
+            // keep it. An entry is dropped only when that leaves it with
+            // nothing left to run.
+            var eventChanged = false
+            var filtered: [[String: Any]] = []
+            for entry in eventEntries {
+                let (updated, changed) = removingAtelierHooks(from: entry) { _ in true }
+                if changed {
+                    eventChanged = true
+                }
+                if let updated {
+                    filtered.append(updated)
                 }
             }
 
-            if filtered.count != eventEntries.count {
+            if eventChanged {
                 modified = true
                 if filtered.isEmpty {
                     hooks.removeValue(forKey: eventName)
@@ -245,15 +263,45 @@ enum HookInstaller {
 
     // MARK: - Shapes
 
+    /// The invocation kind a single hook object registers, or nil if it is not
+    /// ours — the one place that sniffs a command for "atelier-hook".
+    private static func hookKind(of hook: [String: Any]) -> Kind? {
+        guard let command = hook["command"] as? String, command.contains("atelier-hook") else { return nil }
+        return command.contains("--permission") ? .decide : .report
+    }
+
     /// Which of our invocation kinds an entry registers, if any. Empty for a
     /// foreign entry, which is what keeps someone else's hooks out of every
     /// decision this file makes.
     private static func kinds(in entry: [String: Any]) -> [Kind] {
         guard let entryHooks = entry["hooks"] as? [[String: Any]] else { return [] }
-        return entryHooks.compactMap { hook in
-            guard let command = hook["command"] as? String, command.contains("atelier-hook") else { return nil }
-            return command.contains("--permission") ? .decide : .report
+        return entryHooks.compactMap(hookKind(of:))
+    }
+
+    /// Removes our own hook objects from one entry's `hooks` array — never the
+    /// whole entry — keeping any command `shouldRemove` doesn't accept: a
+    /// user's own, or one of ours whose kind `shouldRemove` rejects. Returns
+    /// the updated entry, or nil when removing left no hooks behind, since an
+    /// entry with nothing to run has nothing worth keeping. `changed` is false
+    /// when nothing in this entry matched, so a caller can tell "unchanged"
+    /// apart from "changed to something empty".
+    private static func removingAtelierHooks(
+        from entry: [String: Any],
+        where shouldRemove: (Kind) -> Bool
+    ) -> (entry: [String: Any]?, changed: Bool) {
+        guard let entryHooks = entry["hooks"] as? [[String: Any]] else { return (entry, false) }
+
+        let kept = entryHooks.filter { hook in
+            guard let kind = hookKind(of: hook) else { return true }
+            return !shouldRemove(kind)
         }
+
+        guard kept.count != entryHooks.count else { return (entry, false) }
+        guard !kept.isEmpty else { return (nil, true) }
+
+        var updated = entry
+        updated["hooks"] = kept
+        return (updated, true)
     }
 
     /// One event's entries, tolerating the bare object Claude Code also accepts

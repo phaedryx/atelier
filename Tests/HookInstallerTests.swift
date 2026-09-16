@@ -191,6 +191,50 @@ final class HookInstallerTests: XCTestCase {
         XCTAssertEqual(try commands(for: "PermissionRequest", in: read()), ["/old/atelier-hook --permission"])
     }
 
+    /// The entry Claude Code's own settings UI nudges a user towards: appending
+    /// their own hook command into the SAME entry atelier created, rather than a
+    /// sibling entry under the event. Replacing a wrong-kind atelier command must
+    /// not take the user's command down with it.
+    func testInstallReplacingAWrongKindEntryPreservesAUsersCommandInTheSameEntry() throws {
+        let path = "/Apps/Atelier.app/atelier-hook"
+        let mixed: [String: Any] = [
+            "matcher": "",
+            "hooks": [
+                ["type": "command", "command": path, "timeout": 5],
+                ["type": "command", "command": "/usr/local/bin/my-hook", "timeout": 10],
+            ],
+        ]
+        try write(["hooks": ["PermissionRequest": [mixed]]])
+
+        HookInstaller.install(hookScriptPath: path, at: settingsPath)
+
+        let commands = try commands(for: "PermissionRequest", in: read())
+        XCTAssertTrue(commands.contains("/usr/local/bin/my-hook"), "the user's own command must survive")
+        XCTAssertTrue(commands.contains("\(path) --permission"), "our command must be upgraded to the right kind")
+        XCTAssertFalse(commands.contains(path), "the wrong-kind copy of our own command must be gone")
+    }
+
+    /// Reinstalling over an entry that already mixes our (correct-kind) command
+    /// with a user's own must leave both alone — no duplication, no eviction.
+    func testReinstallOverAMixedEntryLeavesBothCommandsInPlace() throws {
+        let path = "/Apps/Atelier.app/atelier-hook"
+        let mixed: [String: Any] = [
+            "matcher": "",
+            "hooks": [
+                ["type": "command", "command": path, "timeout": 5],
+                ["type": "command", "command": "/usr/local/bin/my-hook", "timeout": 10],
+            ],
+        ]
+        try write(["hooks": ["Stop": [mixed]]])
+
+        HookInstaller.install(hookScriptPath: path, at: settingsPath)
+
+        let settings = try read()
+        XCTAssertEqual(try entries(for: "Stop", in: settings).count, 1, "must not split into a second entry")
+        let commands = try commands(for: "Stop", in: settings)
+        XCTAssertEqual(Set(commands), Set([path, "/usr/local/bin/my-hook"]))
+    }
+
     func testPreservesForeignHooksAndUnrelatedSettings() throws {
         try write([
             "model": "opus",
@@ -246,6 +290,25 @@ final class HookInstallerTests: XCTestCase {
         XCTAssertEqual(settings["model"] as? String, "opus")
         XCTAssertEqual(try commands(for: "Stop", in: settings), ["/usr/local/bin/other-tool"])
         XCTAssertNil(try hooks(in: settings)["PreToolUse"], "events we solely occupied should be gone")
+    }
+
+    /// The core bug: a user who appends their own hook command into the SAME
+    /// entry atelier created must not lose it when atelier uninstalls its own.
+    func testUninstallFromAMixedEntryPreservesTheUsersCommand() throws {
+        let path = "/Apps/Atelier.app/atelier-hook"
+        let mixed: [String: Any] = [
+            "matcher": "",
+            "hooks": [
+                ["type": "command", "command": path, "timeout": 5],
+                ["type": "command", "command": "/usr/local/bin/my-hook", "timeout": 10],
+            ],
+        ]
+        try write(["hooks": ["Stop": [mixed]]])
+
+        HookInstaller.uninstall(at: settingsPath)
+
+        let settings = try read()
+        XCTAssertEqual(try commands(for: "Stop", in: settings), ["/usr/local/bin/my-hook"])
     }
 
     func testUninstallIsSafeWhenNothingIsInstalled() throws {
