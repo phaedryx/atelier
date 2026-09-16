@@ -97,13 +97,12 @@ private func runMonitor(configuration: Configuration) -> Never {
 
     scanner.stop()
 
-    writeState(
-        configuration: configuration,
-        pid: commandPID,
-        status: .stopped,
-        detectedPorts: scanner.detectedPorts,
-        selectedPort: scanner.selectedPort
-    )
+    // No `.stopped` snapshot is written here: `Port.Detector.refreshState` never reads
+    // `Snapshot.status` at all, and `RunState.Store.loadValidated` rejects any snapshot
+    // whose pid is no longer running — which `commandPID` already is not, by the time
+    // this line runs. A `.stopped` write is therefore unobservable to every consumer and
+    // would only race the watcher for nothing. Removing the file is the one signal that
+    // is actually read, as "no session".
     RunState.Store.remove(for: configuration.workstreamID)
     exit(0)
 }
@@ -137,40 +136,48 @@ private final class PortScanner: @unchecked Sendable {
     }
 
     func start(startedAt: Date, workstreamID: UUID) {
-        let timer = DispatchSource.makeTimerSource(queue: queue)
-        self.timer = timer
-        timer.schedule(deadline: .now() + .seconds(1), repeating: .seconds(1))
-        timer.setEventHandler { [weak self] in
-            guard let self, active else { return }
-            pollCount += 1
+        // The whole body runs on `queue`, so every read and write of `active` (and of
+        // `timer`) is confined to it with no exceptions — setting `active = true` on the
+        // calling thread, ahead of the handler's reads on `queue`, was an unsynchronized
+        // write racing those reads.
+        queue.async { [weak self] in
+            guard let self else { return }
 
-            let ports = listeningPorts(in: processTree(rootPID: pid))
-            let result = tracker.update(listeningPorts: ports)
-            detectedPorts = result.detectedPorts
-            selectedPort = result.selectedPort
+            let timer = DispatchSource.makeTimerSource(queue: queue)
+            self.timer = timer
+            timer.schedule(deadline: .now() + .seconds(1), repeating: .seconds(1))
+            timer.setEventHandler { [weak self] in
+                guard let self, active else { return }
+                pollCount += 1
 
-            let status: RunState.Status = result.detectedPorts.isEmpty ? .starting : .running
-            let state = RunState.Snapshot(
-                pid: pid,
-                status: status,
-                detectedPorts: result.detectedPorts,
-                selectedPort: result.selectedPort,
-                startedAt: startedAt
-            )
-            try? RunState.Store.write(state, for: workstreamID)
+                let ports = listeningPorts(in: processTree(rootPID: pid))
+                let result = tracker.update(listeningPorts: ports)
+                detectedPorts = result.detectedPorts
+                selectedPort = result.selectedPort
 
-            if result.selectedPort != nil {
-                active = false
-                timer.cancel()
-                return
+                let status: RunState.Status = result.detectedPorts.isEmpty ? .starting : .running
+                let state = RunState.Snapshot(
+                    pid: pid,
+                    status: status,
+                    detectedPorts: result.detectedPorts,
+                    selectedPort: result.selectedPort,
+                    startedAt: startedAt
+                )
+                try? RunState.Store.write(state, for: workstreamID)
+
+                if result.selectedPort != nil {
+                    active = false
+                    timer.cancel()
+                    return
+                }
+
+                if pollCount == 60 {
+                    timer.schedule(deadline: .now() + .seconds(60), repeating: .seconds(60))
+                }
             }
-
-            if pollCount == 60 {
-                timer.schedule(deadline: .now() + .seconds(60), repeating: .seconds(60))
-            }
+            active = true
+            timer.resume()
         }
-        active = true
-        timer.resume()
     }
 
     func stop() {
