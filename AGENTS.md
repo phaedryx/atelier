@@ -763,10 +763,23 @@ update has been applied" something the method can wait for.
 **A purge cancels through `ProcessRunner.Cancellation`.** `Archiver.purge` calls
 `Initialization.Runner.cancel`, which terminates the running step's process *group* —
 `ProcessRunner`'s own kill, so a step that backgrounded a server goes with it — making
-`capture` return and the loop finish as `.cancelled`. The poll reads the claim in
-`running`, which `run`'s `defer` clears, so it observes the real end of the work rather
-than the signal, and it is bounded at 30s because a step wedged past SIGKILL must not block
-an archive forever. The `Cancellation` class was lifted out of `BareRepoClone`, which still
+`capture` return and the loop finish as `.cancelled`. The poll watches for the
+`Cancellation` it fired leaving `running`, which `run`'s `defer` clears, so it observes the
+real end of the work rather than the signal, and it is bounded at 30s because a step wedged
+past SIGKILL must not block an archive forever.
+
+**The poll compares run *identity* (`running[id] === cancellation`), never slot presence.**
+`run`'s `defer` frees the slot and a new run may claim it in the same breath — a manual
+Rerun from the Info tab, or a late `.workstreamWorktreeReady` racing the purge — so a poll
+that waited for the slot to be empty went on waiting on a run whose handle it had never
+fired, burned the full 30s and answered `.timedOut` for a run that had already let go. The
+archive then reached `git worktree remove --force` having been told the opposite of the
+truth. A claimant is deliberately **not** cancelled in turn: `cancel` answers "the run you
+asked me to stop has let go", and chasing claimants would put the exit condition back on
+the slot being empty, where an arriving stream of them can still burn the bound. The
+residual is stated rather than closed — a run that claims the slot during a purge is still
+running in a tree about to be removed — and it is unchanged by this, which only stops
+`cancel` from stalling and from misreporting. The `Cancellation` class was lifted out of `BareRepoClone`, which still
 uses it: that type's exemption from `ProcessRunner` is about a clone having no honest
 deadline, not about cancelling, so sharing the handle does not narrow it.
 

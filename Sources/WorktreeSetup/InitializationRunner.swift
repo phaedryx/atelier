@@ -276,8 +276,19 @@ extension Initialization {
         /// Cancelling terminates the step's process *group* — `ProcessRunner`'s
         /// own kill, so a step that backgrounded a server goes with it — which
         /// makes `capture` return and the loop finish as `.cancelled`. The poll
-        /// below reads the claim in `running`, which the `defer` in `run` clears,
-        /// so it observes the real end of the work rather than the signal.
+        /// below watches for the `Cancellation` it fired leaving `running`, which
+        /// the `defer` in `run` clears, so it observes the real end of the work
+        /// rather than the signal.
+        ///
+        /// **It waits on that run's identity, not on the slot being free**, and
+        /// the difference is a new run claiming the slot the moment the old one
+        /// lets go — a manual Rerun from the Info tab, or a late
+        /// `.workstreamWorktreeReady` racing the purge. Waiting on presence left
+        /// this polling a run whose handle it had never fired, for the whole 30s,
+        /// and then reporting `.timedOut` for a run that had already finished —
+        /// which sent the archive on to `git worktree remove --force` believing
+        /// the opposite of the truth. What this method answers is "the run you
+        /// asked me to stop has let go", and only identity answers it.
         @discardableResult
         func cancel(for workstreamID: UUID, worktreePath: String) async -> CancelOutcome {
             guard let cancellation = running[workstreamID] else { return .notRunning }
@@ -288,7 +299,12 @@ extension Initialization {
             // archive forever. Proceeding is then the lesser evil: the user asked
             // for this worktree to go.
             for _ in 0 ..< 300 {
-                guard running[workstreamID] != nil else { return .stopped }
+                // `===`, so a run that claimed the slot after this one let go is
+                // not mistaken for the one being waited on. It is deliberately
+                // not cancelled either: it is nobody's business but its own
+                // caller's, and chasing claimants would put the exit condition
+                // back on the slot being empty.
+                guard running[workstreamID] === cancellation else { return .stopped }
                 do {
                     try await Task.sleep(nanoseconds: 100_000_000)
                 } catch {
@@ -305,8 +321,15 @@ extension Initialization {
         /// Test seam. `running` is otherwise only reachable by launching a real
         /// initialization, which needs a worktree and a project that declares
         /// steps.
-        func _markRunning(_ workstreamID: UUID) {
-            running[workstreamID] = ProcessRunner.Cancellation()
+        ///
+        /// Returns the handle it claimed the slot with, because identity is what
+        /// `cancel` waits on: a test for the reclaimed-slot race has to be able
+        /// to tell the run it cancelled from the one that replaced it.
+        @discardableResult
+        func _markRunning(_ workstreamID: UUID) -> ProcessRunner.Cancellation {
+            let cancellation = ProcessRunner.Cancellation()
+            running[workstreamID] = cancellation
+            return cancellation
         }
 
         /// Remove tracked state for a workstream (cleanup after archiving).

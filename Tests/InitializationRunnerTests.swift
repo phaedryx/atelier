@@ -318,6 +318,55 @@ final class InitializationRunnerTests: XCTestCase {
         XCTAssertTrue(note.contains("slow"), "\(note)")
     }
 
+    /// The poll waits on the *run* it cancelled, not on the slot in `running`
+    /// being free. `run`'s `defer` clears that slot when the old run ends, so a
+    /// new run claiming it — a manual Rerun from the Info tab, or a late
+    /// `.workstreamWorktreeReady` racing the purge — used to leave `cancel`
+    /// waiting on a run whose `Cancellation` it had never fired, and reporting
+    /// `.timedOut` thirty seconds later for a run that had already let go. The
+    /// archive then reached `git worktree remove --force` having been told
+    /// initialization was still going, which is the answer this method exists to
+    /// give correctly.
+    ///
+    /// The swap is a single actor hop, so the poll never observes the gap
+    /// between the first run letting go and the second claiming. That is the
+    /// race rather than a convenience: a version that cleared the slot, yielded,
+    /// and then re-claimed it would pass against the buggy code whenever the
+    /// poll happened to look in between.
+    func test_cancel_returnsWhenTheRunItCancelledIsGoneEvenThoughAnotherClaimedTheSlot() async throws {
+        let runner = Initialization.Runner()
+        let id = UUID()
+        let first = await runner._markRunning(id)
+
+        let started = Date()
+        let waiting = Task {
+            await runner.cancel(for: id, worktreePath: "/tmp/does-not-matter")
+        }
+
+        // Wait for the cancel to have actually fired at the first run, so the
+        // replacement below lands after the handle was captured. Bounded, so a
+        // seam that stops working fails here rather than hanging.
+        while !first.cancelled, Date().timeIntervalSince(started) < 10 {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertTrue(first.cancelled, "cancel has to fire at the run it captured")
+
+        let second = await runner._markRunning(id)
+        XCTAssertFalse(second === first, "the replacement is a different run")
+
+        let outcome = await waiting.value
+
+        XCTAssertEqual(outcome, .stopped, "The run it cancelled did let go")
+        XCTAssertLessThan(
+            Date().timeIntervalSince(started), 10,
+            "It must not wait out the 30s bound on a run it never cancelled"
+        )
+        XCTAssertFalse(
+            second.cancelled,
+            "Only the run the archive asked about is stopped; the one that replaced it is not"
+        )
+    }
+
     /// Two concurrent runs would execute the project's setup twice over one
     /// directory. Reachable from `.workstreamWorktreeReady` landing while a
     /// manual rerun is in flight.
