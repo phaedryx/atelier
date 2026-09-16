@@ -71,16 +71,22 @@ final class IPCTransport {
 
     /// Sends one request and blocks for its reply, for at most `deadline`.
     ///
-    /// The receive timeout is set per call rather than at connect, because it is
-    /// a property of the tool being invoked rather than of the socket.
+    /// The receive timeout is recomputed before every `recv`, to whatever is
+    /// left until `deadline` rather than to `deadline` itself. `SO_RCVTIMEO`
+    /// bounds one call to `recv`, not the socket's whole lifetime, so setting
+    /// it once and calling `recv` in a loop bounds only the gap *between*
+    /// chunks — a reply (or a stray late frame for an abandoned request, see
+    /// `Reply`'s doc comment above) that trickles in under that per-chunk
+    /// window keeps re-arming it and can run for chunks × timeout rather than
+    /// `deadline`. Recomputing the remaining time on each iteration is what
+    /// makes the one clock this function keeps actually bound the total wait.
     func roundTrip(_ request: IPC.Request, deadline: TimeInterval) -> Reply {
         guard fd >= 0, let data = try? IPC.Framing.encode(request) else { return .closed }
 
-        var timeout = timeval(
-            tv_sec: Int(deadline),
-            tv_usec: suseconds_t((deadline - deadline.rounded(.down)) * 1_000_000)
-        )
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        // Started here, before the send, so `deadline` bounds the whole call —
+        // "at most `deadline`" above means from entry, not from whenever the
+        // last byte of the request happened to land.
+        let deadlineTime = DispatchTime.now() + deadline
 
         var sent = 0
         while sent < data.count {
@@ -110,6 +116,17 @@ final class IPCTransport {
                 }
             }
 
+            guard var timeout = Self.remainingTimeval(until: deadlineTime) else {
+                return .timedOut
+            }
+            // Not the "two syscalls of theatre" `connect(to:)` calls out for
+            // `SO_SNDTIMEO`: that one is fixed once because a request frame
+            // never approaches the send timeout in practice. This one is the
+            // fix — recomputed and reset on every iteration, it is the only
+            // thing that makes `deadline` bound total elapsed time rather than
+            // the gap since the last chunk.
+            setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+
             let read = recv(fd, &chunk, chunk.count, 0)
             if read == 0 {
                 return .closed
@@ -119,6 +136,27 @@ final class IPCTransport {
             }
             buffer.append(contentsOf: chunk[0 ..< read])
         }
+    }
+
+    /// Whatever remains until `deadline`, as the `timeval` `SO_RCVTIMEO`
+    /// wants — nil once the deadline has passed, which the caller reads as an
+    /// immediate `.timedOut` rather than issuing one more `recv`.
+    ///
+    /// A `{0, 0}` timeval means "block forever" to `setsockopt`, not "return
+    /// immediately", so a remainder too small to round to a whole microsecond
+    /// is bumped to one rather than silently disabling the timeout it was
+    /// asked for.
+    private static func remainingTimeval(until deadline: DispatchTime) -> timeval? {
+        let now = DispatchTime.now().uptimeNanoseconds
+        let end = deadline.uptimeNanoseconds
+        guard end > now else { return nil }
+        let remainingNanos = end - now
+        let seconds = Int(remainingNanos / 1_000_000_000)
+        var microseconds = Int((remainingNanos % 1_000_000_000) / 1_000)
+        if seconds == 0, microseconds == 0 {
+            microseconds = 1
+        }
+        return timeval(tv_sec: seconds, tv_usec: suseconds_t(microseconds))
     }
 }
 
