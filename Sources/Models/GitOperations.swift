@@ -69,9 +69,10 @@ extension Worktree {
         /// unprotected without having asked the question.
         let isProtected: Bool
 
-        /// `isDirty` and/or `hasBranchCommits` are `false` because a probe did not
-        /// run, not because the answer is no. Anything that acts on "this worktree
-        /// is clean" — Prune, above all — has to treat it as not-clean.
+        /// `isDirty`, `hasUnpushedCommits` and/or `hasBranchCommits` are `false`
+        /// because a probe did not run, not because the answer is no. Anything
+        /// that acts on "this worktree is clean" — Prune, above all — has to
+        /// treat it as not-clean.
         ///
         /// No default value on purpose: a `= false` here would let a future
         /// construction site claim both checks ran when it never asked.
@@ -1163,11 +1164,24 @@ extension Git {
             }
         }
 
-        /// Check if the current branch has commits not yet pushed to its upstream.
-        static func hasUnpushedCommits(at path: String) -> Bool {
+        /// Whether the current branch holds commits not yet pushed to its
+        /// upstream — or `nil` when the probe could not run.
+        ///
+        /// Mirrors `hasUncommittedChanges` above: `purgeWarning` gates the same
+        /// last-warning-before-`--force` on this, so a probe that could not look
+        /// must not answer "no". A branch with no upstream configured is *not*
+        /// a probe failure — `git log @{upstream}..HEAD` exits non-zero for
+        /// exactly that reason on every branch that has never been pushed — so
+        /// this only reports `nil` when the fallback, `git log --oneline -1`,
+        /// also fails to answer. Git missing or the call timing out fails both
+        /// probes identically, which is what makes that the honest signal; a
+        /// truly empty repository (no commits at all) hits the same branch and
+        /// is reported as unknown rather than "nothing to push", which is the
+        /// same fail-closed trade the rest of this change makes.
+        static func hasUnpushedCommits(at path: String) -> Bool? {
             guard let output = run(args: ["log", "@{upstream}..HEAD", "--oneline"], in: path) else {
-                // No upstream set means everything is unpushed (if there are commits)
-                guard let commits = run(args: ["log", "--oneline", "-1"], in: path) else { return false }
+                // No upstream set means everything is unpushed (if there are commits).
+                guard let commits = run(args: ["log", "--oneline", "-1"], in: path) else { return nil }
                 return !commits.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             }
             return !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1246,17 +1260,20 @@ extension Git {
                 let isMain = URL(fileURLWithPath: path).standardizedFileURL.path == mainPath
                 let isProtected = isMain || currentBranch.map(protectedBranches.contains) == true
                 let dirtyProbe = isMain ? false : hasUncommittedChanges(at: path)
-                let unpushed = !isMain && hasUnpushedCommits(at: path)
+                let unpushedProbe: Bool? = isMain ? false : hasUnpushedCommits(at: path)
                 let branchCommitsProbe = isMain ? false : hasBranchCommits(at: path, projectPath: projectPath)
                 results.append(Worktree.Info(
                     path: path,
                     branch: currentBranch,
                     isDirty: dirtyProbe ?? false,
                     isMain: isMain,
-                    hasUnpushedCommits: unpushed,
+                    // Defensible only because `cleanlinessUnknown` below now folds
+                    // this probe in — a caller that wants to know whether this
+                    // answer is trustworthy has somewhere to look.
+                    hasUnpushedCommits: unpushedProbe ?? false,
                     hasBranchCommits: branchCommitsProbe ?? false,
                     isProtected: isProtected,
-                    cleanlinessUnknown: dirtyProbe == nil || branchCommitsProbe == nil
+                    cleanlinessUnknown: dirtyProbe == nil || unpushedProbe == nil || branchCommitsProbe == nil
                 ))
             }
 

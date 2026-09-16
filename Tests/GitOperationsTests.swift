@@ -673,6 +673,63 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertEqual(Git.Operations.hasBranchCommits(at: worktree.path, projectPath: repoDir.path), true)
     }
 
+    /// A repository with no upstream configured is not a probe failure — every
+    /// branch that has never been pushed looks like this — so it must report a
+    /// definite answer, not "unknown".
+    func testHasUnpushedCommitsWithNoUpstreamReportsTrueWhenThereAreCommits() throws {
+        let repoDir = tempDir.appendingPathComponent("unpushed-no-upstream")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        XCTAssertTrue(git(["init", "-b", "main"], in: repoDir))
+        XCTAssertTrue(git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+                           "commit", "--allow-empty", "-m", "init"], in: repoDir))
+
+        XCTAssertEqual(Git.Operations.hasUnpushedCommits(at: repoDir.path), true)
+    }
+
+    /// The ordinary "nothing to push" case: a branch that is up to date with its
+    /// upstream.
+    func testHasUnpushedCommitsWithAnUpToDateUpstreamReportsFalse() throws {
+        let remote = tempDir.appendingPathComponent("unpushed-remote")
+        try FileManager.default.createDirectory(at: remote, withIntermediateDirectories: true)
+        XCTAssertTrue(git(["init", "-b", "main"], in: remote))
+        XCTAssertTrue(git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+                           "commit", "--allow-empty", "-m", "init"], in: remote))
+
+        let local = tempDir.appendingPathComponent("unpushed-clone")
+        XCTAssertTrue(git(["clone", remote.path, local.path], in: tempDir))
+
+        XCTAssertEqual(Git.Operations.hasUnpushedCommits(at: local.path), false)
+
+        XCTAssertTrue(git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+                           "commit", "--allow-empty", "-m", "ahead"], in: local))
+        XCTAssertEqual(Git.Operations.hasUnpushedCommits(at: local.path), true)
+    }
+
+    /// Neither `git log @{upstream}..HEAD` nor its no-upstream fallback,
+    /// `git log --oneline -1`, can answer for a directory that is not a
+    /// repository at all — both exit non-zero — so this must not read as
+    /// "nothing unpushed", the same rule `hasUncommittedChanges` follows.
+    func testHasUnpushedCommitsSaysItCouldNotTellRatherThanNothingToPush() throws {
+        let plainDir = tempDir.appendingPathComponent("not-a-repo-unpushed")
+        try FileManager.default.createDirectory(at: plainDir, withIntermediateDirectories: true)
+
+        XCTAssertNil(Git.Operations.hasUnpushedCommits(at: plainDir.path))
+    }
+
+    /// A repository that exists but has never had a commit made in it is the one
+    /// case where both the `@{upstream}..HEAD` probe and its `git log --oneline
+    /// -1` fallback fail for the same non-zero-exit reason a genuine probe
+    /// failure would. It is indistinguishable from that failure here, so it is
+    /// reported as unknown rather than as "nothing to push" — this used to
+    /// answer `false` with full confidence.
+    func testHasUnpushedCommitsOnARepositoryWithNoCommitsAtAllReportsUnknown() throws {
+        let repoDir = tempDir.appendingPathComponent("unborn-head")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        XCTAssertTrue(git(["init", "-b", "main"], in: repoDir))
+
+        XCTAssertNil(Git.Operations.hasUnpushedCommits(at: repoDir.path))
+    }
+
     /// Prune has to fail closed: a worktree whose cleanliness could not be
     /// established is not a clean worktree.
     func testListWorktreesMarksCleanlinessUnknownWhenABaseBranchDoesNotResolve() throws {
