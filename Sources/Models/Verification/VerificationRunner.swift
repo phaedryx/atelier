@@ -108,11 +108,31 @@ extension Verification {
         /// `VerificationRunnerTests`' two stop tests are timing tests that must
         /// not pay it.
         private let killGrace: Duration
+        /// How long a check may go without a pid file before it is taken to have
+        /// died on its way up. Injected only by tests, for the same reason
+        /// `killGrace` is: the production value is a real wait no timing test
+        /// should pay.
+        private let startupGrace: Duration
         private var pollTask: Task<Void, Never>?
 
         /// How long after `SIGTERM` a check that has not died is killed outright.
         static let defaultKillGrace: Duration = .seconds(5)
         static let defaultPollInterval: Duration = .milliseconds(400)
+
+        /// The upper bound on "still starting" — see `completionPass`.
+        ///
+        /// **Thirty seconds is a tradeoff between two costs, and it is worth
+        /// naming both.** Too short and a machine slow enough to take that long
+        /// over fork → `login` → bash → `sh` → `ps` gets a check killed off for
+        /// being slow, which is the failure mode `completionPass`'s rule exists
+        /// to prevent. Too long and the bound becomes the ceiling on
+        /// `stopAndWait`, so archiving a workstream whose check was started a
+        /// moment earlier hangs for it. The real path is milliseconds, so thirty
+        /// seconds is three orders of magnitude of headroom on the first cost,
+        /// and an archive that pauses for half a minute in the worst case is a
+        /// bounded annoyance where the unbounded version was a workstream that
+        /// could not be archived at all.
+        static let defaultStartupGrace: Duration = .seconds(30)
 
         init(
             fingerprint: @escaping @Sendable (String, String) -> String = { worktreePath, projectDirectory in
@@ -121,11 +141,13 @@ extension Verification {
                 )
             },
             pollInterval: Duration = Runner.defaultPollInterval,
-            killGrace: Duration = Runner.defaultKillGrace
+            killGrace: Duration = Runner.defaultKillGrace,
+            startupGrace: Duration = Runner.defaultStartupGrace
         ) {
             self.fingerprint = fingerprint
             self.pollInterval = pollInterval
             self.killGrace = killGrace
+            self.startupGrace = startupGrace
         }
 
         /// Installed once, by `ContentView`, with the adapter over
@@ -456,9 +478,12 @@ extension Verification {
         private func signal(_ spawn: Spawn, _ code: Int32) {
             guard let pid = spawn.recordedPID else {
                 // The wrapper has not written its pid yet, which is a window of
-                // milliseconds at the very start of a check. Nothing to signal;
-                // the completion pass will still see the process appear and the
-                // stop flag is already set, so a second `stop` press lands.
+                // milliseconds at the very start of a check. Nothing to signal —
+                // but the stop flag is already set and the grace's `SIGKILL`
+                // re-reads this file, so a wrapper that comes up between the two
+                // is still killed. One that never comes up is bounded instead, by
+                // `completionPass`'s startup grace, which is what stops a stop
+                // from silently doing nothing forever.
                 logger.info("Verification stop found no pid yet for \(spawn.statusPath, privacy: .public)")
                 return
             }
@@ -472,6 +497,12 @@ extension Verification {
         /// next step of a purge uses, and on expiry the caller logs and proceeds:
         /// a workstream stranded half-archived is worse than cleanup that did not
         /// happen. Returns whether everything really stopped.
+        ///
+        /// **A check that can never report does not reach that bound**, because
+        /// the loop drives `completionPass`, which retires a check with no pid
+        /// file once its startup grace expires. Before that grace existed such a
+        /// check was unstoppable and unobservable, so this waited out the whole
+        /// `userCommand` timeout and came back false every time.
         @discardableResult
         func stopAndWait(
             workstreamID: UUID,
@@ -558,6 +589,7 @@ extension Verification {
         ///   or the surface was destroyed under it. `stopRequested` is the only
         ///   thing that can tell those apart, which is why `stop` sets it.
         func completionPass() async {
+            let now = Date()
             for (workstreamID, checks) in running {
                 for (name, live) in checks {
                     if let status = live.spawn.recordedStatus {
@@ -569,12 +601,41 @@ extension Verification {
                         )
                         continue
                     }
-                    // **A check with no pid file yet is starting, never finished.**
-                    // The wrapper writes its group id as its first act, so this is a
-                    // window of milliseconds — but reading a missing pid as "gone"
-                    // would record every check as finished the instant the first
-                    // pass looked at it, before it had run anything.
-                    guard let pid = live.spawn.recordedPID, !isAlive(pid) else { continue }
+                    guard let pid = live.spawn.recordedPID else {
+                        // **A check with no pid file yet is starting, never
+                        // finished.** The wrapper writes its group id as its first
+                        // act, so this is a window of milliseconds — and reading a
+                        // missing pid as "gone" would record every check as
+                        // finished the instant the first pass looked at it, before
+                        // it had run anything.
+                        //
+                        // **But the window is bounded, because nothing else
+                        // bounds it.** `startSurface` returning true is not the
+                        // wrapper having run: a surface can fail to spawn its
+                        // child, or be torn down before exec. Then the pid file
+                        // never arrives, and "starting" is a state the check
+                        // cannot leave — the row shows Running for the rest of the
+                        // session, `stop` has no group to signal so it no-ops, the
+                        // grace's `SIGKILL` no-ops with it, and `stopAndWait`
+                        // burns the whole of `ProcessRunner.Timeout.userCommand`
+                        // before an archive may proceed. Past the grace the pid
+                        // file is not late, it is never coming, so this is the
+                        // same case as the branch below: a process that is gone
+                        // with no status file.
+                        if now.timeIntervalSince(live.startedAt) >= startupGraceSeconds {
+                            logger.warning(
+                                "Verification check \(name, privacy: .public) wrote no pid within its startup grace"
+                            )
+                            finish(
+                                workstreamID: workstreamID,
+                                name: name,
+                                live: live,
+                                state: live.stopRequested ? .stopped : .failed(-1)
+                            )
+                        }
+                        continue
+                    }
+                    guard !isAlive(pid) else { continue }
                     finish(
                         workstreamID: workstreamID,
                         name: name,
@@ -583,6 +644,14 @@ extension Verification {
                     )
                 }
             }
+        }
+
+        /// `startupGrace` as the seconds `completionPass` compares dates in.
+        /// `Duration` is what the other two knobs are spelled as, and what
+        /// `Task.sleep` wants; nothing converts it for free.
+        private var startupGraceSeconds: TimeInterval {
+            let parts = startupGrace.components
+            return TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18
         }
 
         /// `kill(-pgid, 0)` asks whether a process group still exists without
