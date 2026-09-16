@@ -89,6 +89,60 @@ final class PortDetectorTests: XCTestCase {
         wait(for: [second], timeout: 5)
     }
 
+    /// A pid guaranteed not to be running, for exercising the dead-pid branch of
+    /// `loadValidated` deterministically rather than guessing at an unused number.
+    private func deadPID() throws -> Int32 {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/true")
+        try process.run()
+        process.waitUntilExit()
+        return process.processIdentifier
+    }
+
+    /// Defect B: `runMonitor` used to write a `.stopped` snapshot and then immediately
+    /// remove the very same file. `loadValidated` rejects any snapshot whose pid is not
+    /// running, and by the time a run's process has stopped that pid is already dead — so
+    /// the `.stopped` write could never be observed as anything other than what plain
+    /// removal already produces. This pins that equivalence: a `.stopped` snapshot for a
+    /// dead pid reads exactly like no file at all.
+    func testAStoppedSnapshotForADeadPIDReadsIdenticallyToNoFile() throws {
+        let pid = try deadPID()
+        try RunState.Store.write(
+            RunState.Snapshot(
+                pid: pid,
+                status: .stopped,
+                detectedPorts: [4300],
+                selectedPort: 4300,
+                startedAt: Date()
+            ),
+            for: workstreamID
+        )
+
+        XCTAssertNil(RunState.Store.loadValidated(for: workstreamID))
+
+        RunState.Store.remove(for: workstreamID)
+        XCTAssertNil(RunState.Store.loadValidated(for: workstreamID))
+    }
+
+    /// Defect B, from the consumer's side: with no `.stopped` snapshot ever written, a
+    /// caller watching the store — `Port.Detector` — must still observe the run ending.
+    /// Removing the file is the whole signal; this asserts that removal alone drives the
+    /// detector back to `.none` with no selected port.
+    func testDetectorReadsNoSessionOnceTheRunStateFileIsRemoved() throws {
+        try writeState(selectedPort: 4400)
+        let detector = Port.Detector(workstreamID: workstreamID)
+
+        let running = expectation(description: "port reported")
+        pollUntil(running) { detector.selectedPort == 4400 && detector.status == .running }
+        wait(for: [running], timeout: 5)
+
+        RunState.Store.remove(for: workstreamID)
+
+        let stopped = expectation(description: "run reported as ended")
+        pollUntil(stopped) { detector.status == .none && detector.selectedPort == nil }
+        wait(for: [stopped], timeout: 5)
+    }
+
     private func pollUntil(_ expectation: XCTestExpectation, _ condition: @escaping () -> Bool) {
         func check() {
             if condition() {
