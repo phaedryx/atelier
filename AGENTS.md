@@ -1576,7 +1576,14 @@ Three things hold it shut, and each is easy to undo by accident:
    a wedged app blocks *all* MCP traffic for that long. Only `create_workstream` gets minutes
    (480s — `ProcessRunner.Timeout.userCommand` after a `.network` fetch, spelled as literals
    because `ProcessRunner` is not compiled into `AtelierMCP`). Nothing waits less than the 15
-   seconds it replaced.
+   seconds it replaced. That bound is on *total elapsed time since the call began*, not on the
+   gap between chunks: `SO_RCVTIMEO` only ever bounds one `recv`, so `roundTrip` recomputes the
+   remaining time before every `recv` rather than setting the timeout once — a reply (or a late
+   frame for an abandoned request, still read and discarded per point 1) that trickles in under
+   the per-chunk window would otherwise re-arm a fresh window on every chunk and run for
+   chunks × timeout instead of `deadline`.
+   `IPCServerTests.test_roundTrip_isBoundedByTheToolDeadline_evenWhenRepliesTrickleIn` pins it,
+   against a stub that answers in gapped single-byte fragments and never completes the frame.
 
 The timeout message has to **forbid** a retry rather than invite one, and that is the finding's
 own conclusion rather than a style preference: the caller cannot tell a genuine `nameInUse` from

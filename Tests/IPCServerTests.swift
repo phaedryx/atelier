@@ -528,6 +528,56 @@ final class IPCServerTests: XCTestCase {
         XCTAssertEqual(answer, "No other agents are registered in this project.")
     }
 
+    /// The bug this branch fixes: `IPCTransport.roundTrip` set `SO_RCVTIMEO`
+    /// once and called `recv` in a loop, so each chunk that arrived re-armed
+    /// the full per-`recv` window instead of counting against one clock for
+    /// the whole call. A reply dribbling in under that window — or a stray
+    /// late frame for an abandoned request, which `roundTrip` deliberately
+    /// keeps reading out of the buffer — could stretch a 15s deadline to
+    /// several times that, and because the helper is a single-threaded
+    /// `readLine` loop, every other tool call sat blocked behind it.
+    ///
+    /// `TrickleListener` answers `list_peers` in four one-byte fragments, 6s
+    /// apart (24s of gaps, each individual gap comfortably under the tool's
+    /// 15s deadline), and never sends the newline that would complete the
+    /// frame. Unfixed, that reproduces the bug: three fragments land inside
+    /// their own fresh 15s windows and the fourth `recv` then blocks a full
+    /// 15s more with nothing coming — around 33s in total, none of it
+    /// answerable by `list_peers`' documented deadline. Fixed, the call must
+    /// return with `.timedOut` at that 15s deadline regardless of how the
+    /// fragments are paced, because only three of the four fragments arrive
+    /// before the deadline is spent.
+    func test_roundTrip_isBoundedByTheToolDeadline_evenWhenRepliesTrickleIn() throws {
+        let helper = try XCTUnwrap(MCPHelperLauncher.executableURL(), "atelier-mcp was not found in the host app bundle")
+        let stub = try takeOverTheEndpoint(trickling: .listPeers, fragmentGap: 6, fragmentCount: 4)
+        defer { stub.stop() }
+
+        let agent = try MCPProcess(helper: helper, environment: stubEnvironment())
+        let start = Date()
+        let answer = agent.callTool("list_peers", timeout: 30)
+        let elapsed = Date().timeIntervalSince(start)
+
+        XCTAssertNotNil(answer, "the call must answer within this test's own 30s patience, not hang past it")
+        XCTAssertEqual(
+            answer, Self.expectedListPeersTimeoutMessage,
+            "expected the documented timeout wording for a safe-to-replay tool"
+        )
+        // list_peers' deadline is 15s. A fixed implementation cannot exceed that
+        // by more than helper spawn and scheduling overhead — measured locally
+        // at ~15.1s — so 22 leaves margin for a slower CI runner while staying
+        // well clear of two full 15s windows, which is what a regression back
+        // to per-`recv` arming would produce. The buggy implementation measured
+        // here takes ~33s, so this bound leaves wide separation on both sides.
+        XCTAssertLessThan(
+            elapsed, 22,
+            "roundTrip must be bounded by the 15s tool deadline even though replies trickled in under it — took \(elapsed)s"
+        )
+    }
+
+    private static let expectedListPeersTimeoutMessage =
+        "Atelier did not answer list_peers within 15s. Atelier may be busy rather than stuck, and this call "
+            + "changes nothing by running twice, so it is safe to try again."
+
     // MARK: - Stub listener
 
     private func stubEnvironment() -> [String: String] {
@@ -558,6 +608,30 @@ final class IPCServerTests: XCTestCase {
             throw XCTSkip("the real listener did not release ipc.json")
         }
         let stub = try HangUpListener(hangingUpOn: tool)
+        try FilePersistence.writeAtomically(
+            JSONEncoder().encode(IPC.Endpoint(port: stub.port, token: stub.token)),
+            to: IPC.Endpoint.fileURL
+        )
+        return stub
+    }
+
+    /// The same handover as `takeOverTheEndpoint(hangingUpOn:)`, publishing a
+    /// `TrickleListener` in place of the real server instead.
+    private func takeOverTheEndpoint(
+        trickling tool: IPC.Tool,
+        fragmentGap: TimeInterval,
+        fragmentCount: Int
+    ) throws -> TrickleListener {
+        _ = try waitForEndpoint()
+        server.stop()
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline, IPC.Endpoint.read() != nil {
+            usleep(20_000)
+        }
+        guard IPC.Endpoint.read() == nil else {
+            throw XCTSkip("the real listener did not release ipc.json")
+        }
+        let stub = try TrickleListener(trickling: tool, fragmentGap: fragmentGap, fragmentCount: fragmentCount)
         try FilePersistence.writeAtomically(
             JSONEncoder().encode(IPC.Endpoint(port: stub.port, token: stub.token)),
             to: IPC.Endpoint.fileURL
@@ -766,8 +840,8 @@ private final class MCPProcess {
     }
 
     /// Calls a tool and returns the text an agent would read.
-    func callTool(_ name: String, _ arguments: [String: String] = [:]) -> String? {
-        let reply = send(method: "tools/call", params: ["name": name, "arguments": arguments])
+    func callTool(_ name: String, _ arguments: [String: String] = [:], timeout: TimeInterval = 10) -> String? {
+        let reply = send(method: "tools/call", params: ["name": name, "arguments": arguments], timeout: timeout)
         let result = reply?["result"] as? [String: Any]
         let content = result?["content"] as? [[String: Any]]
         return content?.first?["text"] as? String
@@ -907,6 +981,160 @@ private final class HangUpListener {
             )))
         case .listPeers:
             .success(id: request.id, .peers([]))
+        default:
+            .success(id: request.id, .text("the stub answered \(request.tool.rawValue)"))
+        }
+    }
+
+    private func send(_ response: IPC.Response, on connection: Int32) {
+        guard let data = try? IPC.Framing.encode(response) else { return }
+        var sent = 0
+        while sent < data.count {
+            let written = data.withUnsafeBytes { bytes -> Int in
+                Darwin.send(connection, bytes.baseAddress!.advanced(by: sent), data.count - sent, 0)
+            }
+            guard written > 0 else { return }
+            sent += written
+        }
+    }
+}
+
+/// A loopback listener that answers every request normally, except that the
+/// chosen tool's reply is sent as several single-byte fragments with a gap
+/// between them — and the frame is never completed, so the caller never gets
+/// a full line to match against its request id.
+///
+/// This is what exposed `IPCTransport.roundTrip` re-arming a full `recv`
+/// timeout on every chunk: each individual gap is well under the tool's
+/// deadline, so a caller bounding only the gap *between* chunks never times
+/// out, while one bounding total elapsed time since the call began does —
+/// see `test_roundTrip_isBoundedByTheToolDeadline_evenWhenRepliesTrickleIn`.
+private final class TrickleListener {
+    let port: UInt16
+    let token = "stub-token-for-the-trickle-test"
+
+    private let listenFD: Int32
+    private let trickleOn: IPC.Tool
+    private let fragmentGap: TimeInterval
+    private let fragmentCount: Int
+    private let lock = NSLock()
+    private var running = true
+
+    init(trickling tool: IPC.Tool, fragmentGap: TimeInterval, fragmentCount: Int) throws {
+        trickleOn = tool
+        self.fragmentGap = fragmentGap
+        self.fragmentCount = fragmentCount
+
+        // Bound through a local rather than the stored property: a closure in an
+        // initializer may not read `self` before every member has a value.
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw XCTSkip("could not open a stub listener socket") }
+        listenFD = fd
+
+        var reuse: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
+
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = 0
+        address.sin_addr.s_addr = INADDR_LOOPBACK.bigEndian
+        let bound = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard bound == 0, listen(fd, 8) == 0 else {
+            close(fd)
+            throw XCTSkip("could not bind a stub listener")
+        }
+
+        var assigned = sockaddr_in()
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let named = withUnsafeMutablePointer(to: &assigned) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getsockname(fd, $0, &length)
+            }
+        }
+        guard named == 0 else {
+            close(fd)
+            throw XCTSkip("could not read the stub listener's port")
+        }
+        port = assigned.sin_port.bigEndian
+
+        Thread.detachNewThread { [weak self] in
+            while let self, isRunning {
+                let connection = accept(fd, nil, nil)
+                guard connection >= 0 else { return }
+                serve(connection)
+                close(connection)
+            }
+        }
+    }
+
+    func stop() {
+        lock.lock()
+        running = false
+        lock.unlock()
+        close(listenFD)
+        try? FileManager.default.removeItem(at: IPC.Endpoint.fileURL)
+    }
+
+    private var isRunning: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return running
+    }
+
+    private func serve(_ connection: Int32) {
+        var buffer = Data()
+        var chunk = [UInt8](repeating: 0, count: 65_536)
+        while isRunning {
+            let read = recv(connection, &chunk, chunk.count, 0)
+            guard read > 0 else { return }
+            buffer.append(contentsOf: chunk[0 ..< read])
+
+            let (lines, remainder) = IPC.Framing.lines(from: buffer)
+            buffer = remainder
+            for line in lines {
+                guard let request = try? JSONDecoder().decode(IPC.Request.self, from: line) else { continue }
+
+                if request.tool == trickleOn {
+                    sendTrickle(on: connection)
+                } else {
+                    send(reply(to: request), on: connection)
+                }
+            }
+        }
+    }
+
+    /// Sends `fragmentCount` single bytes, `fragmentGap` apart, and stops —
+    /// deliberately never sending the newline that would complete a frame.
+    private func sendTrickle(on connection: Int32) {
+        for index in 0 ..< fragmentCount {
+            if index > 0 {
+                Thread.sleep(forTimeInterval: fragmentGap)
+            }
+            guard isRunning else { return }
+            var byte: UInt8 = 0x78 // "x"
+            let written = withUnsafeBytes(of: &byte) { bytes in
+                Darwin.send(connection, bytes.baseAddress, 1, 0)
+            }
+            guard written > 0 else { return }
+        }
+    }
+
+    private func reply(to request: IPC.Request) -> IPC.Response {
+        switch request.tool {
+        case .registerPeer:
+            .success(id: request.id, .peer(IPC.PeerInfo(
+                id: UUID().uuidString,
+                name: "wry-amber-lexer",
+                role: "",
+                workstream: "wry-amber-lexer",
+                surfaceID: nil,
+                lastSeenSecondsAgo: 0,
+                pendingMessages: 0
+            )))
         default:
             .success(id: request.id, .text("the stub answered \(request.tool.rawValue)"))
         }
