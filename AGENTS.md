@@ -891,6 +891,25 @@ check as finished before it had run anything, silently. `stopRequested` is the o
 distinguishes a killed check from one that died on its own, because killing the group takes the
 wrapper with it before it can write a status.
 
+**And "starting" is bounded, by `startupGrace` (30s, injectable beside `killGrace`).** The rule
+above is about what a *missing* pid means, not about how long it may go on meaning it, and nothing
+used to bound it: `SurfaceHosting.startSurface` returning true is not the wrapper having run, so a
+surface that failed to spawn its child — or was torn down before exec — left a check that never
+wrote a pid and could not leave the starting state. The row showed Running for the rest of the
+session, `stop` no-op'd because there was no group to signal and the grace's `SIGKILL` no-op'd
+with it, and `stopAndWait` burned the whole of `ProcessRunner.Timeout.userCommand` before an
+archive could proceed. Past the grace the pid file is not late, it is never coming, so the check
+is recorded exactly as the process-is-gone branch records one — `.failed(-1)`, or `.stopped` if a
+stop was asked for. **The bound is an upper limit on the window, never a change to what a missing
+pid means inside it**: within the grace a check with no pid is still starting and must never be
+read as finished, which `test_completionPass_leavesACheckThatHasNotWrittenItsPIDAlone` pins on the
+production default. The number is a two-sided tradeoff and is chosen from the second side: the
+real path is fork → `login` → bash → `sh` → `ps`, milliseconds, so thirty seconds is three orders
+of magnitude of headroom — and because `stopAndWait` drives `completionPass`, it is also the
+ceiling on how long an archive can pause for a check started a moment earlier. Do not shorten it
+towards the measured path; the headroom is what keeps a loaded machine from having its checks
+killed off for being slow.
+
 **`stop`'s kill after the grace belongs to the *run*, not to the check.** `stop` sends `SIGTERM`
 and schedules a `SIGKILL` `killGrace` (5s) later; the task fires only while the live check is
 still the same **run id**. Guarding it on `isRunning(_:check:)` — "is *a* run of this check

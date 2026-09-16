@@ -85,14 +85,16 @@ final class VerificationRunnerTests: XCTestCase {
 
     private func makeRunner(
         _ host: StubSurfaceHost,
-        killGrace: Duration = Verification.Runner.defaultKillGrace
+        killGrace: Duration = Verification.Runner.defaultKillGrace,
+        startupGrace: Duration = Verification.Runner.defaultStartupGrace
     ) -> Verification.Runner {
         // A fixed fingerprint rather than four git spawns against a directory that
         // is not a repository.
         let runner = Verification.Runner(
             fingerprint: { _, _ in "head|1|digest" },
             pollInterval: .milliseconds(10),
-            killGrace: killGrace
+            killGrace: killGrace,
+            startupGrace: startupGrace
         )
         runner.attach(surfaces: host)
         return runner
@@ -378,6 +380,65 @@ final class VerificationRunnerTests: XCTestCase {
             "a check still starting must not be recorded as finished"
         )
         XCTAssertEqual(runner.state(workstreamID, check: "rspec"), .running)
+    }
+
+    /// **The other half of that rule: nothing may be "starting" forever.** The
+    /// window is real but bounded — the wrapper writes its pid as its first act,
+    /// so a check still without one long afterwards is one whose wrapper never
+    /// ran at all: a surface that failed to spawn, or one torn down before exec.
+    /// Left unbounded the row shows Running for the rest of the session, Stop
+    /// no-ops because there is no group to signal, and an archive waits out the
+    /// whole `userCommand` timeout for a check that can never report.
+    func test_completionPass_recordsACheckThatNeverWroteAPIDOnceItsStartupGraceExpires() async throws {
+        try writeConfig()
+        let runner = makeRunner(StubSurfaceHost(), startupGrace: .milliseconds(200))
+        let spawn = makeSpawn(for: "rspec")
+        addTeardownBlock { spawn.clearState() }
+        try start(runner, checks: ["rspec"])
+
+        await runner.completionPass()
+        XCTAssertEqual(
+            runner.state(workstreamID, check: "rspec"), .running,
+            "inside the window a missing pid still means starting, never finished"
+        )
+
+        try await Task.sleep(for: .milliseconds(300))
+        await runner.completionPass()
+
+        XCTAssertFalse(
+            runner.isRunning(workstreamID, check: "rspec"),
+            "past the window it is a check that died before it could write one"
+        )
+        XCTAssertEqual(runner.state(workstreamID, check: "rspec"), .failed(-1))
+        XCTAssertEqual(
+            Verification.CheckStore.records(for: workstreamID)["rspec"]?.state, .failed(-1),
+            "and it is recorded, so the row draws a verdict rather than a stuck timer"
+        )
+    }
+
+    /// The archive path's half of it. `Workstream.Archiver.purge` waits here
+    /// before destroying the worktree, and a check with no pid can never report —
+    /// so without the bound this burns the entire `userCommand` timeout and comes
+    /// back false.
+    func test_stopAndWait_doesNotWaitOutTheTimeoutForACheckThatNeverStarted() async throws {
+        try writeConfig()
+        let runner = makeRunner(
+            StubSurfaceHost(), killGrace: .milliseconds(50), startupGrace: .milliseconds(200)
+        )
+        let spawn = makeSpawn(for: "rspec")
+        addTeardownBlock { spawn.clearState() }
+        try start(runner, checks: ["rspec"])
+
+        let began = Date()
+        let quiesced = await runner.stopAndWait(workstreamID: workstreamID, timeout: 5)
+
+        XCTAssertTrue(quiesced, "a check that can never report must not hold up an archive")
+        XCTAssertLessThan(Date().timeIntervalSince(began), 5)
+        XCTAssertFalse(runner.isLive(workstreamID))
+        XCTAssertEqual(
+            runner.state(workstreamID, check: "rspec"), .stopped,
+            "it was asked to stop, so the stop is what it is recorded as"
+        )
     }
 
     /// One check finishing says nothing about another.
