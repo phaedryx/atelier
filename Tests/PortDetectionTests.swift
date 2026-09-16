@@ -98,6 +98,68 @@ final class PortDetectionTests: XCTestCase {
         ))
     }
 
+    /// The reported bug: a `ports.yaml` with several named ports (none of them
+    /// `ATELIER_PORT`) never lets `PortSelectionTracker` resolve a `selectedPort`,
+    /// so `status` sits at `.starting` forever even once the declared `browser:
+    /// true` port is genuinely listening. A known browser port must be judged on
+    /// its own liveness instead.
+    func testKnownBrowserPortStopsWaitingOnceItIsAmongDetectedPorts() {
+        XCTAssertFalse(Port.isWaitingForServer(
+            browserPort: 44449,
+            status: .starting,
+            detectedPorts: [42935, 43625, 44449, 44542, 46759],
+            browserStartPending: false
+        ))
+    }
+
+    func testKnownBrowserPortKeepsWaitingUntilItIsDetected() {
+        XCTAssertTrue(Port.isWaitingForServer(
+            browserPort: 44449,
+            status: .starting,
+            detectedPorts: [42935, 43625],
+            browserStartPending: false
+        ))
+    }
+
+    func testKnownBrowserPortWaitsOnBrowserStartPendingBeforeAnySessionExists() {
+        XCTAssertTrue(Port.isWaitingForServer(
+            browserPort: 44449,
+            status: .none,
+            detectedPorts: [],
+            browserStartPending: true
+        ))
+
+        XCTAssertFalse(Port.isWaitingForServer(
+            browserPort: 44449,
+            status: .none,
+            detectedPorts: [],
+            browserStartPending: false
+        ))
+    }
+
+    /// With no declared browser port, behavior is unchanged: waiting follows
+    /// `status` and `browserStartPending` exactly as before.
+    func testWithNoBrowserPortWaitingStillFollowsStatus() {
+        XCTAssertTrue(Port.isWaitingForServer(
+            browserPort: nil,
+            status: .starting,
+            detectedPorts: [3000, 5173],
+            browserStartPending: false
+        ))
+        XCTAssertFalse(Port.isWaitingForServer(
+            browserPort: nil,
+            status: .running,
+            detectedPorts: [5173],
+            browserStartPending: false
+        ))
+        XCTAssertTrue(Port.isWaitingForServer(
+            browserPort: nil,
+            status: .none,
+            detectedPorts: [],
+            browserStartPending: true
+        ))
+    }
+
     func testQuotesAShellPathContainingASpace() {
         // `shell` defaults to $SHELL and was interpolated raw while everything
         // around it was quoted, so a shell installed under a path with a space
