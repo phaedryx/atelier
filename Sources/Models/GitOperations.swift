@@ -390,7 +390,7 @@ extension Git {
                 return []
             }
             guard let output = run(
-                args: ["diff", "--name-status", "--diff-filter=AMDR", "-M", base],
+                args: ["diff", "--name-status", "--diff-filter=AMDR", "-M", "-z", base],
                 in: worktreePath
             ) else {
                 return []
@@ -398,7 +398,7 @@ extension Git {
             var files = parseNameStatus(output)
             appendUntrackedFiles(into: &files, at: worktreePath)
 
-            let stats = numstat(args: ["diff", "--numstat", "-M", base], in: worktreePath)
+            let stats = numstat(args: ["diff", "--numstat", "-M", "-z", base], in: worktreePath)
             annotate(&files, with: stats, at: worktreePath)
             return files.sorted { $0.relativePath < $1.relativePath }
         }
@@ -408,7 +408,7 @@ extension Git {
         /// carries `isBinary`/`changedLines`/`sizeHint`. Empty on git failure.
         static func uncommittedDiffFiles(at path: String) -> [Git.DiffFile] {
             guard let output = run(
-                args: ["diff", "--name-status", "--diff-filter=AMDR", "-M", "HEAD"],
+                args: ["diff", "--name-status", "--diff-filter=AMDR", "-M", "-z", "HEAD"],
                 in: path
             ) else {
                 return []
@@ -416,7 +416,7 @@ extension Git {
             var files = parseNameStatus(output)
             appendUntrackedFiles(into: &files, at: path)
 
-            let stats = numstat(args: ["diff", "--numstat", "-M", "HEAD"], in: path)
+            let stats = numstat(args: ["diff", "--numstat", "-M", "-z", "HEAD"], in: path)
             annotate(&files, with: stats, at: path)
             return files.sorted { $0.relativePath < $1.relativePath }
         }
@@ -562,67 +562,107 @@ extension Git {
 
         // MARK: - Diff listing helpers
 
-        /// Parse `git diff --name-status` output into DiffFiles.
-        /// Each line is `<STATUS>\t<path>` or, for renames, `R###\t<old>\t<new>`.
+        /// Parse `git diff --name-status -z` output into DiffFiles.
+        ///
+        /// Under `-z` every field is its own NUL-terminated record — a status, then
+        /// one path for `A`/`M`/`D` and two, old then new, for `R` — and git stops
+        /// C-quoting unusual paths, so a path arrives as the bytes it is on disk.
+        /// (`C`, a copy, would also carry two paths; widening `--diff-filter` past
+        /// `AMDR` means teaching this loop about it.)
+        ///
+        /// The quoting is why this moves with `numstat`: these paths are the keys
+        /// `annotate` looks the counts up by, and one side quoted while the other is
+        /// raw misses every non-ASCII name.
         private static func parseNameStatus(_ output: String) -> [Git.DiffFile] {
             var files: [Git.DiffFile] = []
-            for rawLine in output.split(separator: "\n", omittingEmptySubsequences: true) {
-                let fields = rawLine.split(separator: "\t", omittingEmptySubsequences: true)
-                guard let statusField = fields.first else { continue }
-                let statusChar = statusField.prefix(1)
+            let records = output.split(separator: "\0", omittingEmptySubsequences: true)
+            var index = 0
+            while index < records.count {
+                let statusChar = records[index].prefix(1)
+                index += 1
+                let status: Git.DiffFile.Status?
+                let pathCount: Int
                 switch statusChar {
-                case "A":
-                    if fields.count >= 2 {
-                        files.append(Git.DiffFile(relativePath: String(fields[1]), status: .added))
-                    }
-                case "M":
-                    if fields.count >= 2 {
-                        files.append(Git.DiffFile(relativePath: String(fields[1]), status: .modified))
-                    }
-                case "D":
-                    if fields.count >= 2 {
-                        files.append(Git.DiffFile(relativePath: String(fields[1]), status: .deleted))
-                    }
-                case "R":
-                    // Rename: use the new path (last field).
-                    if fields.count >= 3 {
-                        files.append(Git.DiffFile(relativePath: String(fields[2]), status: .renamed))
-                    }
-                default:
-                    continue
+                case "A": (status, pathCount) = (.added, 1)
+                case "M": (status, pathCount) = (.modified, 1)
+                case "D": (status, pathCount) = (.deleted, 1)
+                case "R": (status, pathCount) = (.renamed, 2)
+                // Every other status git can print (`T`, `U`, `X`) carries a single
+                // path, so skipping one record keeps the walk in step even though
+                // `--diff-filter` means none of them should arrive.
+                default: (status, pathCount) = (nil, 1)
+                }
+                guard index + pathCount <= records.count else { break }
+                // For a rename the new path is the second of the two.
+                let filePath = records[index + pathCount - 1]
+                index += pathCount
+                if let status, !filePath.isEmpty {
+                    files.append(Git.DiffFile(relativePath: String(filePath), status: status))
                 }
             }
             return files
         }
 
-        /// Union untracked files (`git ls-files --others --exclude-standard`) into
+        /// Union untracked files (`git ls-files --others --exclude-standard -z`) into
         /// the list as `.added`, skipping any path already present (Hardening 1).
+        /// `-z` for the same reason the two diff listings take it: it is what stops
+        /// git C-quoting a non-ASCII name, so the paths compared here and the paths
+        /// `numstat` is keyed by are spelled one way.
         private static func appendUntrackedFiles(into files: inout [Git.DiffFile], at path: String) {
-            guard let output = run(args: ["ls-files", "--others", "--exclude-standard"], in: path) else {
+            guard let output = run(args: ["ls-files", "--others", "--exclude-standard", "-z"], in: path) else {
                 return
             }
             let existing = Set(files.map(\.relativePath))
-            for rawLine in output.split(separator: "\n", omittingEmptySubsequences: true) {
-                let filePath = String(rawLine)
+            for record in output.split(separator: "\0", omittingEmptySubsequences: true) {
+                let filePath = String(record)
                 guard !filePath.isEmpty, !existing.contains(filePath) else { continue }
                 files.append(Git.DiffFile(relativePath: filePath, status: .added))
             }
         }
 
-        /// Parse `git diff --numstat <ref>` into `[path: (added, deleted)]`.
-        /// Binary files print `-\t-\t<path>`, mapped to `(nil, nil)`.
+        /// Parse `git diff --numstat -z <ref>` into `[path: (added, deleted)]`.
+        ///
+        /// A record is `<add>\t<del>\t<path>`, with binary files printing `-\t-\t`
+        /// for the counts — mapped to `(nil, nil)` — renamed or not. A **rename** is
+        /// the exception: its third field is empty and the old and new paths follow
+        /// as their own NUL-terminated records.
+        ///
+        /// That exception is the whole reason for `-z`. Without it a rename is one
+        /// combined field naming both paths — `old.txt => new.txt`, or brace-compacted
+        /// as `src/{old => new}/file.txt` — and the spelling is ambiguous rather than
+        /// merely fiddly: a file genuinely called `a => b.txt` renamed to `c.txt`
+        /// prints `a => b.txt => c.txt`, which no parser can split correctly. Keyed on
+        /// that combined string a renamed file never matched, so `annotate` fell
+        /// through to its untracked fallback and reported the file's *entire* line
+        /// count as added — which then fed the Changes tab's large-file guard, which
+        /// could refuse to render a 2,000-line file that had one line edited.
         private static func numstat(args: [String], in path: String) -> [String: (added: Int?, deleted: Int?)] {
             guard let output = run(args: args, in: path) else { return [:] }
             var result: [String: (added: Int?, deleted: Int?)] = [:]
-            for rawLine in output.split(separator: "\n", omittingEmptySubsequences: true) {
-                let fields = rawLine.split(separator: "\t", omittingEmptySubsequences: false)
-                guard fields.count >= 3 else { continue }
+            let records = output.split(separator: "\0", omittingEmptySubsequences: true)
+            var index = 0
+            while index < records.count {
+                // `omittingEmptySubsequences: false` keeps the empty third field a
+                // rename is recognised by; `maxSplits: 2` keeps a tab inside a file
+                // name part of the path rather than a fourth field.
+                let fields = records[index].split(
+                    separator: "\t",
+                    maxSplits: 2,
+                    omittingEmptySubsequences: false
+                )
+                index += 1
+                guard fields.count == 3 else { continue }
                 let added = fields[0] == "-" ? nil : Int(fields[0])
                 let deleted = fields[1] == "-" ? nil : Int(fields[1])
-                // For renames numstat prints `<add>\t<del>\t<old>\t<new>` or a
-                // brace-compacted path; the final field is the (new) path.
-                let filePath = String(fields[fields.count - 1])
-                result[filePath] = (added, deleted)
+                if fields[2].isEmpty {
+                    // Rename: old path, then new path. Key on the new one, which is
+                    // what `parseNameStatus` lists the file under.
+                    guard index + 2 <= records.count else { break }
+                    result[String(records[index + 1])] = (added, deleted)
+                    index += 2
+                } else {
+                    result[String(fields[2])] = (added, deleted)
+                }
             }
             return result
         }
