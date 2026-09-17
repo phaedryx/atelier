@@ -40,13 +40,14 @@ extension IPC {
 
     /// The tools the helper can forward to the app.
     ///
-    /// **Three surfaces, and the split is the point** — see `Tool.surface`.
+    /// **Four surfaces, and the split is the point** — see `Tool.surface`.
     /// *Messaging* moves text between agents and changes nothing a user can see.
     /// *Workspace reads* answer questions about the workstream the caller is
     /// already in. *Workspace actions* create or change something in front of
-    /// the user. Sort a new case into the right group, and give a workspace
-    /// action its own trust story rather than inheriting messaging's, which is
-    /// "none needed".
+    /// the user. *Project tasks* — a claimable, project-scoped work queue; see
+    /// `Surface.projectTasks` for the trust story. Sort a new case into the right
+    /// group, and give a workspace action its own trust story rather than
+    /// inheriting messaging's, which is "none needed".
     ///
     /// The messaging six were once the whole enum, with a comment saying so:
     /// Calix's IPC core is the same six, and everything it grew on top —
@@ -131,7 +132,7 @@ extension IPC {
         /// claimer may call this.
         case failTask = "fail_task"
 
-        /// Which of the three surfaces above this tool belongs to.
+        /// Which of the four surfaces above this tool belongs to.
         ///
         /// Nothing branches on it yet. It exists so the grouping is a value the
         /// compiler checks rather than a comment that rots, and so that if a
@@ -260,7 +261,7 @@ extension IPC {
         }
     }
 
-    /// The three groups of `Tool` — see that type's doc comment.
+    /// The four groups of `Tool` — see that type's doc comment.
     enum Surface: String, Codable, CaseIterable {
         case messaging
         case workspaceRead
