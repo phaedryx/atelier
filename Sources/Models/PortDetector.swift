@@ -35,8 +35,31 @@ extension Port {
     /// and a caller waiting on it would too. A known browser port instead checks
     /// its own liveness — whether it is among the ports atelier-run has actually
     /// observed listening — rather than the tracker's guess at which one to show.
+    ///
+    /// A **fixed** browser port (`ports.yaml`'s `fixed: <port>`) cannot be
+    /// checked that way at all: `detectedPorts` comes only from `atelier-run`
+    /// scanning the launched command's own child-process tree via libproc, and
+    /// `fixed` exists specifically for ports registered off that tree — a
+    /// Docker port-forward, a service that lives outside the machine. Nor can
+    /// `status` stand in for it past `.none`: a fixed browser port is typically
+    /// declared alongside several `assigned` siblings — that is the whole
+    /// reason it needs pinning — and per this function's own history, `status`
+    /// can sit at `.starting` forever for a multi-port stack. So once any
+    /// session exists at all, a fixed browser port stops waiting unconditionally
+    /// and leaves `BrowserView`'s own connection-error/retry UI to judge
+    /// whether the pinned service is actually reachable.
+    ///
+    /// The same "no signal can ever arrive" reasoning bounds a **detectable**
+    /// (`assigned`) browser port too, just one step later: once `status` reaches
+    /// `.running`, the launcher has resolved *some* port from a real listening
+    /// process, and no amount of further waiting can make a browser port that
+    /// still isn't in `detectedPorts` more likely to appear — its own server may
+    /// have crashed or failed to bind while a sibling started fine. Past that
+    /// point detection can only ever agree with itself; disagreement is handed
+    /// to the connection-error/retry UI rather than waited out forever.
     static func isWaitingForServer(
         browserPort: Int?,
+        browserPortIsFixed: Bool,
         status: Status,
         detectedPorts: [Int],
         browserStartPending: Bool
@@ -46,6 +69,9 @@ extension Port {
         }
         if status == .none {
             return browserStartPending
+        }
+        if browserPortIsFixed || status == .running {
+            return false
         }
         return !detectedPorts.contains(browserPort)
     }

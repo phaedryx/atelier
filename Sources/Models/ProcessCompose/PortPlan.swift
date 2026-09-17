@@ -9,6 +9,18 @@ extension ProcessCompose {
         let values: [String: String]
         /// The port the embedded browser should open, if one was declared.
         let browserPort: Int?
+        /// Whether `browserPort` came from a `fixed:` entry rather than
+        /// `assigned:`. A fixed port exists for values registered off the
+        /// machine and can never appear in `Port.Detector.detectedPorts`, which
+        /// only ever reflects `atelier-run`'s scan of the launched command's own
+        /// child-process tree — see `Port.isWaitingForServer`.
+        let browserPortIsFixed: Bool
+
+        init(values: [String: String], browserPort: Int?, browserPortIsFixed: Bool = false) {
+            self.values = values
+            self.browserPort = browserPort
+            self.browserPortIsFixed = browserPortIsFixed
+        }
 
         static let empty = ProcessCompose.PortPlan(values: [:], browserPort: nil)
 
@@ -30,6 +42,7 @@ extension ProcessCompose {
             var values: [String: String] = [:]
             var claimed: Set<Int> = []
             var browserPort: Int?
+            var browserPortIsFixed = false
 
             for entry in config.entries {
                 guard case let .fixed(port) = entry.kind else { continue }
@@ -37,6 +50,7 @@ extension ProcessCompose {
                 values[entry.name] = "\(port)"
                 if entry.isBrowser {
                     browserPort = port
+                    browserPortIsFixed = true
                 }
             }
 
@@ -55,7 +69,7 @@ extension ProcessCompose {
                 }
             }
 
-            return ProcessCompose.PortPlan(values: values, browserPort: browserPort)
+            return ProcessCompose.PortPlan(values: values, browserPort: browserPort, browserPortIsFixed: browserPortIsFixed)
         }
     }
 }
