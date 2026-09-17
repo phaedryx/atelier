@@ -457,4 +457,31 @@ final class IPCServiceTests: XCTestCase {
         let secondRead = try await checkpointText(of: call(.getSessionCheckpoint, as: second))
         XCTAssertTrue(secondRead.contains("No checkpoint saved yet"), secondRead)
     }
+
+    // MARK: - close_tab
+
+    /// The full argument contract — exactly one of `kind`/`surface_id`, the
+    /// Execution refusal, the singleton and terminal behaviors — is tested
+    /// against `WorkspaceActions.shared.closeTab` directly in
+    /// `WorkspaceActionsCloseTabTests`, the same split `open_tab` uses. Here
+    /// there is only the one thing this layer alone can answer: whether the
+    /// caller is in a workstream at all.
+    func test_closeTab_withoutEitherArgument_saysWhichOnesAreMissing() async {
+        let response = await call(.closeTab, [:], as: client(project: projectA))
+
+        XCTAssertNil(response.payload)
+        XCTAssertTrue(response.error?.contains("kind") == true, String(describing: response.error))
+        XCTAssertTrue(response.error?.contains("surface_id") == true, String(describing: response.error))
+    }
+
+    func test_closeTab_outsideAWorkstream_refuses() async {
+        let stranger = IPC.ClientIdentity(
+            workstreamID: nil, workstreamName: nil, projectDirectory: projectA, surfaceID: nil, peerID: nil
+        )
+
+        let response = await call(.closeTab, ["kind": "changes"], as: stranger)
+
+        XCTAssertNil(response.payload)
+        XCTAssertTrue(response.error?.contains("inside an Atelier workstream") == true, String(describing: response.error))
+    }
 }

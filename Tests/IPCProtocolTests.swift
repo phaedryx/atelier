@@ -90,7 +90,7 @@ final class IPCProtocolTests: XCTestCase {
         for tool in [
             IPC.Tool.listPeers, .getPeerStatus, .listTabs, .readReviewComments,
             .checkVerification, .listVerificationChecks, .getSessionCheckpoint,
-            .openEditor, .openTab, .requestAttention,
+            .openEditor, .openTab, .requestAttention, .closeTab,
         ] {
             XCTAssertTrue(tool.isSafeToReplay, "\(tool.rawValue) changes nothing by running twice")
         }

@@ -2,6 +2,7 @@
 // ABOUTME: Covers the file watcher surviving the atomic rewrites RunState.Store performs.
 
 @testable import Atelier
+import Combine
 import XCTest
 
 final class PortDetectorTests: XCTestCase {
@@ -141,6 +142,38 @@ final class PortDetectorTests: XCTestCase {
         let stopped = expectation(description: "run reported as ended")
         pollUntil(stopped) { detector.status == .none && detector.selectedPort == nil }
         wait(for: [stopped], timeout: 5)
+    }
+
+    /// The efficiency fix: a rewrite that changes nothing observable (the case that
+    /// keeps recurring for a `selectedPort` that never resolves, see
+    /// `RunState.PortSelectionTracker.candidatePort`) must not fire `objectWillChange`.
+    /// Confirming the rewrite was actually observed (via the inode change) is what
+    /// keeps this from passing vacuously because the watcher simply hadn't noticed yet.
+    func testRefreshStateDoesNotRepublishWhenTheSnapshotIsUnchanged() throws {
+        try writeState(selectedPort: 4500)
+        let detector = Port.Detector(workstreamID: workstreamID)
+
+        let running = expectation(description: "port reported")
+        pollUntil(running) { detector.selectedPort == 4500 && detector.status == .running }
+        wait(for: [running], timeout: 5)
+
+        let originalInode = try inode(ofFileFor: workstreamID)
+
+        var changeCount = 0
+        let cancellable = detector.objectWillChange.sink { changeCount += 1 }
+        defer { cancellable.cancel() }
+
+        try writeState(selectedPort: 4500)
+
+        let rewritten = expectation(description: "watcher observes the identical rewrite")
+        pollUntil(rewritten) { (try? self.inode(ofFileFor: self.workstreamID)) != originalInode }
+        wait(for: [rewritten], timeout: 5)
+
+        let settled = expectation(description: "settle")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { settled.fulfill() }
+        wait(for: [settled], timeout: 1)
+
+        XCTAssertEqual(changeCount, 0, "Republishing an identical snapshot must not fire objectWillChange")
     }
 
     private func pollUntil(_ expectation: XCTestExpectation, _ condition: @escaping () -> Bool) {

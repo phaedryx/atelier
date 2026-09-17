@@ -125,6 +125,16 @@ extension IPC {
         /// any milestone worth resuming from" convention Scenius's own
         /// `update_last_session` states.
         case updateSessionCheckpoint = "update_session_checkpoint"
+        /// Closes one of the workstream's tabs — a singleton pane by `kind`, or
+        /// a terminal tab by `surface_id`. The counterpart to `open_tab` and
+        /// `open_agent_tab`: the tool for tearing a pane down once it has done
+        /// its job, most of all a peer `open_agent_tab` spawned for a bounded
+        /// task.
+        ///
+        /// Does not close Info, Agent, or Execution — see
+        /// `WorkspaceActions.closeTab` for why Execution is refused rather than
+        /// closed.
+        case closeTab = "close_tab"
 
         /// Which of the three surfaces above this tool belongs to.
         ///
@@ -139,7 +149,7 @@ extension IPC {
             case .listTabs, .readReviewComments, .checkVerification, .listVerificationChecks, .getSessionCheckpoint:
                 .workspaceRead
             case .openAgentTab, .openEditor, .openTab, .requestAttention, .createWorkstream, .startVerification,
-                 .updateSessionCheckpoint:
+                 .updateSessionCheckpoint, .closeTab:
                 .workspaceAction
             }
         }
@@ -174,7 +184,7 @@ extension IPC {
             // Main-actor work with a process-compose probe behind the worst of
             // them (`start_verification` resolves a binary and parses a config
             // before it answers with a run id).
-            case .openAgentTab, .openEditor, .openTab, .requestAttention, .startVerification:
+            case .openAgentTab, .openEditor, .openTab, .requestAttention, .startVerification, .closeTab:
                 60
             // `git worktree add` under `ProcessRunner.Timeout.userCommand` (300s)
             // after a fetch under `.network` (120s). Named as literals because
@@ -237,7 +247,10 @@ extension IPC {
             case .registerPeer, .listPeers, .getPeerStatus,
                  .listTabs, .readReviewComments, .checkVerification, .listVerificationChecks,
                  .openEditor, .openTab, .requestAttention,
-                 .getSessionCheckpoint, .updateSessionCheckpoint:
+                 .getSessionCheckpoint, .updateSessionCheckpoint, .closeTab:
+                // closeTab is `openTab`'s own reasoning in reverse: closing a
+                // tab that is already closed is a no-op reported as such, so a
+                // replay lands on the same answer rather than a second effect.
                 true
             case .sendMessage, .receiveMessages, .broadcast,
                  .openAgentTab, .createWorkstream, .startVerification:
