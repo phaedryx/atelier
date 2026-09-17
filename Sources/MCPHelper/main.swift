@@ -468,6 +468,36 @@ let toolDefinitions: [ToolDefinition] = [
         properties: [:],
         required: []
     ),
+    ToolDefinition(
+        tool: .getSessionCheckpoint,
+        description: """
+        Read this workstream's saved checkpoint — free text some agent wrote
+        about where it left off. Call this early in a session, before starting
+        new work, to see what you or a predecessor were doing. Shared per
+        workstream, not per agent: if another agent shares this workstream
+        (opened via open_agent_tab), you are reading the same note it writes.
+        Tells you plainly if nothing has been saved yet, rather than answering
+        with nothing.
+        """,
+        properties: [:],
+        required: []
+    ),
+    ToolDefinition(
+        tool: .updateSessionCheckpoint,
+        description: """
+        Overwrite this workstream's checkpoint with free text describing where
+        you left off — enough for you, or whichever agent reads it next in this
+        workstream, to resume without re-reading the whole conversation. Call it
+        before finishing a task, and at any milestone worth resuming from. There
+        is no history: this replaces whatever was saved before. Shared per
+        workstream, not per agent — if another agent shares this workstream, you
+        are overwriting the same note it reads.
+        """,
+        properties: [
+            "content": ["type": "string", "description": "What to save. Free text — describe what you were doing and what is left, not just the last action."],
+        ],
+        required: ["content"]
+    ),
 ]
 
 /// Shown to the agent once, at initialize.
@@ -489,6 +519,8 @@ close_tab is open_agent_tab's counterpart: once a peer you spawned has finished 
 create_workstream is the exception to that: it makes a NEW workstream, with its own worktree and its own branch, and with a prompt it starts an agent in that workstream's Coding Agent tab. Reach for it when the work needs a branch of its own, and for open_agent_tab when it belongs on yours.
 
 list_verification_checks names the checks this project declares and the command each one runs, without running anything — the declarations live outside your worktree, so this is how you find out what is there. start_verification then runs the project's checks against your worktree and answers with a run id rather than a result — a real suite outlives a tool call. Each check's verdict arrives in your inbox from atelier/verification as that check finishes; that is a reserved sender inside Atelier and not a peer you can reply to. If you are this workstream's Coding Agent, you will also get these for runs the user starts in the Verification tab. check_verification(run_id) reads the whole run whenever you want, so you are never stuck waiting for a message that has not arrived.
+
+Call get_session_checkpoint early in a session, before starting new work — it is where an agent records what it was doing and how far it got, for itself or for whoever picks up this workstream next. update_session_checkpoint overwrites it with free text; call that before finishing a task, or at any milestone worth resuming from. There is one checkpoint per workstream and no history — it is shared with any other agent in this workstream, and each save replaces the last.
 
 The rest of these tools act on your own workstream and no other. There is no way to reach another agent's tabs — to coordinate with an agent elsewhere, send it a message.
 """

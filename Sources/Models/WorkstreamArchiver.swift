@@ -348,19 +348,21 @@ extension Workstream {
         /// Drop every per-workstream UserDefaults key a purge must not leave
         /// behind.
         ///
-        /// Two keys, and that is the reason this is a function rather than two
-        /// lines inline: `atelier.processSelection.<id>` is Execution's checklist
-        /// selection, and `atelier.verifyChecks.<id>` is Verification's per-check
-        /// results — it has no checklist or selection of its own, only results a
-        /// check can be re-run to replace. Named together here so a third key has
-        /// one place to join.
+        /// Three keys, and that is the reason this is a function rather than a
+        /// few lines inline: `atelier.processSelection.<id>` is Execution's
+        /// checklist selection, `atelier.verifyChecks.<id>` is Verification's
+        /// per-check results — it has no checklist or selection of its own, only
+        /// results a check can be re-run to replace — and
+        /// `atelier.sessionCheckpoint.<id>` is the IPC session-checkpoint tools'
+        /// saved note. Named together here so a fourth key has one place to
+        /// join.
         ///
-        /// Nonisolated: `purge` calls it from a detached task, and none of the
-        /// three reads touches the main actor.
+        /// Nonisolated: `purge` calls it from a detached task, and none of these
+        /// reads touches the main actor.
         ///
         /// Purge only. `remove` keeps the worktree on disk and destroys nothing,
-        /// so a selection or result it left behind is the shape that has always
-        /// been there and is not this function's to change.
+        /// so a selection, result, or checkpoint it left behind is the shape
+        /// that has always been there and is not this function's to change.
         static func clearWorkstreamState(for workstreamID: UUID) {
             ProcessCompose.TableModel.clearSelection(for: workstreamID)
             // The Verification tab has no checklist and no selection key; what outlives
@@ -368,6 +370,7 @@ extension Workstream {
             // store that used to be cleared here is gone — runs live in memory for the
             // session and `Runner.forget` drops them.
             Verification.CheckStore.clear(for: workstreamID)
+            IPC.CheckpointStore.clear(for: workstreamID)
         }
 
         /// What archiving would run, and why it would not.

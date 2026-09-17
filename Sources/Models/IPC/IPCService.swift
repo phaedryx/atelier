@@ -96,6 +96,10 @@ extension IPC {
                 return await checkVerification(for: request)
             case .listVerificationChecks:
                 return await listVerificationChecks(for: request)
+            case .getSessionCheckpoint:
+                return await getSessionCheckpoint(for: request)
+            case .updateSessionCheckpoint:
+                return await updateSessionCheckpoint(for: request)
             }
         }
 
@@ -1252,6 +1256,55 @@ extension IPC {
         func observeVerificationChecks() async {
             await verification?.observeCheckCompletions { [weak self] notice in
                 Task { await self?.postCheckNotice(notice) }
+            }
+        }
+
+        // MARK: - Session checkpoint
+
+        /// Reads the caller's workstream's saved checkpoint.
+        ///
+        /// **No `MainActor` hop.** Unlike `listTabs`/`readReviewComments`, which
+        /// route through `WorkspaceActions` because they need the live app
+        /// environment, this is a plain `UserDefaults` read reachable directly
+        /// from this actor.
+        ///
+        /// **"Never saved" and "saved" are different sentences**, not the same
+        /// empty answer dressed up two ways — the same three-case discipline
+        /// `Verification.Config.Load` applies to its own file: a state an agent
+        /// could mistake for "nothing to report" must say plainly that nothing
+        /// has been recorded yet, so it knows to write one rather than assume
+        /// there was never anything worth saving.
+        private func getSessionCheckpoint(for request: Request) async -> Response {
+            guard let workstreamID = callerWorkstreamID(request) else {
+                return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
+            }
+            guard let checkpoint = IPC.CheckpointStore.read(for: workstreamID) else {
+                return .success(id: request.id, .text(
+                    "No checkpoint saved yet for this workstream. Call update_session_checkpoint "
+                        + "before finishing a task, or at any milestone worth resuming from."
+                ))
+            }
+            let secondsAgo = Int(Date().timeIntervalSince(checkpoint.updatedAt))
+            return .success(id: request.id, .text("Checkpoint from \(secondsAgo)s ago:\n\n\(checkpoint.content)"))
+        }
+
+        /// Overwrites the caller's workstream's checkpoint.
+        ///
+        /// **Shared per workstream, not per agent** — see `IPC.CheckpointStore`'s
+        /// doc comment. Two agents in one workstream read and write the same
+        /// blob, and the tool's own description says so.
+        private func updateSessionCheckpoint(for request: Request) async -> Response {
+            guard let workstreamID = callerWorkstreamID(request) else {
+                return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
+            }
+            guard let content = request.arguments["content"], !content.isEmpty else {
+                return .failure(id: request.id, "update_session_checkpoint needs non-empty `content`.")
+            }
+            do {
+                try IPC.CheckpointStore.save(content, for: workstreamID)
+                return .success(id: request.id, .text("Checkpoint saved."))
+            } catch {
+                return .failure(id: request.id, error.localizedDescription)
             }
         }
 

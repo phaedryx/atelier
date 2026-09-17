@@ -87,6 +87,9 @@ extension IPC {
         /// name could previously only be discovered by guessing one and reading
         /// `start_verification`'s refusal.
         case listVerificationChecks = "list_verification_checks"
+        /// The caller's workstream's saved checkpoint — where an agent said it
+        /// left off — or nothing if none has been saved.
+        case getSessionCheckpoint = "get_session_checkpoint"
 
         /// Workspace actions.
         /// Opens a terminal tab in the caller's own workstream, optionally
@@ -113,6 +116,15 @@ extension IPC {
         /// `verification.yaml` declares — in the caller's own workstream, and
         /// answers with a run id rather than the result.
         case startVerification = "start_verification"
+        /// Overwrites the caller's workstream's checkpoint with free text.
+        ///
+        /// Shared per workstream, not per agent: two agents in one workstream
+        /// (the Coding Agent and one spawned via `open_agent_tab`) read and
+        /// write the same blob. There is no version history — this replaces the
+        /// previous checkpoint outright, the same "call before finishing, or at
+        /// any milestone worth resuming from" convention Scenius's own
+        /// `update_last_session` states.
+        case updateSessionCheckpoint = "update_session_checkpoint"
         /// Closes one of the workstream's tabs — a singleton pane by `kind`, or
         /// a terminal tab by `surface_id`. The counterpart to `open_tab` and
         /// `open_agent_tab`: the tool for tearing a pane down once it has done
@@ -134,9 +146,10 @@ extension IPC {
             switch self {
             case .registerPeer, .listPeers, .sendMessage, .receiveMessages, .broadcast, .getPeerStatus:
                 .messaging
-            case .listTabs, .readReviewComments, .checkVerification, .listVerificationChecks:
+            case .listTabs, .readReviewComments, .checkVerification, .listVerificationChecks, .getSessionCheckpoint:
                 .workspaceRead
-            case .openAgentTab, .openEditor, .openTab, .requestAttention, .createWorkstream, .startVerification, .closeTab:
+            case .openAgentTab, .openEditor, .openTab, .requestAttention, .createWorkstream, .startVerification,
+                 .updateSessionCheckpoint, .closeTab:
                 .workspaceAction
             }
         }
@@ -165,7 +178,8 @@ extension IPC {
             // Actor hops and store reads. The original 15 seconds, which was
             // always right for these.
             case .registerPeer, .listPeers, .sendMessage, .receiveMessages, .broadcast, .getPeerStatus,
-                 .listTabs, .readReviewComments, .checkVerification, .listVerificationChecks:
+                 .listTabs, .readReviewComments, .checkVerification, .listVerificationChecks,
+                 .getSessionCheckpoint, .updateSessionCheckpoint:
                 15
             // Main-actor work with a process-compose probe behind the worst of
             // them (`start_verification` resolves a binary and parses a config
@@ -204,6 +218,13 @@ extension IPC {
         /// to recover the session's identity, and the tool is defined as a
         /// rename rather than a second registration.
         ///
+        /// **`update_session_checkpoint` is safe for the same reason as
+        /// `open_editor`, not by analogy to its own `.workspaceAction`
+        /// surface.** It overwrites a single blob with no version history, so
+        /// writing the same content twice leaves the same final state either
+        /// way — the replay changes nothing a first successful call had not
+        /// already changed.
+        ///
         /// **`send_message` and `broadcast` are the two judgement calls**, and
         /// the choice is not an analogy to the rest. Replaying one risks a
         /// second copy in a peer's inbox, which that agent then acts on twice;
@@ -225,7 +246,8 @@ extension IPC {
             switch self {
             case .registerPeer, .listPeers, .getPeerStatus,
                  .listTabs, .readReviewComments, .checkVerification, .listVerificationChecks,
-                 .openEditor, .openTab, .requestAttention, .closeTab:
+                 .openEditor, .openTab, .requestAttention,
+                 .getSessionCheckpoint, .updateSessionCheckpoint, .closeTab:
                 // closeTab is `openTab`'s own reasoning in reverse: closing a
                 // tab that is already closed is a no-op reported as such, so a
                 // replay lands on the same answer rather than a second effect.

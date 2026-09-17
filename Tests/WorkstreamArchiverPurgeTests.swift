@@ -329,4 +329,16 @@ final class WorkstreamArchiverPurgeTests: XCTestCase {
 
         XCTAssertTrue(Verification.CheckStore.records(for: id).isEmpty)
     }
+
+    /// The session-checkpoint tools' saved note outlives a purged workstream
+    /// otherwise, keyed by a UUID nothing will ever reuse — so nothing else
+    /// would ever clean it up.
+    func test_clearWorkstreamState_dropsTheSessionCheckpoint() throws {
+        let id = UUID()
+        try IPC.CheckpointStore.save("left off mid-refactor", for: id)
+
+        Workstream.Archiver.clearWorkstreamState(for: id)
+
+        XCTAssertNil(IPC.CheckpointStore.read(for: id))
+    }
 }
