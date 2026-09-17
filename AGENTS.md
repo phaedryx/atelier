@@ -1523,7 +1523,7 @@ checks rather than a comment:
 |---|---|---|
 | Messaging | `register_peer`, `list_peers`, `send_message`, `receive_messages`, `broadcast`, `get_peer_status` | none needed — text between agents, nothing a user can see |
 | Workspace reads | `list_tabs`, `read_review_comments`, `check_verification`, `list_verification_checks` | none needed — answers about the caller's own workstream |
-| Workspace actions | `open_agent_tab`, `open_editor`, `open_tab`, `request_attention`, `create_workstream`, `start_verification` | see below |
+| Workspace actions | `open_agent_tab`, `open_editor`, `open_tab`, `close_tab`, `request_attention`, `create_workstream`, `start_verification` | see below |
 
 The messaging six were once the whole enum. Calix's IPC core is the same six, and everything it
 grew on top — pane/tab control, LSP, shell integration — arrived as separate tool surfaces with
@@ -1623,6 +1623,48 @@ consequences worth keeping:
 - **Surfaces are created eagerly, outside any render pass** (the same construction
   `TerminalSurfaceCache.retrySurface` already does), so a tab can be spawned into a workstream
   the user is not looking at. What is view-bound is *rendering*, not surface creation.
+
+**`close_tab` is `open_tab`/`open_agent_tab`'s counterpart, for the pane an agent's own job
+created rather than one the user did.** A controller that spawns a peer into a new tab for a
+bounded task — a reviewer, a test-writer — had no way to tear that pane down once the job was
+done, so it (or the peer itself) leaves it running for the user to close by hand. `close_tab`
+closes a singleton by `kind` (`"changes"` or `"verification"`) or a terminal by `surface_id`,
+the same two vocabularies `open_tab` and `open_agent_tab`/`list_tabs` already speak — no third
+one for anything to keep in step. It reuses `openableTabs` rather than a second table keyed the
+same way: adding a fourth singleton kind there makes it closeable by default, and only
+`execution` opts out, by name.
+
+**Execution is refused, not closed, and that is a scope limit rather than an oversight.** `⌘W`
+on that tab also stops the running dev stack (`TerminalContainerView.stopRun`), and that method
+reaches into view-local `@State` (`browserStartPending`) that `WorkspaceActions` — a `MainActor`
+singleton with no view — cannot reach. Reimplementing `stopRun`'s logic here would be exactly
+the inlined second copy this document keeps warning about, so `close_tab(kind: "execution")`
+refuses by name and points at the tab's own Stop control instead. Changes and Verification have
+no such side effect — `forceCloseTab`'s own switch has no case for either — so closing one is
+nothing more than removing the tab; a running verification check in particular is unaffected
+either way, since its surface comes from `Verification.Spawn` and only `Verification.Runner.forget`
+reaches it.
+
+**Closing an already-closed tab, or a `surface_id` nothing currently owns, is success, not a
+refusal.** `close_tab` is `isSafeToReplay`, the same as `open_tab`: a replay landing after the
+first close already succeeded must answer the same way rather than erroring on a fact that is
+merely no longer true. The unmatched-`surface_id` case reports no kind, deliberately — the id
+may never have named a tab in this workstream at all, and asserting one it did not resolve
+would be rendering a guess as a fact.
+
+**The Agent tab is refused the same way Info would be, and for the same reason `open_tab`
+already refuses them: they are permanent.** The Agent tab's surface id *is* the workstream id
+(`WorkspaceActions.surfaceID(of:)`), so an agent naming its own main session's surface resolves
+to `.agent`, and `removeTab`'s own `false` there would read identically to "not open" — the one
+place this tool checks `WorkspaceTabKind.isCloseable` explicitly, because here the two answers
+must not collide.
+
+**Two gaps stay open, deliberately, rather than being half-closed.** Editor and browser tabs
+have no id exposed over IPC — `surfaceID(of:)` returns nil for both, so `list_tabs` cannot
+report one to close by — and giving them one is a `TabInfo` change, out of scope here. And
+closing the terminal tab you are running in — the actual peer-teardown case — destroys your own
+surface immediately, the same as a user's `⌘W`; you will not see the reply, because there is
+nothing left to send it to.
 
 **`create_workstream` inherits `bootstrap`'s policy by not touching it.** Creating a
 workstream runs the project's `bootstrap` namespace — the thing `PhasePolicy.plan` exists to

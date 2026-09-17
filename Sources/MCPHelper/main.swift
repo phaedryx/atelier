@@ -333,6 +333,35 @@ let toolDefinitions: [ToolDefinition] = [
         required: []
     ),
     ToolDefinition(
+        tool: .closeTab,
+        description: """
+        Close one of this workstream's tabs — the counterpart to open_tab and
+        open_agent_tab, for tearing a pane down once it has done its job. Most
+        of all: a peer you spawned with open_agent_tab for a bounded task
+        (review a diff, run a check) should be closed with this once that job
+        is done, rather than left running for the user to close by hand.
+
+        Give exactly one of "kind" (for "changes" or "verification") or
+        "surface_id" (for a terminal tab, from open_agent_tab's result or
+        list_tabs). Closing a tab that is already closed, or a surface_id
+        nothing currently owns, does nothing and says so rather than erroring.
+
+        Info, Agent and Execution cannot be closed this way. Execution also
+        stops the running dev stack when closed, which this tool cannot do —
+        use its own Stop control, or ask the user. Editor and browser tabs
+        have no id exposed over IPC yet, so there is no way to close one of
+        those through this tool either.
+
+        Closing the terminal tab you are running in destroys your own surface
+        immediately, same as a user's ⌘W — you will not see the reply.
+        """,
+        properties: [
+            "kind": ["type": "string", "description": "\"changes\" or \"verification\". Do not use this for a terminal tab; pass surface_id instead."],
+            "surface_id": ["type": "string", "description": "A terminal tab's surface id, from open_agent_tab's result or list_tabs. Provide exactly one of kind or surface_id."],
+        ],
+        required: []
+    ),
+    ToolDefinition(
         tool: .requestAttention,
         description: """
         Raise a desktop notification asking the user to come and look at this
@@ -454,6 +483,8 @@ open_editor puts a file on screen in front of the user, and request_attention ra
 open_tab opens this workstream's Changes, Execution or Verification pane, which all start closed. It does not switch the user's view — pair it with request_attention when you need their eyes, rather than assuming a tab you opened is a tab they saw.
 
 open_agent_tab opens a terminal tab in your workstream, and with a prompt it starts another agent there. That agent shares your worktree, so give it work that collaborates on the change you are already making — a reviewer, a test-writer, a second pair of hands on the same branch. Work that belongs on its own branch needs its own workstream, not a tab. Poll list_tabs for the new surface's peer id before trying to message it.
+
+close_tab is open_agent_tab's counterpart: once a peer you spawned has finished a bounded job, close its tab by the surface_id you got back rather than leaving it for the user to close by hand. It also closes Changes or Verification by kind. Execution, Info and Agent cannot be closed this way.
 
 create_workstream is the exception to that: it makes a NEW workstream, with its own worktree and its own branch, and with a prompt it starts an agent in that workstream's Coding Agent tab. Reach for it when the work needs a branch of its own, and for open_agent_tab when it belongs on yours.
 

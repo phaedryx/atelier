@@ -256,6 +256,123 @@ final class WorkspaceActions {
         return (tab.kind.id, wasAlreadyOpen)
     }
 
+    /// The subset of `openableTabs` this tool will actually close — every
+    /// singleton kind except Execution.
+    ///
+    /// A filtered *view* of `openableTabs` rather than a second table: a kind
+    /// added there tomorrow is closeable by default, and only `execution`
+    /// needs to opt out by name. See `closeTab`'s doc comment for why.
+    private static var closeableSingletonKinds: [String] {
+        openableTabs.keys.filter { $0 != WorkspaceTabKind.execution.id }.sorted()
+    }
+
+    /// Closes one of the caller's tabs — a singleton pane by `kind`, or a
+    /// terminal tab by `surfaceID`. Exactly one of the two must be given.
+    ///
+    /// **Execution is refused, not closed.** `⌘W` on that tab also stops the
+    /// running dev stack (`TerminalContainerView.stopRun`), and that method
+    /// reaches into view-local `@State` (`browserStartPending`) that this
+    /// `MainActor` singleton — no view, no `@State` — cannot reach.
+    /// Reimplementing `stopRun`'s logic here would be exactly the "second
+    /// copy that drifts" shape this codebase's own conventions keep warning
+    /// about, so instead this refuses by name and points at the real control.
+    /// Changes and Verification have no such side effect — `forceCloseTab`'s
+    /// own switch has no case for them — so closing either is nothing more
+    /// than removing the tab. A running verification check in particular is
+    /// unaffected either way: its surface comes from `Verification.Spawn`
+    /// and only `Verification.Runner.forget` reaches it.
+    ///
+    /// **Closing a tab that is already closed, or a `surfaceID` nothing
+    /// currently owns, is success, not a refusal.** `isSafeToReplay` depends
+    /// on this: a replay landing after the first close already succeeded must
+    /// answer the same way, the same idempotence `openTab` already promises
+    /// for "already open".
+    ///
+    /// **Two gaps stay open, deliberately.** Editor and browser tabs have no
+    /// id exposed over IPC — `surfaceID(of:)` returns nil for them, so
+    /// `list_tabs` cannot report one to close by — and extending `TabInfo` to
+    /// give them one is out of scope for this tool. And closing your own
+    /// terminal tab (the actual `open_agent_tab` peer-teardown case) destroys
+    /// your own surface immediately, the same as a user's `⌘W`; you will not
+    /// see the reply.
+    func closeTab(workstreamID: UUID, kind: String?, surfaceID: String?) throws -> (kind: String?, wasOpen: Bool) {
+        let kind = kind.flatMap { $0.isEmpty ? nil : $0 }
+        let surfaceID = surfaceID.flatMap { $0.isEmpty ? nil : $0 }
+
+        if kind != nil, surfaceID != nil {
+            throw Failure.invalidArgument(
+                name: "kind",
+                reason: "provide only one of `kind` or `surface_id`, not both."
+            )
+        }
+        if let kind {
+            return try closeSingleton(workstreamID: workstreamID, kind: kind)
+        }
+        if let surfaceID {
+            return try closeTerminal(workstreamID: workstreamID, surfaceIDString: surfaceID)
+        }
+        throw Failure.invalidArgument(
+            name: "kind",
+            reason: "provide `kind` (a singleton pane) or `surface_id` (a terminal tab)."
+        )
+    }
+
+    private func closeSingleton(workstreamID: UUID, kind: String) throws -> (kind: String?, wasOpen: Bool) {
+        if kind == WorkspaceTabKind.execution.id {
+            throw Failure.invalidArgument(
+                name: "kind",
+                reason: "closing it must also stop the running dev stack, which this tool cannot do — "
+                    + "use the Execution tab's own Stop control, or ask the user."
+            )
+        }
+        guard let tab = Self.openableTabs[kind] else {
+            throw Failure.invalidArgument(
+                name: "kind",
+                reason: "expected one of \(Self.closeableSingletonKinds.joined(separator: ", ")), got \(kind)."
+            )
+        }
+        let context = try context(workstreamID: workstreamID)
+        let wasOpen = context.model.removeTab(tab)
+        logger.detailed("close_tab: \(kind) wasOpen=\(wasOpen)")
+        return (tab.kind.id, wasOpen)
+    }
+
+    /// Resolves `surfaceIDString` against the caller's own tabs and closes it
+    /// if it names one.
+    ///
+    /// The only tabs `surfaceID(of:)` can resolve a match for are `.agent`
+    /// (permanent) and `.terminal` (closeable) — browser and editor never
+    /// match, because that function returns nil for them. So the explicit
+    /// `isCloseable` guard below is reached only by the Agent tab, and it is
+    /// the one place in this method that check is load-bearing: `removeTab`'s
+    /// own `false` conflates "refused, permanent" with "not open", and this
+    /// path needs the two to say different things.
+    private func closeTerminal(workstreamID: UUID, surfaceIDString: String) throws -> (kind: String?, wasOpen: Bool) {
+        guard let surfaceUUID = UUID(uuidString: surfaceIDString) else {
+            throw Failure.invalidArgument(name: "surface_id", reason: "not a valid surface id.")
+        }
+        let context = try context(workstreamID: workstreamID)
+        guard let tab = context.model.tabs.first(where: {
+            Self.surfaceID(of: $0, workstreamID: workstreamID) == surfaceUUID
+        }) else {
+            // Nothing here owns that surface id right now — already closed,
+            // or never open in this workstream. No kind to report, because
+            // none was ever resolved; claiming one would be asserting a fact
+            // this lookup did not establish.
+            return (nil, false)
+        }
+        guard tab.kind.isCloseable else {
+            throw Failure.invalidArgument(
+                name: "surface_id",
+                reason: "that surface is the Agent tab, which is permanent and can't be closed this way."
+            )
+        }
+        context.model.removeTab(tab)
+        surfaceCache?.removeSurface(for: surfaceUUID)
+        logger.detailed("close_tab: surface \(surfaceUUID) kind=\(tab.kind.id)")
+        return (tab.kind.id, true)
+    }
+
     // MARK: - Spawning an agent
 
     /// What `open_agent_tab` needs about a workstream before it leaves the main
