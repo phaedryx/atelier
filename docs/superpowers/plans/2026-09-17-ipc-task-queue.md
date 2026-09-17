@@ -997,6 +997,8 @@ git commit -m "feat(ipc): add IPC.TaskSummary — tag parsing and the completion
 - Consumes: `IPC.TaskStore` and its methods (Task 2), `IPC.TaskSummary.{sender,tags(from:),notice(for:)}` (Task 3), `IPC.Tool.{addTask,getPendingTasks,listTasks,claimTask,completeTask,failTask}` and `IPC.TaskInfo`/`IPC.TaskWireState`/`IPC.Payload.{task,tasks}` (Task 1). Also `WorkspaceActions.Failure.missingArgument(_:)` (existing).
 - Produces: `IPC.Service.releaseTaskClaims(inWorkstream:)` — Task 5 (`WorkstreamArchiver`) calls this.
 
+**Note on pre-existing stub cases:** Task 1 added the six `Tool` cases and two `Payload` cases as exhaustive-switch members, which forced it to add matching stub cases to `handle(_:)`'s switch in this file (`IPC.Service`) so the codebase kept compiling in the interim — this was not optional, Swift's exhaustiveness check leaves no other way to land Task 1 alone without breaking the build. The six stub cases already sit in `handle(_:)`, immediately after `.listVerificationChecks`, each returning `.failure(id: request.id, "<tool>: not yet implemented")`. **Step 3b below replaces those six stub bodies with the real dispatch — it does not insert new cases.** If you find the stubs already gone (a later Task 1 fix round removed them, which it should not have), treat that as a NEEDS_CONTEXT case and ask the controller before proceeding, since it would mean the compile-forced insertion was itself reverted somewhere.
+
 - [ ] **Step 1: Write the failing tests**
 
 Add to `Tests/IPCServiceTests.swift`, using the existing `client(project:peerID:workstream:surfaceID:)` and `call(_:_:as:)` helpers already in that file:
@@ -1204,7 +1206,7 @@ In `Sources/Models/IPC/IPCService.swift`:
         }
 ```
 
-3b. Add the six cases to the `handle(_:)` dispatch switch, after `.listVerificationChecks`:
+3b. **Replace** the six stub cases already in the `handle(_:)` dispatch switch (added by Task 1, immediately after `.listVerificationChecks`) with the real dispatch — same six case labels, same location, new bodies:
 
 ```swift
             case .addTask:
@@ -1543,6 +1545,8 @@ git commit -m "fix(ipc): revert a workstream's claimed tasks to pending when it 
 **Interfaces:**
 - Consumes: `IPC.Tool.{addTask,getPendingTasks,listTasks,claimTask,completeTask,failTask}`, `IPC.TaskInfo`, `IPC.Payload.{task,tasks}` (Task 1).
 
+**Note on pre-existing stubs:** the same exhaustiveness pressure that put stub cases into `IPC.Service.handle(_:)` (see Task 4's note) also forced Task 1 to add two stub cases to this file's `renderText(_:)` switch — `case .task: return "(task rendering not yet implemented)"` and `case .tasks: return "(tasks rendering not yet implemented)"`, immediately before `case let .text(text):`. **Step 4 below replaces those two stub bodies, at the same location — it does not insert new cases.** Separately, Task 1 also added an assertion to `test_helperBinary_answersToolsCallOverStdio` pinning `undefined` (the `Tool` cases not yet in `toolDefinitions`) to the six task-queue tool names, with the comment "task queue tools are not yet implemented; they are declared but not advertised until their handlers land." Once Step 3 below adds all six to `toolDefinitions`, `undefined` computes to `[]` again — **Step 1's test changes below must also revert that assertion back to asserting `undefined.sorted()` is empty** (the state every other advertised tool already leaves it in), or the suite will fail with the six-name array no longer matching reality.
+
 - [ ] **Step 1: Write the failing test**
 
 In `Tests/IPCServerTests.swift`, extend `test_helperBinary_answersToolsCallOverStdio` (found via `grep -n "func test_helperBinary_answersToolsCallOverStdio" Tests/IPCServerTests.swift`). Two changes to the existing test body:
@@ -1594,6 +1598,17 @@ Second, extend the `advertised` list assertion (immediately below) to include th
                 "list_verification_checks",
                 "add_task", "get_pending_tasks", "list_tasks", "claim_task", "complete_task", "fail_task",
             ]
+        )
+```
+
+Third — and this is required, not optional, given what Task 1 already put in this file — find the `undefined` assertion a little further down in the same test (it currently reads `XCTAssertEqual(undefined.sorted(), ["add_task", "claim_task", "complete_task", "fail_task", "get_pending_tasks", "list_tasks"], "task queue tools are not yet implemented...")`, added by Task 1 because at that point in the plan's history none of the six were advertised yet). Revert it to assert the empty set every other tool already leaves it in, now that `toolDefinitions` covers all six:
+
+```swift
+        let undefined = IPC.Tool.allCases.map(\.rawValue).filter { !advertised.contains($0) }
+        XCTAssertEqual(
+            undefined.sorted(),
+            [],
+            "every IPC.Tool case should now be advertised"
         )
 ```
 
@@ -1709,9 +1724,9 @@ In `Sources/MCPHelper/main.swift`, inside the `toolDefinitions` array literal, i
     ),
 ```
 
-- [ ] **Step 4: Add `renderText` cases**
+- [ ] **Step 4: Replace the `renderText` stub cases**
 
-In the same file, inside `func renderText(_ payload: IPC.Payload?) -> String`, add two new cases immediately before `case let .text(text):`:
+In the same file, inside `func renderText(_ payload: IPC.Payload?) -> String`, **replace** the two stub cases Task 1 added (`case .task: return "(task rendering not yet implemented)"` / `case .tasks: return "(tasks rendering not yet implemented)"`, immediately before `case let .text(text):`) with:
 
 ```swift
     case let .task(task):
