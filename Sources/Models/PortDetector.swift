@@ -175,9 +175,23 @@ extension Port {
             let nextStatus: Port.Status = state == nil ? .none : (state?.selectedPort != nil ? .running : .starting)
             let nextDetectedPorts = state?.detectedPorts ?? []
             DispatchQueue.main.async { [weak self] in
-                self?.selectedPort = nextPort
-                self?.status = nextStatus
-                self?.detectedPorts = nextDetectedPorts
+                guard let self else { return }
+                // Guarded rather than assigned unconditionally: atelier-run rewrites its
+                // state file on every poll even when nothing observable changed (e.g. a
+                // multi-named-port project where `selectedPort` never resolves — see
+                // `RunState.PortSelectionTracker.candidatePort` — keeps the write loop
+                // running indefinitely), and an unconditional `@Published` write fires
+                // `objectWillChange` on every one of those, forcing an avoidable SwiftUI
+                // re-render for a snapshot that is byte-identical to the last one.
+                if selectedPort != nextPort {
+                    selectedPort = nextPort
+                }
+                if status != nextStatus {
+                    status = nextStatus
+                }
+                if detectedPorts != nextDetectedPorts {
+                    detectedPorts = nextDetectedPorts
+                }
             }
         }
     }
