@@ -112,4 +112,29 @@ final class PortPlanTests: XCTestCase {
 
         XCTAssertNil(plan.browserPort)
     }
+
+    /// A fixed browser port can never show up in `detectedPorts` — that comes
+    /// from scanning the launched command's own child-process tree, and
+    /// `fixed` exists for ports registered off the machine. `Port.isWaitingForServer`
+    /// needs to know this to avoid waiting on detection that can never resolve.
+    func testBrowserPortIsFixedWhenDeclaredFixed() {
+        let plan = ProcessCompose.PortPlan.resolve(
+            config([ProcessCompose.PortEntry(name: "OAUTH_PORT", kind: .fixed(4000), isBrowser: true)]),
+            workingDirectory: worktree,
+            isFree: allFree
+        )
+
+        XCTAssertEqual(plan.browserPort, 4000)
+        XCTAssertTrue(plan.browserPortIsFixed)
+    }
+
+    func testBrowserPortIsNotFixedWhenAssigned() {
+        let plan = ProcessCompose.PortPlan.resolve(
+            config([ProcessCompose.PortEntry(name: "BFF_PORT", kind: .assigned, isBrowser: true)]),
+            workingDirectory: worktree,
+            isFree: allFree
+        )
+
+        XCTAssertFalse(plan.browserPortIsFixed)
+    }
 }

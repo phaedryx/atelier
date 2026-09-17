@@ -462,6 +462,7 @@ struct TerminalContainerView: View {
     private var isWaitingForServer: Bool {
         Port.isWaitingForServer(
             browserPort: portPlan.browserPort,
+            browserPortIsFixed: portPlan.browserPortIsFixed,
             status: portDetector.status,
             detectedPorts: portDetector.detectedPorts,
             browserStartPending: browserStartPending
