@@ -352,4 +352,109 @@ final class IPCServiceTests: XCTestCase {
 
         XCTAssertTrue(response.error?.contains("kind") == true, String(describing: response.error))
     }
+
+    // MARK: - Session checkpoint
+
+    private func checkpointText(of response: IPC.Response) throws -> String {
+        guard case let .text(text) = response.payload else {
+            throw XCTSkip("expected a text payload, got \(String(describing: response.payload))")
+        }
+        return text
+    }
+
+    func test_getSessionCheckpoint_outsideAWorkstream_refuses() async {
+        let stranger = IPC.ClientIdentity(
+            workstreamID: nil, workstreamName: nil, projectDirectory: projectA, surfaceID: nil, peerID: nil
+        )
+
+        let response = await call(.getSessionCheckpoint, as: stranger)
+
+        XCTAssertNil(response.payload)
+        XCTAssertTrue(response.error?.contains("inside an Atelier workstream") == true, String(describing: response.error))
+    }
+
+    /// "Never saved" must not read as an empty checkpoint some agent wrote on
+    /// purpose — the same three-case discipline `Verification.Config.Load`
+    /// applies to its own file.
+    func test_getSessionCheckpoint_whenNoneSaved_saysSoRatherThanAnsweringEmpty() async throws {
+        let mine = client(project: projectA)
+
+        let text = try await checkpointText(of: call(.getSessionCheckpoint, as: mine))
+
+        XCTAssertTrue(text.contains("No checkpoint saved yet"), text)
+        XCTAssertTrue(text.contains("update_session_checkpoint"), "should point the agent at how to save one: \(text)")
+    }
+
+    func test_updateSessionCheckpoint_thenGet_roundTrips() async throws {
+        let mine = client(project: projectA)
+        let workstreamID = try XCTUnwrap(mine.workstreamID.flatMap(UUID.init(uuidString:)))
+        addTeardownBlock { IPC.CheckpointStore.clear(for: workstreamID) }
+
+        let saved = try await checkpointText(of: call(.updateSessionCheckpoint, ["content": "finished the login form, tests still red"], as: mine))
+        XCTAssertTrue(saved.contains("saved"), saved)
+
+        let read = try await checkpointText(of: call(.getSessionCheckpoint, as: mine))
+        XCTAssertTrue(read.contains("finished the login form, tests still red"), read)
+        XCTAssertTrue(read.contains("Checkpoint from"), "should report recency: \(read)")
+    }
+
+    /// A second save with no version history: the checkpoint is what the
+    /// *second* call wrote, not an accumulation of both.
+    func test_updateSessionCheckpoint_overwritesRatherThanAppending() async throws {
+        let mine = client(project: projectA)
+        let workstreamID = try XCTUnwrap(mine.workstreamID.flatMap(UUID.init(uuidString:)))
+        addTeardownBlock { IPC.CheckpointStore.clear(for: workstreamID) }
+
+        _ = await call(.updateSessionCheckpoint, ["content": "first note"], as: mine)
+        _ = await call(.updateSessionCheckpoint, ["content": "second note"], as: mine)
+
+        let read = try await checkpointText(of: call(.getSessionCheckpoint, as: mine))
+        XCTAssertTrue(read.contains("second note"), read)
+        XCTAssertFalse(read.contains("first note"), "must overwrite, not accumulate: \(read)")
+    }
+
+    func test_updateSessionCheckpoint_rejectsEmptyContent() async {
+        let response = await call(.updateSessionCheckpoint, ["content": ""], as: client(project: projectA))
+
+        XCTAssertNil(response.payload)
+        XCTAssertTrue(response.error?.contains("content") == true, String(describing: response.error))
+    }
+
+    func test_updateSessionCheckpoint_rejectsOversizedContent() async {
+        let tooBig = String(repeating: "a", count: IPC.CheckpointStore.maxContentSize + 1)
+
+        let response = await call(.updateSessionCheckpoint, ["content": tooBig], as: client(project: projectA))
+
+        XCTAssertNil(response.payload)
+        XCTAssertTrue(response.error?.contains("64KB") == true, String(describing: response.error))
+    }
+
+    func test_updateSessionCheckpoint_outsideAWorkstream_refuses() async {
+        let stranger = IPC.ClientIdentity(
+            workstreamID: nil, workstreamName: nil, projectDirectory: projectA, surfaceID: nil, peerID: nil
+        )
+
+        let response = await call(.updateSessionCheckpoint, ["content": "note"], as: stranger)
+
+        XCTAssertNil(response.payload)
+        XCTAssertTrue(response.error?.contains("inside an Atelier workstream") == true, String(describing: response.error))
+    }
+
+    /// Two workstreams never see each other's checkpoint — the key is per
+    /// workstream, unlike a peer's inbox, which is per registered agent.
+    func test_twoWorkstreams_haveIndependentCheckpoints() async throws {
+        let first = client(project: projectA)
+        let second = client(project: projectA)
+        let firstID = try XCTUnwrap(first.workstreamID.flatMap(UUID.init(uuidString:)))
+        let secondID = try XCTUnwrap(second.workstreamID.flatMap(UUID.init(uuidString:)))
+        addTeardownBlock {
+            IPC.CheckpointStore.clear(for: firstID)
+            IPC.CheckpointStore.clear(for: secondID)
+        }
+
+        _ = await call(.updateSessionCheckpoint, ["content": "workstream one's note"], as: first)
+
+        let secondRead = try await checkpointText(of: call(.getSessionCheckpoint, as: second))
+        XCTAssertTrue(secondRead.contains("No checkpoint saved yet"), secondRead)
+    }
 }
