@@ -18,7 +18,13 @@ extension Port {
         case none
         /// A session is running but no port has been selected yet.
         case starting
-        /// A listening port has been selected; the server is reachable.
+        /// `RunState.PortSelectionTracker`'s single-port heuristic resolved a port.
+        /// That heuristic never resolves for a stack with several named ports, so
+        /// this case does not mean *the* port a caller cares about is reachable —
+        /// a declared `browser: true` port that the process-tree scan cannot see
+        /// (a `fixed:` port, say) can stay unconfirmed while this is `.running`.
+        /// A caller with a specific port in hand should check `detectedPorts`
+        /// itself, the way `isWaitingForServer` does, rather than trust this case.
         case running
     }
 }
