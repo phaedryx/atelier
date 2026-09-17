@@ -981,7 +981,7 @@ Run: `./scripts/dev.sh test`. All `IPCTaskSummaryTests` should pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add Sources/Models/IPC/IPCTaskSummary.swift Sources/Models/IPC/IPCTaskStore.swift Tests/IPCTaskSummaryTests.swift
+git add Sources/Models/IPC/IPCTaskSummary.swift Tests/IPCTaskSummaryTests.swift
 git commit -m "feat(ipc): add IPC.TaskSummary — tag parsing and the completion notice"
 ```
 
@@ -1476,7 +1476,7 @@ Run: `./scripts/dev.sh test`. All `IPCServiceTests` (existing and new) should pa
 - [ ] **Step 5: Commit**
 
 ```bash
-git add Sources/Models/IPC/IPCService.swift Sources/Models/IPC/IPCProtocol.swift Tests/IPCServiceTests.swift
+git add Sources/Models/IPC/IPCService.swift Tests/IPCServiceTests.swift
 git commit -m "feat(ipc): wire the six task-queue tools into IPC.Service"
 ```
 
@@ -1802,6 +1802,8 @@ Add a short subsection to CLAUDE.md's "Agent workspace tools (IPC)" section (the
 - [ ] **Step 6: Final commit**
 
 ```bash
-git add project.yml CLAUDE.md
+git add CLAUDE.md
 git commit -m "docs: document the IPC task queue in CLAUDE.md"
 ```
+
+(`project.yml` is not modified anywhere in this plan — new files are picked up by the existing directory globs, and `xcodegen generate` in Step 1 only regenerates the gitignored `Atelier.xcodeproj`, never `project.yml` itself.)
