@@ -125,36 +125,15 @@ final class PortDetectionTests: XCTestCase {
 
     /// Every other "stops waiting" case above uses `status: .starting`. This is the
     /// `.running` counterpart of `testKnownBrowserPortStopsWaitingOnceItIsAmongDetectedPorts`
-    /// — the combination the PR #167 review flagged as untested. Passes today because the
-    /// non-nil-`browserPort` branch of `isWaitingForServer` never actually consults `status`
-    /// beyond `.none` (see `PortDetector.swift`): `.starting` and `.running` both fall through
-    /// to `!detectedPorts.contains(browserPort)`.
+    /// — the combination the PR #167 review flagged as untested. Rounds out
+    /// `testKnownBrowserPortStopsWaitingOnceStatusIsRunningEvenIfNeverDetected`, which covers
+    /// the same `status` with the browser port still undetected.
     func testKnownBrowserPortStopsWaitingWhenRunningAndPortIsDetected() {
         XCTAssertFalse(Port.isWaitingForServer(
             browserPort: 44449,
+            browserPortIsFixed: false,
             status: .running,
             detectedPorts: [42935, 43625, 44449, 44542, 46759],
-            browserStartPending: false
-        ))
-    }
-
-    /// KNOWN FAILURE against `main` — pins the exact regression flagged in code review: a
-    /// declared `browser: true` port that is absent from `detectedPorts` (a `fixed:` port
-    /// per `ports.yaml` bound somewhere the launcher's scan never observes it is one way
-    /// this happens) leaves `isWaitingForServer`'s non-nil-`browserPort` branch asking only
-    /// `!detectedPorts.contains(browserPort)` — true forever, even once `status` reaches
-    /// `.running` — so the browser pane hangs on "Starting dev server…" indefinitely while
-    /// the server is actually up.
-    ///
-    /// This asserts the *correct* behavior (a `.running` session should stop waiting on its
-    /// own known port), not what `PortDetector.swift` currently returns. The `fix-browser-port-hang`
-    /// workstream owns the actual fix; expect this case to start passing once that lands,
-    /// with no change needed here — do not "fix" this test by asserting the buggy `true`.
-    func testKnownBrowserPortStopsWaitingWhenRunningEvenIfFixedPortWasNeverDetected() {
-        XCTAssertFalse(Port.isWaitingForServer(
-            browserPort: 4000,
-            status: .running,
-            detectedPorts: [5173],
             browserStartPending: false
         ))
     }
