@@ -123,6 +123,21 @@ final class PortDetectionTests: XCTestCase {
         ))
     }
 
+    /// Every other "stops waiting" case above uses `status: .starting`. This is the
+    /// `.running` counterpart of `testKnownBrowserPortStopsWaitingOnceItIsAmongDetectedPorts`
+    /// — the combination the PR #167 review flagged as untested. Rounds out
+    /// `testKnownBrowserPortStopsWaitingOnceStatusIsRunningEvenIfNeverDetected`, which covers
+    /// the same `status` with the browser port still undetected.
+    func testKnownBrowserPortStopsWaitingWhenRunningAndPortIsDetected() {
+        XCTAssertFalse(Port.isWaitingForServer(
+            browserPort: 44449,
+            browserPortIsFixed: false,
+            status: .running,
+            detectedPorts: [42935, 43625, 44449, 44542, 46759],
+            browserStartPending: false
+        ))
+    }
+
     func testKnownBrowserPortWaitsOnBrowserStartPendingBeforeAnySessionExists() {
         XCTAssertTrue(Port.isWaitingForServer(
             browserPort: 44449,
