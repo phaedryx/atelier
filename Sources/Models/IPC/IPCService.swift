@@ -84,6 +84,8 @@ extension IPC {
                 return await openEditor(for: request)
             case .openTab:
                 return await openTab(for: request)
+            case .closeTab:
+                return await closeTab(for: request)
             case .requestAttention:
                 return await requestAttention(for: request)
             case .createWorkstream:
@@ -534,6 +536,37 @@ extension IPC {
                     .text(what + " It did not take the selection, so the user is still looking at whatever they had "
                         + "in front of them — use request_attention if you need them to come and look.")
                 )
+            } catch {
+                return .failure(id: request.id, error.localizedDescription)
+            }
+        }
+
+        /// Closes one of the caller's tabs — a singleton pane by `kind`, or a
+        /// terminal tab by `surface_id`. See `WorkspaceActions.closeTab` for
+        /// the full contract: exactly one of the two arguments, why Execution
+        /// is refused rather than closed, and why an id nothing currently
+        /// owns is success rather than an error.
+        private func closeTab(for request: Request) async -> Response {
+            guard let workstreamID = callerWorkstreamID(request) else {
+                return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
+            }
+            do {
+                let result = try await MainActor.run {
+                    try WorkspaceActions.shared.closeTab(
+                        workstreamID: workstreamID,
+                        kind: request.arguments["kind"],
+                        surfaceID: request.arguments["surface_id"]
+                    )
+                }
+                let what = switch (result.kind, result.wasOpen) {
+                case let (kind?, true):
+                    "Closed the \(kind) tab."
+                case let (kind?, false):
+                    "The \(kind) tab was already closed."
+                case (nil, _):
+                    "No tab in this workstream has that surface id — it may already be closed."
+                }
+                return .success(id: request.id, .text(what))
             } catch {
                 return .failure(id: request.id, error.localizedDescription)
             }

@@ -89,7 +89,7 @@ final class IPCProtocolTests: XCTestCase {
     func test_readsAndRenames_stayReplayable() {
         for tool in [
             IPC.Tool.listPeers, .getPeerStatus, .listTabs, .readReviewComments,
-            .checkVerification, .listVerificationChecks, .openEditor, .openTab, .requestAttention,
+            .checkVerification, .listVerificationChecks, .openEditor, .openTab, .requestAttention, .closeTab,
         ] {
             XCTAssertTrue(tool.isSafeToReplay, "\(tool.rawValue) changes nothing by running twice")
         }
