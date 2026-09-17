@@ -94,6 +94,18 @@ extension IPC {
                 return await checkVerification(for: request)
             case .listVerificationChecks:
                 return await listVerificationChecks(for: request)
+            case .addTask:
+                return .failure(id: request.id, "add_task: not yet implemented")
+            case .getPendingTasks:
+                return .failure(id: request.id, "get_pending_tasks: not yet implemented")
+            case .listTasks:
+                return .failure(id: request.id, "list_tasks: not yet implemented")
+            case .claimTask:
+                return .failure(id: request.id, "claim_task: not yet implemented")
+            case .completeTask:
+                return .failure(id: request.id, "complete_task: not yet implemented")
+            case .failTask:
+                return .failure(id: request.id, "fail_task: not yet implemented")
             }
         }
 

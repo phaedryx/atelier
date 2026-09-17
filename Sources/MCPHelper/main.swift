@@ -582,6 +582,10 @@ func renderText(_ payload: IPC.Payload?) -> String {
                 + "or any subset by naming them."
         )
         return lines.joined(separator: "\n")
+    case .task:
+        return "(task rendering not yet implemented)"
+    case .tasks:
+        return "(tasks rendering not yet implemented)"
     case let .text(text):
         return text
     case nil:

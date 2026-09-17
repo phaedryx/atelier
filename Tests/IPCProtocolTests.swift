@@ -98,4 +98,32 @@ final class IPCProtocolTests: XCTestCase {
             "the reconnect path replays register_peer by hand to recover the session's identity"
         )
     }
+
+    func test_taskQueueTools_replyDeadlineIsTheFifteenSecondTier() {
+        for tool in [IPC.Tool.addTask, .getPendingTasks, .listTasks, .claimTask, .completeTask, .failTask] {
+            XCTAssertEqual(tool.replyDeadline, 15, "\(tool.rawValue) is an in-memory actor hop, same tier as the messaging six")
+        }
+    }
+
+    func test_taskQueueTools_surfaceIsProjectTasks() {
+        for tool in [IPC.Tool.addTask, .getPendingTasks, .listTasks, .claimTask, .completeTask, .failTask] {
+            XCTAssertEqual(tool.surface, .projectTasks)
+        }
+    }
+
+    /// `add_task` is a create: the helper mints a fresh request id on every
+    /// replay, so a duplicate-path create is a real second execution, not a
+    /// provably-safe no-op — the same bucket as `create_workstream`.
+    func test_addTask_isNotReplayed() {
+        XCTAssertFalse(IPC.Tool.addTask.isSafeToReplay)
+    }
+
+    /// The other five are naturally idempotent: same-surface replay is a
+    /// defined no-op, different-surface replay is a defined refusal — neither
+    /// is a duplicate side effect.
+    func test_theOtherFiveTaskQueueTools_areReplayable() {
+        for tool in [IPC.Tool.getPendingTasks, .listTasks, .claimTask, .completeTask, .failTask] {
+            XCTAssertTrue(tool.isSafeToReplay, "\(tool.rawValue) is idempotent per-surface by construction")
+        }
+    }
 }

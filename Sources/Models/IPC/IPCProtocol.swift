@@ -114,6 +114,23 @@ extension IPC {
         /// answers with a run id rather than the result.
         case startVerification = "start_verification"
 
+        /// Project tasks — a claimable, project-scoped work queue. See
+        /// `Surface.projectTasks`'s doc comment for why this is its own group.
+        /// Adds a task to the queue for any peer in the project to claim.
+        case addTask = "add_task"
+        /// Lists unclaimed tasks in the project's queue.
+        case getPendingTasks = "get_pending_tasks"
+        /// Lists every task in the project's queue, regardless of state.
+        case listTasks = "list_tasks"
+        /// Claims a pending task. Ownership is keyed by the caller's surface
+        /// id, never its peer id — see this file's `IPC.TaskStore` doc comment.
+        case claimTask = "claim_task"
+        /// Marks a claimed task done. Only its claimer may call this.
+        case completeTask = "complete_task"
+        /// Marks a claimed task failed, with a required reason. Only its
+        /// claimer may call this.
+        case failTask = "fail_task"
+
         /// Which of the three surfaces above this tool belongs to.
         ///
         /// Nothing branches on it yet. It exists so the grouping is a value the
@@ -128,6 +145,8 @@ extension IPC {
                 .workspaceRead
             case .openAgentTab, .openEditor, .openTab, .requestAttention, .createWorkstream, .startVerification:
                 .workspaceAction
+            case .addTask, .getPendingTasks, .listTasks, .claimTask, .completeTask, .failTask:
+                .projectTasks
             }
         }
 
@@ -169,6 +188,11 @@ extension IPC {
             // (`project.yml:198-200`).
             case .createWorkstream:
                 480
+            // In-memory actor hops over IPC.TaskStore. No shell, no process, no
+            // network — the same tier as the messaging six and the existing
+            // workspace reads.
+            case .addTask, .getPendingTasks, .listTasks, .claimTask, .completeTask, .failTask:
+                15
             }
         }
 
@@ -220,6 +244,18 @@ extension IPC {
             case .sendMessage, .receiveMessages, .broadcast,
                  .openAgentTab, .createWorkstream, .startVerification:
                 false
+            // Same-surface replay of any of these five is a defined no-op;
+            // different-surface replay is a defined refusal. Neither is a
+            // duplicate side effect, unlike the tools in the `false` branches
+            // above.
+            case .getPendingTasks, .listTasks, .claimTask, .completeTask, .failTask:
+                true
+            // A create. The helper mints a fresh request id on every replay
+            // (no id-based dedup available), so a duplicate-path create from a
+            // replay is a real second execution — the same bucket as
+            // `create_workstream`.
+            case .addTask:
+                false
             }
         }
     }
@@ -229,6 +265,27 @@ extension IPC {
         case messaging
         case workspaceRead
         case workspaceAction
+        /// A project-scoped, claimable task queue — `add_task`, `get_pending_tasks`,
+        /// `list_tasks`, `claim_task`, `complete_task`, `fail_task`.
+        ///
+        /// Not `.messaging`: that group's trust story is "none needed — nothing a
+        /// user can see," and a claim is durable state another agent's
+        /// *correctness* depends on, not a private inbox message. Not
+        /// `.workspaceRead`/`.workspaceAction` either: both are explicitly scoped
+        /// to the caller's own workstream in their own doc comments, and this
+        /// feature is project-wide by design — the same scope peers and messages
+        /// already have.
+        ///
+        /// **No approval gate, for a third reason distinct from either existing
+        /// ungated group.** Workspace actions go ungated because they're
+        /// attended (a deliberate press, output in front of the user). Messaging
+        /// goes ungated because nothing here is visible to the user at all.
+        /// Project tasks go ungated because nothing in this surface executes
+        /// code, spawns a process, or touches the user's files or git state —
+        /// it's structured coordination data between peers already inside one
+        /// trust boundary, gated by the same `atelier.agentIPC` setting that
+        /// gates whether any IPC tool exists for this session at all.
+        case projectTasks
     }
 
     /// One request from a helper to the app.
@@ -496,6 +553,40 @@ extension IPC {
         return "\(minutes)m " + String(format: "%.1fs", seconds - Double(minutes * 60))
     }
 
+    /// A task's lifecycle, as an agent sees it.
+    enum TaskWireState: String, Codable, CaseIterable {
+        case pending
+        case claimed
+        case completed
+        case failed
+    }
+
+    /// One task, projected for the wire — the relationship `PeerInfo` has to
+    /// the store's `Peer`, and `VerificationRunInfo` to `Verification.Run`.
+    ///
+    /// `createdBy`/`claimedBy` are **peer ids**, not surface ids: ownership is
+    /// keyed internally by surface id (see `IPC.TaskStore`'s doc comment), but
+    /// an agent reading this has no use for another surface's raw id — a peer
+    /// id is what `send_message` addresses. Both are resolved live from
+    /// whichever peer currently occupies that surface, which can be a
+    /// different peer than the one that originally created or claimed the
+    /// task; nil when nobody is currently registered there.
+    struct TaskInfo: Codable, Equatable {
+        let path: String
+        let name: String
+        let content: String
+        let tags: [String]
+        let state: TaskWireState
+        let createdSecondsAgo: Int
+        let createdBy: String?
+        let createdByName: String?
+        let claimedBy: String?
+        let claimedByName: String?
+        let claimedSecondsAgo: Int?
+        /// Set only when `state == .failed`.
+        let failureReason: String?
+    }
+
     /// The result of a successful call.
     enum Payload: Codable {
         case peers([PeerInfo])
@@ -505,6 +596,8 @@ extension IPC {
         case reviewComments([ReviewCommentInfo])
         case verificationRun(VerificationRunInfo)
         case verificationChecks(VerificationChecksInfo)
+        case task(TaskInfo)
+        case tasks([TaskInfo])
         case text(String)
     }
 
