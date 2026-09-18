@@ -4,6 +4,125 @@ Atelier was forked from [Factory Floor](https://github.com/alltuner/factoryfloor
 at v0.1.79. Everything below that release is Factory Floor's history; those links
 point at the upstream repository.
 
+## [0.2.5](https://github.com/phaedryx/atelier/compare/v0.2.4...v0.2.5) (2026-09-18)
+
+### Features
+
+* **ipc:** a claimable, project-scoped task queue — `add_task`,
+  `get_pending_tasks`, `list_tasks`, `claim_task`, `complete_task` and
+  `fail_task`. Add several units of work once and let any peer in the project
+  pull the next one, instead of a coordinator dispatching each by hand with
+  `create_workstream`. Claiming is exclusive and keyed by `ATELIER_SURFACE_ID`
+  rather than peer id, so an IPC reconnect — which mints a new peer id for the
+  same surface — cannot make an agent look like a different actor attempting
+  its own earlier claim. Tearing down a workstream reverts every task claimed
+  there to pending, so a dead peer's work does not stay claimed forever.
+* **ipc:** `close_tab`, the counterpart to `open_tab` and `open_agent_tab`. A
+  controller that spawns a peer into a tab for a bounded task — a reviewer, a
+  test-writer — can now tear that pane down once the job is done rather than
+  leaving it for the user to close by hand. Closes a singleton pane by kind or
+  a terminal by `surface_id`; closing Execution also stops the running dev
+  stack, exactly as the user's own close of that tab does. Info and Agent stay
+  permanent. Closing an already-closed tab, or a `surface_id` nothing owns, is
+  success rather than an error, which is what makes it safe to replay.
+* **ipc:** `get_session_checkpoint` and `update_session_checkpoint`. A durable
+  free-text note per workstream, independent of the transcript, for an agent to
+  record where it left off — for itself, or for whoever picks the workstream up
+  next. One checkpoint per workstream and no history: it is shared with any
+  other agent working there, and each save replaces the last.
+* **ipc:** `PeerInfo.lastUserPromptSecondsAgo`, on `get_peer_status` and
+  `list_peers`, so a coordinating agent can tell whether a peer has had direct
+  human input rather than inferring it from the peer's actions. A coordinator
+  once watched a peer merge a PR, concluded it had gone off brief, and
+  broadcast that — when the user had told the peer to do exactly that in its
+  own terminal. Atelier's own synthetic keystrokes are excluded: the
+  unread-messages nudge marks its prompt before typing it, so an autonomous
+  notice cannot read as a human walking up to that terminal.
+* **editor:** "Paste to Agent" on the code editor's context menu. Right-click a
+  selection and it is typed into the Coding Agent's terminal without being
+  submitted, so the user can add context before sending. Quiet no-op when the
+  Coding Agent tab was never opened, the same fallback every other
+  terminal-injection path takes.
+* **editor:** the file tree walks with the arrow keys. It was a `ScrollView` of
+  `Button`s with no selection for the keys to move, while its own sibling,
+  Changes' file tree, documented keyboard navigation as the reason it kept
+  `List`. It is a `List(selection:)` over `DisclosureGroup` now, which also
+  brings native indentation and the disclosure gutter. One trade: a long
+  filename truncates with a middle ellipsis instead of scrolling sideways — a
+  `List` nested in a horizontal `ScrollView` loses its own vertical scrolling
+  and virtualization, which is the same trade the Changes tree already made.
+* **execution:** the process table is a real `Table` — named, resizable,
+  sortable columns. It was five fixed-width cells with no header row at all, so
+  nothing on screen said what the 24-point column was, and a process with no
+  readiness probe rendered an empty cell indistinguishable from a column that
+  was not there. Sorting is on the status *string* rather than on `isRunning`,
+  because the string is what the row shows and grouping equal strings is what
+  scanning for what is not up actually wants.
+
+### Bug Fixes
+
+* **ipc:** a purged or archived workstream releases its task claims. The claim
+  recorded the workstream id as the agent's own environment spells it —
+  `ATELIER_WORKSTREAM_ID`, exported lowercased — while the archive paths
+  released by `UUID.uuidString`, which Foundation spells uppercase, and the two
+  were compared with a case-sensitive `==`. Nothing ever matched, so every task
+  claimed in a workstream stayed claimed for the rest of the session once that
+  workstream was gone: the exact incident the queue was built to fix. The
+  comparison is case-insensitive, and lives in the store rather than at the
+  caller so it is not case-sensitive for the next one.
+* **ipc:** `close_tab` no longer tells an agent that Execution cannot be closed.
+  The tool description, the advertised kinds and the helper's own server
+  instructions all still said Execution was refused and that the tool could not
+  stop a dev server — stale since the run lifecycle moved onto
+  `ProcessCompose.RunSession`, which is what made closing it possible with no
+  view mounted. The code, and a test, had accepted it for a release. An agent
+  closing that pane believing the call was inert would take down the user's dev
+  stack, so the prose now names the side effect rather than denying it.
+* **execution:** the first Start after a relaunch no longer reattaches to a
+  stale tmux run. `beginRun` killed only the session it had *recorded*, and
+  nothing records one when the tmux restore returns early — which it does
+  whenever the view cannot resolve a command, an empty execute selection or an
+  unresolvable binary. `tmux new-session -A` then attached to the previous
+  launch's server, still running the old selection, while the run was marked
+  started and the selection the user had just made never ran. Start now also
+  kills the session it is about to start in.
+* **execution:** a workstream removed mid-reclaim no longer starts a run into
+  its own deleted worktree. Start awaits `process-compose down` when something
+  still holds the execute socket, and that wait retained the run session through
+  its own task, past the archive that dropped it from the surface cache — so the
+  run began afterwards and put a dev-server surface, cwd set to a worktree being
+  deleted, somewhere nothing was left to evict it from. The reclaim is
+  cancellable now and the archive cancels it.
+* **environment:** a detached HEAD no longer blanks the branch app-wide. Both
+  single-worktree refreshes assigned the probe's answer unconditionally, and
+  `git rev-parse --abbrev-ref HEAD` answers nothing for a detached HEAD — so
+  opening the Info tab mid-rebase, or any git activity at all reaching the HEAD
+  watcher, cleared the sidebar's branch label, the PR badge and Copy Branch
+  Name until the next successful probe. Nil now keeps the last known branch,
+  which is the rule the fifteen-second sweep already stated and enforced.
+* **environment:** the Info tab refreshes GitHub info for a worktree on a
+  detached HEAD. The call was gated on a resolved branch, though it takes an
+  optional one and writes the repository and open-PR caches regardless — only
+  the per-branch PR lookup needs a branch at all.
+* **environment:** one dirtiness answer per worktree, not two. The
+  fifteen-second sweep ran `git status --porcelain --ignore-submodules=dirty`
+  twice for every worktree — once for the Info tab's cleanliness, once for the
+  quick-action menu's `hasUncommittedChanges` — and the two could disagree. The
+  second spawn is gone and the value is derived from the first; the throttled
+  single-path refresh now writes both fields from its own one probe for the
+  same reason.
+
+### Documentation
+
+* **claude.md:** the IPC tool table lists the two checkpoint tools, and the
+  localization rule states its one carve-out — labels registered with Monaco's
+  own APIs inside the editor bundle, which has no access to `NSLocalizedString`.
+* **editor:** the file tree's cursor comment describes the clear that exists
+  rather than a rejected alternative, and names the coupling it depends on
+  (`navigateToFile` writing `currentFilePath` synchronously). The tree's icon
+  credit says Material Icon Theme, which is what it has rendered since the
+  vendored vscicons fork was dropped.
+
 ## [0.2.4](https://github.com/phaedryx/atelier/compare/v0.2.3...v0.2.4) (2026-09-16)
 
 ### Bug Fixes
