@@ -366,4 +366,31 @@ final class ExecutionTabViewTests: XCTestCase {
         ProcessSelectionStore.execute.write(.only(["bff"]), id)
         XCTAssertEqual(ProcessSelectionStore.execute.read(id), .only(["bff"]))
     }
+
+    // MARK: - Keeping the terminal's share of the run pane
+
+    /// A `Table` is greedy in both axes, where the rows it replaced were
+    /// intrinsically sized, so the height is capped rather than negotiated in
+    /// the layout: past the cap the table scrolls and the terminal below it
+    /// keeps the rest of the pane.
+    func testALongProcessTableIsCappedSoTheTerminalKeepsItsSpace() {
+        XCTAssertEqual(processTableHeight(count: 30, rowHeight: 24, headerHeight: 28, visibleRows: 8), 28 + 192)
+        XCTAssertEqual(processTableHeight(count: 9, rowHeight: 24, headerHeight: 28, visibleRows: 8), 28 + 192)
+    }
+
+    /// And below the cap it is exactly as tall as its rows plus its header —
+    /// one fixed height for every stack would hand a two-process project rows
+    /// of dead space between its table and its terminal.
+    func testAShortProcessTableIsExactlyAsTallAsItsRowsAndHeader() {
+        XCTAssertEqual(processTableHeight(count: 2, rowHeight: 24, headerHeight: 28, visibleRows: 8), 28 + 48)
+        XCTAssertEqual(processTableHeight(count: 8, rowHeight: 24, headerHeight: 28, visibleRows: 8), 28 + 192)
+    }
+
+    /// The header is always paid for, and a table that is somehow empty still
+    /// reserves one row: the view renders "Nothing running." instead in that
+    /// case, but the arithmetic must not go below a header plus a row if it is
+    /// ever asked.
+    func testTheProcessTableAlwaysReservesItsHeaderAndOneRow() {
+        XCTAssertEqual(processTableHeight(count: 0, rowHeight: 24, headerHeight: 28, visibleRows: 8), 28 + 24)
+    }
 }
