@@ -705,7 +705,24 @@ struct TerminalContainerView: View {
 
             Spacer()
 
-            // Quick actions to add tabs
+            // Quick actions to add tabs.
+            //
+            // A plain `HStack` of six separate buttons, deliberately. This is
+            // NOT the place for a `ControlGroup`, which is the obvious-looking
+            // native container for a row of related controls and was tried and
+            // reverted — on macOS it does not wrap its children, it harvests
+            // them into a single `NSSegmentedControl`. Measured: hit-testing
+            // across this cluster returns six `SwiftUIAppKitButton`s as written
+            // and exactly one `SwiftUISegmentedControl` per group when wrapped,
+            // with the individual buttons gone from the hierarchy entirely. The
+            // failure is silent and nasty — `.onHover` still fires, so the
+            // icons go on lighting up under the pointer while nothing happens
+            // when they are clicked. Wrapping bare `Button`s instead of
+            // `TabBarActionButton`, or moving its styling into a `ButtonStyle`,
+            // changes nothing: all three collapse the same way. These buttons
+            // are bespoke on purpose (tertiary until hover, their own hover
+            // background, a tooltip each) and none of that survives becoming a
+            // segment.
             HStack(spacing: 2) {
                 // Shown only while the tab is closed. ⌘1-9 is positional over
                 // the tabs that are open, so no number reaches a closed one;
@@ -719,19 +736,38 @@ struct TerminalContainerView: View {
                 // different things across: reopen the one there is only ever
                 // one of, versus add another of something there can be many
                 // of. Drawn only when the left half is non-empty.
+                //
+                // `Divider` rather than a hand-filled `Rectangle`: it is the
+                // native separator, so it needs no `.accessibilityHidden(true)`
+                // to undo being a shape pretending to be chrome. It renders
+                // identically and leaves the six buttons six separate views.
                 if !closedSingletons.isEmpty {
-                    Rectangle()
-                        .fill(.separator)
-                        .frame(width: 1, height: 14)
+                    Divider()
+                        .frame(height: 14)
                         .padding(.horizontal, 4)
-                        .accessibilityHidden(true)
                 }
                 // Icons come from the kind rather than a literal, the same way
                 // the singleton buttons above take theirs: a quick-add button
-                // and the tab it opens must not be able to drift apart.
-                TabBarActionButton(icon: WorkspaceTabKind.terminal.icon, tooltip: "New Terminal", action: addTerminal)
-                TabBarActionButton(icon: WorkspaceTabKind.browser.icon, tooltip: "New Browser", action: addBrowser)
-                TabBarActionButton(icon: WorkspaceTabKind.editor.icon, tooltip: "New Editor", action: openEditor)
+                // and the tab it opens must not be able to drift apart. The
+                // tooltips go through `NSLocalizedString` for the reason
+                // `SingletonQuickAdd` spells its own out: `TabBarActionButton`
+                // takes a `String`, so `.help` binds the `StringProtocol`
+                // overload, which does not localize a literal on its own.
+                TabBarActionButton(
+                    icon: WorkspaceTabKind.terminal.icon,
+                    tooltip: NSLocalizedString("New Terminal", comment: "Tab bar button tooltip"),
+                    action: addTerminal
+                )
+                TabBarActionButton(
+                    icon: WorkspaceTabKind.browser.icon,
+                    tooltip: NSLocalizedString("New Browser", comment: "Tab bar button tooltip"),
+                    action: addBrowser
+                )
+                TabBarActionButton(
+                    icon: WorkspaceTabKind.editor.icon,
+                    tooltip: NSLocalizedString("New Editor", comment: "Tab bar button tooltip"),
+                    action: openEditor
+                )
             }
             .fixedSize()
 
