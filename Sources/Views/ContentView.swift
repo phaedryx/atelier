@@ -155,8 +155,11 @@ struct ContentView: View {
     @ObservedObject private var channelProbe = HookChannelProbe.shared
     @State private var saveWork: DispatchWorkItem?
     @State private var workstreamToRemove: UUID?
-    @State private var workstreamToPurge: UUID?
-    @State private var purgeWarningMessage: String?
+    /// The pending Purge, its warning and its alert copy. See
+    /// `Workstream.PurgeConfirmation` — Remove stays a plain `UUID?` above
+    /// because it has no warning, no button-title rule and no destroyable
+    /// question, so folding it in would buy a `kind` branch in every accessor.
+    @StateObject private var purgeConfirmation = Workstream.PurgeConfirmation()
     @State private var removedProjectNames: [String] = []
     @State private var keyMonitorInstalled = false
     @StateObject private var commandRegistry = CommandRegistry(commands: defaultPaletteCommands())
@@ -378,26 +381,23 @@ struct ContentView: View {
             } message: {
                 Text("Ongoing terminals and Coding Agent sessions will be killed. The worktree and its files will remain on disk.")
             }
-            .alert(
-                "Purge Workstream",
-                isPresented: Binding(
-                    get: { workstreamToPurge != nil },
-                    set: {
-                        if !$0 {
-                            workstreamToPurge = nil
-                        }
-                    }
+            .purgeConfirmationAlert(
+                purgeConfirmation,
+                archiving: Workstream.PurgeConfirmation.ArchiveContext(
+                    projects: $projectList.items,
+                    surfaceCache: surfaceCache,
+                    tmuxPath: appEnvironment.toolStatus.tmux.path,
+                    verificationRunner: verificationRunner,
+                    agentStateTracker: agentStateTracker
                 )
-            ) {
-                Button("Cancel", role: .cancel) { workstreamToPurge = nil }
-                Button(purgeWarningMessage != nil ? "Purge Anyway" : "Purge", role: .destructive) {
-                    performPurge()
-                }
-            } message: {
-                if let warning = purgeWarningMessage {
-                    Text(warning)
-                } else {
-                    Text("The worktree and its branch will be permanently deleted.")
+            ) { completion in
+                guard case let .workstream(wsID, projectID) = completion else { return }
+                ProjectStore.save(projects)
+                // Before anything else touches the deleted worktree: purge removes
+                // the directory this was watching.
+                syncHeadWatcher(projects: projects)
+                if case let .workstream(id) = selection, id == wsID {
+                    selection = .project(projectID)
                 }
             }
             .alert(
@@ -1177,10 +1177,11 @@ struct ContentView: View {
         selection = .project(sorted[next].id)
     }
 
+    /// Signature deliberately unchanged: the `.purgeWorkstream` receiver, the
+    /// project overview's row and the palette all reach a purge through here.
     private func confirmPurge(_ wsID: UUID) {
-        let ws = projects.flatMap(\.workstreams).first(where: { $0.id == wsID })
-        purgeWarningMessage = ws.flatMap { Workstream.Archiver.purgeWarning(for: $0) }
-        workstreamToPurge = wsID
+        guard let ws = projects.flatMap(\.workstreams).first(where: { $0.id == wsID }) else { return }
+        purgeConfirmation.confirm(workstream: ws)
     }
 
     private func performRemove() {
@@ -1191,26 +1192,6 @@ struct ContentView: View {
         ProjectStore.save(projects)
         syncHeadWatcher(projects: projects)
         workstreamToRemove = nil
-    }
-
-    private func performPurge() {
-        guard let wsID = workstreamToPurge,
-              let projectIndex = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
-        let projectID = projects[projectIndex].id
-        Workstream.Archiver.purge(
-            wsID, in: &projects[projectIndex], surfaceCache: surfaceCache,
-            tmuxPath: appEnvironment.toolStatus.tmux.path,
-            verificationRunner: verificationRunner,
-            agentStateTracker: agentStateTracker
-        )
-        ProjectStore.save(projects)
-        // Before anything else touches the deleted worktree: purge removes the
-        // directory this was watching.
-        syncHeadWatcher(projects: projects)
-        if case let .workstream(id) = selection, id == wsID {
-            selection = .project(projectID)
-        }
-        workstreamToPurge = nil
     }
 }
 

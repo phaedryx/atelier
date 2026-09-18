@@ -153,6 +153,28 @@ extension Workstream {
             projectDirectory: String,
             checkoutDirectory: String? = nil
         ) -> String? {
+            destroyablePath(
+                workstream.worktreePath,
+                projectDirectory: projectDirectory,
+                checkoutDirectory: checkoutDirectory
+            )
+        }
+
+        /// The same decision for a path that belongs to no workstream.
+        ///
+        /// Extracted so the orphan path can ask it too: `purgeOrphanWorktree`
+        /// takes a bare string straight to `removeWorktree` and
+        /// `deleteLocalBranch` and has never had a guard of its own. The rule is
+        /// the one `destroyableWorktreePath` states above and there is exactly
+        /// one copy of it — an orphan purge that re-derived "is this the
+        /// project's own directory" would be the inlined second copy this
+        /// codebase keeps warning about, and the two would drift on the first
+        /// spelling that only one of them canonicalized.
+        static func destroyablePath(
+            _ stored: String?,
+            projectDirectory: String,
+            checkoutDirectory: String? = nil
+        ) -> String? {
             // Absolute only. `URL(fileURLWithPath:)` resolves a relative string
             // against the *process's* working directory, which has nothing to do
             // with this project — so it never equals the protected set and sails
@@ -161,7 +183,7 @@ extension Workstream {
             // resolve it against a working directory of their own. `~` is not
             // expanded for the same reason: only a path that already names one
             // directory can be reasoned about here.
-            guard let stored = workstream.worktreePath else { return nil }
+            guard let stored else { return nil }
             let path = stored.trimmingCharacters(in: .whitespacesAndNewlines)
             guard path.hasPrefix("/") else { return nil }
 
