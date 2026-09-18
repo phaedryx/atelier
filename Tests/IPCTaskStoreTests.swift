@@ -163,8 +163,9 @@ final class IPCTaskStoreTests: XCTestCase {
     func test_complete_byTheClaimer_succeeds() async throws {
         _ = try await store.add(projectDirectory: projectA, path: "p", name: "n", content: "x", tags: [], createdBySurfaceID: nil)
         _ = try await store.claim(projectDirectory: projectA, path: "p", surfaceID: surfaceX, workstreamID: workstream1)
-        let completed = try await store.complete(projectDirectory: projectA, path: "p", surfaceID: surfaceX)
+        let (completed, transitioned) = try await store.complete(projectDirectory: projectA, path: "p", surfaceID: surfaceX)
         guard case .completed = completed.state else { return XCTFail("expected .completed") }
+        XCTAssertTrue(transitioned, "a first-time complete must report that it transitioned")
     }
 
     func test_complete_bySomeoneWhoNeverClaimedIt_isRefused() async throws {
@@ -193,8 +194,9 @@ final class IPCTaskStoreTests: XCTestCase {
         _ = try await store.add(projectDirectory: projectA, path: "p", name: "n", content: "x", tags: [], createdBySurfaceID: nil)
         _ = try await store.claim(projectDirectory: projectA, path: "p", surfaceID: surfaceX, workstreamID: workstream1)
         _ = try await store.complete(projectDirectory: projectA, path: "p", surfaceID: surfaceX)
-        let replayed = try await store.complete(projectDirectory: projectA, path: "p", surfaceID: surfaceX)
+        let (replayed, transitioned) = try await store.complete(projectDirectory: projectA, path: "p", surfaceID: surfaceX)
         guard case .completed = replayed.state else { return XCTFail("expected .completed") }
+        XCTAssertFalse(transitioned, "a same-surface replay must report that nothing changed")
     }
 
     // MARK: - Failing
@@ -202,9 +204,10 @@ final class IPCTaskStoreTests: XCTestCase {
     func test_fail_byTheClaimer_recordsTheReason() async throws {
         _ = try await store.add(projectDirectory: projectA, path: "p", name: "n", content: "x", tags: [], createdBySurfaceID: nil)
         _ = try await store.claim(projectDirectory: projectA, path: "p", surfaceID: surfaceX, workstreamID: workstream1)
-        let failed = try await store.fail(projectDirectory: projectA, path: "p", surfaceID: surfaceX, reason: "flaky dependency")
+        let (failed, transitioned) = try await store.fail(projectDirectory: projectA, path: "p", surfaceID: surfaceX, reason: "flaky dependency")
         guard case let .failed(_, _, reason) = failed.state else { return XCTFail("expected .failed") }
         XCTAssertEqual(reason, "flaky dependency")
+        XCTAssertTrue(transitioned, "a first-time fail must report that it transitioned")
     }
 
     /// A replayed fail_task with a DIFFERENT reason string must not overwrite
@@ -213,9 +216,10 @@ final class IPCTaskStoreTests: XCTestCase {
         _ = try await store.add(projectDirectory: projectA, path: "p", name: "n", content: "x", tags: [], createdBySurfaceID: nil)
         _ = try await store.claim(projectDirectory: projectA, path: "p", surfaceID: surfaceX, workstreamID: workstream1)
         _ = try await store.fail(projectDirectory: projectA, path: "p", surfaceID: surfaceX, reason: "first reason")
-        let replayed = try await store.fail(projectDirectory: projectA, path: "p", surfaceID: surfaceX, reason: "different reason")
+        let (replayed, transitioned) = try await store.fail(projectDirectory: projectA, path: "p", surfaceID: surfaceX, reason: "different reason")
         guard case let .failed(_, _, reason) = replayed.state else { return XCTFail("expected .failed") }
         XCTAssertEqual(reason, "first reason")
+        XCTAssertFalse(transitioned, "a same-surface replay must report that nothing changed")
     }
 
     // MARK: - Releasing claims on workstream teardown

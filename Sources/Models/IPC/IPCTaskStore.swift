@@ -119,6 +119,7 @@ extension IPC {
             tags: [String],
             createdBySurfaceID: String?
         ) throws -> ProjectTask {
+            let path = path.trimmingCharacters(in: .whitespacesAndNewlines)
             guard content.utf8.count <= maxContentSize else { throw TaskQueueFailure.contentTooLarge }
             guard tasksByProject[projectDirectory]?[path] == nil else {
                 throw TaskQueueFailure.alreadyExists(path)
@@ -173,6 +174,7 @@ extension IPC {
         // MARK: - Claiming
 
         func claim(projectDirectory: String, path: String, surfaceID: String, workstreamID: String) throws -> ProjectTask {
+            let path = path.trimmingCharacters(in: .whitespacesAndNewlines)
             guard var task = tasksByProject[projectDirectory]?[path] else {
                 throw TaskQueueFailure.unknownTask(path)
             }
@@ -192,15 +194,18 @@ extension IPC {
 
         // MARK: - Completing
 
-        func complete(projectDirectory: String, path: String, surfaceID: String) throws -> ProjectTask {
+        func complete(projectDirectory: String, path: String, surfaceID: String) throws -> (task: ProjectTask, transitioned: Bool) {
+            let path = path.trimmingCharacters(in: .whitespacesAndNewlines)
             guard var task = tasksByProject[projectDirectory]?[path] else {
                 throw TaskQueueFailure.unknownTask(path)
             }
+            let transitioned: Bool
             switch task.state {
             case let .claimed(existing, _, _) where existing == surfaceID:
                 task.state = .completed(bySurfaceID: surfaceID, at: Date())
+                transitioned = true
             case let .completed(existing, _) where existing == surfaceID:
-                break // idempotent replay
+                transitioned = false // idempotent replay: nothing changed
             case let .claimed(existing, _, _):
                 throw TaskQueueFailure.wrongClaimer(heldBySurfaceID: existing)
             case let .completed(existing, _):
@@ -211,20 +216,25 @@ extension IPC {
                 throw TaskQueueFailure.wrongClaimer(heldBySurfaceID: nil)
             }
             tasksByProject[projectDirectory]?[path] = task
-            return task
+            return (task, transitioned)
         }
 
         // MARK: - Failing
 
-        func fail(projectDirectory: String, path: String, surfaceID: String, reason: String) throws -> ProjectTask {
+        func fail(
+            projectDirectory: String, path: String, surfaceID: String, reason: String
+        ) throws -> (task: ProjectTask, transitioned: Bool) {
+            let path = path.trimmingCharacters(in: .whitespacesAndNewlines)
             guard var task = tasksByProject[projectDirectory]?[path] else {
                 throw TaskQueueFailure.unknownTask(path)
             }
+            let transitioned: Bool
             switch task.state {
             case let .claimed(existing, _, _) where existing == surfaceID:
                 task.state = .failed(bySurfaceID: surfaceID, at: Date(), reason: reason)
+                transitioned = true
             case let .failed(existing, _, _) where existing == surfaceID:
-                break // idempotent replay: the FIRST reason wins, never overwritten
+                transitioned = false // idempotent replay: the FIRST reason wins, never overwritten
             case let .claimed(existing, _, _):
                 throw TaskQueueFailure.wrongClaimer(heldBySurfaceID: existing)
             case let .failed(existing, _, _):
@@ -235,7 +245,7 @@ extension IPC {
                 throw TaskQueueFailure.wrongClaimer(heldBySurfaceID: nil)
             }
             tasksByProject[projectDirectory]?[path] = task
-            return task
+            return (task, transitioned)
         }
 
         // MARK: - Teardown

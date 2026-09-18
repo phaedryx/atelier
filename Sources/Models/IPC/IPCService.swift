@@ -1338,8 +1338,10 @@ extension IPC {
                 guard let path = request.arguments["path"], !path.isEmpty else {
                     return .failure(id: request.id, WorkspaceActions.Failure.missingArgument("path").localizedDescription)
                 }
-                let task = try await tasks.complete(projectDirectory: project, path: path, surfaceID: surfaceID)
-                await notifyCreator(of: task)
+                let (task, transitioned) = try await tasks.complete(projectDirectory: project, path: path, surfaceID: surfaceID)
+                if transitioned {
+                    await notifyCreator(of: task)
+                }
                 return await .success(id: request.id, .task(info(for: task)))
             } catch let failure as TaskQueueFailure {
                 return await .failure(id: request.id, message(for: failure))
@@ -1358,8 +1360,10 @@ extension IPC {
                 guard let reason = request.arguments["reason"]?.trimmingCharacters(in: .whitespacesAndNewlines), !reason.isEmpty else {
                     return .failure(id: request.id, WorkspaceActions.Failure.missingArgument("reason").localizedDescription)
                 }
-                let task = try await tasks.fail(projectDirectory: project, path: path, surfaceID: surfaceID, reason: reason)
-                await notifyCreator(of: task)
+                let (task, transitioned) = try await tasks.fail(projectDirectory: project, path: path, surfaceID: surfaceID, reason: reason)
+                if transitioned {
+                    await notifyCreator(of: task)
+                }
                 return await .success(id: request.id, .task(info(for: task)))
             } catch let failure as TaskQueueFailure {
                 return await .failure(id: request.id, message(for: failure))

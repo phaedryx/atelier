@@ -678,7 +678,7 @@ func renderText(_ payload: IPC.Payload?) -> String {
         return renderTask(task)
     case let .tasks(list):
         guard !list.isEmpty else { return "No tasks match." }
-        return list.map(renderTask).joined(separator: "\n\n")
+        return list.map { renderTask($0, contentPreviewLimit: 200) }.joined(separator: "\n\n")
     case let .text(text):
         return text
     case nil:
@@ -687,15 +687,39 @@ func renderText(_ payload: IPC.Payload?) -> String {
 }
 
 /// Renders one task for the plain text an agent reads.
-func renderTask(_ task: IPC.TaskInfo) -> String {
+///
+/// `contentPreviewLimit` is `nil` for the singular `.task` payload (add/claim/
+/// complete/fail responses) — full content, since a caller acting on one task
+/// needs its whole brief. `get_pending_tasks`/`list_tasks` pass a fixed limit
+/// instead: a list can hold several tasks near the 64KB cap each, and dumping
+/// all of them in full would flood the agent's context.
+///
+/// `createdBy`/`claimedBy` are rendered alongside their display-name
+/// counterparts — id in parens after the name, the same shape `.peer`/`.peers`
+/// use (`[peer.role] id=\(peer.id)`) — because a peer id, not a display name,
+/// is what `send_message` addresses.
+func renderTask(_ task: IPC.TaskInfo, contentPreviewLimit: Int? = nil) -> String {
     var lines = ["\(task.path) [\(task.state.rawValue)] \(task.name)"]
-    lines.append("created \(task.createdSecondsAgo)s ago" + (task.createdByName.map { " by \($0)" } ?? ""))
+
+    var createdLine = "created \(task.createdSecondsAgo)s ago"
+    if let createdByName = task.createdByName {
+        createdLine += " by \(createdByName)" + (task.createdBy.map { " (\($0))" } ?? "")
+    }
+    lines.append(createdLine)
+
     if let claimedByName = task.claimedByName, let claimedSecondsAgo = task.claimedSecondsAgo {
-        lines.append("claimed by \(claimedByName) \(claimedSecondsAgo)s ago")
+        lines.append("claimed by \(claimedByName)" + (task.claimedBy.map { " (\($0))" } ?? "") + " \(claimedSecondsAgo)s ago")
     }
     if !task.tags.isEmpty {
         lines.append("tags: \(task.tags.joined(separator: ", "))")
     }
+
+    if let limit = contentPreviewLimit, task.content.count > limit {
+        lines.append("content: \(task.content.prefix(limit))…")
+    } else {
+        lines.append("content: \(task.content)")
+    }
+
     if let reason = task.failureReason {
         lines.append("failure reason: \(reason)")
     }

@@ -504,6 +504,32 @@ final class IPCServiceTests: XCTestCase {
         XCTAssertNil(response.error)
     }
 
+    /// Finding 2 of the whole-branch review: a replayed `complete_task` from
+    /// the same surface is a documented no-op (`IPCProtocol.swift` marks it
+    /// `isSafeToReplay = true` on that basis) — but the store's idempotent-
+    /// replay branch was still followed by an unconditional `notifyCreator`,
+    /// so an ordinary reconnect-and-replay produced a second inbox message and
+    /// a second unsolicited nudge into the creator's terminal. A genuine
+    /// first-time complete must still notify exactly once.
+    func test_completeTask_replayedBySameSurface_notifiesTheCreatorOnlyOnce() async {
+        let creatorSurface = UUID()
+        let registered = await call(.registerPeer, ["name": "coordinator"], as: client(project: projectA, workstream: "coordinator-ws", surfaceID: creatorSurface))
+        guard case let .peer(creatorPeer) = registered.payload else { return XCTFail("expected a peer") }
+
+        _ = await call(.addTask, ["path": "p", "name": "n", "content": "c"], as: client(project: projectA, surfaceID: creatorSurface))
+
+        let claimerSurface = UUID()
+        _ = await call(.claimTask, ["path": "p"], as: client(project: projectA, surfaceID: claimerSurface))
+        let first = await call(.completeTask, ["path": "p"], as: client(project: projectA, surfaceID: claimerSurface))
+        XCTAssertNil(first.error)
+        let replay = await call(.completeTask, ["path": "p"], as: client(project: projectA, surfaceID: claimerSurface))
+        XCTAssertNil(replay.error, "a same-surface replay must still answer success")
+
+        let received = await call(.receiveMessages, as: client(project: projectA, peerID: creatorPeer.id, surfaceID: creatorSurface))
+        guard case let .messages(messages) = received.payload else { return XCTFail("expected messages") }
+        XCTAssertEqual(messages.count, 1, "a replayed complete_task must not produce a second notice")
+    }
+
     // MARK: - Releasing claims on workstream teardown
 
     func test_releaseTaskClaims_revertsClaimsInThatWorkstream() async throws {
