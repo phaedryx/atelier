@@ -554,8 +554,8 @@ extension Git {
                 }
             }
             // Try remote HEAD
-            if let ref = run(args: ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], in: path) {
-                return ref.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let ref = remoteHeadRef(at: path) {
+                return ref
             }
             // Check if origin/main or origin/master exist
             for branch in ["origin/main", "origin/master"] {
@@ -1708,10 +1708,8 @@ extension Git {
         /// `origin/HEAD` to ask.
         static func protectedBranchNames(at path: String) -> Set<String> {
             var names: Set = ["main", "master"]
-            if let head = run(args: ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], in: path)?
-                .trimmingCharacters(in: .whitespacesAndNewlines), !head.isEmpty
-            {
-                names.insert(head.hasPrefix("origin/") ? String(head.dropFirst("origin/".count)) : head)
+            if let head = remoteHeadRef(at: path), !head.isEmpty {
+                names.insert(stripOriginPrefix(head))
             }
             return names
         }
@@ -1725,10 +1723,8 @@ extension Git {
         /// worktree.
         private static func defaultBranchNames(at path: String) -> [String] {
             var names: [String] = []
-            if let head = run(args: ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], in: path)?
-                .trimmingCharacters(in: .whitespacesAndNewlines), !head.isEmpty
-            {
-                names.append(head.hasPrefix("origin/") ? String(head.dropFirst("origin/".count)) : head)
+            if let head = remoteHeadRef(at: path), !head.isEmpty {
+                names.append(stripOriginPrefix(head))
             }
             names.append(contentsOf: ["main", "master", "development"])
             return names
@@ -1900,6 +1896,26 @@ extension Git {
             ref.hasPrefix("origin/") ? String(ref.dropFirst("origin/".count)) : ref
         }
 
+        /// `origin/HEAD` as git reports it — `origin/main`, trimmed — or nil when
+        /// the ref is absent, which is the ordinary case for a repository that has
+        /// never been fetched.
+        ///
+        /// Four sites asked git this with four copies of the same two lines, and
+        /// two of them then reimplemented `stripOriginPrefix` inline rather than
+        /// calling it. That is the prefix check that must not become a substring
+        /// removal — a branch named `feature/origin/thing` comes back unchanged —
+        /// so having two hand-rolled copies of it was the part worth removing.
+        ///
+        /// Deliberately **not** cached and deliberately not routed through
+        /// `defaultBranch(at:)`: three of the four callers are asking a different
+        /// question from that one (which trunk must never be purged, which checkout
+        /// represents the project, which branch to fetch), and `defaultBranch`'s
+        /// cache and its `"HEAD"` sentinel belong to its own question.
+        private static func remoteHeadRef(at path: String) -> String? {
+            run(args: ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], in: path)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
         /// Fetch a branch from origin. Fails silently when there is no remote or
         /// the network is unreachable.
         ///
@@ -1915,9 +1931,9 @@ extension Git {
             // there is no guard here — asking twice was one git spawn per call for nothing.
             let branchToFetch: String = if let branch {
                 stripOriginPrefix(branch)
-            } else if let ref = run(args: ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], in: path) {
+            } else if let ref = remoteHeadRef(at: path) {
                 // e.g. "origin/main" -> "main"
-                stripOriginPrefix(ref.trimmingCharacters(in: .whitespacesAndNewlines))
+                stripOriginPrefix(ref)
             } else {
                 "main"
             }
