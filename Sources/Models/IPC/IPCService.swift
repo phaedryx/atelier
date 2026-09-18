@@ -86,6 +86,8 @@ extension IPC {
                 return await openEditor(for: request)
             case .openTab:
                 return await openTab(for: request)
+            case .closeTab:
+                return await closeTab(for: request)
             case .requestAttention:
                 return await requestAttention(for: request)
             case .createWorkstream:
@@ -108,6 +110,10 @@ extension IPC {
                 return await completeTask(for: request)
             case .failTask:
                 return await failTask(for: request)
+            case .getSessionCheckpoint:
+                return await getSessionCheckpoint(for: request)
+            case .updateSessionCheckpoint:
+                return await updateSessionCheckpoint(for: request)
             }
         }
 
@@ -419,15 +425,27 @@ extension IPC {
             await info(for: peer, pending: store.inboxCount(for: peer.id), now: Date())
         }
 
+        /// Synchronous on purpose: `lastUserPromptAt(forSurface:)` is `nonisolated`
+        /// precisely so this can stay off the main actor. A `MainActor.run` hop
+        /// here once deadlocked a real socket round trip — `IPCServerTests` blocks
+        /// its own thread in a raw `recv()` waiting for the reply this function
+        /// produces, so if producing it needed the main thread to go idle first,
+        /// and the main thread was the one blocked in `recv()`, neither side could
+        /// proceed.
         private func info(for peer: Peer, pending: Int, now: Date) -> PeerInfo {
-            PeerInfo(
+            let surfaceID = contexts[peer.id]?.surfaceID
+            let lastUserPromptSecondsAgo = surfaceID
+                .flatMap { Workstream.AgentStateTracker.shared.lastUserPromptAt(forSurface: $0) }
+                .map { Int(now.timeIntervalSince($0)) }
+            return PeerInfo(
                 id: peer.id.uuidString,
                 name: peer.name,
                 role: peer.role,
                 workstream: contexts[peer.id]?.workstreamName,
-                surfaceID: contexts[peer.id]?.surfaceID?.uuidString,
+                surfaceID: surfaceID?.uuidString,
                 lastSeenSecondsAgo: Int(now.timeIntervalSince(peer.lastSeen)),
-                pendingMessages: pending
+                pendingMessages: pending,
+                lastUserPromptSecondsAgo: lastUserPromptSecondsAgo
             )
         }
 
@@ -549,6 +567,37 @@ extension IPC {
                     .text(what + " It did not take the selection, so the user is still looking at whatever they had "
                         + "in front of them — use request_attention if you need them to come and look.")
                 )
+            } catch {
+                return .failure(id: request.id, error.localizedDescription)
+            }
+        }
+
+        /// Closes one of the caller's tabs — a singleton pane by `kind`, or a
+        /// terminal tab by `surface_id`. See `WorkspaceActions.closeTab` for
+        /// the full contract: exactly one of the two arguments, why Execution
+        /// is refused rather than closed, and why an id nothing currently
+        /// owns is success rather than an error.
+        private func closeTab(for request: Request) async -> Response {
+            guard let workstreamID = callerWorkstreamID(request) else {
+                return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
+            }
+            do {
+                let result = try await MainActor.run {
+                    try WorkspaceActions.shared.closeTab(
+                        workstreamID: workstreamID,
+                        kind: request.arguments["kind"],
+                        surfaceID: request.arguments["surface_id"]
+                    )
+                }
+                let what = switch (result.kind, result.wasOpen) {
+                case let (kind?, true):
+                    "Closed the \(kind) tab."
+                case let (kind?, false):
+                    "The \(kind) tab was already closed."
+                case (nil, _):
+                    "No tab in this workstream has that surface id — it may already be closed."
+                }
+                return .success(id: request.id, .text(what))
             } catch {
                 return .failure(id: request.id, error.localizedDescription)
             }
@@ -1471,6 +1520,55 @@ extension IPC {
         /// .releaseClaims(inWorkstreamID:)`'s doc comment.
         func releaseTaskClaims(inWorkstream workstreamID: UUID) async {
             _ = await tasks.releaseClaims(inWorkstreamID: workstreamID.uuidString)
+        }
+
+        // MARK: - Session checkpoint
+
+        /// Reads the caller's workstream's saved checkpoint.
+        ///
+        /// **No `MainActor` hop.** Unlike `listTabs`/`readReviewComments`, which
+        /// route through `WorkspaceActions` because they need the live app
+        /// environment, this is a plain `UserDefaults` read reachable directly
+        /// from this actor.
+        ///
+        /// **"Never saved" and "saved" are different sentences**, not the same
+        /// empty answer dressed up two ways — the same three-case discipline
+        /// `Verification.Config.Load` applies to its own file: a state an agent
+        /// could mistake for "nothing to report" must say plainly that nothing
+        /// has been recorded yet, so it knows to write one rather than assume
+        /// there was never anything worth saving.
+        private func getSessionCheckpoint(for request: Request) async -> Response {
+            guard let workstreamID = callerWorkstreamID(request) else {
+                return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
+            }
+            guard let checkpoint = IPC.CheckpointStore.read(for: workstreamID) else {
+                return .success(id: request.id, .text(
+                    "No checkpoint saved yet for this workstream. Call update_session_checkpoint "
+                        + "before finishing a task, or at any milestone worth resuming from."
+                ))
+            }
+            let secondsAgo = Int(Date().timeIntervalSince(checkpoint.updatedAt))
+            return .success(id: request.id, .text("Checkpoint from \(secondsAgo)s ago:\n\n\(checkpoint.content)"))
+        }
+
+        /// Overwrites the caller's workstream's checkpoint.
+        ///
+        /// **Shared per workstream, not per agent** — see `IPC.CheckpointStore`'s
+        /// doc comment. Two agents in one workstream read and write the same
+        /// blob, and the tool's own description says so.
+        private func updateSessionCheckpoint(for request: Request) async -> Response {
+            guard let workstreamID = callerWorkstreamID(request) else {
+                return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
+            }
+            guard let content = request.arguments["content"], !content.isEmpty else {
+                return .failure(id: request.id, "update_session_checkpoint needs non-empty `content`.")
+            }
+            do {
+                try IPC.CheckpointStore.save(content, for: workstreamID)
+                return .success(id: request.id, .text("Checkpoint saved."))
+            } catch {
+                return .failure(id: request.id, error.localizedDescription)
+            }
         }
 
         // MARK: - Test Support

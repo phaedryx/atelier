@@ -89,7 +89,8 @@ final class IPCProtocolTests: XCTestCase {
     func test_readsAndRenames_stayReplayable() {
         for tool in [
             IPC.Tool.listPeers, .getPeerStatus, .listTabs, .readReviewComments,
-            .checkVerification, .listVerificationChecks, .openEditor, .openTab, .requestAttention,
+            .checkVerification, .listVerificationChecks, .getSessionCheckpoint,
+            .openEditor, .openTab, .requestAttention, .closeTab,
         ] {
             XCTAssertTrue(tool.isSafeToReplay, "\(tool.rawValue) changes nothing by running twice")
         }
@@ -125,5 +126,17 @@ final class IPCProtocolTests: XCTestCase {
         for tool in [IPC.Tool.getPendingTasks, .listTasks, .claimTask, .completeTask, .failTask] {
             XCTAssertTrue(tool.isSafeToReplay, "\(tool.rawValue) is idempotent per-surface by construction")
         }
+    }
+
+    /// `update_session_checkpoint` is a workspace *action* — it mutates state —
+    /// but it is safe to replay by the same idempotence rule `open_editor` is:
+    /// overwriting a blob with no version history leaves the same final state
+    /// whether it runs once or twice.
+    func test_updateSessionCheckpoint_isSafeToReplayDespiteBeingAnAction() {
+        XCTAssertEqual(IPC.Tool.updateSessionCheckpoint.surface, .workspaceAction)
+        XCTAssertTrue(
+            IPC.Tool.updateSessionCheckpoint.isSafeToReplay,
+            "an overwrite with no history writes the same bytes twice"
+        )
     }
 }

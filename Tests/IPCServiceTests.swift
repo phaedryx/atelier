@@ -325,6 +325,59 @@ final class IPCServiceTests: XCTestCase {
         XCTAssertEqual(peer.pendingMessages, 1)
     }
 
+    // MARK: - Last user prompt
+
+    func test_getPeerStatus_lastUserPromptSecondsAgo_isNilWithNoObservedPrompt() async {
+        let surface = UUID()
+        let response = await call(.registerPeer, ["name": "peer"], as: client(project: projectA, surfaceID: surface))
+        guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
+
+        let status = await call(.getPeerStatus, ["peer_id": peer.id], as: client(project: projectA))
+        guard case let .peer(info) = status.payload else { return XCTFail("expected a peer") }
+        XCTAssertNil(info.lastUserPromptSecondsAgo, "no UserPromptSubmit has ever been observed on this surface")
+    }
+
+    func test_getPeerStatus_reportsARecentUserPrompt() async {
+        let surface = UUID()
+        let response = await call(.registerPeer, ["name": "peer"], as: client(project: projectA, surfaceID: surface))
+        guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
+
+        await MainActor.run {
+            Workstream.AgentStateTracker.shared._testSetLastUserPrompt(surfaceID: surface, at: Date())
+        }
+
+        let status = await call(.getPeerStatus, ["peer_id": peer.id], as: client(project: projectA))
+        guard case let .peer(info) = status.payload else { return XCTFail("expected a peer") }
+        guard let secondsAgo = info.lastUserPromptSecondsAgo else { return XCTFail("expected a value") }
+        XCTAssertLessThan(secondsAgo, 5)
+    }
+
+    func test_listPeers_alsoReportsLastUserPromptSecondsAgo() async throws {
+        let surface = UUID()
+        let sender = try await register(name: "sender", project: projectA)
+        let response = await call(.registerPeer, ["name": "peer"], as: client(project: projectA, surfaceID: surface))
+        guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
+
+        await MainActor.run {
+            Workstream.AgentStateTracker.shared._testSetLastUserPrompt(surfaceID: surface, at: Date())
+        }
+
+        let listed = try await peers(of: call(.listPeers, as: client(project: projectA, peerID: sender)))
+        guard let info = listed.first(where: { $0.id == peer.id }) else { return XCTFail("peer not listed") }
+        XCTAssertNotNil(info.lastUserPromptSecondsAgo)
+    }
+
+    func test_getPeerStatus_pullOnlyPeer_neverReportsLastUserPrompt() async {
+        // No surface means no pane a human could type into, so this must never
+        // borrow another surface's timestamp.
+        let response = await call(.registerPeer, ["name": "elsewhere"], as: client(project: projectA, surfaceID: nil))
+        guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
+
+        let status = await call(.getPeerStatus, ["peer_id": peer.id], as: client(project: projectA))
+        guard case let .peer(info) = status.payload else { return XCTFail("expected a peer") }
+        XCTAssertNil(info.lastUserPromptSecondsAgo)
+    }
+
     // MARK: - open_tab
 
     func test_openTab_withoutAKind_saysWhichArgumentIsMissing() async {
@@ -564,5 +617,137 @@ final class IPCServiceTests: XCTestCase {
 
         let listedTasks = try await tasks(of: call(.getPendingTasks, as: client(project: projectA)))
         XCTAssertTrue(listedTasks.isEmpty, "releaseAll must wipe the task queue, not just the peer store")
+    }
+
+    // MARK: - Session checkpoint
+
+    private func checkpointText(of response: IPC.Response) throws -> String {
+        guard case let .text(text) = response.payload else {
+            throw XCTSkip("expected a text payload, got \(String(describing: response.payload))")
+        }
+        return text
+    }
+
+    func test_getSessionCheckpoint_outsideAWorkstream_refuses() async {
+        let stranger = IPC.ClientIdentity(
+            workstreamID: nil, workstreamName: nil, projectDirectory: projectA, surfaceID: nil, peerID: nil
+        )
+
+        let response = await call(.getSessionCheckpoint, as: stranger)
+
+        XCTAssertNil(response.payload)
+        XCTAssertTrue(response.error?.contains("inside an Atelier workstream") == true, String(describing: response.error))
+    }
+
+    /// "Never saved" must not read as an empty checkpoint some agent wrote on
+    /// purpose — the same three-case discipline `Verification.Config.Load`
+    /// applies to its own file.
+    func test_getSessionCheckpoint_whenNoneSaved_saysSoRatherThanAnsweringEmpty() async throws {
+        let mine = client(project: projectA)
+
+        let text = try await checkpointText(of: call(.getSessionCheckpoint, as: mine))
+
+        XCTAssertTrue(text.contains("No checkpoint saved yet"), text)
+        XCTAssertTrue(text.contains("update_session_checkpoint"), "should point the agent at how to save one: \(text)")
+    }
+
+    func test_updateSessionCheckpoint_thenGet_roundTrips() async throws {
+        let mine = client(project: projectA)
+        let workstreamID = try XCTUnwrap(mine.workstreamID.flatMap(UUID.init(uuidString:)))
+        addTeardownBlock { IPC.CheckpointStore.clear(for: workstreamID) }
+
+        let saved = try await checkpointText(of: call(.updateSessionCheckpoint, ["content": "finished the login form, tests still red"], as: mine))
+        XCTAssertTrue(saved.contains("saved"), saved)
+
+        let read = try await checkpointText(of: call(.getSessionCheckpoint, as: mine))
+        XCTAssertTrue(read.contains("finished the login form, tests still red"), read)
+        XCTAssertTrue(read.contains("Checkpoint from"), "should report recency: \(read)")
+    }
+
+    /// A second save with no version history: the checkpoint is what the
+    /// *second* call wrote, not an accumulation of both.
+    func test_updateSessionCheckpoint_overwritesRatherThanAppending() async throws {
+        let mine = client(project: projectA)
+        let workstreamID = try XCTUnwrap(mine.workstreamID.flatMap(UUID.init(uuidString:)))
+        addTeardownBlock { IPC.CheckpointStore.clear(for: workstreamID) }
+
+        _ = await call(.updateSessionCheckpoint, ["content": "first note"], as: mine)
+        _ = await call(.updateSessionCheckpoint, ["content": "second note"], as: mine)
+
+        let read = try await checkpointText(of: call(.getSessionCheckpoint, as: mine))
+        XCTAssertTrue(read.contains("second note"), read)
+        XCTAssertFalse(read.contains("first note"), "must overwrite, not accumulate: \(read)")
+    }
+
+    func test_updateSessionCheckpoint_rejectsEmptyContent() async {
+        let response = await call(.updateSessionCheckpoint, ["content": ""], as: client(project: projectA))
+
+        XCTAssertNil(response.payload)
+        XCTAssertTrue(response.error?.contains("content") == true, String(describing: response.error))
+    }
+
+    func test_updateSessionCheckpoint_rejectsOversizedContent() async {
+        let tooBig = String(repeating: "a", count: IPC.CheckpointStore.maxContentSize + 1)
+
+        let response = await call(.updateSessionCheckpoint, ["content": tooBig], as: client(project: projectA))
+
+        XCTAssertNil(response.payload)
+        XCTAssertTrue(response.error?.contains("64KB") == true, String(describing: response.error))
+    }
+
+    func test_updateSessionCheckpoint_outsideAWorkstream_refuses() async {
+        let stranger = IPC.ClientIdentity(
+            workstreamID: nil, workstreamName: nil, projectDirectory: projectA, surfaceID: nil, peerID: nil
+        )
+
+        let response = await call(.updateSessionCheckpoint, ["content": "note"], as: stranger)
+
+        XCTAssertNil(response.payload)
+        XCTAssertTrue(response.error?.contains("inside an Atelier workstream") == true, String(describing: response.error))
+    }
+
+    /// Two workstreams never see each other's checkpoint — the key is per
+    /// workstream, unlike a peer's inbox, which is per registered agent.
+    func test_twoWorkstreams_haveIndependentCheckpoints() async throws {
+        let first = client(project: projectA)
+        let second = client(project: projectA)
+        let firstID = try XCTUnwrap(first.workstreamID.flatMap(UUID.init(uuidString:)))
+        let secondID = try XCTUnwrap(second.workstreamID.flatMap(UUID.init(uuidString:)))
+        addTeardownBlock {
+            IPC.CheckpointStore.clear(for: firstID)
+            IPC.CheckpointStore.clear(for: secondID)
+        }
+
+        _ = await call(.updateSessionCheckpoint, ["content": "workstream one's note"], as: first)
+
+        let secondRead = try await checkpointText(of: call(.getSessionCheckpoint, as: second))
+        XCTAssertTrue(secondRead.contains("No checkpoint saved yet"), secondRead)
+    }
+
+    // MARK: - close_tab
+
+    /// The full argument contract — exactly one of `kind`/`surface_id`, the
+    /// Execution refusal, the singleton and terminal behaviors — is tested
+    /// against `WorkspaceActions.shared.closeTab` directly in
+    /// `WorkspaceActionsCloseTabTests`, the same split `open_tab` uses. Here
+    /// there is only the one thing this layer alone can answer: whether the
+    /// caller is in a workstream at all.
+    func test_closeTab_withoutEitherArgument_saysWhichOnesAreMissing() async {
+        let response = await call(.closeTab, [:], as: client(project: projectA))
+
+        XCTAssertNil(response.payload)
+        XCTAssertTrue(response.error?.contains("kind") == true, String(describing: response.error))
+        XCTAssertTrue(response.error?.contains("surface_id") == true, String(describing: response.error))
+    }
+
+    func test_closeTab_outsideAWorkstream_refuses() async {
+        let stranger = IPC.ClientIdentity(
+            workstreamID: nil, workstreamName: nil, projectDirectory: projectA, surfaceID: nil, peerID: nil
+        )
+
+        let response = await call(.closeTab, ["kind": "changes"], as: stranger)
+
+        XCTAssertNil(response.payload)
+        XCTAssertTrue(response.error?.contains("inside an Atelier workstream") == true, String(describing: response.error))
     }
 }

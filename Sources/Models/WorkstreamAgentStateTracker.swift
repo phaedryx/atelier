@@ -20,7 +20,54 @@ private let logger = Logger(subsystem: "atelier", category: "agent-state")
 extension Workstream {
     @MainActor
     final class AgentStateTracker: ObservableObject {
-        static let shared = AgentStateTracker()
+        /// `nonisolated` so `IPC.Service` — an actor, not the main actor — can
+        /// reach the instance at all to call `lastUserPromptAt(forSurface:)`,
+        /// which is itself `nonisolated` for the same reason. See that method's
+        /// comment and `UserPromptClock` below.
+        nonisolated static let shared = AgentStateTracker()
+
+        /// Lock-guarded per-surface `UserPromptSubmit` timestamps, read through
+        /// `lastUserPromptAt(forSurface:)`.
+        ///
+        /// Everything else this class holds is MainActor-isolated and reached only
+        /// from MainActor code. This one is different: `IPC.Service` — an actor
+        /// answering real socket requests — needs to read it while producing a
+        /// reply, and hopping to the main actor from there deadlocked a real round
+        /// trip in `IPCServerTests`. The test blocks its own thread in a raw
+        /// `recv()` waiting for that reply; if producing the reply requires the
+        /// main thread to become free, and the main thread is the one blocked in
+        /// `recv()`, neither side ever proceeds. A lock-guarded box lets the read
+        /// stay `nonisolated` and synchronous, matching the precedent in
+        /// `Git.Operations.defaultBranch`'s cache, which lives outside
+        /// `AppEnvironment` for the same reason: "half the callers structurally
+        /// cannot reach a `@MainActor` type." Writes still only ever happen from
+        /// MainActor code, in `updateSurfaceState`.
+        private final class UserPromptClock: @unchecked Sendable {
+            private let lock = NSLock()
+            private var timestamps: [UUID: Date] = [:]
+
+            func set(_ surfaceID: UUID, to date: Date) {
+                lock.lock(); defer { lock.unlock() }
+                timestamps[surfaceID] = date
+            }
+
+            func clear(_ surfaceID: UUID) {
+                lock.lock(); defer { lock.unlock() }
+                timestamps.removeValue(forKey: surfaceID)
+            }
+
+            func clearAll() {
+                lock.lock(); defer { lock.unlock() }
+                timestamps.removeAll()
+            }
+
+            func get(_ surfaceID: UUID) -> Date? {
+                lock.lock(); defer { lock.unlock() }
+                return timestamps[surfaceID]
+            }
+        }
+
+        private let surfaceLastUserPromptAt = UserPromptClock()
 
         enum NeedsReason: Equatable {
             case justFinished
@@ -170,6 +217,22 @@ extension Workstream {
         /// Which workstream each known surface belongs to, so `clear` can drop it.
         private var surfaceWorkstream: [UUID: UUID] = [:]
 
+        /// Surfaces where the *next* `UserPromptSubmit` — if it arrives within
+        /// `syntheticPromptWindow` — is Atelier's own synthetic input (currently
+        /// only `AgentNudge`'s unread-messages notice), not a human's, paired
+        /// with the moment it was marked.
+        ///
+        /// `typeAndSubmit`'s own safety check (`TerminalContainerView.swift`) can
+        /// skip its Return keypress entirely if the surface stops looking idle
+        /// mid-delivery, in which case nothing ever consumes the marker. A window
+        /// bounds that: past it, the next prompt counts as human — the safe
+        /// direction to be wrong in, since the alternative is silently discarding
+        /// a real human prompt at an arbitrary point later in the session. The
+        /// window only has to clear `typeAndSubmit`'s own ~1s of delay plus hook
+        /// delivery latency, so it is generous rather than tight.
+        private var surfacesExpectingSyntheticPrompt: [UUID: Date] = [:]
+        private static let syntheticPromptWindow: TimeInterval = 10
+
         private var lastContextReadAt: [UUID: Date] = [:]
         /// Workstreams whose last transcript read found nothing, so the failure
         /// is logged once per spell rather than once per hook event.
@@ -193,7 +256,9 @@ extension Workstream {
 
         private var sweepTimer: Timer?
 
-        private init() {}
+        /// `nonisolated` so `static let shared`'s initializer can run outside the
+        /// main actor — see that property's comment.
+        private nonisolated init() {}
 
         // MARK: - Public API
 
@@ -206,6 +271,25 @@ extension Workstream {
         /// pane, not that the pane is idle.
         func state(forSurface id: UUID) -> AgentRunState? {
             surfaceStates[id]
+        }
+
+        /// When this surface last had a `UserPromptSubmit` hook event, or nil if
+        /// none has been observed this session.
+        ///
+        /// `nonisolated`, deliberately: `IPC.Service` reads this while producing a
+        /// reply on its own actor, and a MainActor hop here previously deadlocked a
+        /// real socket round trip (see `UserPromptClock`'s doc comment above).
+        nonisolated func lastUserPromptAt(forSurface id: UUID) -> Date? {
+            surfaceLastUserPromptAt.get(id)
+        }
+
+        /// Marks that the *next* `UserPromptSubmit` on this surface, if it
+        /// arrives promptly, is Atelier's own synthetic input rather than a
+        /// human's — see `surfacesExpectingSyntheticPrompt`'s comment. Called by
+        /// `AgentNudge` immediately before it types and submits its
+        /// unread-messages notice.
+        func expectSyntheticPrompt(surfaceID: UUID) {
+            surfacesExpectingSyntheticPrompt[surfaceID] = Date()
         }
 
         /// Live agent runs for a workstream, main agent first.
@@ -290,6 +374,8 @@ extension Workstream {
             for (surface, owner) in surfaceWorkstream where owner == workstreamID {
                 surfaceStates.removeValue(forKey: surface)
                 surfaceWorkstream.removeValue(forKey: surface)
+                surfaceLastUserPromptAt.clear(surface)
+                surfacesExpectingSyntheticPrompt.removeValue(forKey: surface)
             }
         }
 
@@ -299,6 +385,8 @@ extension Workstream {
         func clear(surfaceID: UUID) {
             surfaceStates.removeValue(forKey: surfaceID)
             surfaceWorkstream.removeValue(forKey: surfaceID)
+            surfaceLastUserPromptAt.clear(surfaceID)
+            surfacesExpectingSyntheticPrompt.removeValue(forKey: surfaceID)
         }
 
         /// Clears every tracked state. Used by tests to isolate cases.
@@ -311,6 +399,8 @@ extension Workstream {
             transcriptReadFailing.removeAll()
             surfaceStates.removeAll()
             surfaceWorkstream.removeAll()
+            surfaceLastUserPromptAt.clearAll()
+            surfacesExpectingSyntheticPrompt.removeAll()
             workstreamLookup = nil
             currentSelection = nil
             onProlongedSilence = nil
@@ -322,6 +412,19 @@ extension Workstream {
                   let idx = list.firstIndex(where: { $0.id == agentId }) else { return }
             list[idx].lastEventAt = lastEventAt
             rosters[workstreamID] = list
+        }
+
+        /// Seeds a surface's last-user-prompt timestamp directly, without driving a
+        /// full `UserPromptSubmit` event through `handle`. Used by `IPC.Service`
+        /// tests to exercise the join without needing a `workstreamLookup`.
+        func _testSetLastUserPrompt(surfaceID: UUID, at date: Date) {
+            surfaceLastUserPromptAt.set(surfaceID, to: date)
+        }
+
+        /// Backdates a synthetic-prompt marker, to test that an expired one no
+        /// longer suppresses attribution.
+        func _testExpectSyntheticPrompt(surfaceID: UUID, at date: Date) {
+            surfacesExpectingSyntheticPrompt[surfaceID] = date
         }
 
         /// Aggressive path normalization: resolves symlinks (e.g. `/private/var` ↔ `/var`)
@@ -674,6 +777,14 @@ extension Workstream {
             switch event.type {
             case .agentWaiting:
                 surfaceStates[surfaceID] = .working
+                if let markedAt = surfacesExpectingSyntheticPrompt.removeValue(forKey: surfaceID),
+                   Date().timeIntervalSince(markedAt) < Self.syntheticPromptWindow
+                {
+                    // Atelier's own synthetic input (e.g. AgentNudge's
+                    // unread-messages notice), not a human — do not record it.
+                } else {
+                    surfaceLastUserPromptAt.set(surfaceID, to: Date())
+                }
 
             case .agentIdle:
                 surfaceStates[surfaceID] = .idle
@@ -688,6 +799,13 @@ extension Workstream {
 
             case .agentSessionStarted:
                 surfaceStates[surfaceID] = .idle
+                // Belt and suspenders with the removal below: hook delivery is a
+                // one-second curl that fails silently, so a dropped `SessionEnd`
+                // must not leave a new session inheriting the previous one's
+                // timestamp — a coordinator would read "a human typed into this
+                // peer" when nobody has, in this session.
+                surfaceLastUserPromptAt.clear(surfaceID)
+                surfacesExpectingSyntheticPrompt.removeValue(forKey: surfaceID)
 
             case .agentSessionEnded:
                 // Cleared rather than set to `.idle`, which would read as "the
@@ -698,6 +816,8 @@ extension Workstream {
                 // retires.
                 surfaceStates.removeValue(forKey: surfaceID)
                 surfaceWorkstream.removeValue(forKey: surfaceID)
+                surfaceLastUserPromptAt.clear(surfaceID)
+                surfacesExpectingSyntheticPrompt.removeValue(forKey: surfaceID)
 
             case .agentToolStart, .agentToolDone:
                 // A running tool is proof of an active turn, so this sets .working

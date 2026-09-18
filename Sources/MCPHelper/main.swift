@@ -196,8 +196,10 @@ let toolDefinitions: [ToolDefinition] = [
         tool: .listPeers,
         description: """
         List the other agents currently reachable, with how long ago each was
-        last heard from and how many messages are waiting for it. Only agents
-        working in the same project are listed.
+        last heard from, how many messages are waiting for it, and how long ago
+        a human last typed directly into its session (null if never, or if it
+        has no terminal of its own). Only agents working in the same project are
+        listed.
         """,
         properties: [:],
         required: []
@@ -240,7 +242,11 @@ let toolDefinitions: [ToolDefinition] = [
     ),
     ToolDefinition(
         tool: .getPeerStatus,
-        description: "Check one agent: whether it is still registered, and how many messages are waiting for it.",
+        description: """
+        Check one agent: whether it is still registered, how many messages are
+        waiting for it, and how long ago a human last typed directly into its
+        session (null if never, or if it has no terminal of its own).
+        """,
         properties: [
             "peer_id": ["type": "string", "description": "Peer id from list_peers."],
         ],
@@ -329,6 +335,35 @@ let toolDefinitions: [ToolDefinition] = [
         properties: [
             "prompt": ["type": "string", "description": "Instructions for the agent to start with. Omit to open a plain terminal tab instead of an agent."],
             "title": ["type": "string", "description": "Optional name for the tab, so the user can tell what it is for."],
+        ],
+        required: []
+    ),
+    ToolDefinition(
+        tool: .closeTab,
+        description: """
+        Close one of this workstream's tabs — the counterpart to open_tab and
+        open_agent_tab, for tearing a pane down once it has done its job. Most
+        of all: a peer you spawned with open_agent_tab for a bounded task
+        (review a diff, run a check) should be closed with this once that job
+        is done, rather than left running for the user to close by hand.
+
+        Give exactly one of "kind" (for "changes" or "verification") or
+        "surface_id" (for a terminal tab, from open_agent_tab's result or
+        list_tabs). Closing a tab that is already closed, or a surface_id
+        nothing currently owns, does nothing and says so rather than erroring.
+
+        Info, Agent and Execution cannot be closed this way. Execution also
+        stops the running dev stack when closed, which this tool cannot do —
+        use its own Stop control, or ask the user. Editor and browser tabs
+        have no id exposed over IPC yet, so there is no way to close one of
+        those through this tool either.
+
+        Closing the terminal tab you are running in destroys your own surface
+        immediately, same as a user's ⌘W — you will not see the reply.
+        """,
+        properties: [
+            "kind": ["type": "string", "description": "\"changes\" or \"verification\". Do not use this for a terminal tab; pass surface_id instead."],
+            "surface_id": ["type": "string", "description": "A terminal tab's surface id, from open_agent_tab's result or list_tabs. Provide exactly one of kind or surface_id."],
         ],
         required: []
     ),
@@ -529,6 +564,36 @@ let toolDefinitions: [ToolDefinition] = [
         ],
         required: ["path", "reason"]
     ),
+    ToolDefinition(
+        tool: .getSessionCheckpoint,
+        description: """
+        Read this workstream's saved checkpoint — free text some agent wrote
+        about where it left off. Call this early in a session, before starting
+        new work, to see what you or a predecessor were doing. Shared per
+        workstream, not per agent: if another agent shares this workstream
+        (opened via open_agent_tab), you are reading the same note it writes.
+        Tells you plainly if nothing has been saved yet, rather than answering
+        with nothing.
+        """,
+        properties: [:],
+        required: []
+    ),
+    ToolDefinition(
+        tool: .updateSessionCheckpoint,
+        description: """
+        Overwrite this workstream's checkpoint with free text describing where
+        you left off — enough for you, or whichever agent reads it next in this
+        workstream, to resume without re-reading the whole conversation. Call it
+        before finishing a task, and at any milestone worth resuming from. There
+        is no history: this replaces whatever was saved before. Shared per
+        workstream, not per agent — if another agent shares this workstream, you
+        are overwriting the same note it reads.
+        """,
+        properties: [
+            "content": ["type": "string", "description": "What to save. Free text — describe what you were doing and what is left, not just the last action."],
+        ],
+        required: ["content"]
+    ),
 ]
 
 /// Shown to the agent once, at initialize.
@@ -545,11 +610,15 @@ open_tab opens this workstream's Changes, Execution or Verification pane, which 
 
 open_agent_tab opens a terminal tab in your workstream, and with a prompt it starts another agent there. That agent shares your worktree, so give it work that collaborates on the change you are already making — a reviewer, a test-writer, a second pair of hands on the same branch. Work that belongs on its own branch needs its own workstream, not a tab. Poll list_tabs for the new surface's peer id before trying to message it.
 
+close_tab is open_agent_tab's counterpart: once a peer you spawned has finished a bounded job, close its tab by the surface_id you got back rather than leaving it for the user to close by hand. It also closes Changes or Verification by kind. Execution, Info and Agent cannot be closed this way.
+
 create_workstream is the exception to that: it makes a NEW workstream, with its own worktree and its own branch, and with a prompt it starts an agent in that workstream's Coding Agent tab. Reach for it when the work needs a branch of its own, and for open_agent_tab when it belongs on yours.
 
 add_task/get_pending_tasks/list_tasks/claim_task/complete_task/fail_task are a shared, project-scoped work queue — add several units of work once, and any peer in the project can claim, complete, or fail them, instead of you dispatching each by hand. Claiming is exclusive: only one peer wins, and it needs a surface to attach to, so this only works from an agent Atelier launched. Completing or failing a task notifies whoever created it.
 
 list_verification_checks names the checks this project declares and the command each one runs, without running anything — the declarations live outside your worktree, so this is how you find out what is there. start_verification then runs the project's checks against your worktree and answers with a run id rather than a result — a real suite outlives a tool call. Each check's verdict arrives in your inbox from atelier/verification as that check finishes; that is a reserved sender inside Atelier and not a peer you can reply to. If you are this workstream's Coding Agent, you will also get these for runs the user starts in the Verification tab. check_verification(run_id) reads the whole run whenever you want, so you are never stuck waiting for a message that has not arrived.
+
+Call get_session_checkpoint early in a session, before starting new work — it is where an agent records what it was doing and how far it got, for itself or for whoever picks up this workstream next. update_session_checkpoint overwrites it with free text; call that before finishing a task, or at any milestone worth resuming from. There is one checkpoint per workstream and no history — it is shared with any other agent in this workstream, and each save replaces the last.
 
 The rest of these tools act on your own workstream and no other. There is no way to reach another agent's tabs — to coordinate with an agent elsewhere, send it a message.
 """
@@ -570,6 +639,13 @@ func reply(id: Any, code: Int, message: String) {
     writeLine(["jsonrpc": "2.0", "id": id, "error": ["code": code, "message": message]])
 }
 
+/// "never" is deliberately not "0s-ago": a value of 0 means a prompt just
+/// landed, which is a very different fact from "none has ever been observed
+/// on this surface, or it has no surface at all."
+func lastUserPromptText(_ secondsAgo: Int?) -> String {
+    secondsAgo.map { "\($0)s-ago" } ?? "never"
+}
+
 /// Renders a payload as the plain text an agent reads.
 func renderText(_ payload: IPC.Payload?) -> String {
     switch payload {
@@ -580,9 +656,11 @@ func renderText(_ payload: IPC.Payload?) -> String {
                 + (peer.workstream.map { " workstream=\($0)" } ?? "")
                 + (peer.surfaceID.map { " surface=\($0)" } ?? "")
                 + " last-seen=\(peer.lastSeenSecondsAgo)s-ago pending=\(peer.pendingMessages)"
+                + " last-user-prompt=\(lastUserPromptText(peer.lastUserPromptSecondsAgo))"
         }.joined(separator: "\n")
     case let .peer(peer):
         return "\(peer.name) [\(peer.role)] id=\(peer.id) last-seen=\(peer.lastSeenSecondsAgo)s-ago pending=\(peer.pendingMessages)"
+            + " last-user-prompt=\(lastUserPromptText(peer.lastUserPromptSecondsAgo))"
     case let .messages(messages):
         guard !messages.isEmpty else { return "No new messages." }
         return messages.map { message in

@@ -1523,7 +1523,7 @@ checks rather than a comment:
 |---|---|---|
 | Messaging | `register_peer`, `list_peers`, `send_message`, `receive_messages`, `broadcast`, `get_peer_status` | none needed — text between agents, nothing a user can see |
 | Workspace reads | `list_tabs`, `read_review_comments`, `check_verification`, `list_verification_checks` | none needed — answers about the caller's own workstream |
-| Workspace actions | `open_agent_tab`, `open_editor`, `open_tab`, `request_attention`, `create_workstream`, `start_verification` | see below |
+| Workspace actions | `open_agent_tab`, `open_editor`, `open_tab`, `close_tab`, `request_attention`, `create_workstream`, `start_verification` | see below |
 | Project tasks | `add_task`, `get_pending_tasks`, `list_tasks`, `claim_task`, `complete_task`, `fail_task` | see "The project task queue" below — project-scoped, and ungated for a third reason distinct from the two above |
 
 The messaging six were once the whole enum. Calix's IPC core is the same six, and everything it
@@ -1548,6 +1548,68 @@ shared enum and the exhaustive dispatch switch land ahead of the handlers.
 `IPCServerTests.test_helperBinary_answersToolsCallOverStdio` pins both directions — every
 advertised name is a real `Tool`, and the unadvertised set is exactly the expected one — so a
 tool cannot be advertised before its handler exists or stay hidden after.
+
+**`PeerInfo.lastUserPromptSecondsAgo` answers "has a human typed into this peer directly", and
+Atelier deliberately has no notion of "since I dispatched it" to compare against.** It is
+`nil` when no `UserPromptSubmit` hook event has been observed for that peer's surface this
+session — which covers both "never happened yet" and "this peer has no surface at all"
+(`surfaceID == nil`) — and otherwise the seconds since the most recent one, mirroring
+`lastSeenSecondsAgo` rather than collapsing to a boolean: a boolean would force Atelier to
+decide what "since dispatch" means, and dispatch is not a concept Atelier has. A coordinator
+that just sent a peer a brief (via `send_message`, or an initial prompt through
+`open_agent_tab`/`create_workstream`) knows its own dispatch time; comparing that against this
+field is how it tells whether a human has since typed into that peer's own session — the
+incident this field exists for: a coordinator saw a peer merge a PR, assumed it had gone off
+brief, and broadcast that conclusion, when the user had in fact told the peer to do exactly
+that in its own terminal. Tracked per **surface** (`Workstream.AgentStateTracker`'s
+`surfaceLastUserPromptAt`, alongside `surfaceStates`), not per workstream, for the reason
+`surfaceStates` already gives: two agents can share one workstream.
+
+**The read is `nonisolated`, and that is not a style choice — a `MainActor.run` hop here
+deadlocked a real socket round trip.** `IPC.Service` is an actor answering requests from
+`IPC.Server`'s own dispatch queue, and `IPCServerTests` exercises it by blocking the *test's*
+thread in a raw, untimed `recv()` waiting for the reply. `Workstream.AgentStateTracker` is
+`@MainActor`, so producing that reply by hopping to the main actor works only if the main
+thread is free to run the hop — and in that test it is the very thread parked in `recv()`.
+Neither side can proceed: the reply can't be produced until the main thread goes idle, and the
+main thread won't go idle until the reply arrives. `AgentStateTracker.lastUserPromptAt(forSurface:)`
+is therefore `nonisolated`, backed by a lock-guarded box (`UserPromptClock`) rather than a plain
+dictionary — the same reasoning as `Git.Operations.defaultBranch`'s cache living outside
+`AppEnvironment`, for the same reason stated there: "half the callers structurally cannot reach
+a `@MainActor` type." Writes still only ever happen from MainActor code, in `updateSurfaceState`.
+Do not route this field back through a `MainActor.run` read to "simplify" it — that reintroduces
+the deadlock, and `IPCServerTests` is what will hang to prove it.
+
+**Not every synthetic keystroke should count, and the two Atelier already has disagree.**
+`PromptInjector`'s stored prompts are a human's own decision — they choose, in the moment, which
+saved prompt to send into which pane — so a `UserPromptSubmit` that follows one is genuinely
+attributable to that human, however it was typed. `AgentNudge`'s unread-messages notice is the
+opposite: fully autonomous text Atelier types on the recipient's behalf when nothing has been
+read yet, and unrelated to the sender's own conduct. Left alone it would have made every
+`send_message` to an idle peer look like a human just walked up to that peer's terminal, which is
+the exact false positive this field exists to prevent, just self-inflicted rather than caused by
+the coordinator's misreading — so `AgentNudge.nudge` calls
+`Workstream.AgentStateTracker.shared.expectSyntheticPrompt(surfaceID:)` immediately before typing,
+and `updateSurfaceState`'s `.agentWaiting` case consumes that marker instead of recording the
+prompt, provided it arrives within `syntheticPromptWindow` (10s — generous headroom over
+`typeAndSubmit`'s own ~1s of delay plus hook latency). Past the window an unconsumed marker is
+discarded and the next prompt counts as human regardless: `typeAndSubmit`'s own safety check can
+skip its Return keypress entirely if the pane stops looking idle mid-delivery, and a marker with
+no expiry would then go on suppressing attribution for whatever genuinely human prompt eventually
+arrived — silently, at an arbitrary point later in the session. Add a marker-and-consume pair like
+this for any *other* future mechanism that submits synthetic text into a Coding Agent tab; do not
+extend `PromptInjector`'s path the same way, since its submissions are the human input this field
+is supposed to report.
+
+**Known, accepted gap: the CLI-supplied initial prompt from `open_agent_tab`/`create_workstream`
+may itself read as a human prompt.** If Claude Code's harness fires `UserPromptSubmit` for that
+first turn the same way it does for one typed after the session starts, a peer's
+`lastUserPromptSecondsAgo` will read as "just now" from the moment it is created by *another
+agent's* dispatch, not a human's. This is deliberately not suppressed the way `AgentNudge`'s
+notice is: the dispatching coordinator already knows exactly what it just sent and when, so its
+own "since I dispatched" comparison naturally reads this as unremarkable rather than as evidence
+of a human redirect. Suppressing it would also require assuming a fact about Claude Code's own
+hook semantics for a CLI-argument-supplied first turn that has not been verified here.
 
 **A tool call that is interrupted is never re-sent unless re-sending it changes nothing.**
 `IPC.Tool` carries two properties the helper reads — `replyDeadline` and `isSafeToReplay` —
@@ -1626,6 +1688,48 @@ consequences worth keeping:
 - **Surfaces are created eagerly, outside any render pass** (the same construction
   `TerminalSurfaceCache.retrySurface` already does), so a tab can be spawned into a workstream
   the user is not looking at. What is view-bound is *rendering*, not surface creation.
+
+**`close_tab` is `open_tab`/`open_agent_tab`'s counterpart, for the pane an agent's own job
+created rather than one the user did.** A controller that spawns a peer into a new tab for a
+bounded task — a reviewer, a test-writer — had no way to tear that pane down once the job was
+done, so it (or the peer itself) leaves it running for the user to close by hand. `close_tab`
+closes a singleton by `kind` (`"changes"` or `"verification"`) or a terminal by `surface_id`,
+the same two vocabularies `open_tab` and `open_agent_tab`/`list_tabs` already speak — no third
+one for anything to keep in step. It reuses `openableTabs` rather than a second table keyed the
+same way: adding a fourth singleton kind there makes it closeable by default, and only
+`execution` opts out, by name.
+
+**Execution is refused, not closed, and that is a scope limit rather than an oversight.** `⌘W`
+on that tab also stops the running dev stack (`TerminalContainerView.stopRun`), and that method
+reaches into view-local `@State` (`browserStartPending`) that `WorkspaceActions` — a `MainActor`
+singleton with no view — cannot reach. Reimplementing `stopRun`'s logic here would be exactly
+the inlined second copy this document keeps warning about, so `close_tab(kind: "execution")`
+refuses by name and points at the tab's own Stop control instead. Changes and Verification have
+no such side effect — `forceCloseTab`'s own switch has no case for either — so closing one is
+nothing more than removing the tab; a running verification check in particular is unaffected
+either way, since its surface comes from `Verification.Spawn` and only `Verification.Runner.forget`
+reaches it.
+
+**Closing an already-closed tab, or a `surface_id` nothing currently owns, is success, not a
+refusal.** `close_tab` is `isSafeToReplay`, the same as `open_tab`: a replay landing after the
+first close already succeeded must answer the same way rather than erroring on a fact that is
+merely no longer true. The unmatched-`surface_id` case reports no kind, deliberately — the id
+may never have named a tab in this workstream at all, and asserting one it did not resolve
+would be rendering a guess as a fact.
+
+**The Agent tab is refused the same way Info would be, and for the same reason `open_tab`
+already refuses them: they are permanent.** The Agent tab's surface id *is* the workstream id
+(`WorkspaceActions.surfaceID(of:)`), so an agent naming its own main session's surface resolves
+to `.agent`, and `removeTab`'s own `false` there would read identically to "not open" — the one
+place this tool checks `WorkspaceTabKind.isCloseable` explicitly, because here the two answers
+must not collide.
+
+**Two gaps stay open, deliberately, rather than being half-closed.** Editor and browser tabs
+have no id exposed over IPC — `surfaceID(of:)` returns nil for both, so `list_tabs` cannot
+report one to close by — and giving them one is a `TabInfo` change, out of scope here. And
+closing the terminal tab you are running in — the actual peer-teardown case — destroys your own
+surface immediately, the same as a user's `⌘W`; you will not see the reply, because there is
+nothing left to send it to.
 
 **`create_workstream` inherits `bootstrap`'s policy by not touching it.** Creating a
 workstream runs the project's `bootstrap` namespace — the thing `PhasePolicy.plan` exists to

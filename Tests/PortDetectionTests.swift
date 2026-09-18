@@ -106,6 +106,7 @@ final class PortDetectionTests: XCTestCase {
     func testKnownBrowserPortStopsWaitingOnceItIsAmongDetectedPorts() {
         XCTAssertFalse(Port.isWaitingForServer(
             browserPort: 44449,
+            browserPortIsFixed: false,
             status: .starting,
             detectedPorts: [42935, 43625, 44449, 44542, 46759],
             browserStartPending: false
@@ -115,8 +116,24 @@ final class PortDetectionTests: XCTestCase {
     func testKnownBrowserPortKeepsWaitingUntilItIsDetected() {
         XCTAssertTrue(Port.isWaitingForServer(
             browserPort: 44449,
+            browserPortIsFixed: false,
             status: .starting,
             detectedPorts: [42935, 43625],
+            browserStartPending: false
+        ))
+    }
+
+    /// Every other "stops waiting" case above uses `status: .starting`. This is the
+    /// `.running` counterpart of `testKnownBrowserPortStopsWaitingOnceItIsAmongDetectedPorts`
+    /// — the combination the PR #167 review flagged as untested. Rounds out
+    /// `testKnownBrowserPortStopsWaitingOnceStatusIsRunningEvenIfNeverDetected`, which covers
+    /// the same `status` with the browser port still undetected.
+    func testKnownBrowserPortStopsWaitingWhenRunningAndPortIsDetected() {
+        XCTAssertFalse(Port.isWaitingForServer(
+            browserPort: 44449,
+            browserPortIsFixed: false,
+            status: .running,
+            detectedPorts: [42935, 43625, 44449, 44542, 46759],
             browserStartPending: false
         ))
     }
@@ -124,6 +141,7 @@ final class PortDetectionTests: XCTestCase {
     func testKnownBrowserPortWaitsOnBrowserStartPendingBeforeAnySessionExists() {
         XCTAssertTrue(Port.isWaitingForServer(
             browserPort: 44449,
+            browserPortIsFixed: false,
             status: .none,
             detectedPorts: [],
             browserStartPending: true
@@ -131,6 +149,72 @@ final class PortDetectionTests: XCTestCase {
 
         XCTAssertFalse(Port.isWaitingForServer(
             browserPort: 44449,
+            browserPortIsFixed: false,
+            status: .none,
+            detectedPorts: [],
+            browserStartPending: false
+        ))
+    }
+
+    /// A declared but not-yet-detected browser port must not hang forever just
+    /// because a *sibling* port came up first and let `PortSelectionTracker`
+    /// resolve a `selectedPort` (`status == .running`) — reachable when the
+    /// browser's own server crashed or never bound while another declared
+    /// process started fine. Once the launcher has resolved anything at all,
+    /// further waiting can never be justified by more detection: either the
+    /// browser port shows up (and this branch is moot) or it never will, and
+    /// only `BrowserView`'s own connection-error/retry UI can tell those apart.
+    func testKnownBrowserPortStopsWaitingOnceStatusIsRunningEvenIfNeverDetected() {
+        XCTAssertFalse(Port.isWaitingForServer(
+            browserPort: 44449,
+            browserPortIsFixed: false,
+            status: .running,
+            detectedPorts: [42935],
+            browserStartPending: false
+        ))
+    }
+
+    /// A `fixed` browser port (ports.yaml, `fixed: <port>`) exists precisely for
+    /// values registered off the machine — a Docker-forwarded port, a service
+    /// nothing in the launched command's own process tree binds — so it can
+    /// never appear in `detectedPorts`, which comes from `atelier-run` scanning
+    /// only that tree via libproc. There is therefore no status past `.none`
+    /// that detection could ever resolve for it, including `.starting`: a
+    /// fixed browser port is typically declared alongside several `assigned`
+    /// siblings (that's the whole reason it needs pinning), and per PR #167's
+    /// own bug, `status` can sit at `.starting` forever for a multi-port stack.
+    /// A fixed browser port must therefore stop waiting the moment any session
+    /// exists at all, leaving `BrowserView`'s connection-error/retry UI to
+    /// judge its actual liveness.
+    func testFixedBrowserPortNeverWaitsOnceASessionExists() {
+        XCTAssertFalse(Port.isWaitingForServer(
+            browserPort: 4000,
+            browserPortIsFixed: true,
+            status: .starting,
+            detectedPorts: [42935, 43625],
+            browserStartPending: false
+        ))
+        XCTAssertFalse(Port.isWaitingForServer(
+            browserPort: 4000,
+            browserPortIsFixed: true,
+            status: .running,
+            detectedPorts: [42935, 43625],
+            browserStartPending: false
+        ))
+    }
+
+    func testFixedBrowserPortWaitsOnBrowserStartPendingBeforeAnySessionExists() {
+        XCTAssertTrue(Port.isWaitingForServer(
+            browserPort: 4000,
+            browserPortIsFixed: true,
+            status: .none,
+            detectedPorts: [],
+            browserStartPending: true
+        ))
+
+        XCTAssertFalse(Port.isWaitingForServer(
+            browserPort: 4000,
+            browserPortIsFixed: true,
             status: .none,
             detectedPorts: [],
             browserStartPending: false
@@ -142,18 +226,21 @@ final class PortDetectionTests: XCTestCase {
     func testWithNoBrowserPortWaitingStillFollowsStatus() {
         XCTAssertTrue(Port.isWaitingForServer(
             browserPort: nil,
+            browserPortIsFixed: false,
             status: .starting,
             detectedPorts: [3000, 5173],
             browserStartPending: false
         ))
         XCTAssertFalse(Port.isWaitingForServer(
             browserPort: nil,
+            browserPortIsFixed: false,
             status: .running,
             detectedPorts: [5173],
             browserStartPending: false
         ))
         XCTAssertTrue(Port.isWaitingForServer(
             browserPort: nil,
+            browserPortIsFixed: false,
             status: .none,
             detectedPorts: [],
             browserStartPending: true
