@@ -544,6 +544,60 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertNil(entry?.branch)
     }
 
+    /// The two cases `GitWorktreeListingTests` can only assert against a
+    /// hand-written fixture, pinned here against real git so the fixture cannot
+    /// be green against a contract git does not actually have: a path with a
+    /// space in it — porcelain neither quotes nor escapes it — and a branch whose
+    /// name contains slashes.
+    ///
+    /// Both are what the parser's "take the whole remainder of the line" and
+    /// "strip exactly the `refs/heads/` prefix" rules exist for, and both are
+    /// silently wrong under any tokenizing implementation.
+    func testRegisteredWorktreesSurvivesASpacedPathAndASlashedBranch() throws {
+        let repoDir = tempDir.appendingPathComponent("repo")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: repoDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "--allow-empty", "-m", "init"], in: repoDir)
+        let spaced = tempDir.appendingPathComponent("my worktree")
+        git(["worktree", "add", "-b", "feat/nested/thing", spaced.path], in: repoDir)
+
+        let registered = try XCTUnwrap(Git.Operations.registeredWorktrees(at: repoDir.path))
+        let entry = registered.first { $0.branch == "feat/nested/thing" }
+
+        XCTAssertNotNil(entry, "a slashed branch name was truncated or dropped")
+        XCTAssertEqual(
+            entry.map { URL(fileURLWithPath: $0.path).standardizedFileURL.path },
+            spaced.standardizedFileURL.path,
+            "the path was cut at the space"
+        )
+    }
+
+    /// `worktreePath(forBranch:)` matches on the full `refs/heads/<branch>`, so
+    /// the slashed name has to round-trip through that form too.
+    func testWorktreePathForBranchFindsASlashedBranch() throws {
+        let repoDir = tempDir.appendingPathComponent("repo")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: repoDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "--allow-empty", "-m", "init"], in: repoDir)
+        let nested = tempDir.appendingPathComponent("nested")
+        git(["worktree", "add", "-b", "feat/nested/thing", nested.path], in: repoDir)
+
+        let found = try XCTUnwrap(
+            Git.Operations.worktreePath(forBranch: "feat/nested/thing", at: repoDir.path)
+        )
+
+        XCTAssertEqual(
+            URL(fileURLWithPath: found).standardizedFileURL.path,
+            nested.standardizedFileURL.path
+        )
+        XCTAssertNil(
+            Git.Operations.worktreePath(forBranch: "thing", at: repoDir.path),
+            "the branch's last path component is not the branch"
+        )
+    }
+
     // MARK: - pruneCleanWorktrees
 
     func testPruneCleanWorktreesPrunesOnlyRequestedPaths() throws {
