@@ -352,4 +352,176 @@ final class IPCServiceTests: XCTestCase {
 
         XCTAssertTrue(response.error?.contains("kind") == true, String(describing: response.error))
     }
+
+    // MARK: - Task queue
+
+    private func task(of response: IPC.Response) throws -> IPC.TaskInfo {
+        guard case let .task(task) = response.payload else {
+            throw XCTSkip("expected a task payload, got \(String(describing: response.payload ?? nil))")
+        }
+        return task
+    }
+
+    private func tasks(of response: IPC.Response) throws -> [IPC.TaskInfo] {
+        guard case let .tasks(tasks) = response.payload else {
+            throw XCTSkip("expected a tasks payload, got \(String(describing: response.payload ?? nil))")
+        }
+        return tasks
+    }
+
+    func test_addTask_withoutAProject_isRefused() async {
+        let response = await call(.addTask, ["path": "p", "name": "n", "content": "c"], as: client(project: nil))
+        XCTAssertEqual(response.error, IPC.TaskQueueFailure.noProject.localizedDescription)
+    }
+
+    func test_addTask_missingRequiredArguments_isRefused() async {
+        let response = await call(.addTask, ["name": "n", "content": "c"], as: client(project: projectA))
+        XCTAssertNotNil(response.error)
+    }
+
+    func test_addTask_thenGetPendingTasks_seesIt() async throws {
+        _ = await call(.addTask, ["path": "audit/finding-1", "name": "SQLi", "content": "details"], as: client(project: projectA))
+        let listed = try await tasks(of: call(.getPendingTasks, as: client(project: projectA)))
+        XCTAssertEqual(listed.map(\.path), ["audit/finding-1"])
+        XCTAssertEqual(listed.first?.state, .pending)
+    }
+
+    func test_addTask_aSecondTimeAtTheSamePath_isRefused() async {
+        _ = await call(.addTask, ["path": "p", "name": "n", "content": "c"], as: client(project: projectA))
+        let second = await call(.addTask, ["path": "p", "name": "n2", "content": "c2"], as: client(project: projectA))
+        XCTAssertNotNil(second.error)
+    }
+
+    func test_getPendingTasks_isScopedToTheCallersProject() async throws {
+        _ = await call(.addTask, ["path": "p", "name": "n", "content": "c"], as: client(project: projectA))
+        let listedFromB = try await tasks(of: call(.getPendingTasks, as: client(project: projectB)))
+        XCTAssertTrue(listedFromB.isEmpty)
+    }
+
+    func test_claimTask_withoutASurfaceID_isRefused() async {
+        _ = await call(.addTask, ["path": "p", "name": "n", "content": "c"], as: client(project: projectA))
+        let response = await call(.claimTask, ["path": "p"], as: client(project: projectA, surfaceID: nil))
+        XCTAssertEqual(response.error, IPC.TaskQueueFailure.noSurface.localizedDescription)
+    }
+
+    func test_claimTask_thenListTasks_showsClaimed() async throws {
+        _ = await call(.addTask, ["path": "p", "name": "n", "content": "c"], as: client(project: projectA))
+        let surface = UUID()
+        _ = await call(.claimTask, ["path": "p"], as: client(project: projectA, surfaceID: surface))
+
+        let listed = try await tasks(of: call(.listTasks, as: client(project: projectA)))
+        XCTAssertEqual(listed.first?.state, .claimed)
+        // `claimedBy` is a resolved PEER id, not the raw surface id — see
+        // `TaskInfo`'s doc comment in Task 1. No peer is registered from
+        // `surface` in this test, so nobody can be resolved from it yet.
+        XCTAssertNil(listed.first?.claimedBy, "no peer is registered from that surface in this test")
+    }
+
+    func test_claimTask_byASecondSurface_namesTheHolder() async {
+        _ = await call(.addTask, ["path": "p", "name": "n", "content": "c"], as: client(project: projectA))
+        let firstSurface = UUID()
+        _ = await call(.claimTask, ["path": "p"], as: client(project: projectA, surfaceID: firstSurface))
+
+        let secondSurface = UUID()
+        let response = await call(.claimTask, ["path": "p"], as: client(project: projectA, surfaceID: secondSurface))
+        XCTAssertNotNil(response.error)
+        XCTAssertTrue(response.error?.contains("not claimed by you") == true, "got \(response.error ?? "nil")")
+    }
+
+    func test_claimTask_bySameSurfaceTwice_isIdempotentSuccess() async {
+        _ = await call(.addTask, ["path": "p", "name": "n", "content": "c"], as: client(project: projectA))
+        let surface = UUID()
+        _ = await call(.claimTask, ["path": "p"], as: client(project: projectA, surfaceID: surface))
+        let second = await call(.claimTask, ["path": "p"], as: client(project: projectA, surfaceID: surface))
+        XCTAssertNil(second.error)
+    }
+
+    func test_completeTask_byANonClaimer_isRefused() async {
+        _ = await call(.addTask, ["path": "p", "name": "n", "content": "c"], as: client(project: projectA))
+        let response = await call(.completeTask, ["path": "p"], as: client(project: projectA, surfaceID: UUID()))
+        XCTAssertNotNil(response.error)
+    }
+
+    func test_completeTask_byTheClaimer_succeeds() async throws {
+        _ = await call(.addTask, ["path": "p", "name": "n", "content": "c"], as: client(project: projectA))
+        let surface = UUID()
+        _ = await call(.claimTask, ["path": "p"], as: client(project: projectA, surfaceID: surface))
+        let completed = try await task(of: call(.completeTask, ["path": "p"], as: client(project: projectA, surfaceID: surface)))
+        XCTAssertEqual(completed.state, .completed)
+    }
+
+    func test_failTask_withoutAReason_isRefused() async {
+        _ = await call(.addTask, ["path": "p", "name": "n", "content": "c"], as: client(project: projectA))
+        let surface = UUID()
+        _ = await call(.claimTask, ["path": "p"], as: client(project: projectA, surfaceID: surface))
+        let response = await call(.failTask, ["path": "p"], as: client(project: projectA, surfaceID: surface))
+        XCTAssertNotNil(response.error)
+    }
+
+    func test_failTask_recordsTheReason() async throws {
+        _ = await call(.addTask, ["path": "p", "name": "n", "content": "c"], as: client(project: projectA))
+        let surface = UUID()
+        _ = await call(.claimTask, ["path": "p"], as: client(project: projectA, surfaceID: surface))
+        let failed = try await task(of: call(.failTask, ["path": "p", "reason": "flaky"], as: client(project: projectA, surfaceID: surface)))
+        XCTAssertEqual(failed.state, .failed)
+        XCTAssertEqual(failed.failureReason, "flaky")
+    }
+
+    /// The creator gets a notice in its inbox when the task it created
+    /// completes — even though the creator is a DIFFERENT peer/surface than
+    /// whoever claimed and completed it.
+    ///
+    /// Registers the creator's peer explicitly AT `creatorSurface` (rather
+    /// than through the shared `register(...)` helper, which mints a random
+    /// surface id per call) because `notifyCreator` resolves the creator by
+    /// walking `contexts[peer.id]?.surfaceID` — set at registration time —
+    /// back to a peer, not by trusting any id `add_task`'s own caller claims.
+    func test_completeTask_notifiesTheCreator() async {
+        let creatorSurface = UUID()
+        let registered = await call(.registerPeer, ["name": "coordinator"], as: client(project: projectA, workstream: "coordinator-ws", surfaceID: creatorSurface))
+        guard case let .peer(creatorPeer) = registered.payload else { return XCTFail("expected a peer") }
+
+        _ = await call(.addTask, ["path": "p", "name": "n", "content": "c"], as: client(project: projectA, surfaceID: creatorSurface))
+
+        let claimerSurface = UUID()
+        _ = await call(.claimTask, ["path": "p"], as: client(project: projectA, surfaceID: claimerSurface))
+        _ = await call(.completeTask, ["path": "p"], as: client(project: projectA, surfaceID: claimerSurface))
+
+        let received = await call(.receiveMessages, as: client(project: projectA, peerID: creatorPeer.id, surfaceID: creatorSurface))
+        guard case let .messages(messages) = received.payload else { return XCTFail("expected messages") }
+        XCTAssertEqual(messages.count, 1)
+        XCTAssertEqual(messages.first?.from, IPC.TaskSummary.sender)
+        XCTAssertTrue(messages.first?.content.contains("p") == true)
+    }
+
+    /// A task created by an agent with no surface id disables the notice
+    /// without blocking creation or completion.
+    func test_completeTask_withNoCreatorSurface_doesNotCrashOrNotifyAnyone() async {
+        _ = await call(.addTask, ["path": "p", "name": "n", "content": "c"], as: client(project: projectA, surfaceID: nil))
+        let claimerSurface = UUID()
+        _ = await call(.claimTask, ["path": "p"], as: client(project: projectA, surfaceID: claimerSurface))
+        let response = await call(.completeTask, ["path": "p"], as: client(project: projectA, surfaceID: claimerSurface))
+        XCTAssertNil(response.error)
+    }
+
+    // MARK: - Releasing claims on workstream teardown
+
+    func test_releaseTaskClaims_revertsClaimsInThatWorkstream() async throws {
+        let workstreamID = UUID()
+        _ = await call(.addTask, ["path": "p", "name": "n", "content": "c"], as: client(project: projectA))
+        let claimant = client(project: projectA, workstream: "doomed", surfaceID: UUID())
+        // `claim_task` reads `workstreamID` from `ClientIdentity.workstreamID`,
+        // which the shared `client(...)` helper mints fresh per call — so this
+        // constructs the identity directly to pin a specific workstream id.
+        let identity = IPC.ClientIdentity(
+            workstreamID: workstreamID.uuidString, workstreamName: "doomed",
+            projectDirectory: projectA, surfaceID: UUID().uuidString, peerID: nil
+        )
+        _ = await call(.claimTask, ["path": "p"], as: identity)
+
+        await service.releaseTaskClaims(inWorkstream: workstreamID)
+
+        let listed = try await tasks(of: call(.getPendingTasks, as: client(project: projectA)))
+        XCTAssertEqual(listed.map(\.path), ["p"], "the claim must revert to pending so another peer can claim it")
+    }
 }
