@@ -148,7 +148,7 @@ it receives only the `X.Y.Z` core; the suffix naming the commit rides on
   Types that do not cluster stay top-level — do not invent a `Core` bucket for
   them. `ProcessRunner` and `AppEnvironment` stay top-level permanently:
   `Process` and `Environment` would collide with Foundation and SwiftUI.
-- `Sources/Models/ProcessCompose/` - The process-compose layer (config location, phases, ports, the process table)
+- `Sources/Models/ProcessCompose/` - The process-compose layer (config location, phases, ports, the process table, the per-workstream run session)
 - `Sources/Terminal/` - Ghostty integration (TerminalApp singleton, TerminalView NSView)
 - `Sources/Views/` - SwiftUI views (sidebar, settings, project overview, workspace, browser, editor)
 - `Sources/Palette/` - Command palette (registry, default commands, fuzzy matcher)
@@ -1131,6 +1131,71 @@ near-universal and almost always starts a subset of the stack, so it was a plaus
 wrong answer a project could not opt out of; the override covers the case it stood in for,
 explicitly.
 
+### The run lifecycle lives on a session, not on the view
+**`ProcessCompose.RunSession` is the one place a workstream's dev-server run is started,
+stopped, restarted or restored**, and it holds the state those decisions write.
+`TerminalSurfaceCache.runSession(for:)` owns one per workstream, beside that workstream's
+`WorkspaceModel` and for the same reason: `ContentView` keys `TerminalContainerView`
+`.id(workstreamID)`, so the view is destroyed on navigation and anything the run needs to
+outlive that cannot be the view's.
+
+It was split across both. `runStarted`, `runStoppedManually`, `runGeneration` and
+`runCommandString` lived on `WorkspaceModel` while every decision that set them —
+`doStartRun`, `beginRun`, `stopRun`, `restartRun`, `restoreRunState` — was a private method on
+the view, and four more pieces of run state never reached a model at all: `browserStartPending`,
+`isReclaimingRunSocket`, the port plan and the port detector. That split has already produced
+two shipped bugs of the same shape. `runGeneration` was view `@State` once, so navigating away
+and back left the view believing a run was live with the generation reset to 0 and Stop removing
+a surface nothing was using while a real server kept running; `browserStartPending` had exactly
+that shape until this type existed. And `close_tab(kind: "execution")` was refused outright
+because stopping a run meant reaching view-local `@State` — see **close_tab** above.
+
+**The session consumes `ProcessCompose.RunCommandPlan`; it never re-decides one.** The resolved
+command reaches it as a **non-optional** `StartContext.command`, assembled by
+`TerminalContainerView.runStartContext` from the stored `Resolution`'s plan and the execute
+checklist. That is what makes the one-decision rule structural here rather than a guard somebody
+has to remember: `restart` cannot stop a run and then decline to start one, because there is no
+optional left to decline on. **`runnableExecuteSelection` deliberately stays in the view** —
+CLAUDE.md's process-compose section explains why the checklist's gate is not in the plan either,
+and a reviewer will pattern-match its absence from the session to the second copy this document
+forbids.
+
+**The tmux session a run is started in is recorded at `beginRun`, not read live at `stop`.**
+That is what makes `stop()` self-contained enough for `WorkspaceActions` to call with no view
+mounted, and it is strictly more correct than the live read it replaced: `killRunTmuxSession`
+used to consult the *current* tmux mode and tool path, so a run started under tmux and stopped
+after tmux mode was switched off killed nothing.
+
+**The run surface's exit is the session's to observe, not the view's.** It subscribes to
+`.terminalTabExited` in `init`, so a run whose last process dies while the user is looking at
+another workstream is still recorded — it used to be an `.onReceive` on the container, which is
+absent exactly then. The comparison is against the **current** `runID`, so the outgoing
+generation's surface (which `beginRun` and `stop` both drop on their way past) cannot clear the
+run that replaced it, and `runStoppedManually` is still deliberately left alone: the run died on
+its own.
+
+**What stayed in the view, and why.** `syncProcessPolling` reads `usesProcessCompose` off the
+view-owned resolver and drives a `@StateObject` table, so it stays — rebound to
+`.onChange(of: session.runStarted)`, which is still the right trigger because the tmux restore
+sets that flag without going through start or stop. `Port.Detector` stays a view `@StateObject`
+and writes `session.clearBrowserStartPending()` from its own `.onChange`; moving it would give
+every visited workstream a permanent FSEvents source for no gain. Every remaining observer that
+touches the run — the `.rerunScript` receiver, the `appEnv.isDetecting` change, `.onAppear` —
+is on the always-mounted modifier chain, never inside a `@ViewBuilder` branch.
+
+**Three seams are injected in `init` and defaulted**, the shape `Verification.Runner` uses for
+`SurfaceHosting` and `killGrace`: creating and removing a surface and `ensureSingleton(.execution)`
+(supplied by the cache, which owns both), the socket probe and reclaim, and the tmux
+probe/kill. `TerminalSurfaceCache.terminalApp` exists for the same reason — it is the only place
+in that type that needs `TerminalApp.shared`, and touching that initializes libghostty, which a
+unit-test host cannot do. `Tests/RunSessionTests.swift` is what that buys.
+
+**Nothing about a run is persisted.** `WorkspaceTabSnapshot` carries no run state at all now, and
+never meaningfully did — it is a seed, not a store, and `WorkspaceStateStore` only ever wrote the
+active tab. What made run state survive navigation was always that the cache owns the object
+holding it. Across a *launch* no surface exists and a restored command string would be a lie, so
+`restore`'s tmux probe is the only thing that carries a run over a relaunch.
+
 ### Port detection
 Run scripts are wrapped in the `atelier-run` launcher binary (bundled at `Contents/Helpers/atelier-run`).
 The launcher monitors the child process tree for listening TCP ports using `libproc` and writes
@@ -1859,22 +1924,23 @@ consequences worth keeping:
 created rather than one the user did.** A controller that spawns a peer into a new tab for a
 bounded task — a reviewer, a test-writer — had no way to tear that pane down once the job was
 done, so it (or the peer itself) leaves it running for the user to close by hand. `close_tab`
-closes a singleton by `kind` (`"changes"` or `"verification"`) or a terminal by `surface_id`,
-the same two vocabularies `open_tab` and `open_agent_tab`/`list_tabs` already speak — no third
-one for anything to keep in step. It reuses `openableTabs` rather than a second table keyed the
-same way: adding a fourth singleton kind there makes it closeable by default, and only
-`execution` opts out, by name.
+closes a singleton by `kind` (`"changes"`, `"execution"` or `"verification"`) or a terminal by
+`surface_id`, the same two vocabularies `open_tab` and `open_agent_tab`/`list_tabs` already
+speak — no third one for anything to keep in step. It reuses `openableTabs` rather than a second
+table keyed the same way, so a fourth singleton kind added there is closeable by default.
 
-**Execution is refused, not closed, and that is a scope limit rather than an oversight.** `⌘W`
-on that tab also stops the running dev stack (`TerminalContainerView.stopRun`), and that method
-reaches into view-local `@State` (`browserStartPending`) that `WorkspaceActions` — a `MainActor`
-singleton with no view — cannot reach. Reimplementing `stopRun`'s logic here would be exactly
-the inlined second copy this document keeps warning about, so `close_tab(kind: "execution")`
-refuses by name and points at the tab's own Stop control instead. Changes and Verification have
-no such side effect — `forceCloseTab`'s own switch has no case for either — so closing one is
-nothing more than removing the tab; a running verification check in particular is unaffected
-either way, since its surface comes from `Verification.Spawn` and only `Verification.Runner.forget`
-reaches it.
+**Execution closes, and stops the run on its way out. It used to be refused by name, and what
+changed is where the run lives.** `⌘W` on that tab also stops the running dev stack, and the
+method that did it reached into view-local `@State` (`browserStartPending`) that
+`WorkspaceActions` — a `MainActor` singleton with no view — could not reach; reimplementing it
+there would have been the inlined second copy this document keeps warning about, so the refusal
+stood until there was one copy to call. There is: `ProcessCompose.RunSession` owns the run and
+`TerminalSurfaceCache` owns the session, so `stopIfTabOwnsRun` is the same call
+`TerminalContainerView.forceCloseTab` makes and it works with nothing on screen. Both paths run
+it *after* `removeTab`, and only when the tab was really open — `closingTabStopsRun` names
+exactly one owner, so Changes and Verification reach it and it does nothing for them. A running
+verification check in particular is unaffected either way, since its surface comes from
+`Verification.Spawn` and only `Verification.Runner.forget` reaches it.
 
 **Closing an already-closed tab, or a `surface_id` nothing currently owns, is success, not a
 refusal.** `close_tab` is `isSafeToReplay`, the same as `open_tab`: a replay landing after the

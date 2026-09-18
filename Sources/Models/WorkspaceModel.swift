@@ -31,29 +31,14 @@ final class WorkspaceModel: ObservableObject {
     /// would invalidate the view for no reason.
     var hasBeenPresented = false
 
-    /// Dev-server state. Held here rather than in the view for the same reason
-    /// the tab list is: it must survive the view going away when the user
-    /// navigates to another workstream.
-    @Published var runStarted: Bool
-    @Published var runStoppedManually: Bool
-
-    /// The run surface's generation, and the command it was started with.
-    ///
-    /// Here rather than in the view, and the pairing with `runStarted` above is
-    /// the whole point. While these were `@State` on `TerminalContainerView` —
-    /// which `ContentView` keys `.id(workstreamID)` — navigating to another
-    /// workstream and back destroyed them while `runStarted` survived here. The
-    /// view came back believing a run was live with `runGeneration` reset to 0,
-    /// so Stop called `removeSurface` on the generation-0 id, which is a no-op
-    /// against a live generation-3 surface: the stack kept running with no UI
-    /// able to see or stop it, and the next Start rebound its socket and
-    /// stranded the server.
-    ///
-    /// Deliberately absent from `WorkspaceTabSnapshot`: they must outlive a
-    /// view remount, not an app relaunch. Across a launch no surface exists and
-    /// a restored command string would be a lie.
-    @Published var runGeneration = 0
-    @Published var runCommandString: String?
+    // Dev-server state used to live here: `runStarted`, `runStoppedManually`,
+    // `runGeneration` and `runCommandString`. They moved to
+    // `ProcessCompose.RunSession`, which the surface cache owns beside this
+    // model and which also holds the run state that never reached a model at
+    // all — the browser hand-off flag, the socket-reclaim flag and the port
+    // plan. The reason those four were here in the first place is unchanged and
+    // is now the session's: run state must survive the view going away, which it
+    // does because the cache owns it, not because anything persists it.
 
     /// Monotonic per-kind counters. They feed `derivedUUID` salts, so they must
     /// never rewind on close — a reused salt would collide with a surface the
@@ -103,8 +88,6 @@ final class WorkspaceModel: ObservableObject {
         browserTitles = snapshot.browserTitles
         terminalTitles = snapshot.terminalTitles
         editorFilePaths = snapshot.editorFilePaths
-        runStarted = snapshot.runStarted
-        runStoppedManually = snapshot.runStoppedManually
     }
 
     // MARK: - Derived state
@@ -300,9 +283,7 @@ final class WorkspaceModel: ObservableObject {
             activeTab: activeTab,
             browserTitles: browserTitles,
             terminalTitles: terminalTitles,
-            editorFilePaths: editorFilePaths,
-            runStarted: runStarted,
-            runStoppedManually: runStoppedManually
+            editorFilePaths: editorFilePaths
         )
     }
 }

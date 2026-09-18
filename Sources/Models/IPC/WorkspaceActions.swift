@@ -269,31 +269,29 @@ final class WorkspaceActions {
         return (tab.kind.id, wasAlreadyOpen)
     }
 
-    /// The subset of `openableTabs` this tool will actually close — every
-    /// singleton kind except Execution.
-    ///
-    /// A filtered *view* of `openableTabs` rather than a second table: a kind
-    /// added there tomorrow is closeable by default, and only `execution`
-    /// needs to opt out by name. See `closeTab`'s doc comment for why.
+    /// The singleton kinds this tool will close. Every one of them, now that
+    /// Execution can be closed too — see `closeTab`'s doc comment.
     private static var closeableSingletonKinds: [String] {
-        openableTabs.keys.filter { $0 != WorkspaceTabKind.execution.id }.sorted()
+        openableTabs.keys.sorted()
     }
 
     /// Closes one of the caller's tabs — a singleton pane by `kind`, or a
     /// terminal tab by `surfaceID`. Exactly one of the two must be given.
     ///
-    /// **Execution is refused, not closed.** `⌘W` on that tab also stops the
-    /// running dev stack (`TerminalContainerView.stopRun`), and that method
-    /// reaches into view-local `@State` (`browserStartPending`) that this
-    /// `MainActor` singleton — no view, no `@State` — cannot reach.
-    /// Reimplementing `stopRun`'s logic here would be exactly the "second
-    /// copy that drifts" shape this codebase's own conventions keep warning
-    /// about, so instead this refuses by name and points at the real control.
-    /// Changes and Verification have no such side effect — `forceCloseTab`'s
-    /// own switch has no case for them — so closing either is nothing more
-    /// than removing the tab. A running verification check in particular is
-    /// unaffected either way: its surface comes from `Verification.Spawn`
-    /// and only `Verification.Runner.forget` reaches it.
+    /// **Execution closes, and stops the run on its way out.** It used to be
+    /// refused by name: `⌘W` on that tab also stops the running dev stack, and
+    /// the method that did it reached into view-local `@State`
+    /// (`browserStartPending`) that this `MainActor` singleton — no view, no
+    /// `@State` — could not reach. Reimplementing it here would have been the
+    /// "second copy that drifts" shape this codebase keeps warning about, so
+    /// the refusal stood until there was one copy to call. There is:
+    /// `ProcessCompose.RunSession.stopIfTabOwnsRun` is the same call
+    /// `TerminalContainerView.forceCloseTab` makes, on a session the surface
+    /// cache owns rather than a view, so it works with nothing on screen.
+    /// Changes and Verification reach it too and it does nothing for them —
+    /// `closingTabStopsRun` names exactly one owner. A running verification
+    /// check in particular is unaffected either way: its surface comes from
+    /// `Verification.Spawn` and only `Verification.Runner.forget` reaches it.
     ///
     /// **Closing a tab that is already closed, or a `surfaceID` nothing
     /// currently owns, is success, not a refusal.** `isSafeToReplay` depends
@@ -331,13 +329,6 @@ final class WorkspaceActions {
     }
 
     private func closeSingleton(workstreamID: UUID, kind: String) throws -> (kind: String?, wasOpen: Bool) {
-        if kind == WorkspaceTabKind.execution.id {
-            throw IPC.ToolError.invalidArgument(
-                name: "kind",
-                reason: "closing it must also stop the running dev stack, which this tool cannot do — "
-                    + "use the Execution tab's own Stop control, or ask the user."
-            )
-        }
         guard let tab = Self.openableTabs[kind] else {
             throw IPC.ToolError.invalidArgument(
                 name: "kind",
@@ -346,6 +337,13 @@ final class WorkspaceActions {
         }
         let context = try context(workstreamID: workstreamID)
         let wasOpen = context.model.removeTab(tab)
+        // The same order `forceCloseTab` uses, and for the same reason: the tab
+        // goes first, then the one rule that decides whether its close stops the
+        // run. Unconditional on `wasOpen` would stop a run for a tab that was
+        // already closed; `closingTabStopsRun` is what keeps it to the owner.
+        if wasOpen {
+            surfaceCache?.runSession(for: workstreamID).stopIfTabOwnsRun(tab)
+        }
         logger.detailed("close_tab: \(kind) wasOpen=\(wasOpen)")
         return (tab.kind.id, wasOpen)
     }

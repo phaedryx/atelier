@@ -18,9 +18,7 @@ final class WorkspaceModelTests: XCTestCase {
             activeTab: activeTab,
             browserTitles: [:],
             terminalTitles: [:],
-            editorFilePaths: [:],
-            runStarted: false,
-            runStoppedManually: false
+            editorFilePaths: [:]
         )
         return WorkspaceModel(workstreamID: workstreamID, snapshot: snapshot)
     }
@@ -190,7 +188,6 @@ final class WorkspaceModelTests: XCTestCase {
         let terminal = model.addTerminal()
         let editor = model.addEditor(filePath: "b.swift")
         model.terminalTitles[terminal] = "zsh"
-        model.runStarted = true
 
         let snapshot = model.snapshot()
         let restored = WorkspaceModel(workstreamID: model.workstreamID, snapshot: snapshot)
@@ -199,8 +196,6 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertEqual(restored.activeTab, model.activeTab)
         XCTAssertEqual(restored.terminalTitles[terminal], "zsh")
         XCTAssertEqual(restored.editorFilePaths[editor], "b.swift")
-        XCTAssertTrue(restored.runStarted)
-        XCTAssertFalse(restored.runStoppedManually)
     }
 
     func testEditorActivityHelpers() {
@@ -286,9 +281,7 @@ final class WorkspaceModelTests: XCTestCase {
             activeTab: .changes,
             browserTitles: [:],
             terminalTitles: [:],
-            editorFilePaths: [:],
-            runStarted: false,
-            runStoppedManually: false
+            editorFilePaths: [:]
         )
         let model = WorkspaceModel(workstreamID: UUID(), snapshot: snapshot)
 
@@ -431,9 +424,7 @@ final class WorkspaceModelCacheTests: XCTestCase {
             activeTab: WorkspaceTab.agent,
             browserTitles: [:],
             terminalTitles: [:],
-            editorFilePaths: [:],
-            runStarted: false,
-            runStoppedManually: false
+            editorFilePaths: [:]
         )
         let model = WorkspaceModel(workstreamID: UUID(), snapshot: snapshot)
         XCTAssertFalse(model.tabs.contains(WorkspaceTab.execution))
@@ -453,9 +444,7 @@ final class WorkspaceModelCacheTests: XCTestCase {
             activeTab: WorkspaceTab.agent,
             browserTitles: [:],
             terminalTitles: [:],
-            editorFilePaths: [:],
-            runStarted: false,
-            runStoppedManually: false
+            editorFilePaths: [:]
         )
         let model = WorkspaceModel(workstreamID: UUID(), snapshot: snapshot)
         model.ensureSingleton(WorkspaceTab.execution)
@@ -465,16 +454,40 @@ final class WorkspaceModelCacheTests: XCTestCase {
         XCTAssertEqual(model.activeTab, .agent)
     }
 
-    // MARK: - Run identity lifetime
+    // MARK: - Run state is not here any more
 
-    /// `runGeneration` and `runCommandString` must outlive a *view remount* and
-    /// not an *app relaunch*, so they belong on the model but not in the
-    /// snapshot. Living on the model is structural — a test cannot observe
-    /// SwiftUI `@State` — but their absence from the snapshot is observable,
-    /// and adding them to it would restore a command string for a surface that
-    /// no longer exists.
-    func testRunIdentityIsNotCarriedAcrossASnapshotRoundTrip() {
-        let snapshot = WorkspaceTabSnapshot(
+    /// `runStarted`, `runStoppedManually`, `runGeneration` and
+    /// `runCommandString` used to live on this model and two of them travelled
+    /// in the snapshot. They are all `ProcessCompose.RunSession`'s now, and the
+    /// snapshot carries none of it — which is what this pins, because the reason
+    /// they survived a view remount was never the snapshot. It was that the
+    /// surface cache owns the model, and the cache owns the session the same
+    /// way. See `RunSessionTests`.
+    func testTheSnapshotCarriesNoRunState() {
+        let cache = TerminalSurfaceCache()
+        cache.terminalApp = { nil }
+        let id = UUID()
+        let session = cache.runSession(for: id)
+        session.start(ProcessCompose.RunSession.StartContext(
+            command: "just dev",
+            workingDirectory: "/repo",
+            environment: [:],
+            launcherPath: nil,
+            tmux: nil,
+            shell: "/bin/zsh"
+        ))
+
+        let model = cache.workspaceModel(for: id, seed: makeSnapshot())
+        let restored = WorkspaceModel(workstreamID: id, snapshot: model.snapshot())
+
+        // Rebuilding the model from its snapshot cannot touch the run, because
+        // the snapshot has no way to describe one.
+        XCTAssertTrue(cache.runSession(for: id).runStarted)
+        XCTAssertTrue(restored.tabs.contains(.agent))
+    }
+
+    private func makeSnapshot() -> WorkspaceTabSnapshot {
+        WorkspaceTabSnapshot(
             tabs: [.info, .agent],
             terminalCount: 0,
             browserCount: 0,
@@ -482,19 +495,7 @@ final class WorkspaceModelCacheTests: XCTestCase {
             activeTab: .info,
             browserTitles: [:],
             terminalTitles: [:],
-            editorFilePaths: [:],
-            runStarted: false,
-            runStoppedManually: false
+            editorFilePaths: [:]
         )
-        let model = WorkspaceModel(workstreamID: UUID(), snapshot: snapshot)
-        model.runStarted = true
-        model.runGeneration = 7
-        model.runCommandString = "process-compose up -n execute"
-
-        let restored = WorkspaceModel(workstreamID: model.workstreamID, snapshot: model.snapshot())
-
-        XCTAssertTrue(restored.runStarted, "runStarted is persisted and must stay so")
-        XCTAssertEqual(restored.runGeneration, 0)
-        XCTAssertNil(restored.runCommandString)
     }
 }

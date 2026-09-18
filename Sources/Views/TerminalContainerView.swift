@@ -180,8 +180,6 @@ struct WorkspaceTabSnapshot {
     var browserTitles: [UUID: String]
     var terminalTitles: [UUID: String]
     var editorFilePaths: [UUID: String]
-    var runStarted: Bool
-    var runStoppedManually: Bool
 }
 
 /// The state a workstream's model starts life with: the two permanent tabs and
@@ -210,9 +208,7 @@ func startupWorkspaceTabState(savedTab: RestorableWorkspaceTab?) -> WorkspaceTab
         activeTab: tabs.contains(restored) ? restored : .info,
         browserTitles: [:],
         terminalTitles: [:],
-        editorFilePaths: [:],
-        runStarted: false,
-        runStoppedManually: false
+        editorFilePaths: [:]
     )
 }
 
@@ -274,6 +270,14 @@ struct TerminalContainerView: View {
     /// `@ObservedObject`: a computed property re-resolving it on each access
     /// would never subscribe, and the view would silently render stale tabs.
     @ObservedObject var model: WorkspaceModel
+    /// This workstream's dev-server run. Resolved by `ContentView` from the
+    /// surface cache and passed in for the same reason `model` is, and held for
+    /// the same reason: it owns the run's whole lifecycle and every field behind
+    /// it, and it outlives this view. Before it existed those fields were split
+    /// between `WorkspaceModel` and this view's `@State`, and the decisions that
+    /// wrote them were all private methods here — see the type's doc comment for
+    /// what that cost.
+    @ObservedObject var session: ProcessCompose.RunSession
     /// The app-level verification runner, created by `ContentView` and passed
     /// through. Not an `@ObservedObject` here: nothing in this view renders
     /// from it, and `VerificationTabView` — which does — observes it itself.
@@ -294,18 +298,15 @@ struct TerminalContainerView: View {
     @State private var cachedClaudeCommand: String?
     @State private var draggedCustomTab: WorkspaceTab?
     @StateObject private var portDetector: Port.Detector
-    @State private var browserStartPending = false
     @State private var devCommandOverride: String?
     @State private var defaultBranch = "main"
-    /// Resolved once per change rather than per render: resolving binds a socket
-    /// to check whether each port is free.
-    @State private var portPlan: ProcessCompose.PortPlan = .empty
     /// Everything the panes read about this workstream's process-compose config,
     /// resolved together and published as one value.
     ///
     /// **Stored rather than recomputed, because *agreement* is the invariant
     /// here and not freshness.** The Execution pane's Start button is enabled on
-    /// `resolution.plan` and `doStartRun` refuses on `resolution.plan`, so the
+    /// `resolution.plan`, and `runStartContext` resolves the command it hands
+    /// `ProcessCompose.RunSession.start` from that same plan, so the
     /// two cannot describe different worlds; a plan that is a moment stale but
     /// consistent with the reason beside it is harmless, while a fresh plan
     /// disagreeing with the button is exactly the bug — an enabled Start that
@@ -343,20 +344,6 @@ struct TerminalContainerView: View {
     /// read, and deleting it as unused would leave the Start button stuck on the
     /// selection the pane was built with.
     @State private var executeSelectionChanges = 0
-    /// True while `doStartRun` is awaiting `down` on a socket it has to reclaim.
-    ///
-    /// Start is otherwise synchronous, and that is what kept it safe to press
-    /// twice: the second press found `runStarted` already true. The reclaim path
-    /// awaits a child process before flipping any state, which reopens that
-    /// window for as long as `down` takes — and a second press would then run a
-    /// second `down` and a second `beginRun`, the later one bumping
-    /// `runGeneration` and replacing the surface the earlier one just built.
-    ///
-    /// Passed to `ExecutionTabView` as well as guarding `doStartRun`, because
-    /// a button that silently swallows a press reads as broken. The guard still
-    /// has to be there: `.rerunScript` (⌘⇧⏎) reaches `startRunIfNeeded` without
-    /// going through the button at all.
-    @State private var isReclaimingRunSocket = false
     /// The last thing initialization said about this workstream.
     ///
     /// `.completedWithNote`, the state whose whole job is to say *why* nothing
@@ -374,6 +361,7 @@ struct TerminalContainerView: View {
         bypassPermissions: Bool,
         isActive: Bool,
         model: WorkspaceModel,
+        session: ProcessCompose.RunSession,
         verificationRunner: Verification.Runner
     ) {
         self.workstreamID = workstreamID
@@ -385,6 +373,7 @@ struct TerminalContainerView: View {
         self.bypassPermissions = bypassPermissions
         self.isActive = isActive
         self.model = model
+        self.session = session
         self.verificationRunner = verificationRunner
         _portDetector = StateObject(wrappedValue: Port.Detector(workstreamID: workstreamID))
         _processTable = StateObject(wrappedValue: ProcessCompose.TableModel(
@@ -443,14 +432,15 @@ struct TerminalContainerView: View {
     /// RunState.PortSelectionTracker returns nil once more than one process is listening
     /// and no port was expected, which is every multi-service stack.
     private var browserDefaultURL: String {
-        let port = portPlan.browserPort ?? portDetector.selectedPort ?? workstreamPort
+        let port = session.portPlan.browserPort ?? portDetector.selectedPort ?? workstreamPort
         return "http://localhost:\(port)/"
     }
 
-    /// The run session's surface ID. Bumped on stop/restart so a fresh
-    /// surface replaces the previous one.
+    /// The run session's surface ID. Read off the session rather than derived
+    /// here: it is the generation that makes it, and the generation is the
+    /// session's.
     private var runID: UUID {
-        derivedUUID(from: workstreamID, salt: "env-run-\(model.runGeneration)")
+        session.runID
     }
 
     /// The dev server is coming up but has not exposed a port yet. Covers the
@@ -461,11 +451,11 @@ struct TerminalContainerView: View {
     /// own liveness rather than by `portDetector.status` — see `Port.isWaitingForServer`.
     private var isWaitingForServer: Bool {
         Port.isWaitingForServer(
-            browserPort: portPlan.browserPort,
-            browserPortIsFixed: portPlan.browserPortIsFixed,
+            browserPort: session.portPlan.browserPort,
+            browserPortIsFixed: session.portPlan.browserPortIsFixed,
             status: portDetector.status,
             detectedPorts: portDetector.detectedPorts,
-            browserStartPending: browserStartPending
+            browserStartPending: session.browserStartPending
         )
     }
 
@@ -475,7 +465,7 @@ struct TerminalContainerView: View {
     /// everything*.
     ///
     /// One expression with two consumers, the Start button's enabled state and
-    /// `resolvedRunCommand`'s guard, which is the `canRun`/`doStartRun` rule
+    /// `resolvedRunCommand`'s guard, which is the `canRun`/`start` rule
     /// applied to the other half of the decision: the plan says whether a
     /// command can be built, this says whether there is anything to build one
     /// for. Both halves have to be asked once and read twice, never asked
@@ -866,22 +856,22 @@ struct TerminalContainerView: View {
                     workingDirectory: workingDirectory,
                     useTmux: useTmux,
                     environmentVars: runEnvironmentVars,
-                    runCommand: model.runCommandString,
+                    runCommand: session.runCommandString,
                     devCommand: resolved.devCommand,
                     devCommandOverride: $devCommandOverride,
-                    runStarted: $model.runStarted,
-                    runGeneration: model.runGeneration,
+                    runStarted: session.runStarted,
+                    runGeneration: session.runGeneration,
                     processTable: processTable,
                     showsProcessTable: usesProcessCompose,
-                    portsByName: portPlan.values,
+                    portsByName: session.portPlan.values,
                     declaredProcesses: declared,
                     canStart: resolved.plan.canRun,
                     hasRunnableSelection: runnableExecuteSelection(declared: declared) != nil,
-                    isReclaimingSocket: isReclaimingRunSocket,
+                    isReclaimingSocket: session.isReclaimingSocket,
                     devCommandFiles: resolved.loadedFiles,
                     startUnavailableReason: resolved.startUnavailableReason,
                     onSelectionChange: { executeSelectionChanges += 1 },
-                    onStart: doStartRun,
+                    onStart: startRun,
                     onStop: stopRun,
                     onRestart: restartRun
                 )
@@ -1094,7 +1084,7 @@ struct TerminalContainerView: View {
             .onReceive(NotificationCenter.default.publisher(for: .rerunScript)) { _ in
                 guard isActive else { return }
                 guard resolvedRunCommand != nil else { return }
-                if model.runStarted {
+                if session.runStarted {
                     restartRun()
                 } else {
                     startRunIfNeeded()
@@ -1318,24 +1308,20 @@ struct TerminalContainerView: View {
             .onChange(of: appEnv.toolStatus.processCompose.path) { _, _ in
                 processComposeResolver.refresh(override: devCommandOverride)
             }
-            .onChange(of: model.runStarted) { _, started in
-                // A session restored from tmux (or started before TerminalApp
-                // was ready) needs its command assembled on the container side
-                // so the restored surface reattaches to the existing session.
-                if started, model.runCommandString == nil, let command = resolvedRunCommand {
-                    model.runCommandString = buildRunCommand(script: command)
-                    preloadRunSurface()
-                }
-                // Driven here rather than from doStartRun/stopRun because a
-                // session restored from tmux sets this directly and never goes
-                // through either of them.
+            // The command-assembly half of this observer is gone with the run
+            // lifecycle: `RunSession.restore` builds its own command, so leaving
+            // a second builder on a view's mount lifetime would be exactly the
+            // drift that move was for. Only the polling half is the view's, and
+            // it stays driven from here because the tmux restore sets
+            // `runStarted` without going through start or stop.
+            .onChange(of: session.runStarted) { _, _ in
                 syncProcessPolling()
             }
             .onChange(of: portDetector.status) { _, newStatus in
                 // Once the session materializes (atelier-run wrote state), the
                 // waiting overlay is driven by the status itself.
                 if newStatus != .none {
-                    browserStartPending = false
+                    session.clearBrowserStartPending()
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .switchByNumber)) { notification in
@@ -1355,31 +1341,13 @@ struct TerminalContainerView: View {
                 guard let currentIndex = model.tabs.firstIndex(of: model.activeTab) else { return }
                 model.activeTab = model.tabs[(currentIndex - 1 + model.tabs.count) % model.tabs.count]
             }
-            .onReceive(NotificationCenter.default.publisher(for: .terminalTabExited)) { notification in
-                guard let surfaceID = notification.object as? UUID else { return }
-                if surfaceID == runID {
-                    // The dev-server session died; no port is coming.
-                    browserStartPending = false
-                    // And the run is over, which has to be recorded rather than
-                    // left implied. `runStarted` stayed true here, so the pane
-                    // kept rendering `SingleTerminalView` with the stored
-                    // command — and `TerminalSurfaceView.updateNSView`
-                    // recreates a missing surface from that command on the next
-                    // render. Stopping the last process therefore rebooted the
-                    // whole stack with no user action, and Stop acted on a run
-                    // that did not exist until a render brought it back.
-                    //
-                    // `runStoppedManually` is deliberately left alone: the run
-                    // died on its own, and marking it manual would suppress the
-                    // tmux restore the user never asked to suppress.
-                    model.runStarted = false
-                    model.runCommandString = nil
-                    syncProcessPolling()
-                }
-                // Tab removal for exited terminals happens at exit time, in
-                // handleSurfaceClosed via removeTerminalTab(surfaceID:) — by
-                // the time this notification arrives the tab is already gone.
-            }
+            // The run surface's own exit is `ProcessCompose.RunSession`'s to
+            // record, and it subscribes for itself: a run whose last process
+            // dies while the user is looking at another workstream has no view
+            // mounted here to notice. Tab removal for exited terminals happens
+            // at exit time, in `handleSurfaceClosed` via
+            // `removeTerminalTab(surfaceID:)` — by the time that notification
+            // arrives the tab is already gone.
             .onReceive(NotificationCenter.default.publisher(for: .browserTitleChanged)) { notification in
                 guard let tabID = notification.object as? UUID else { return }
                 model.browserTitles[tabID] = notification.userInfo?["title"] as? String
@@ -1499,118 +1467,73 @@ struct TerminalContainerView: View {
     /// Opening starts the run; closing does not stop it. That asymmetry is the
     /// point: a browser tab is one view onto a running server, and the last one
     /// closing says nothing about whether the server is still wanted. Only the
-    /// Execution tab's close stops a run — see `closingTabStopsRun`.
+    /// Execution tab's close stops a run — see
+    /// `ProcessCompose.RunSession.closingTabStopsRun`.
     private func startRunIfNeeded() {
-        guard resolvedRunCommand != nil else { return }
         guard sessionMode != .waitingForTools, !appEnv.isDetecting else { return }
         guard portDetector.status == .none else { return }
         restartRun()
     }
 
-    /// Start, after reclaiming this workstream's execute socket if anything is
-    /// still holding it.
+    /// Everything the run session needs that only this view can resolve.
     ///
-    /// `process-compose up` refuses to bind a socket another server holds:
-    /// `unix socket <path> is already in use`, exit 1. In the chained
-    /// `prepare && execute` that `ProcessCompose.PhaseRunner.startCommand`
-    /// builds, it refuses at the **end** — so the user waits out the entire
-    /// prepare phase, which for a real project is an install, a package build
-    /// and a bundle install, and is then told about a unix socket.
+    /// **Nil is the whole of "there is nothing to run", and it is resolved
+    /// exactly once here.** The command comes from `resolvedRunCommand`, which
+    /// reads the stored `RunCommandPlan` and the execute checklist — the two
+    /// halves of the one decision the Start button is enabled on. Handing the
+    /// session a non-optional command is what makes `restart`'s old hazard
+    /// structural rather than a guard somebody has to remember: it cannot stop
+    /// a run and then decline to start one, because there is no optional left
+    /// to decline on.
     ///
-    /// Whatever holds it is this workstream's own orphaned run: the path is
-    /// named for the workstream id. It happens because `stopRun` kills the tmux
-    /// session and drops the surface without ever calling `down`, so a server
-    /// can outlive the run Atelier believes it stopped — and `runStarted` then
-    /// reads false while the socket is still bound, which is exactly the state
-    /// that makes Start look available and fail.
-    ///
-    /// Reclaiming belongs to Start rather than to Stop, or as well as to Stop:
-    /// Start already means "tear down and re-run" — it kills the tmux session
-    /// and bumps `runGeneration` — and a server stranded by a *crash*, or by a
-    /// quit that raced `stopAllServers`, was never going to be cleaned up by a
-    /// Stop that is not coming.
-    ///
-    /// A leftover socket *file* is deliberately not handled: process-compose
-    /// overwrites one. See `ProcessCompose.Client.isServerListening`.
-    ///
-    /// Every way into a run comes through here — the Start button, Rerun via
-    /// `restartRun`, and the browser tab via `startRunIfNeeded` — so the probe
-    /// is paid once and cannot be routed around.
-    @MainActor
-    private func doStartRun() {
-        guard let command = resolvedRunCommand else { return }
-
-        // A reclaim already in flight owns this press. See
-        // `isReclaimingRunSocket`.
-        guard !isReclaimingRunSocket else { return }
-
-        let socketPath = ProcessCompose.PhaseRunner.socketPath(for: workstreamID)
-        guard ProcessCompose.Client.isServerListening(atSocketPath: socketPath),
-              let binary = ProcessCompose.Settings.resolveBinary()
-        else {
-            beginRun(command: command)
-            return
-        }
-
-        logger.warning("[Atelier] doStartRun: reclaiming execute socket still in use")
-        let worktree = workingDirectory
-        isReclaimingRunSocket = true
-        Task {
-            // Cleared however this ends — a thrown or cancelled Task that left
-            // the flag set would make Start permanently inert for this
-            // workstream, which is worse than the double-press it prevents.
-            defer { isReclaimingRunSocket = false }
-            // `down` spawns a child and waits on it, so it stays off the main
-            // actor. The run begins once the socket is free, not before: that
-            // ordering is the whole point.
-            await Task.detached {
-                ProcessCompose.PhaseExecutor.shutDown(
-                    binary: binary,
-                    socketPath: socketPath,
-                    workingDirectory: worktree
+    /// The tmux context is `nil` unless this run will really be wrapped, so the
+    /// session records what it actually started in. That is what lets `stop()`
+    /// kill the right session with no view mounted and no live tmux read — the
+    /// path `close_tab(kind: "execution")` takes.
+    private var runStartContext: ProcessCompose.RunSession.StartContext? {
+        guard let command = resolvedRunCommand else { return nil }
+        let tmux: ProcessCompose.RunSession.TmuxContext? = if useTmux, let tmuxPath = appEnv.toolStatus.tmux.path {
+            ProcessCompose.RunSession.TmuxContext(
+                path: tmuxPath,
+                sessionName: TmuxSession.sessionName(
+                    project: projectName,
+                    workstream: workstreamName,
+                    role: "run"
                 )
-            }.value
-            beginRun(command: command)
+            )
+        } else {
+            nil
         }
+        return ProcessCompose.RunSession.StartContext(
+            command: command,
+            workingDirectory: workingDirectory,
+            environment: runEnvironmentVars,
+            launcherPath: RunLauncher.executableURL()?.path,
+            tmux: tmux,
+            shell: CommandBuilder.userShell
+        )
     }
 
-    /// Starts the run session. The command is either the user's own override or
-    /// the phase-scoped `prepare && execute` Atelier composes from the located
-    /// config. Nothing here is gated behind approval, because this is attended:
-    /// the user pressed Start, the output lands in a surface in front of them,
-    /// and Stop is to hand. The pane does *not* display this command — what it
-    /// shows for a process-compose source is the list of files that will be
-    /// loaded.
-    private func beginRun(command: String) {
-        // A run always gets an Execution tab, because that tab is what can
-        // see and stop it — and, since browser tabs stopped claiming the run,
-        // the only thing that can. `addBrowser` starts the dev server through
-        // `startRunIfNeeded` and opens only a browser, so without this a run
-        // could exist with no Execution tab at all and nothing left that
-        // stops it short of quitting. This line is what keeps
-        // `closingTabStopsRun`'s single owner present for every run.
-        //
-        // Ensure rather than activate: the browser tab the user just asked for
-        // must keep focus.
-        model.ensureSingleton(.execution)
-        killRunTmuxSession()
-        surfaceCache.removeSurface(for: runID)
-        model.runStoppedManually = false
-        model.runGeneration += 1
-        model.runCommandString = buildRunCommand(script: command)
-        model.runStarted = true
-        markBrowserStartPending()
-        preloadRunSurface()
+    /// Start. The socket reclaim, the generation bump, the launch log and the
+    /// surface preload are all `ProcessCompose.RunSession`'s; this resolves what
+    /// to run and hands it over.
+    private func startRun() {
+        guard let context = runStartContext else { return }
+        session.start(context)
     }
 
     private func stopRun() {
-        killRunTmuxSession()
-        surfaceCache.removeSurface(for: runID)
-        model.runStoppedManually = true
-        model.runStarted = false
-        browserStartPending = false
-        model.runCommandString = nil
-        model.runGeneration += 1
+        session.stop()
+    }
+
+    /// Rerun: the session stops what is running and goes back through Start.
+    ///
+    /// The guard stays here because the resolution does: without a command
+    /// there is nothing to hand over, and a Rerun that stopped the run and then
+    /// declined to start one is a Stop wearing Rerun's label.
+    private func restartRun() {
+        guard let context = runStartContext else { return }
+        session.restart(context)
     }
 
     /// Whether this workstream's run is a process-compose run, and so has a
@@ -1648,171 +1571,45 @@ struct TerminalContainerView: View {
     }
 
     /// Polls the control socket exactly while a process-compose run is up.
-    /// Called from every place `runStarted` can change, including the tmux
-    /// restore path, which sets it without going through `doStartRun`.
+    ///
+    /// Stays in the view because it reads `usesProcessCompose`, which comes off
+    /// the view-owned resolver, and drives a `@StateObject` table the view
+    /// owns. Driven from `.onChange(of: session.runStarted)` rather than from
+    /// the start and stop paths, because the tmux restore sets that flag
+    /// without going through either.
     @MainActor
     private func syncProcessPolling() {
-        if model.runStarted, usesProcessCompose {
+        if session.runStarted, usesProcessCompose {
             processTable.startPolling()
         } else {
             processTable.stopPolling()
         }
     }
 
-    /// Rerun: stop what is running, then go through Start.
+    /// Re-reads ports.yaml and resolves it for this worktree.
     ///
-    /// This used to inline `beginRun`'s body — kill the tmux session, bump
-    /// `runGeneration`, set `runStarted` — and so skipped the socket reclaim
-    /// entirely. Rerun is the path *most* likely to need it: killing the tmux
-    /// session without calling `down` is exactly how a process-compose server
-    /// gets stranded, and Rerun does that immediately before running `up`
-    /// again on the same socket. It failed the way Start used to, at the end
-    /// of prepare.
-    ///
-    /// Routing through `stopRun` first, rather than teaching this path its own
-    /// reclaim, is what keeps Stop out of the reclaim window: `runStarted` is
-    /// false for the whole of it, and the Stop and Rerun controls are rendered
-    /// only when it is true. A Stop landing mid-reclaim would otherwise be
-    /// followed by the run it just cancelled.
-    ///
-    /// `stopRun` sets `runStoppedManually`, which suppresses the tmux restore —
-    /// but `beginRun` clears it again on the far side, so the pair lands where
-    /// the old inline body did.
-    private func restartRun() {
-        // Kept ahead of `stopRun`: without it a Rerun with no runnable command
-        // would stop the run and then decline to start one, which is a Stop
-        // wearing Rerun's label.
-        guard resolvedRunCommand != nil else { return }
-        if model.runStarted {
-            stopRun()
-        }
-        doStartRun()
-    }
-
-    /// Marks the start so browser tabs hold the waiting overlay until a port
-    /// appears. Self-clears after a few seconds so a failed spawn (nothing
-    /// ever wrote state) still falls through to the error view.
-    @MainActor
-    private func markBrowserStartPending() {
-        browserStartPending = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [self] in
-            guard browserStartPending else { return }
-            browserStartPending = false
-        }
-    }
-
-    /// Create the run surface eagerly so the dev server starts even while the
-    /// browser tab is active and the Info pane is not rendered.
-    private func preloadRunSurface() {
-        guard let commandString = model.runCommandString else { return }
-        guard let app = TerminalApp.shared.app else { return }
-        _ = surfaceCache.surface(
-            for: runID,
-            app: app,
-            workingDirectory: workingDirectory,
-            command: commandString,
-            environmentVars: runEnvironmentVars
-        )
-    }
-
-    /// Assembles the final run command: atelier-run wrap (port detection) + tmux wrap.
-    private func buildRunCommand(script: String) -> String {
-        let baseCommand: String
-        let ffRunPath = RunLauncher.executableURL()?.path
-        if let launcherPath = ffRunPath {
-            baseCommand = runScriptCommand(script: script, workstreamID: workstreamID, launcherPath: launcherPath)
-        } else {
-            baseCommand = scriptCommand(script: script)
-        }
-
-        let finalCommand: String
-        if useTmux, let tmuxPath = appEnv.toolStatus.tmux.path {
-            let session = TmuxSession.sessionName(project: projectName, workstream: workstreamName, role: "run")
-            finalCommand = TmuxSession.wrapCommand(tmuxPath: tmuxPath, sessionName: session, command: baseCommand, environmentVars: runEnvironmentVars)
-        } else {
-            finalCommand = baseCommand
-        }
-
-        var intermediates = [script, baseCommand]
-        if finalCommand != baseCommand {
-            intermediates.append(finalCommand)
-        }
-        LaunchLogger.log(LaunchLogEntry(
-            workstreamID: workstreamID,
-            event: "run-start",
-            finalCommand: finalCommand,
-            intermediateCommands: intermediates,
-            environmentVariables: runEnvironmentVars,
-            workingDirectory: workingDirectory,
-            toolPaths: LaunchLogEntry.ToolPaths(
-                claude: nil,
-                tmux: useTmux ? appEnv.toolStatus.tmux.path : nil,
-                ffRun: ffRunPath
-            ),
-            settings: LaunchLogEntry.Settings(
-                tmuxMode: useTmux,
-                bypassPermissions: false,
-                autoRenameBranch: false,
-                allowOutsideWorktree: false
-            ),
-            shell: CommandBuilder.userShell
-        ))
-
-        return finalCommand
-    }
-
-    /// Re-reads ports.yaml and resolves it for this worktree. A malformed file
-    /// leaves the plan empty and logs — the Execution tab surfaces the error
-    /// in Task 8; nothing here should throw into a view update.
+    /// Still called from `startWorkspace`, synchronously and before
+    /// `preloadSurfaces`: the plan feeds every surface's environment, and a
+    /// surface's environment is never compared after creation.
     private func refreshPortPlan() {
-        do {
-            guard let config = try ProcessCompose.PortsConfig.load(from: projectDirectory) else {
-                portPlan = .empty
-                return
-            }
-            portPlan = ProcessCompose.PortPlan.resolve(config, workingDirectory: workingDirectory)
-        } catch {
-            logger.warning("ports.yaml: \(error.localizedDescription, privacy: .public)")
-            portPlan = .empty
-        }
-    }
-
-    private func killRunTmuxSession() {
-        guard useTmux, let tmuxPath = appEnv.toolStatus.tmux.path else { return }
-        let session = TmuxSession.sessionName(project: projectName, workstream: workstreamName, role: "run")
-        TmuxSession.killSession(tmuxPath: tmuxPath, sessionName: session)
+        session.refreshPortPlan(
+            projectDirectory: projectDirectory,
+            workingDirectory: workingDirectory
+        )
     }
 
     /// Restores `runStarted` from a run session already alive in tmux —
     /// survives relaunch, or a session started before this container existed.
-    /// Lives here rather than on the Execution tab because it must run
-    /// before the user ever opens that tab: on launch (once tool detection
-    /// has resolved whether tmux is usable) and whenever detection state
-    /// changes. The guards make re-invocation harmless.
+    ///
+    /// Driven from here rather than from the Execution tab because it must run
+    /// before the user ever opens that tab: on launch (once tool detection has
+    /// resolved whether tmux is usable) and whenever detection state changes.
+    /// The decision itself, and the command assembly behind it, are
+    /// `ProcessCompose.RunSession.restore`'s; the guards make re-invocation
+    /// harmless on both sides.
     private func restoreRunState() {
-        guard !model.runStarted,
-              useTmux,
-              resolvedRunCommand != nil,
-              let tmuxPath = appEnv.toolStatus.tmux.path else { return }
-        let session = TmuxSession.sessionName(project: projectName, workstream: workstreamName, role: "run")
-        let hasExistingRunSession = TmuxSession.sessionExists(tmuxPath: tmuxPath, sessionName: session)
-        if shouldRestoreRunSession(
-            useTmux: useTmux,
-            hasRunScript: resolvedRunCommand != nil,
-            hasExistingRunSession: hasExistingRunSession,
-            wasStoppedManually: model.runStoppedManually
-        ) {
-            // The same guarantee `beginRun` makes, on the other path that can
-            // set `runStarted`. Only the Execution tab's close stops a run
-            // (`closingTabStopsRun`), so a restored run without that tab is a
-            // run nothing can stop short of quitting — and the tab really can
-            // be absent here: `terminalTabExited` sets `runStarted = false`
-            // and deliberately leaves `runStoppedManually` alone, so the tab
-            // can be closed with no consequence while tmux still has a session
-            // for the next launch to find.
-            model.ensureSingleton(.execution)
-            model.runStarted = true
-        }
+        guard let context = runStartContext else { return }
+        session.restore(context)
     }
 
     private func openEditor() {
@@ -1987,14 +1784,12 @@ struct TerminalContainerView: View {
         default:
             break
         }
-        // Which tab's close stops the run is one rule, tested without a view.
-        // It lives outside the switch because it is not per-tab teardown: the
-        // run is a workstream-wide thing that exactly one tab owns, and asking
-        // the question once here is what keeps a second tab from quietly
-        // claiming it again.
-        if closingTabStopsRun(tab, runStarted: model.runStarted) {
-            stopRun()
-        }
+        // Which tab's close stops the run is one rule, and it lives on the
+        // session with the run it stops. Outside the switch because it is not
+        // per-tab teardown: the run is a workstream-wide thing that exactly one
+        // tab owns. `close_tab(kind: "execution")` over IPC now reaches the same
+        // call, which is why that tool no longer has to refuse.
+        session.stopIfTabOwnsRun(tab)
     }
 
     private func moveCustomTab(to targetTab: WorkspaceTab) {
@@ -2084,7 +1879,7 @@ struct TerminalContainerView: View {
             workingDirectory: workingDirectory,
             port: workstreamPort,
             defaultBranch: defaultBranch,
-            portPlan: portPlan
+            portPlan: session.portPlan
         )
         // claudeID is the workstream id, so the Agent surface addresses itself
         // the same way every other surface does.
@@ -2717,6 +2512,20 @@ final class TerminalSurfaceCache: ObservableObject {
     private var webViews: [UUID: WKWebView] = [:]
     private var quickActionRunners: [UUID: QuickAction.Runner] = [:]
     private var workspaceModels: [UUID: WorkspaceModel] = [:]
+    /// One run session per workstream, beside its `WorkspaceModel` and for the
+    /// same reason: the run has to survive the view that drives it.
+    private var runSessions: [UUID: ProcessCompose.RunSession] = [:]
+    /// How this cache reaches the terminal app, for the one thing in it that
+    /// needs one: the surface-creating closure handed to a `RunSession`.
+    ///
+    /// **Injected only by tests, and not a style choice.** Every other surface
+    /// this type makes is asked for with an app the *caller* already resolved,
+    /// so nothing here ever touched `TerminalApp.shared` — and touching it
+    /// initializes libghostty, which a unit-test host cannot do and dies trying.
+    /// A run session outlives the view, so its surface closure cannot take the
+    /// app from a caller the way the rest do; this is what keeps the cache
+    /// constructible in a test that then starts a run.
+    var terminalApp: () -> ghostty_app_t? = { TerminalApp.shared.app }
     /// Surface IDs that should respawn when closed (e.g., the agent).
     var respawnableIDs: Set<UUID> = []
     /// Guards against concurrent respawns for the same surface ID.
@@ -2925,6 +2734,42 @@ final class TerminalSurfaceCache: ObservableObject {
         return model
     }
 
+    /// The workstream's dev-server run, created on first access.
+    ///
+    /// The three closures are the side effects a session structurally cannot
+    /// own — it lives in `Sources/Models` and a surface is this cache's — and
+    /// they are also the test seam, the same shape `Verification.Runner` takes
+    /// its `SurfaceHosting` through. The model is resolved *inside* the
+    /// `ensureExecutionTab` closure rather than captured here, so asking for a
+    /// session never forces a model into existence with a seed that has lost the
+    /// user's restored tab.
+    func runSession(for workstreamID: UUID) -> ProcessCompose.RunSession {
+        if let existing = runSessions[workstreamID] {
+            return existing
+        }
+        let session = ProcessCompose.RunSession(
+            workstreamID: workstreamID,
+            ensureExecutionTab: { [weak self] in
+                self?.workspaceModels[workstreamID]?.ensureSingleton(.execution)
+            },
+            removeSurface: { [weak self] id in
+                self?.removeSurface(for: id)
+            },
+            createSurface: { [weak self] id, command, workingDirectory, environment in
+                guard let self, let app = terminalApp() else { return }
+                _ = surface(
+                    for: id,
+                    app: app,
+                    workingDirectory: workingDirectory,
+                    command: command,
+                    environmentVars: environment
+                )
+            }
+        )
+        runSessions[workstreamID] = session
+        return session
+    }
+
     /// Drops the tab that owned a terminal surface which has just exited.
     ///
     /// This has to happen here, at exit, rather than as a prune when a
@@ -3010,9 +2855,16 @@ final class TerminalSurfaceCache: ObservableObject {
     }
 
     func removeWorkstreamSurfaces(for workstreamID: UUID) {
-        // Captured before the model goes: its counters are what bound the sweep.
+        // Captured before both go: the model's counters and the session's run
+        // generation are what bound the sweep. Reading the generation off the
+        // model used to be enough; it lives on the session now, and a sweep that
+        // forgot to follow it would reach generation zero only — leaving the
+        // live run surface, and the dev server under it, alive for the rest of
+        // the process.
         let model = workspaceModels[workstreamID]
+        let session = runSessions[workstreamID]
         workspaceModels.removeValue(forKey: workstreamID)
+        runSessions.removeValue(forKey: workstreamID)
         if let runner = quickActionRunners.removeValue(forKey: workstreamID) {
             runner.cancel()
         }
@@ -3023,7 +2875,7 @@ final class TerminalSurfaceCache: ObservableObject {
             terminalCount: model?.terminalCount ?? 0,
             browserCount: model?.browserCount ?? 0,
             editorCount: model?.editorCount ?? 0,
-            runGeneration: model?.runGeneration ?? 0
+            runGeneration: session?.runGeneration ?? 0
         )
         for id in derivedIDs {
             if surfaces[id] != nil {
