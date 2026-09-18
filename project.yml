@@ -203,6 +203,7 @@ targets:
           - Models/AppConstants.swift
           - Models/FilePersistence.swift
           - Models/IPC/IPCProtocol.swift
+          - Models/IPC/IPCToolRegistry.swift
     settings:
       base:
         PRODUCT_NAME: atelier-mcp

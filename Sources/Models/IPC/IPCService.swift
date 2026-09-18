@@ -127,12 +127,18 @@ extension IPC {
         private func registerPeer(for request: Request) async -> Response {
             // Both are agent-chosen and both are shown to other agents; the name is
             // additionally typed into their terminals by the nudge.
+            let arguments = ToolArguments(request)
+            // `optional` reads a present-but-empty `name` as absent, so `name: ""`
+            // now falls through to the workstream name rather than to "agent" —
+            // which is what this argument's own schema has always promised it
+            // defaults to. The behaviour changed with the typed read; the
+            // promise did not.
             let name = Names.sanitized(
-                request.arguments["name"] ?? request.client.workstreamName ?? "agent",
+                arguments.optional("name") ?? request.client.workstreamName ?? "agent",
                 limit: 40,
                 fallback: "agent"
             )
-            let role = Names.sanitized(request.arguments["role"] ?? "", limit: 80, fallback: "")
+            let role = Names.sanitized(arguments.optional("role") ?? "", limit: 80, fallback: "")
 
             if let existingID = request.client.peerID.flatMap(UUID.init(uuidString:)),
                let renamed = await store.updatePeer(id: existingID, name: name, role: role.isEmpty ? nil : role)
@@ -166,11 +172,25 @@ extension IPC {
             guard let sender = registeredPeerID(request) else {
                 return .failure(id: request.id, Error.unregisteredPeer.localizedDescription)
             }
-            guard let recipient = request.arguments["to"].flatMap(UUID.init(uuidString:)) else {
-                return .failure(id: request.id, "send_message needs a `to` peer id. Use list_peers to see who is reachable.")
+            let arguments = ToolArguments(request)
+            // Refused in this tool's own words rather than as a bare
+            // `invalidArgument`, because the sentence names the tool that fixes
+            // it and agents have been reading it for as long as the tool has
+            // existed. `ToolError.refused` is the boundary case for exactly
+            // that: one type crossing into `Response`, without renaming a
+            // message somebody's agent parses.
+            guard let recipient = try? arguments.uuid("to") else {
+                return .failure(
+                    id: request.id,
+                    ToolError.refused("send_message needs a `to` peer id. Use list_peers to see who is reachable.")
+                        .localizedDescription
+                )
             }
-            guard let content = request.arguments["content"], !content.isEmpty else {
-                return .failure(id: request.id, "send_message needs non-empty `content`.")
+            let content: String
+            do {
+                content = try arguments.nonEmpty("content")
+            } catch {
+                return .failure(id: request.id, error.localizedDescription)
             }
             guard isVisible(recipient, to: request.client) else {
                 return .failure(id: request.id, Error.peerNotFound(recipient).localizedDescription)
@@ -190,8 +210,11 @@ extension IPC {
             guard let sender = registeredPeerID(request) else {
                 return .failure(id: request.id, Error.unregisteredPeer.localizedDescription)
             }
-            guard let content = request.arguments["content"], !content.isEmpty else {
-                return .failure(id: request.id, "broadcast needs non-empty `content`.")
+            let content: String
+            do {
+                content = try ToolArguments(request).nonEmpty("content")
+            } catch {
+                return .failure(id: request.id, error.localizedDescription)
             }
 
             let audience = await store.listPeers()
@@ -251,8 +274,8 @@ extension IPC {
         }
 
         private func getPeerStatus(for request: Request) async -> Response {
-            guard let peerID = request.arguments["peer_id"].flatMap(UUID.init(uuidString:)) else {
-                return .failure(id: request.id, "get_peer_status needs a `peer_id`.")
+            guard let peerID = try? ToolArguments(request).uuid("peer_id") else {
+                return .failure(id: request.id, ToolError.refused("get_peer_status needs a `peer_id`.").localizedDescription)
             }
             guard isVisible(peerID, to: request.client), let peer = await store.peerStatus(id: peerID) else {
                 return .failure(id: request.id, Error.peerNotFound(peerID).localizedDescription)
@@ -477,7 +500,7 @@ extension IPC {
 
         private func listTabs(for request: Request) async -> Response {
             guard let workstreamID = callerWorkstreamID(request) else {
-                return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
+                return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
             }
             let callerSurfaceID = request.client.surfaceID.flatMap(UUID.init(uuidString:))
             let peers = await peersBySurface()
@@ -497,7 +520,7 @@ extension IPC {
 
         private func readReviewComments(for request: Request) async -> Response {
             guard let workstreamID = callerWorkstreamID(request) else {
-                return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
+                return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
             }
             do {
                 let comments = try await MainActor.run {
@@ -511,24 +534,20 @@ extension IPC {
 
         private func openEditor(for request: Request) async -> Response {
             guard let workstreamID = callerWorkstreamID(request) else {
-                return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
-            }
-            guard let path = request.arguments["path"], !path.isEmpty else {
-                return .failure(id: request.id, WorkspaceActions.Failure.missingArgument("path").localizedDescription)
+                return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
             }
             // `line` is optional, but a value that is present and unparseable is
-            // a mistake worth reporting rather than silently ignoring.
-            var line: Int?
-            if let raw = request.arguments["line"], !raw.isEmpty {
-                guard let parsed = Int(raw) else {
-                    return .failure(
-                        id: request.id,
-                        WorkspaceActions.Failure.invalidArgument(
-                            name: "line", reason: "expected a whole number, got \(raw)."
-                        ).localizedDescription
-                    )
-                }
-                line = parsed
+            // a mistake worth reporting rather than silently ignoring — which is
+            // `ToolArguments.integer`'s whole contract, rather than something
+            // this handler has to remember to spell out.
+            let path: String
+            let line: Int?
+            do {
+                let arguments = ToolArguments(request)
+                path = try arguments.required("path")
+                line = try arguments.integer("line")
+            } catch {
+                return .failure(id: request.id, error.localizedDescription)
             }
             do {
                 let opened = try await MainActor.run {
@@ -550,10 +569,13 @@ extension IPC {
         /// how an agent ends up waiting for a reaction to something nobody saw.
         private func openTab(for request: Request) async -> Response {
             guard let workstreamID = callerWorkstreamID(request) else {
-                return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
+                return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
             }
-            guard let kind = request.arguments["kind"], !kind.isEmpty else {
-                return .failure(id: request.id, WorkspaceActions.Failure.missingArgument("kind").localizedDescription)
+            let kind: String
+            do {
+                kind = try ToolArguments(request).required("kind")
+            } catch {
+                return .failure(id: request.id, error.localizedDescription)
             }
             do {
                 let opened = try await MainActor.run {
@@ -578,15 +600,16 @@ extension IPC {
         /// is refused rather than closed, and why an id nothing currently
         /// owns is success rather than an error.
         private func closeTab(for request: Request) async -> Response {
+            let arguments = ToolArguments(request)
             guard let workstreamID = callerWorkstreamID(request) else {
-                return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
+                return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
             }
             do {
                 let result = try await MainActor.run {
                     try WorkspaceActions.shared.closeTab(
                         workstreamID: workstreamID,
-                        kind: request.arguments["kind"],
-                        surfaceID: request.arguments["surface_id"]
+                        kind: arguments.optional("kind"),
+                        surfaceID: arguments.optional("surface_id")
                     )
                 }
                 let what = switch (result.kind, result.wasOpen) {
@@ -617,10 +640,17 @@ extension IPC {
         /// not exist until it exists running the right thing.
         private func openAgentTab(for request: Request) async -> Response {
             guard let workstreamID = callerWorkstreamID(request) else {
-                return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
+                return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
             }
-            let title = Names.sanitized(request.arguments["title"] ?? "", limit: 40, fallback: "")
-            let prompt = request.arguments["prompt"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let arguments = ToolArguments(request)
+            let title = Names.sanitized(arguments.optional("title") ?? "", limit: 40, fallback: "")
+            // An empty `prompt` is not a request for an agent, and is now read as
+            // absent. It used to arrive as `Optional("")`, which `startsAgent`
+            // already treated as no agent while the `claude`-not-found guard
+            // below treated it as one — so a caller sending `prompt: ""` on a
+            // machine without `claude` was refused a plain terminal it would
+            // otherwise have been given.
+            let prompt = arguments.optionalTrimmed("prompt")
 
             do {
                 let plan = try await MainActor.run {
@@ -903,14 +933,16 @@ extension IPC {
         /// The invariant lives there, at the consumer, rather than in an
         /// obligation on this handler to produce a byte-identical command.
         private func createWorkstream(for request: Request) async -> Response {
-            let name = request.arguments["name"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let prompt = request.arguments["prompt"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let arguments = ToolArguments(request)
+            let name = arguments.optionalTrimmed("name")
+            let prompt = arguments.optionalTrimmed("prompt")
             let callerWorkstreamID = callerWorkstreamID(request)
 
             let bypass: Bool
-            switch Workstream.Launcher.parseBool(request.arguments["bypass_permissions"], name: "bypass_permissions") {
-            case let .success(value): bypass = value
-            case let .failure(failure): return .failure(id: request.id, failure.localizedDescription)
+            do {
+                bypass = try arguments.boolean("bypass_permissions")
+            } catch {
+                return .failure(id: request.id, error.localizedDescription)
             }
 
             do {
@@ -1011,11 +1043,14 @@ extension IPC {
 
         private func requestAttention(for request: Request) async -> Response {
             guard let workstreamID = callerWorkstreamID(request) else {
-                return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
+                return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
             }
-            let reason = Names.sanitized(request.arguments["reason"] ?? "", limit: 400, fallback: "")
+            // Sanitized *before* the emptiness check, not after: a reason of
+            // nothing but control characters is as absent as no reason at all,
+            // and this string is rendered into a notification.
+            let reason = Names.sanitized(ToolArguments(request).optional("reason") ?? "", limit: 400, fallback: "")
             guard !reason.isEmpty else {
-                return .failure(id: request.id, WorkspaceActions.Failure.missingArgument("reason").localizedDescription)
+                return .failure(id: request.id, ToolError.missingArgument("reason").localizedDescription)
             }
             let name = request.client.workstreamName ?? "Atelier"
             let outcome = await MainActor.run {
@@ -1045,7 +1080,7 @@ extension IPC {
         /// `start_verification`'s refusal.
         private func listVerificationChecks(for request: Request) async -> Response {
             guard let workstreamID = callerWorkstreamID(request) else {
-                return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
+                return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
             }
             guard let runner = verification else {
                 return .failure(id: request.id, VerificationFailure.notAvailable.localizedDescription)
@@ -1078,13 +1113,13 @@ extension IPC {
         /// verbatim.
         private func startVerification(for request: Request) async -> Response {
             guard let workstreamID = callerWorkstreamID(request) else {
-                return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
+                return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
             }
             guard let runner = verification else {
                 return .failure(id: request.id, VerificationFailure.notAvailable.localizedDescription)
             }
 
-            let checks = VerificationSummary.checks(from: request.arguments["checks"])
+            let checks = ToolArguments(request).list("checks")
             // The caller is addressed by surface, never by workstream: two agents
             // in one worktree report the same workstream name, and a notice
             // addressed by workstream would land in the wrong pane's inbox half
@@ -1183,13 +1218,16 @@ extension IPC {
         /// also what every other tool in this group does.
         private func checkVerification(for request: Request) async -> Response {
             guard let workstreamID = callerWorkstreamID(request) else {
-                return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
+                return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
             }
             guard let runner = verification else {
                 return .failure(id: request.id, VerificationFailure.notAvailable.localizedDescription)
             }
-            guard let runID = request.arguments["run_id"], !runID.isEmpty else {
-                return .failure(id: request.id, WorkspaceActions.Failure.missingArgument("run_id").localizedDescription)
+            let runID: String
+            do {
+                runID = try ToolArguments(request).required("run_id")
+            } catch {
+                return .failure(id: request.id, error.localizedDescription)
             }
             guard let info = await runner.verificationRun(id: runID, in: workstreamID) else {
                 return .failure(id: request.id, VerificationFailure.unknownRun(runID).localizedDescription)
@@ -1313,16 +1351,11 @@ extension IPC {
         private func addTask(for request: Request) async -> Response {
             do {
                 let project = try projectDirectory(request)
-                guard let path = request.arguments["path"]?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty else {
-                    return .failure(id: request.id, WorkspaceActions.Failure.missingArgument("path").localizedDescription)
-                }
-                guard let name = request.arguments["name"]?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else {
-                    return .failure(id: request.id, WorkspaceActions.Failure.missingArgument("name").localizedDescription)
-                }
-                guard let content = request.arguments["content"], !content.isEmpty else {
-                    return .failure(id: request.id, WorkspaceActions.Failure.missingArgument("content").localizedDescription)
-                }
-                let tags = TaskSummary.tags(from: request.arguments["tags"])
+                let arguments = ToolArguments(request)
+                let path = try arguments.requiredTrimmed("path")
+                let name = try arguments.requiredTrimmed("name")
+                let content = try arguments.required("content")
+                let tags = arguments.list("tags")
                 let task = try await tasks.add(
                     projectDirectory: project, path: path, name: name, content: content,
                     tags: tags, createdBySurfaceID: request.client.surfaceID
@@ -1351,8 +1384,9 @@ extension IPC {
         ) async -> Response {
             do {
                 let project = try projectDirectory(request)
-                let prefix = request.arguments["path_prefix"]
-                let tagList = TaskSummary.tags(from: request.arguments["tags"])
+                let arguments = ToolArguments(request)
+                let prefix = arguments.optional("path_prefix")
+                let tagList = arguments.list("tags")
                 let found = await fetch(project, prefix, tagList)
                 var infos: [TaskInfo] = []
                 for task in found {
@@ -1368,9 +1402,7 @@ extension IPC {
             do {
                 let project = try projectDirectory(request)
                 let (surfaceID, workstreamID) = try surfaceAndWorkstream(request)
-                guard let path = request.arguments["path"], !path.isEmpty else {
-                    return .failure(id: request.id, WorkspaceActions.Failure.missingArgument("path").localizedDescription)
-                }
+                let path = try ToolArguments(request).required("path")
                 let task = try await tasks.claim(projectDirectory: project, path: path, surfaceID: surfaceID, workstreamID: workstreamID)
                 return await .success(id: request.id, .task(info(for: task)))
             } catch let failure as TaskQueueFailure {
@@ -1384,9 +1416,7 @@ extension IPC {
             do {
                 let project = try projectDirectory(request)
                 let (surfaceID, _) = try surfaceAndWorkstream(request)
-                guard let path = request.arguments["path"], !path.isEmpty else {
-                    return .failure(id: request.id, WorkspaceActions.Failure.missingArgument("path").localizedDescription)
-                }
+                let path = try ToolArguments(request).required("path")
                 let (task, transitioned) = try await tasks.complete(projectDirectory: project, path: path, surfaceID: surfaceID)
                 if transitioned {
                     await notifyCreator(of: task)
@@ -1403,12 +1433,9 @@ extension IPC {
             do {
                 let project = try projectDirectory(request)
                 let (surfaceID, _) = try surfaceAndWorkstream(request)
-                guard let path = request.arguments["path"], !path.isEmpty else {
-                    return .failure(id: request.id, WorkspaceActions.Failure.missingArgument("path").localizedDescription)
-                }
-                guard let reason = request.arguments["reason"]?.trimmingCharacters(in: .whitespacesAndNewlines), !reason.isEmpty else {
-                    return .failure(id: request.id, WorkspaceActions.Failure.missingArgument("reason").localizedDescription)
-                }
+                let arguments = ToolArguments(request)
+                let path = try arguments.required("path")
+                let reason = try arguments.requiredTrimmed("reason")
                 let (task, transitioned) = try await tasks.fail(projectDirectory: project, path: path, surfaceID: surfaceID, reason: reason)
                 if transitioned {
                     await notifyCreator(of: task)
@@ -1539,7 +1566,7 @@ extension IPC {
         /// there was never anything worth saving.
         private func getSessionCheckpoint(for request: Request) async -> Response {
             guard let workstreamID = callerWorkstreamID(request) else {
-                return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
+                return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
             }
             guard let checkpoint = IPC.CheckpointStore.read(for: workstreamID) else {
                 return .success(id: request.id, .text(
@@ -1558,12 +1585,10 @@ extension IPC {
         /// blob, and the tool's own description says so.
         private func updateSessionCheckpoint(for request: Request) async -> Response {
             guard let workstreamID = callerWorkstreamID(request) else {
-                return .failure(id: request.id, WorkspaceActions.Failure.notInAWorkstream.localizedDescription)
-            }
-            guard let content = request.arguments["content"], !content.isEmpty else {
-                return .failure(id: request.id, "update_session_checkpoint needs non-empty `content`.")
+                return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
             }
             do {
+                let content = try ToolArguments(request).nonEmpty("content")
                 try IPC.CheckpointStore.save(content, for: workstreamID)
                 return .success(id: request.id, .text("Checkpoint saved."))
             } catch {

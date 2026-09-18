@@ -50,18 +50,27 @@ final class WorkspaceActions {
     /// Why a workspace tool could not act. Every case is something an agent can
     /// act on or report, never a bare nil — a tool that quietly does nothing is
     /// worse than one that says why it didn't.
+    /// Why the *workspace* could not do what was asked.
+    ///
+    /// **Argument failures are not here.** `missingArgument` and
+    /// `invalidArgument` lived on this enum and on `IPC.ToolError`, rendering
+    /// the same two sentences from two types, and the argument-shaped refusals
+    /// this file still raises — a line below 1, a path that does not exist, a
+    /// surface id that will not parse — are the same class as the ones the
+    /// dispatch layer raises before a request ever reaches here. One type
+    /// crosses into `Response`, so they all throw `IPC.ToolError`. What is left
+    /// is what only the live app can know.
+    ///
+    /// `notInAWorkstream` went the same way, to `ToolError.notInWorkstream`:
+    /// it was answered by every workspace tool's first guard, which is in the
+    /// dispatch layer, and nothing in this file ever threw it.
     enum Failure: Error, LocalizedError {
-        case notInAWorkstream
         case unknownWorkstream
         case appNotReady
         case surfaceAlreadyRunning
-        case missingArgument(String)
-        case invalidArgument(name: String, reason: String)
 
         var errorDescription: String? {
             switch self {
-            case .notInAWorkstream:
-                "This tool only works from an agent running inside an Atelier workstream."
             case .unknownWorkstream:
                 "This workstream is no longer open in Atelier."
             case .appNotReady:
@@ -69,10 +78,6 @@ final class WorkspaceActions {
             case .surfaceAlreadyRunning:
                 "The workstream was created, but its Coding Agent had already been started by the user opening it, "
                     + "so the prompt was not delivered. Send it to that agent instead, or use open_agent_tab."
-            case let .missingArgument(name):
-                "Missing required argument `\(name)`."
-            case let .invalidArgument(name, reason):
-                "Invalid `\(name)`: \(reason)"
             }
         }
     }
@@ -198,7 +203,7 @@ final class WorkspaceActions {
         let context = try context(workstreamID: workstreamID)
         let resolved = try Self.resolvePath(path, inWorktree: context.workingDirectory)
         if let line, line < 1 {
-            throw Failure.invalidArgument(name: "line", reason: "must be 1 or greater.")
+            throw IPC.ToolError.invalidArgument(name: "line", reason: "must be 1 or greater.")
         }
         _ = context.model.addEditor(filePath: resolved, line: line)
         logger.detailed("open_editor: \(resolved)")
@@ -218,10 +223,18 @@ final class WorkspaceActions {
     /// anything. Terminal, browser and editor are **instanced**: there can be many
     /// of each, so "the" tab is meaningless, and two of the three already have a
     /// tool that says which one (`open_agent_tab`, `open_editor`).
+    /// **Keyed by `IPC.Vocabulary.TabKind`, not by `WorkspaceTabKind.id`.**
+    /// Those two strings must be equal — `list_tabs` reports the second and
+    /// `open_tab` accepts the first — and they used to be equal only by having
+    /// been typed the same way in three places: here, and twice more as
+    /// literals in the helper's advertised schema, which compiles none of this
+    /// file's imports. Keying on the shared enum makes the helper's list and
+    /// this table one list; `WorkspaceTabKindTests` pins that each still equals
+    /// the `WorkspaceTabKind.id` it names.
     nonisolated static let openableTabs: [String: WorkspaceTab] = [
-        WorkspaceTabKind.changes.id: .changes,
-        WorkspaceTabKind.execution.id: .execution,
-        WorkspaceTabKind.verification.id: .verification,
+        IPC.Vocabulary.TabKind.changes.rawValue: .changes,
+        IPC.Vocabulary.TabKind.execution.rawValue: .execution,
+        IPC.Vocabulary.TabKind.verification.rawValue: .verification,
     ]
 
     /// Opens one of the singleton tabs, **without taking the selection**.
@@ -242,7 +255,7 @@ final class WorkspaceActions {
     /// vocabulary this tool exists to share.
     func openTab(workstreamID: UUID, kind: String) throws -> (kind: String, wasAlreadyOpen: Bool) {
         guard let tab = Self.openableTabs[kind] else {
-            throw Failure.invalidArgument(
+            throw IPC.ToolError.invalidArgument(
                 name: "kind",
                 reason: "expected one of \(Self.openableTabs.keys.sorted().joined(separator: ", ")), got \(kind)."
             )
@@ -300,7 +313,7 @@ final class WorkspaceActions {
         let surfaceID = surfaceID.flatMap { $0.isEmpty ? nil : $0 }
 
         if kind != nil, surfaceID != nil {
-            throw Failure.invalidArgument(
+            throw IPC.ToolError.invalidArgument(
                 name: "kind",
                 reason: "provide only one of `kind` or `surface_id`, not both."
             )
@@ -311,7 +324,7 @@ final class WorkspaceActions {
         if let surfaceID {
             return try closeTerminal(workstreamID: workstreamID, surfaceIDString: surfaceID)
         }
-        throw Failure.invalidArgument(
+        throw IPC.ToolError.invalidArgument(
             name: "kind",
             reason: "provide `kind` (a singleton pane) or `surface_id` (a terminal tab)."
         )
@@ -319,14 +332,14 @@ final class WorkspaceActions {
 
     private func closeSingleton(workstreamID: UUID, kind: String) throws -> (kind: String?, wasOpen: Bool) {
         if kind == WorkspaceTabKind.execution.id {
-            throw Failure.invalidArgument(
+            throw IPC.ToolError.invalidArgument(
                 name: "kind",
                 reason: "closing it must also stop the running dev stack, which this tool cannot do — "
                     + "use the Execution tab's own Stop control, or ask the user."
             )
         }
         guard let tab = Self.openableTabs[kind] else {
-            throw Failure.invalidArgument(
+            throw IPC.ToolError.invalidArgument(
                 name: "kind",
                 reason: "expected one of \(Self.closeableSingletonKinds.joined(separator: ", ")), got \(kind)."
             )
@@ -349,7 +362,7 @@ final class WorkspaceActions {
     /// path needs the two to say different things.
     private func closeTerminal(workstreamID: UUID, surfaceIDString: String) throws -> (kind: String?, wasOpen: Bool) {
         guard let surfaceUUID = UUID(uuidString: surfaceIDString) else {
-            throw Failure.invalidArgument(name: "surface_id", reason: "not a valid surface id.")
+            throw IPC.ToolError.invalidArgument(name: "surface_id", reason: "not a valid surface id.")
         }
         let context = try context(workstreamID: workstreamID)
         guard let tab = context.model.tabs.first(where: {
@@ -362,7 +375,7 @@ final class WorkspaceActions {
             return (nil, false)
         }
         guard tab.kind.isCloseable else {
-            throw Failure.invalidArgument(
+            throw IPC.ToolError.invalidArgument(
                 name: "surface_id",
                 reason: "that surface is the Agent tab, which is permanent and can't be closed this way."
             )
@@ -579,7 +592,7 @@ final class WorkspaceActions {
         fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
     ) throws -> String {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { throw Failure.missingArgument("path") }
+        guard !trimmed.isEmpty else { throw IPC.ToolError.missingArgument("path") }
 
         let root = URL(fileURLWithPath: worktree).standardizedFileURL
         let candidate = trimmed.hasPrefix("/")
@@ -592,13 +605,13 @@ final class WorkspaceActions {
         guard candidate.pathComponents.count > rootParts.count,
               Array(candidate.pathComponents.prefix(rootParts.count)) == rootParts
         else {
-            throw Failure.invalidArgument(
+            throw IPC.ToolError.invalidArgument(
                 name: "path",
                 reason: "must be inside this workstream's worktree (\(root.path))."
             )
         }
         guard fileExists(candidate.path) else {
-            throw Failure.invalidArgument(name: "path", reason: "no such file: \(candidate.path)")
+            throw IPC.ToolError.invalidArgument(name: "path", reason: "no such file: \(candidate.path)")
         }
         return candidate.pathComponents.dropFirst(rootParts.count).joined(separator: "/")
     }

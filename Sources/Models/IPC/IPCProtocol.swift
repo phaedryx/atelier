@@ -7,9 +7,9 @@ import Foundation
 /// settings that gate it.
 ///
 /// Declared here rather than in a file of its own because `AtelierMCP`
-/// compiles only this file out of `Models/IPC/` (`project.yml:198-200`); a
-/// namespace declared anywhere else in this directory would not exist for
-/// the `atelier-mcp` binary.
+/// compiles only this file and `IPCToolRegistry.swift` out of `Models/IPC/`
+/// (`project.yml`); a namespace declared anywhere else in this directory would
+/// not exist for the `atelier-mcp` binary.
 enum IPC {}
 
 extension IPC {
@@ -56,13 +56,20 @@ extension IPC {
     /// `MCPCommandLogBridge`). That prediction held; this enum is where Atelier
     /// takes the same step, so the groups are named rather than merged.
     ///
-    /// **A case here is not a tool an agent can see.** What is advertised over
-    /// MCP is `toolDefinitions` in `Sources/MCPHelper/main.swift`; a case with no
-    /// entry there is dispatchable but undiscoverable. That is deliberate — it
-    /// lets the shared enum and the exhaustive `IPC.Service.handle` switch land
-    /// ahead of the handlers, so agents implementing a tool each do not collide
-    /// on this file. An unimplemented case must fail loudly (see
-    /// `Service.notImplemented`), never succeed silently.
+    /// **Everything else about a tool lives in `IPC.ToolSpec`** — its surface,
+    /// its reply deadline, its replay policy, the prose an agent reads and the
+    /// arguments it takes. `Tool.spec` is an exhaustive `switch`, so a case
+    /// added here cannot compile without one, and the helper advertises what
+    /// that spec says.
+    ///
+    /// That closes a hole this comment used to describe and excuse. A case was
+    /// once dispatchable but undiscoverable — the advertised list was a
+    /// hand-written table in `Sources/MCPHelper/main.swift` that nothing made
+    /// agree with this enum — and the paragraph justified it as room for a tool
+    /// to land ahead of its handler, citing a `Service.notImplemented` that has
+    /// never existed. `IPCServerTests` has asserted the hidden set is empty for
+    /// some time; now it is empty by construction, because there is no table to
+    /// leave a case out of.
     enum Tool: String, Codable, CaseIterable {
         // Messaging.
         case registerPeer = "register_peer"
@@ -153,147 +160,6 @@ extension IPC {
         /// Marks a claimed task failed, with a required reason. Only its
         /// claimer may call this.
         case failTask = "fail_task"
-
-        /// Which of the four surfaces above this tool belongs to.
-        ///
-        /// Nothing branches on it yet. It exists so the grouping is a value the
-        /// compiler checks rather than a comment that rots, and so that if a
-        /// gate is ever added it has one obvious place to ask "does this need
-        /// one?" — reads never do, and messaging never has.
-        var surface: Surface {
-            switch self {
-            case .registerPeer, .listPeers, .sendMessage, .receiveMessages, .broadcast, .getPeerStatus:
-                .messaging
-            case .listTabs, .readReviewComments, .checkVerification, .listVerificationChecks, .getSessionCheckpoint:
-                .workspaceRead
-            case .openAgentTab, .openEditor, .openTab, .requestAttention, .createWorkstream, .startVerification,
-                 .updateSessionCheckpoint, .closeTab:
-                .workspaceAction
-            case .addTask, .getPendingTasks, .listTasks, .claimTask, .completeTask, .failTask:
-                .projectTasks
-            }
-        }
-
-        /// How long the helper waits for this tool's reply before it stops
-        /// waiting. A liveness backstop, not a latency budget — but the numbers
-        /// have to be honest about the *slowest* thing the app does behind each
-        /// tool, because a deadline that fires while a handler is still working
-        /// is indistinguishable to the helper from an app that has died.
-        ///
-        /// One number for every tool is what made that confusion reachable: the
-        /// helper set a single 15-second socket timeout over a comment claiming
-        /// "every handler here is sub-millisecond", which is true of the
-        /// messaging six and false of `create_workstream`, whose answer waits on
-        /// `git worktree add`.
-        ///
-        /// The cost of a long one is paid by the whole session, not just the
-        /// call: the helper is a single-threaded `readLine` loop, so it stops
-        /// reading stdin for the length of a round trip. A wedged app therefore
-        /// blocks *all* MCP traffic for this long. That is why only the tool
-        /// that genuinely needs minutes gets them, and why the value is sized to
-        /// the realistic worst case rather than to every theoretical retry the
-        /// app might stack.
-        var replyDeadline: TimeInterval {
-            switch self {
-            // Actor hops and store reads. The original 15 seconds, which was
-            // always right for these.
-            case .registerPeer, .listPeers, .sendMessage, .receiveMessages, .broadcast, .getPeerStatus,
-                 .listTabs, .readReviewComments, .checkVerification, .listVerificationChecks,
-                 .getSessionCheckpoint, .updateSessionCheckpoint:
-                15
-            // Main-actor work with a process-compose probe behind the worst of
-            // them (`start_verification` resolves a binary and parses a config
-            // before it answers with a run id).
-            case .openAgentTab, .openEditor, .openTab, .requestAttention, .startVerification, .closeTab:
-                60
-            // `git worktree add` under `ProcessRunner.Timeout.userCommand` (300s)
-            // after a fetch under `.network` (120s). Named as literals because
-            // `ProcessRunner` is not compiled into the helper — `AtelierMCP`
-            // takes this file and nothing else out of `Models/IPC/`
-            // (`project.yml:198-200`).
-            case .createWorkstream:
-                480
-            // In-memory actor hops over IPC.TaskStore. No shell, no process, no
-            // network — the same tier as the messaging six and the existing
-            // workspace reads.
-            case .addTask, .getPendingTasks, .listTasks, .claimTask, .completeTask, .failTask:
-                15
-            }
-        }
-
-        /// Whether the helper may re-send this tool after losing the connection
-        /// mid-call.
-        ///
-        /// **A replay is a second execution, and only a tool that changes
-        /// nothing by running twice can afford one.** The helper reconnects and
-        /// replays so a restarted Atelier does not fail every later call; that
-        /// recovery is worth keeping for a read, and is a silent duplicate for
-        /// an action. `create_workstream` replayed produces two worktrees and
-        /// two branches under a generated name, or tells the caller its
-        /// creation failed under an explicit one — the same lie either way,
-        /// since the first call had already succeeded.
-        ///
-        /// The rule is idempotence rather than `surface`, because the two do not
-        /// line up: `receive_messages` is messaging and *drains an inbox*, so a
-        /// replay that lands after the app processed the first copy loses those
-        /// messages for good, while `open_editor` is a workspace action and puts
-        /// the same file on screen however many times it runs.
-        ///
-        /// `register_peer` has to be here: the reconnect path replays it by hand
-        /// to recover the session's identity, and the tool is defined as a
-        /// rename rather than a second registration.
-        ///
-        /// **`update_session_checkpoint` is safe for the same reason as
-        /// `open_editor`, not by analogy to its own `.workspaceAction`
-        /// surface.** It overwrites a single blob with no version history, so
-        /// writing the same content twice leaves the same final state either
-        /// way — the replay changes nothing a first successful call had not
-        /// already changed.
-        ///
-        /// **`send_message` and `broadcast` are the two judgement calls**, and
-        /// the choice is not an analogy to the rest. Replaying one risks a
-        /// second copy in a peer's inbox, which that agent then acts on twice;
-        /// refusing costs the sender an error for a message that may in fact
-        /// have landed. What breaks the tie is that the case replay exists for —
-        /// a restarted Atelier — cannot help these two anyway: the new app's
-        /// store is empty, so the recipient's peer id is already meaningless and
-        /// the replay would be refused. That leaves only a mid-flight close
-        /// against a *live* app, where a duplicate is the likelier outcome than
-        /// a rescue. And the refusal is reported, so nothing is lost silently:
-        /// the sender is told, and can re-send deliberately. `broadcast` settles
-        /// it on its own — its audience is resolved app-side, so one replay is a
-        /// duplicate to every peer at once.
-        ///
-        /// Refusing a replay does not abandon the session. The helper still
-        /// reconnects and re-registers; it just reports the interruption instead
-        /// of guessing what the app did with the first copy.
-        var isSafeToReplay: Bool {
-            switch self {
-            case .registerPeer, .listPeers, .getPeerStatus,
-                 .listTabs, .readReviewComments, .checkVerification, .listVerificationChecks,
-                 .openEditor, .openTab, .requestAttention,
-                 .getSessionCheckpoint, .updateSessionCheckpoint, .closeTab:
-                // closeTab is `openTab`'s own reasoning in reverse: closing a
-                // tab that is already closed is a no-op reported as such, so a
-                // replay lands on the same answer rather than a second effect.
-                true
-            case .sendMessage, .receiveMessages, .broadcast,
-                 .openAgentTab, .createWorkstream, .startVerification:
-                false
-            // Same-surface replay of any of these five is a defined no-op;
-            // different-surface replay is a defined refusal. Neither is a
-            // duplicate side effect, unlike the tools in the `false` branches
-            // above.
-            case .getPendingTasks, .listTasks, .claimTask, .completeTask, .failTask:
-                true
-            // A create. The helper mints a fresh request id on every replay
-            // (no id-based dedup available), so a duplicate-path create from a
-            // replay is a real second execution — the same bucket as
-            // `create_workstream`.
-            case .addTask:
-                false
-            }
-        }
     }
 
     /// The four groups of `Tool` — see that type's doc comment.
@@ -481,8 +347,8 @@ extension IPC {
     ///
     /// Declared here rather than beside the seam for the same reason
     /// `VerificationRunInfo` is: `renderText` in `Sources/MCPHelper/main.swift`
-    /// renders it, and `AtelierMCP` compiles exactly one file out of
-    /// `Models/IPC/` — this one (`project.yml:198-200`).
+    /// renders it, and `AtelierMCP` compiles only this file and
+    /// `IPCToolRegistry.swift` out of `Models/IPC/` (`project.yml`).
     struct VerificationChecksInfo: Codable, Equatable {
         /// Where the checks were read from, or nil when there is no file.
         let configPath: String?
@@ -527,8 +393,8 @@ extension IPC {
     /// one check.
     ///
     /// Declared here rather than beside the seam because `renderText` in
-    /// `Sources/MCPHelper/main.swift` renders it, and `AtelierMCP` compiles
-    /// exactly one file out of `Models/IPC/` — this one (`project.yml:198-200`).
+    /// `Sources/MCPHelper/main.swift` renders it, and `AtelierMCP` compiles only
+    /// this file and `IPCToolRegistry.swift` out of `Models/IPC/` (`project.yml`).
     struct VerificationRunInfo: Codable {
         let runID: String
         /// The workstream the run belongs to. Carried so a read can be scoped to
@@ -591,7 +457,8 @@ extension IPC {
     /// Minutes appear because a real suite runs for tens of them and `1503.2s`
     /// is arithmetic homework. Declared here rather than beside the rest of the
     /// verification formatting because `renderText` in the helper needs it, and
-    /// `AtelierMCP` compiles this file alone out of `Models/IPC/`.
+    /// `AtelierMCP` compiles only this file and `IPCToolRegistry.swift` out of
+    /// `Models/IPC/`.
     static func durationText(_ seconds: Double) -> String {
         guard seconds >= 60 else { return String(format: "%.1fs", seconds) }
         let minutes = Int(seconds) / 60
@@ -651,13 +518,18 @@ extension IPC {
         let id: String
         let payload: Payload?
         let error: String?
+        /// Why it failed, for the refusals the helper has to *act* on rather
+        /// than relay — see `IPC.ResponseCode`. Nil for everything else, which
+        /// is almost everything: an error an agent reads needs a sentence, not
+        /// a code.
+        let code: ResponseCode?
 
         static func success(id: String, _ payload: Payload) -> Response {
-            Response(id: id, payload: payload, error: nil)
+            Response(id: id, payload: payload, error: nil, code: nil)
         }
 
-        static func failure(id: String, _ message: String) -> Response {
-            Response(id: id, payload: nil, error: message)
+        static func failure(id: String, _ message: String, code: ResponseCode? = nil) -> Response {
+            Response(id: id, payload: nil, error: message, code: code)
         }
     }
 

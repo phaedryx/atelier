@@ -472,34 +472,4 @@ final class WorkstreamLauncherTests: XCTestCase {
             XCTAssertEqual(error as? Workstream.Launcher.Failure, .notInAProject)
         }
     }
-
-    // MARK: - Reading an agent-supplied bool
-
-    func testAbsentBoolIsFalse() {
-        XCTAssertEqual(try? Workstream.Launcher.parseBool(nil, name: "bypass_permissions").get(), false)
-        XCTAssertEqual(try? Workstream.Launcher.parseBool("", name: "bypass_permissions").get(), false)
-        XCTAssertEqual(try? Workstream.Launcher.parseBool("  ", name: "bypass_permissions").get(), false)
-    }
-
-    func testBoolParsesTrueAndFalse() {
-        XCTAssertEqual(try? Workstream.Launcher.parseBool("true", name: "b").get(), true)
-        XCTAssertEqual(try? Workstream.Launcher.parseBool(" true ", name: "b").get(), true)
-        XCTAssertEqual(try? Workstream.Launcher.parseBool("false", name: "b").get(), false)
-    }
-
-    /// The whole point: a value that quietly reads false because the agent sent
-    /// "True" is a silent no-op reported as a success.
-    func testUnrecognizedBoolIsAnErrorRatherThanFalse() {
-        for raw in ["True", "TRUE", "yes", "1", "on", "y"] {
-            guard case let .failure(failure) = Workstream.Launcher.parseBool(raw, name: "bypass_permissions") else {
-                XCTFail("expected \(raw) to be rejected rather than read as false")
-                continue
-            }
-            guard case let .invalidArgument(name, reason) = failure else {
-                return XCTFail("expected an invalidArgument failure")
-            }
-            XCTAssertEqual(name, "bypass_permissions")
-            XCTAssertTrue(reason.contains(raw), "the refusal must echo what arrived: \(reason)")
-        }
-    }
 }

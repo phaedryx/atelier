@@ -1626,13 +1626,67 @@ approval inbox here without a reason that survives that comparison; `PermissionA
 particular is the wrong type to reuse — its expiry resolves to "no decision, let Claude Code ask
 in the terminal", a fallback an MCP tool call does not have.
 
-**A `Tool` case is not a tool an agent can see.** `toolDefinitions` in
-`Sources/MCPHelper/main.swift` is what is advertised; a case with no entry there is dispatchable
-but undiscoverable, and `IPC.Service.notImplemented` fails loudly for it. That is what lets the
-shared enum and the exhaustive dispatch switch land ahead of the handlers.
-`IPCServerTests.test_helperBinary_answersToolsCallOverStdio` pins both directions — every
-advertised name is a real `Tool`, and the unadvertised set is exactly the expected one — so a
-tool cannot be advertised before its handler exists or stay hidden after.
+**A tool is described once, in `IPC.ToolSpec` (`Sources/Models/IPC/IPCToolRegistry.swift`).**
+That file is the second one `AtelierMCP` compiles out of `Models/IPC/` — `project.yml` lists
+`IPCProtocol.swift` and `IPCToolRegistry.swift`, and nothing else from the app — so the app's
+dispatch and the helper's advertised schema read one description rather than two lists that
+agreed by convention. A spec carries the tool's `surface`, `replyDeadline`, `isSafeToReplay`,
+the prose an agent reads, and its `[ArgumentSpec]`, from which `inputSchema` is **generated**.
+
+`Tool.spec` is an **exhaustive `switch`**, deliberately, and not a lookup in the ordered
+`ToolSpec.advertised` array. A dictionary keyed by `Tool` forces one of two bad endings for a
+case somebody forgets — a force-unwrap that crashes, or a default that silently hands a tool the
+wrong deadline, and a default of 15 would still satisfy every deadline assertion in
+`IPCProtocolTests`. The `switch` makes a case without a spec a build failure. `advertised`
+decides **order only**; it is not enum order and never has been, which is why it is written out
+rather than derived from `allCases`.
+
+Adding a tool is therefore **three edit sites**: the `Tool` case, its `spec`, and the handler
+plus its `Service.handle` arm. All three are compiler-enforced. It used to be eight across four
+files, three of them silent.
+
+This retires a paragraph that said the opposite — that a case with no entry in the helper's
+`toolDefinitions` table was "dispatchable but undiscoverable", justified as room for a tool to
+land ahead of its handler, and citing an `IPC.Service.notImplemented` that has never existed.
+That hole is now closed by construction: there is no table to leave a case out of.
+`IPCServerTests.test_helperBinary_answersToolsCallOverStdio` still pins the advertised list end
+to end (its `undefined == []` assertion is now tautological, and kept as the wire-level check
+that the helper really advertises what the registry says).
+
+**Arguments are typed at the boundary, by `IPC.ToolArguments`.** Handlers no longer read
+`request.arguments["line"]` by literal key and parse it inline; they ask for `required`,
+`nonEmpty`, `integer`, `boolean`, `list` or `uuid` and get an `IPC.ToolError` naming the
+argument. That collapsed three ad-hoc list/bool parsers applied unevenly —
+`Workstream.Launcher.parseBool` (deleted, along with the now-unreachable
+`Launcher.Failure.invalidArgument`), `VerificationSummary.checks(from:)` and
+`TaskSummary.tags(from:)` (both now delegating to `ToolArguments.parseList`).
+
+**`IPC.ToolError` unifies the *type* that crosses into a `Response`, not every wording.**
+`missingArgument`/`invalidArgument`/`notInWorkstream` moved off `WorkspaceActions.Failure`,
+which keeps only what the live app can know (`unknownWorkstream`, `appNotReady`,
+`surfaceAlreadyRunning`); `IPC.Error`, `VerificationFailure`, `TaskQueueFailure` and
+`CheckpointStore.Error` stay as they are, because each carries meaning the boundary has no
+business knowing. `ToolError.refused(_:)` is the escape hatch for a sentence an agent is already
+reading — `send_message`'s "needs a `to` peer id" and `get_peer_status`'s "needs a `peer_id`"
+travel through it unchanged rather than being renamed into `missingArgument`'s sentence.
+`emptyArgument(tool:name:)` reproduces the three "x needs non-empty `y`." refusals exactly.
+**No agent-facing string changed in this refactor.**
+
+**Four things both processes have to agree on now live in `IPC.Vocabulary`**, because the helper
+compiles none of the app's model files and each was previously a literal on both sides: the tab
+kinds (`WorkspaceActions.openableTabs` is keyed by them, and `WorkspaceTabKindTests` pins each
+still equals the matching `WorkspaceTabKind.id`), the two reserved senders
+(`VerificationSummary.sender`, `TaskSummary.sender`) and the attention cooldown
+(`Workstream.AttentionNotifier.cooldown` reads it; the tool's own description and the server
+instructions interpolate it).
+
+**And the helper no longer recognises a refusal by its sentence.** `IPC.Response` carries an
+optional `code: ResponseCode?`, and the one case so far —
+`peerOwnedByAnotherSession` — replaces `error.contains("belongs to another session")`, a
+substring match across a process boundary against a string assembled in `IPC.Server`, where
+rewording the message for a human would have silently disabled the re-registration it gates.
+The field is optional on the wire, so a response carrying none decodes exactly as before. Add a
+code only for a refusal the helper has to *act* on; an error an agent reads needs a sentence.
 
 **`PeerInfo.lastUserPromptSecondsAgo` answers "has a human typed into this peer directly", and
 Atelier deliberately has no notion of "since I dispatched it" to compare against.** It is

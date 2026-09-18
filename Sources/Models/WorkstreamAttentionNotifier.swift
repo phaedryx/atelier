@@ -40,7 +40,11 @@ extension Workstream {
         /// a loop must not be able to paper the user's screen; further requests
         /// inside the window are refused with a message saying so, rather than
         /// dropped silently.
-        nonisolated static let cooldown: TimeInterval = 30
+        /// Quoted by `request_attention`'s own description and by the helper's
+        /// server instructions, so the number lives in `IPC.Vocabulary` where
+        /// both can read it rather than being restated in a target that
+        /// compiles neither this file nor any other of the app's.
+        nonisolated static let cooldown = TimeInterval(IPC.Vocabulary.attentionCooldownSeconds)
 
         private let center: any NotificationRequestAdding
         private var lastRequest: [UUID: Date] = [:]

@@ -750,4 +750,155 @@ final class IPCServiceTests: XCTestCase {
         XCTAssertNil(response.payload)
         XCTAssertTrue(response.error?.contains("inside an Atelier workstream") == true, String(describing: response.error))
     }
+
+    // MARK: - Workspace tools through `Service.handle`
+
+    // These five handlers had no test that went through `Service.handle` at
+    // all: their argument reads, their `notInWorkstream` guard and the shape of
+    // what they answer were only ever exercised by hand. The refusals are what
+    // is assertable without a live app — `WorkspaceActions` needs a real
+    // `ProjectList` and surface cache — and they are also where the argument
+    // handling this refactor moved actually lives.
+
+    /// An agent Atelier did not launch has no `ATELIER_WORKSTREAM_ID`, and there
+    /// is no sensible default: acting on "some workstream" would be worse than
+    /// refusing. Every workspace tool answers this the same way, through one
+    /// `ToolError.notInWorkstream`.
+    private var stranger: IPC.ClientIdentity {
+        IPC.ClientIdentity(
+            workstreamID: nil, workstreamName: nil, projectDirectory: projectA, surfaceID: nil, peerID: nil
+        )
+    }
+
+    func test_everyWorkspaceTool_outsideAWorkstream_refusesTheSameWay() async {
+        let calls: [(IPC.Tool, [String: String])] = [
+            (.listTabs, [:]),
+            (.readReviewComments, [:]),
+            (.openEditor, ["path": "README.md"]),
+            (.openAgentTab, [:]),
+            (.requestAttention, ["reason": "come and look"]),
+        ]
+        for (tool, arguments) in calls {
+            let response = await call(tool, arguments, as: stranger)
+            XCTAssertNil(response.payload, "\(tool.rawValue) answered a caller with no workstream")
+            XCTAssertEqual(
+                response.error,
+                IPC.ToolError.notInWorkstream.errorDescription,
+                "\(tool.rawValue) refuses in its own words rather than the one boundary error"
+            )
+        }
+    }
+
+    // MARK: - list_tabs
+
+    /// In a workstream, but with no live app behind it: the refusal must be the
+    /// app's state rather than the caller's, so an agent is not told to go and
+    /// find a workstream it is already in.
+    func test_listTabs_insideAWorkstream_withNoLiveApp_saysTheAppIsNotReady() async {
+        let response = await call(.listTabs, [:], as: client(project: projectA))
+
+        XCTAssertNil(response.payload)
+        XCTAssertNotEqual(response.error, IPC.ToolError.notInWorkstream.errorDescription)
+        XCTAssertTrue(response.error?.contains("not ready") == true, String(describing: response.error))
+    }
+
+    // MARK: - read_review_comments
+
+    func test_readReviewComments_insideAWorkstream_withNoLiveApp_saysTheAppIsNotReady() async {
+        let response = await call(.readReviewComments, [:], as: client(project: projectA))
+
+        XCTAssertNil(response.payload)
+        XCTAssertTrue(response.error?.contains("not ready") == true, String(describing: response.error))
+    }
+
+    // MARK: - open_editor
+
+    func test_openEditor_withoutAPath_saysWhichArgumentIsMissing() async {
+        let response = await call(.openEditor, [:], as: client(project: projectA))
+
+        XCTAssertNil(response.payload)
+        XCTAssertEqual(response.error, IPC.ToolError.missingArgument("path").errorDescription)
+    }
+
+    func test_openEditor_treatsAnEmptyPathAsMissing() async {
+        let response = await call(.openEditor, ["path": ""], as: client(project: projectA))
+
+        XCTAssertEqual(response.error, IPC.ToolError.missingArgument("path").errorDescription)
+    }
+
+    /// `line` is optional, but a value that is present and unparseable is a
+    /// mistake worth reporting: a typo that silently scrolls to the top of the
+    /// file is worse than a refusal naming the argument.
+    func test_openEditor_withAnUnparseableLine_namesTheArgument() async {
+        let response = await call(.openEditor, ["path": "README.md", "line": "twelve"], as: client(project: projectA))
+
+        XCTAssertNil(response.payload)
+        XCTAssertEqual(
+            response.error,
+            IPC.ToolError.invalidArgument(name: "line", reason: "expected a whole number, got twelve.").errorDescription
+        )
+    }
+
+    /// The argument checks run before the workspace is resolved, so a caller
+    /// with a bad `line` is told about `line` rather than about the app's
+    /// readiness — the refusal an agent can act on, not the one it cannot.
+    func test_openEditor_checksItsArgumentsBeforeTheWorkspace() async {
+        let response = await call(.openEditor, ["path": "README.md"], as: client(project: projectA))
+
+        XCTAssertTrue(response.error?.contains("not ready") == true, String(describing: response.error))
+    }
+
+    // MARK: - open_agent_tab
+
+    /// The refusal path is the assertable one: spawning a tab needs a live
+    /// terminal. What matters is that it refuses for the app's reason and never
+    /// reports a surface it did not create — a tab claimed but not made is the
+    /// worst answer this tool can give.
+    func test_openAgentTab_withNoLiveApp_refusesRatherThanClaimingATab() async {
+        let response = await call(.openAgentTab, ["prompt": "review the diff"], as: client(project: projectA))
+
+        XCTAssertNil(response.payload)
+        let error = response.error ?? ""
+        XCTAssertFalse(error.contains("surface"), "refused, so it must not name a surface: \(error)")
+        XCTAssertFalse(error.isEmpty)
+    }
+
+    /// The title is agent-chosen and shown in the user's tab strip, so it goes
+    /// through the same sanitizer a peer name does. Nothing here should reach a
+    /// tab at all, but the read must not be what fails.
+    func test_openAgentTab_withAControlCharacterTitle_stillRefusesForTheAppsReason() async {
+        let response = await call(
+            .openAgentTab, ["title": "review\u{3}\n", "prompt": "look"], as: client(project: projectA)
+        )
+
+        XCTAssertNil(response.payload)
+        XCTAssertNotEqual(response.error, IPC.ToolError.notInWorkstream.errorDescription)
+    }
+
+    // MARK: - request_attention
+
+    func test_requestAttention_withoutAReason_saysWhichArgumentIsMissing() async {
+        let response = await call(.requestAttention, [:], as: client(project: projectA))
+
+        XCTAssertNil(response.payload)
+        XCTAssertEqual(response.error, IPC.ToolError.missingArgument("reason").errorDescription)
+    }
+
+    /// A reason of nothing but control characters is as absent as no reason at
+    /// all: the string is sanitized before the emptiness check, because what is
+    /// left after sanitizing is what would be rendered into the notification.
+    func test_requestAttention_withAReasonOfNothingButControlCharacters_isMissing() async {
+        let response = await call(.requestAttention, ["reason": "\u{3}\u{1B}"], as: client(project: projectA))
+
+        XCTAssertEqual(response.error, IPC.ToolError.missingArgument("reason").errorDescription)
+    }
+
+    /// The notifier is gated on a cooldown and needs the main actor, so the
+    /// outcome here is not assertable — but the argument read is, and it must
+    /// not be what refuses.
+    func test_requestAttention_withAReason_getsPastTheArgumentCheck() async {
+        let response = await call(.requestAttention, ["reason": "the branch is ready to review"], as: client(project: projectA))
+
+        XCTAssertNotEqual(response.error, IPC.ToolError.missingArgument("reason").errorDescription)
+    }
 }
