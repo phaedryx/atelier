@@ -446,24 +446,55 @@ struct ExecutionTabView: View {
     /// Deliberately not a new pane. Every state that lands here was previously
     /// silent, and the review that found them was specific that they belong in
     /// the surface that already renders for "nothing to run".
+    /// Why there is nothing to start, as the platform's own empty state.
+    ///
+    /// **The twin of `VerificationTabView.unavailableView`, and deliberately
+    /// built the same way.** Both panes answer the same question — a config file
+    /// in the project directory is missing, unreadable, or declares nothing — so
+    /// they use one glyph, one type scale and one layout. Change one and change
+    /// the other; a reader who sees them disagree will read the difference as
+    /// meaning something.
+    ///
+    /// **`reason` reaches the screen verbatim, and the fallback is not a
+    /// paraphrase of it.** `Text(_:)` over a `String` binds the `StringProtocol`
+    /// overload rather than the `LocalizedStringKey` one, so
+    /// `ProcessCompose.RunCommandPlan.unavailableReason`'s wording is *shown*
+    /// rather than looked up a second time under itself as a key. Nothing here
+    /// reformats it or appends to it — and note that those three strings are
+    /// pinned from the other side: `RunCommandPlanTests` asserts one of them
+    /// `contains("no execute processes")`, so this view may be restyled freely
+    /// but that copy may not be reworded here or there.
+    ///
+    /// **A nil `reason` is the ordinary case, not a missing explanation.**
+    /// `unavailableReason` returns nil when `devCommand` is nil — no override
+    /// typed and no config located — precisely because this default already says
+    /// the thing, and it names the same file. The `??` is the whole of that
+    /// contract.
+    ///
+    /// **The `label:`/`description:` builder form, to keep the app's type
+    /// scale.** `ContentUnavailableView`'s convenience initializer sizes itself
+    /// for a full window — a ~28pt title — and this is a tab pane in an app
+    /// whose body text is 11–13pt. The builder form keeps the component's
+    /// layout, centring and accessibility while holding the 28/13/11 scale this
+    /// pane already had. The explicit `.frame(maxWidth: 380)` that used to cap
+    /// the description is gone because the component caps it itself, at close to
+    /// the same width and without the pane's own width having to be guessed.
     private func scriptInstructions(reason: String?) -> some View {
-        VStack(spacing: 12) {
-            Image(systemName: "doc.text")
-                .font(.system(size: 28))
-                .foregroundStyle(.tertiary)
-            Text("Nothing to start")
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
+        ContentUnavailableView {
+            Label {
+                Text("Nothing to start")
+                    .font(.system(size: 13))
+            } icon: {
+                Image(systemName: "doc.text")
+                    .font(.system(size: 28))
+            }
+        } description: {
             Text(reason ?? NSLocalizedString(
                 "Add an execution.process-compose.yaml to this project's directory, or set a command with Customize above.",
                 comment: ""
             ))
             .font(.system(size: 11))
-            .foregroundStyle(.tertiary)
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: 380)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     /// Whether Rerun may be pressed.
