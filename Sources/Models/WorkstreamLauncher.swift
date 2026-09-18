@@ -73,7 +73,6 @@ extension Workstream {
             case bridgeUnavailable
             case notInAProject
             case projectNotFound(String)
-            case invalidArgument(name: String, reason: String)
             case invalidName(String)
             case nameInUse(String)
             case worktreeCreationFailed(String)
@@ -86,8 +85,6 @@ extension Workstream {
                     "This tool only works from an agent running inside an Atelier workstream."
                 case let .projectNotFound(directory):
                     "No open project matches \(directory). create_workstream can only create a workstream in the project the calling agent belongs to."
-                case let .invalidArgument(name, reason):
-                    "Invalid `\(name)`: \(reason)"
                 case let .invalidName(name):
                     "\(name) is not a usable git branch name. Avoid spaces and ~^:?*[\\, a leading -, a trailing . or /, and .. or //."
                 case let .nameInUse(name):
@@ -180,29 +177,6 @@ extension Workstream {
                 directory: project.directory,
                 existingWorkstreamNames: Set(project.workstreams.map(\.name))
             )
-        }
-
-        /// Reads an agent-supplied boolean.
-        ///
-        /// `IPC.Request.arguments` is `[String: String]`, so a bool arrives as
-        /// text. Absent means false; anything that is not exactly `true` or
-        /// `false` is an error rather than a default. A value that quietly reads
-        /// false because the agent sent `True` is a silent no-op reported as a
-        /// success, which is the failure mode this whole surface avoids.
-        nonisolated static func parseBool(
-            _ raw: String?,
-            name: String
-        ) -> Result<Bool, Failure> {
-            guard let raw, !raw.trimmingCharacters(in: .whitespaces).isEmpty else { return .success(false) }
-            switch raw.trimmingCharacters(in: .whitespaces) {
-            case "true": return .success(true)
-            case "false": return .success(false)
-            default:
-                return .failure(.invalidArgument(
-                    name: name,
-                    reason: "expected \"true\" or \"false\", received \"\(raw)\"."
-                ))
-            }
         }
 
         /// The name a launch will use: the caller's, once it is known to be

@@ -201,7 +201,12 @@ extension IPC {
 
             guard claim(request.client.peerID, for: connection) else {
                 logger.warning("Rejected a request claiming a peer owned by a live connection")
-                send(.failure(id: request.id, "That peer id belongs to another session."), on: connection)
+                send(
+                    // The sentence is for a human reading a log; the code is what
+                    // the helper acts on. See `IPC.ResponseCode`.
+                    .failure(id: request.id, "That peer id belongs to another session.", code: .peerOwnedByAnotherSession),
+                    on: connection
+                )
                 return true
             }
 

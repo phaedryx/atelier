@@ -49,7 +49,7 @@ extension IPC {
         ///
         /// Not a peer id, and deliberately not one: there is nothing inside
         /// Atelier for an agent to `send_message` back to.
-        static let sender = "atelier/verification"
+        static let sender = IPC.Vocabulary.verificationSender
 
         // MARK: - Arguments
 
@@ -62,16 +62,7 @@ extension IPC {
         /// plural argument invites. All three are the same intent and none of
         /// them is worth a refusal.
         static func checks(from raw: String?) -> [String] {
-            guard let raw else { return [] }
-            let separators = CharacterSet(charactersIn: ",[]\"'").union(.whitespacesAndNewlines)
-            var seen: Set<String> = []
-            var result: [String] = []
-            for token in raw.components(separatedBy: separators) where !token.isEmpty {
-                if seen.insert(token).inserted {
-                    result.append(token)
-                }
-            }
-            return result
+            ToolArguments.parseList(raw)
         }
 
         // MARK: - The completion notice

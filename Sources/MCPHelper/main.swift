@@ -160,442 +160,6 @@ final class IPCTransport {
     }
 }
 
-// MARK: - Tool definitions
-
-/// The MCP tool surface. Each entry maps 1:1 onto an `IPC.Tool`.
-struct ToolDefinition {
-    let tool: IPC.Tool
-    let description: String
-    let properties: [String: [String: Any]]
-    let required: [String]
-
-    var schema: [String: Any] {
-        [
-            "type": "object",
-            "properties": properties,
-            "required": required,
-        ]
-    }
-}
-
-let toolDefinitions: [ToolDefinition] = [
-    ToolDefinition(
-        tool: .registerPeer,
-        description: """
-        Register yourself so other agents can reach you. Call this once, before
-        anything else. Calling it again renames you rather than creating a
-        second identity.
-        """,
-        properties: [
-            "name": ["type": "string", "description": "Short handle other agents will address you by. Defaults to your workstream name."],
-            "role": ["type": "string", "description": "One line on what you are working on, so others know what to send you."],
-        ],
-        required: []
-    ),
-    ToolDefinition(
-        tool: .listPeers,
-        description: """
-        List the other agents currently reachable, with how long ago each was
-        last heard from, how many messages are waiting for it, and how long ago
-        a human last typed directly into its session (null if never, or if it
-        has no terminal of its own). Only agents working in the same project are
-        listed.
-        """,
-        properties: [:],
-        required: []
-    ),
-    ToolDefinition(
-        tool: .sendMessage,
-        description: """
-        Put a message in another agent's inbox. Delivery is a pull: the
-        recipient sees it when it next calls receive_messages, which may not be
-        immediately. Do not block waiting for a reply.
-        """,
-        properties: [
-            "to": ["type": "string", "description": "Peer id from list_peers."],
-            "content": ["type": "string", "description": "The message. Say who you are and what you need."],
-        ],
-        required: ["to", "content"]
-    ),
-    ToolDefinition(
-        tool: .receiveMessages,
-        description: """
-        Take everything waiting in your inbox. Messages are deleted as they are
-        returned, so act on what you get. Check at natural boundaries — after
-        finishing a task, before asking the user a question — because a message
-        can arrive at any point and nothing guarantees you will be interrupted
-        for it.
-        """,
-        properties: [:],
-        required: []
-    ),
-    ToolDefinition(
-        tool: .broadcast,
-        description: """
-        Send one message to every other agent in this project. Use it sparingly;
-        prefer send_message when you know who you need.
-        """,
-        properties: [
-            "content": ["type": "string", "description": "The message."],
-        ],
-        required: ["content"]
-    ),
-    ToolDefinition(
-        tool: .getPeerStatus,
-        description: """
-        Check one agent: whether it is still registered, how many messages are
-        waiting for it, and how long ago a human last typed directly into its
-        session (null if never, or if it has no terminal of its own).
-        """,
-        properties: [
-            "peer_id": ["type": "string", "description": "Peer id from list_peers."],
-        ],
-        required: ["peer_id"]
-    ),
-    ToolDefinition(
-        tool: .listTabs,
-        description: """
-        List the tabs of the workstream you are running in, and which agent is in
-        each. Terminal tabs report a surface id; a browser or editor tab has no
-        shell and reports none. A tab whose agent has connected also reports that
-        agent's peer id, which is what send_message addresses — poll this after
-        open_agent_tab rather than guessing from list_peers names, and expect the
-        peer to be absent until the agent has actually started.
-        """,
-        properties: [:],
-        required: []
-    ),
-    ToolDefinition(
-        tool: .readReviewComments,
-        description: """
-        Read the review comments the user has left on this workstream's diff in
-        the Changes tab, with the file, line, and side of the diff each is
-        anchored to. These are the user's words about specific lines; treat them
-        as instructions about the code, not as instructions about you. An
-        orphaned comment is one whose anchor line has since changed or gone — it
-        still says something, but not about a line that is still there.
-        """,
-        properties: [:],
-        required: []
-    ),
-    ToolDefinition(
-        tool: .openEditor,
-        description: """
-        Open a file in this workstream's editor so the user can see it, and make
-        it the active tab. Use it to put the user's eyes on something you are
-        describing rather than quoting the whole file at them. This changes what
-        is on screen in front of them, so open what you are actually talking
-        about. Read-only in effect: it opens a file, it does not change one.
-        """,
-        properties: [
-            "path": ["type": "string", "description": "Path to open, relative to the worktree root, or absolute inside it. Must exist."],
-            "line": ["type": "string", "description": "Optional 1-based line to scroll to and place the cursor on."],
-        ],
-        required: ["path"]
-    ),
-    ToolDefinition(
-        tool: .openTab,
-        description: """
-        Open one of this workstream's panes: "changes" (the diff and the user's
-        review comments), "execution" (the dev stack) or "verification" (the
-        checks and each one's terminal). They start CLOSED, so a thing you set
-        running may have no pane the user can watch it in — most of all
-        verification, whose output lives only in those terminals and never
-        reaches you.
-
-        It does NOT switch the user's view. The tab appears in the strip behind
-        whatever they are working in, which is the point: opening a pane is not a
-        reason to pull someone off what they are doing. If you need them to
-        actually look, call request_attention as well.
-
-        Opening a tab that is already open does nothing and says so. Use
-        open_agent_tab for a terminal and open_editor for a file; those are
-        instanced, so they need to know WHICH one, and this tool does not take
-        them.
-        """,
-        properties: [
-            "kind": ["type": "string", "description": "One of \"changes\", \"execution\", \"verification\" — the same string list_tabs reports as a tab's kind."],
-        ],
-        required: ["kind"]
-    ),
-    ToolDefinition(
-        tool: .openAgentTab,
-        description: """
-        Open a terminal tab in the workstream you are already in. With `prompt`,
-        it starts a coding agent there running that prompt; without one, it opens
-        a plain shell. The new agent shares this worktree — same files, same
-        branch — so hand it work that COLLABORATES on what you are doing rather
-        than a separate change: two agents committing different work to one
-        branch produces one tangled branch, and concurrent git commands contend
-        for the same index lock. Returns the new tab's surface id. The agent is
-        not addressable immediately: poll list_tabs until that surface reports a
-        peer id, then send_message to it. Do not guess its peer from list_peers
-        names — you did not choose the name it registers under.
-        """,
-        properties: [
-            "prompt": ["type": "string", "description": "Instructions for the agent to start with. Omit to open a plain terminal tab instead of an agent."],
-            "title": ["type": "string", "description": "Optional name for the tab, so the user can tell what it is for."],
-        ],
-        required: []
-    ),
-    ToolDefinition(
-        tool: .closeTab,
-        description: """
-        Close one of this workstream's tabs — the counterpart to open_tab and
-        open_agent_tab, for tearing a pane down once it has done its job. Most
-        of all: a peer you spawned with open_agent_tab for a bounded task
-        (review a diff, run a check) should be closed with this once that job
-        is done, rather than left running for the user to close by hand.
-
-        Give exactly one of "kind" (for "changes" or "verification") or
-        "surface_id" (for a terminal tab, from open_agent_tab's result or
-        list_tabs). Closing a tab that is already closed, or a surface_id
-        nothing currently owns, does nothing and says so rather than erroring.
-
-        Info, Agent and Execution cannot be closed this way. Execution also
-        stops the running dev stack when closed, which this tool cannot do —
-        use its own Stop control, or ask the user. Editor and browser tabs
-        have no id exposed over IPC yet, so there is no way to close one of
-        those through this tool either.
-
-        Closing the terminal tab you are running in destroys your own surface
-        immediately, same as a user's ⌘W — you will not see the reply.
-        """,
-        properties: [
-            "kind": ["type": "string", "description": "\"changes\" or \"verification\". Do not use this for a terminal tab; pass surface_id instead."],
-            "surface_id": ["type": "string", "description": "A terminal tab's surface id, from open_agent_tab's result or list_tabs. Provide exactly one of kind or surface_id."],
-        ],
-        required: []
-    ),
-    ToolDefinition(
-        tool: .requestAttention,
-        description: """
-        Raise a desktop notification asking the user to come and look at this
-        workstream. For when you are genuinely blocked on a person — a decision
-        only they can make, or work that is finished and needs review. Clicking
-        it selects this workstream. Not for progress reports: the user did not
-        ask to be interrupted, and one workstream can only raise this every 30
-        seconds. It does not wait for a reply — carry on with anything you can do
-        without them.
-        """,
-        properties: [
-            "reason": ["type": "string", "description": "One line on what you need them for. Shown in the notification, so keep it short and specific."],
-        ],
-        required: ["reason"]
-    ),
-    ToolDefinition(
-        tool: .createWorkstream,
-        description: """
-        Create a new workstream in this project — its own git worktree on its own
-        new branch, cut from the project's base branch — and with `prompt`, start
-        an agent in it. This is the tool for work that needs a SEPARATE BRANCH.
-        Use open_agent_tab instead when the work belongs on the branch you are
-        already on: a tab shares your worktree, a workstream does not, and one
-        worktree cannot hold two branches. The agent starts in the new
-        workstream's Coding Agent tab, so the user opening that workstream lands
-        on its conversation. The new workstream's initialization runs in the
-        background, so its dependencies may not be installed the moment the agent
-        starts. Creating it does not move the user's view — the row appears in
-        the sidebar and whatever they are looking at stays put. Returns the
-        workstream's name and path, and the new agent's surface id; poll
-        list_peers for a peer reporting that surface before messaging it.
-        """,
-        properties: [
-            "name": ["type": "string", "description": "Name for the workstream, used verbatim as the git branch name. Omit to have one generated. Must be a valid branch name and must not already be taken in this project."],
-            "prompt": ["type": "string", "description": "Instructions for the agent to start with. Omit to create the workstream without starting an agent."],
-            "bypass_permissions": ["type": "string", "description": "\"true\" to start the agent with --dangerously-skip-permissions. Omit for \"false\". Any other value is an error."],
-        ],
-        required: []
-    ),
-    ToolDefinition(
-        tool: .startVerification,
-        description: """
-        Run this project's verification checks — its specs, linters and type
-        checks, whatever `verification.yaml` declares — against the worktree you
-        are in, and get a run id back IMMEDIATELY. list_verification_checks is
-        how you find out what it declares before naming any. It does not wait
-        for the suite: a real one takes minutes and this tool call does not.
-        Each check
-        posts its own verdict to your inbox from atelier/verification as it
-        finishes, so a failure reaches you while the rest of the suite is still
-        going — carry on with something else and call receive_messages at your
-        next natural boundary. check_verification reads the whole run at any
-        time, including while it is still going. Checks are independent and any
-        number run at once; starting a check that is already running is refused
-        rather than allowed to kill it, per check.
-
-        If you are this workstream's Coding Agent, you will also receive these
-        notices for runs the USER started from the Verification tab, which you
-        did not ask for — that is deliberate, it is how you find out what your
-        human just ran. An agent in another tab of this workstream will not.
-        """,
-        properties: [
-            "checks": ["type": "string", "description": "Comma-separated names of the checks to run, e.g. \"rspec,rubocop\". Omit to run all of them. A name the project does not declare is an error naming what it does."],
-        ],
-        required: []
-    ),
-    ToolDefinition(
-        tool: .checkVerification,
-        description: """
-        Read a verification run: its state, and each check's verdict, exit code
-        and duration. Works while the run is still going — checks report as
-        running until they finish — so this is also how you watch one without
-        blocking. Only runs in your own workstream are readable.
-
-        NO OUTPUT. A check runs in its own terminal surface in the Verification
-        tab and Atelier keeps no copy of what it printed, so there is nothing to
-        send you and nothing to fetch later — not from here, not from disk. To
-        see why a check failed, ask the user to look at that tab while Atelier is
-        still running, or re-run the one check. Only runs from this session
-        resolve; ids from before a restart are gone.
-        """,
-        properties: [
-            "run_id": ["type": "string", "description": "The run id start_verification returned."],
-        ],
-        required: ["run_id"]
-    ),
-    ToolDefinition(
-        tool: .listVerificationChecks,
-        description: """
-        List the verification checks this project declares — each one's name, the
-        command it runs, and the shell it runs in — WITHOUT running any of them.
-
-        Call this before start_verification. The checks are declared in a
-        verification.yaml in the project directory, which is OUTSIDE your
-        worktree, so you almost certainly cannot read it yourself: this is how
-        you learn what the names are. Then start_verification runs all of them,
-        or the subset you name.
-
-        The answer is in file order, which is the order the user sees in the
-        Verification tab. If the project declares nothing, or its
-        verification.yaml is missing or unreadable, you are told which — those
-        are three different problems.
-        """,
-        properties: [:],
-        required: []
-    ),
-    ToolDefinition(
-        tool: .addTask,
-        description: """
-        Add a task to this project's shared queue, for any peer in the project
-        to claim and work on. Use this instead of hand-dispatching work to
-        individual workstreams when you have several similar units of work —
-        findings from an audit, files needing the same fix — so peers can pull
-        the next one instead of you assigning each by hand.
-
-        `path` is the task's permanent identifier: choose something
-        hierarchical and unique, e.g. "audit-2026-09/finding-3". Calling
-        add_task again with a path that already exists is refused rather than
-        replayed automatically after a lost connection, so if you see
-        "already exists" after a timeout, check list_tasks before retrying —
-        your first call likely already succeeded.
-        """,
-        properties: [
-            "path": ["type": "string", "description": "Unique identifier for this task within the project, e.g. \"audit-2026-09/finding-3\"."],
-            "name": ["type": "string", "description": "Short display name."],
-            "content": ["type": "string", "description": "The brief: what needs doing. Up to 64KB."],
-            "tags": ["type": "string", "description": "Optional comma-separated tags, for filtering with get_pending_tasks/list_tasks."],
-        ],
-        required: ["path", "name", "content"]
-    ),
-    ToolDefinition(
-        tool: .getPendingTasks,
-        description: """
-        List unclaimed tasks in this project's queue — the ones nobody has
-        started yet. Call this when you're free and want the next thing to
-        work on. Omit path_prefix to see every pending task.
-        """,
-        properties: [
-            "path_prefix": ["type": "string", "description": "Only tasks whose path starts with this. Omit for every pending task in the project."],
-            "tags": ["type": "string", "description": "Optional comma-separated tags — a task must have ALL of them to match. Omit for no filtering."],
-        ],
-        required: []
-    ),
-    ToolDefinition(
-        tool: .listTasks,
-        description: """
-        List every task in this project's queue regardless of state —
-        pending, claimed, completed, or failed. Use this for an overview of
-        the whole queue's progress; use get_pending_tasks when you just want
-        the next thing to claim.
-        """,
-        properties: [
-            "path_prefix": ["type": "string", "description": "Only tasks whose path starts with this. Omit for every task in the project."],
-            "tags": ["type": "string", "description": "Optional comma-separated tags — a task must have ALL of them to match. Omit for no filtering."],
-        ],
-        required: []
-    ),
-    ToolDefinition(
-        tool: .claimTask,
-        description: """
-        Claim a pending task so no other peer works on it too. Only one claim
-        wins — calling this again yourself on a task you already hold is a
-        safe no-op; calling it on a task someone else holds is refused,
-        naming them. Requires a surface to attach ownership to, so this only
-        works from an agent Atelier launched.
-        """,
-        properties: [
-            "path": ["type": "string", "description": "The task's path, from add_task or get_pending_tasks."],
-        ],
-        required: ["path"]
-    ),
-    ToolDefinition(
-        tool: .completeTask,
-        description: """
-        Mark a task you hold as done. Only the peer that claimed it may
-        complete it — calling this on someone else's claim, or a task nobody
-        claimed, is refused. The task's creator is notified in its inbox.
-        """,
-        properties: [
-            "path": ["type": "string", "description": "The task's path."],
-        ],
-        required: ["path"]
-    ),
-    ToolDefinition(
-        tool: .failTask,
-        description: """
-        Mark a task you hold as failed, with a reason. Only the peer that
-        claimed it may fail it. The task's creator is notified in its inbox,
-        including your reason.
-        """,
-        properties: [
-            "path": ["type": "string", "description": "The task's path."],
-            "reason": ["type": "string", "description": "Why it failed. Required, and shown to the task's creator."],
-        ],
-        required: ["path", "reason"]
-    ),
-    ToolDefinition(
-        tool: .getSessionCheckpoint,
-        description: """
-        Read this workstream's saved checkpoint — free text some agent wrote
-        about where it left off. Call this early in a session, before starting
-        new work, to see what you or a predecessor were doing. Shared per
-        workstream, not per agent: if another agent shares this workstream
-        (opened via open_agent_tab), you are reading the same note it writes.
-        Tells you plainly if nothing has been saved yet, rather than answering
-        with nothing.
-        """,
-        properties: [:],
-        required: []
-    ),
-    ToolDefinition(
-        tool: .updateSessionCheckpoint,
-        description: """
-        Overwrite this workstream's checkpoint with free text describing where
-        you left off — enough for you, or whichever agent reads it next in this
-        workstream, to resume without re-reading the whole conversation. Call it
-        before finishing a task, and at any milestone worth resuming from. There
-        is no history: this replaces whatever was saved before. Shared per
-        workstream, not per agent — if another agent shares this workstream, you
-        are overwriting the same note it reads.
-        """,
-        properties: [
-            "content": ["type": "string", "description": "What to save. Free text — describe what you were doing and what is left, not just the last action."],
-        ],
-        required: ["content"]
-    ),
-]
-
 /// Shown to the agent once, at initialize.
 let serverInstructions = """
 Agent-to-agent messaging inside Atelier. Register once with register_peer, then use list_peers and send_message to coordinate with agents working in other workstreams of this project.
@@ -604,7 +168,7 @@ Delivery is pull-based: a message sits in the recipient's inbox until it calls r
 
 You can also act on the workstream you are running in. list_tabs shows its tabs and which agent is in each; read_review_comments returns the review comments the user has left on the Changes diff, anchored to file and line. Both are reads and neither changes anything.
 
-open_editor puts a file on screen in front of the user, and request_attention raises a desktop notification asking them to come and look. Both change what the user sees, so use them when you have something for them rather than to narrate progress. request_attention does not block: it notifies and returns, and one workstream can raise it only every 30 seconds.
+open_editor puts a file on screen in front of the user, and request_attention raises a desktop notification asking them to come and look. Both change what the user sees, so use them when you have something for them rather than to narrate progress. request_attention does not block: it notifies and returns, and one workstream can raise it only every \(IPC.Vocabulary.attentionCooldownSeconds) seconds.
 
 open_tab opens this workstream's Changes, Execution or Verification pane, which all start closed. It does not switch the user's view — pair it with request_attention when you need their eyes, rather than assuming a tab you opened is a tab they saw.
 
@@ -616,7 +180,7 @@ create_workstream is the exception to that: it makes a NEW workstream, with its 
 
 add_task/get_pending_tasks/list_tasks/claim_task/complete_task/fail_task are a shared, project-scoped work queue — add several units of work once, and any peer in the project can claim, complete, or fail them, instead of you dispatching each by hand. Claiming is exclusive: only one peer wins, and it needs a surface to attach to, so this only works from an agent Atelier launched. Completing or failing a task notifies whoever created it.
 
-list_verification_checks names the checks this project declares and the command each one runs, without running anything — the declarations live outside your worktree, so this is how you find out what is there. start_verification then runs the project's checks against your worktree and answers with a run id rather than a result — a real suite outlives a tool call. Each check's verdict arrives in your inbox from atelier/verification as that check finishes; that is a reserved sender inside Atelier and not a peer you can reply to. If you are this workstream's Coding Agent, you will also get these for runs the user starts in the Verification tab. check_verification(run_id) reads the whole run whenever you want, so you are never stuck waiting for a message that has not arrived.
+list_verification_checks names the checks this project declares and the command each one runs, without running anything — the declarations live outside your worktree, so this is how you find out what is there. start_verification then runs the project's checks against your worktree and answers with a run id rather than a result — a real suite outlives a tool call. Each check's verdict arrives in your inbox from \(IPC.Vocabulary.verificationSender) as that check finishes; that is a reserved sender inside Atelier and not a peer you can reply to. If you are this workstream's Coding Agent, you will also get these for runs the user starts in the Verification tab. check_verification(run_id) reads the whole run whenever you want, so you are never stuck waiting for a message that has not arrived.
 
 Call get_session_checkpoint early in a session, before starting new work — it is where an agent records what it was doing and how far it got, for itself or for whoever picks up this workstream next. update_session_checkpoint overwrites it with free text; call that before finishing a task, or at any milestone worth resuming from. There is one checkpoint per workstream and no history — it is shared with any other agent in this workstream, and each save replaces the last.
 
@@ -1014,7 +578,7 @@ final class IPCBridge {
 
     /// - Parameter afterReregister: set on the two recursive calls below, so the
     ///   re-registration dance is attempted once and never re-entered. Without it
-    ///   an app that keeps answering "belongs to another session" — to the retry
+    ///   an app that keeps answering `peerOwnedByAnotherSession` — to the retry
     ///   *or* to the `register_peer` inside it — recursed without bound.
     private func attempt(
         tool: IPC.Tool,
@@ -1037,7 +601,13 @@ final class IPCBridge {
             // socket's close. Treated as final, that wedges the session for
             // good: `ensureRegistered` no-ops while `peerID` is set, so nothing
             // would ever ask again. Drop the identity and re-register instead.
-            if error.contains("belongs to another session"), !afterReregister {
+            //
+            // Recognised by `Response.code`, never by the sentence. This was
+            // `error.contains("belongs to another session")` — a substring match
+            // across a process boundary against a string assembled in
+            // `IPC.Server`, so rewording the message for a human would have
+            // silently disabled this recovery.
+            if response.code == .peerOwnedByAnotherSession, !afterReregister {
                 peerID = nil
                 if case let .ok(payload) = attempt(
                     tool: .registerPeer,
@@ -1092,11 +662,15 @@ while let line = readLine(strippingNewline: true) {
         reply(id: id ?? NSNull(), result: [:])
 
     case "tools/list":
-        let tools = toolDefinitions.map { definition -> [String: Any] in
+        // The registry is the only list. `IPC.ToolSpec.advertised` decides the
+        // order; `IPC.Tool.spec` decides everything else, and is an exhaustive
+        // switch, so a tool cannot reach an agent with no schema or reach this
+        // loop without being a real `IPC.Tool`.
+        let tools = IPC.ToolSpec.advertised.map { spec -> [String: Any] in
             [
-                "name": definition.tool.rawValue,
-                "description": definition.description,
-                "inputSchema": definition.schema,
+                "name": spec.tool.rawValue,
+                "description": spec.description,
+                "inputSchema": spec.inputSchema,
             ]
         }
         reply(id: id ?? NSNull(), result: ["tools": tools])

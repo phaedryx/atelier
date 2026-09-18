@@ -12,7 +12,7 @@ extension IPC {
         /// The label a task-queue notice arrives from. Not a peer id — there
         /// is nothing inside Atelier for an agent to `send_message` back to,
         /// mirroring `VerificationSummary.sender`.
-        static let sender = "atelier/tasks"
+        static let sender = IPC.Vocabulary.taskSender
 
         /// Character cap on the two agent-authored fields a notice quotes
         /// (`name`, and a failure's `reason`). Generous next to the fixed
@@ -30,16 +30,7 @@ extension IPC {
         /// `VerificationSummary.checks(from:)` — an argument is always text
         /// however a model chose to spell a list.
         static func tags(from raw: String?) -> [String] {
-            guard let raw else { return [] }
-            let separators = CharacterSet(charactersIn: ",[]\"'").union(.whitespacesAndNewlines)
-            var seen: Set<String> = []
-            var result: [String] = []
-            for token in raw.components(separatedBy: separators) where !token.isEmpty {
-                if seen.insert(token).inserted {
-                    result.append(token)
-                }
-            }
-            return result
+            ToolArguments.parseList(raw)
         }
 
         // MARK: - The completion/failure notice
