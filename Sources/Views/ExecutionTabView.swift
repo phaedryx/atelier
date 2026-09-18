@@ -3,37 +3,6 @@
 
 import SwiftUI
 
-func shouldRestoreRunSession(useTmux: Bool, hasRunScript: Bool, hasExistingRunSession: Bool, wasStoppedManually: Bool) -> Bool {
-    useTmux && hasRunScript && hasExistingRunSession && !wasStoppedManually
-}
-
-/// Whether closing `tab` stops this workstream's run.
-///
-/// The Execution tab is the run's sole owner. It is the pane that lists the
-/// processes and the pane Stop lives on, and `beginRun` opens one for every
-/// run, so no other tab has to stand in as the way out.
-///
-/// A browser tab used to claim the same ownership, guarded by a "no browser
-/// tabs left" check that matched only browser tabs and so could not see an open
-/// Execution tab. Closing the last browser therefore stopped a run that tab
-/// was still watching, and set `runStoppedManually` on the way out, so it did
-/// not come back on the next launch either.
-///
-/// `runStarted` is folded in here rather than left to the caller because
-/// forgetting it is the same defect in a second place: `stopRun` sets
-/// `runStoppedManually`, and closing a tab that was running nothing must not
-/// suppress the next launch's tmux restore.
-///
-/// A free function, like its neighbours, so which tab owns the run can be
-/// tested without standing up a view.
-func closingTabStopsRun(_ tab: WorkspaceTab, runStarted: Bool) -> Bool {
-    guard runStarted else { return false }
-    if case .execution = tab {
-        return true
-    }
-    return false
-}
-
 /// What the Execution pane shows for the effective dev command.
 ///
 /// An override is shown as the command it is — the user typed it, and it is what
@@ -46,9 +15,8 @@ func closingTabStopsRun(_ tab: WorkspaceTab, runStarted: Bool) -> Bool {
 /// here made it reachable by hand, in a monospaced font that invites exactly
 /// that. The files are what `ProcessCompose.RunCommandPlan` meant the user to be able to see.
 ///
-/// A free function, like its neighbours, so the property that matters — no
-/// output of this is ever a runnable process-compose command — can be tested
-/// without a view.
+/// A free function, so the property that matters — no output of this is ever a
+/// runnable process-compose command — can be tested without a view.
 func devCommandDisplayText(devCommand: DevCommand?, loadedFiles: [String]) -> String? {
     guard let devCommand else { return nil }
     switch devCommand.source {
@@ -83,17 +51,6 @@ func showsProcessSelection(
     !runStarted && showsProcessTable && !declaredProcesses.isEmpty
 }
 
-/// Wraps a command for a login shell, so it sees the PATH and shell functions
-/// the user's own terminal would. Used when the `atelier-run` launcher is
-/// unavailable and the command has to be run bare.
-func scriptCommand(script: String, shell: String = CommandBuilder.userShell) -> String {
-    // POSIX quoting for the same reason `RunLauncher.runScriptCommand` uses it:
-    // the outer shell that strips this layer is ghostty's `/bin/bash -c`, not
-    // the login shell named here, and double quotes would leave backticks in
-    // the script live for bash to substitute.
-    "\(shell) -lic \(CommandBuilder.shellQuote(script))"
-}
-
 struct ExecutionTabView: View {
     let workstreamID: UUID
     let workingDirectory: String
@@ -105,7 +62,7 @@ struct ExecutionTabView: View {
     /// process-compose config.
     let devCommand: DevCommand?
     @Binding var devCommandOverride: String?
-    @Binding var runStarted: Bool
+    let runStarted: Bool
     let runGeneration: Int
     /// Live process state from process-compose. Only rendered when the run is a
     /// process-compose run; otherwise nothing is polling it.
@@ -501,9 +458,9 @@ struct ExecutionTabView: View {
     ///
     /// The selection half is defensive rather than a case anyone can reach
     /// today, and it is worth knowing which: the checklist is hidden during a
-    /// run, and the one path that sets `runStarted` without a Start press — the
-    /// tmux restore in `TerminalContainerView` — passes
-    /// `hasRunScript: resolvedRunCommand != nil`, which is already nil for an
+    /// run, and the one path that sets `runStarted` without a Start press —
+    /// `ProcessCompose.RunSession.restore` — is only reached with a
+    /// `StartContext` the view could build, which is already impossible for an
     /// empty selection. So a run cannot currently be live over one.
     ///
     /// It is gated anyway because `restartRun` guards on `resolvedRunCommand`,

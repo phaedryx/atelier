@@ -18,9 +18,7 @@ final class WorkspaceModelTests: XCTestCase {
             activeTab: activeTab,
             browserTitles: [:],
             terminalTitles: [:],
-            editorFilePaths: [:],
-            runStarted: false,
-            runStoppedManually: false
+            editorFilePaths: [:]
         )
         return WorkspaceModel(workstreamID: workstreamID, snapshot: snapshot)
     }
@@ -190,7 +188,6 @@ final class WorkspaceModelTests: XCTestCase {
         let terminal = model.addTerminal()
         let editor = model.addEditor(filePath: "b.swift")
         model.terminalTitles[terminal] = "zsh"
-        model.runStarted = true
 
         let snapshot = model.snapshot()
         let restored = WorkspaceModel(workstreamID: model.workstreamID, snapshot: snapshot)
@@ -199,8 +196,6 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertEqual(restored.activeTab, model.activeTab)
         XCTAssertEqual(restored.terminalTitles[terminal], "zsh")
         XCTAssertEqual(restored.editorFilePaths[editor], "b.swift")
-        XCTAssertTrue(restored.runStarted)
-        XCTAssertFalse(restored.runStoppedManually)
     }
 
     func testEditorActivityHelpers() {
@@ -286,9 +281,7 @@ final class WorkspaceModelTests: XCTestCase {
             activeTab: .changes,
             browserTitles: [:],
             terminalTitles: [:],
-            editorFilePaths: [:],
-            runStarted: false,
-            runStoppedManually: false
+            editorFilePaths: [:]
         )
         let model = WorkspaceModel(workstreamID: UUID(), snapshot: snapshot)
 
@@ -431,9 +424,7 @@ final class WorkspaceModelCacheTests: XCTestCase {
             activeTab: WorkspaceTab.agent,
             browserTitles: [:],
             terminalTitles: [:],
-            editorFilePaths: [:],
-            runStarted: false,
-            runStoppedManually: false
+            editorFilePaths: [:]
         )
         let model = WorkspaceModel(workstreamID: UUID(), snapshot: snapshot)
         XCTAssertFalse(model.tabs.contains(WorkspaceTab.execution))
@@ -453,9 +444,7 @@ final class WorkspaceModelCacheTests: XCTestCase {
             activeTab: WorkspaceTab.agent,
             browserTitles: [:],
             terminalTitles: [:],
-            editorFilePaths: [:],
-            runStarted: false,
-            runStoppedManually: false
+            editorFilePaths: [:]
         )
         let model = WorkspaceModel(workstreamID: UUID(), snapshot: snapshot)
         model.ensureSingleton(WorkspaceTab.execution)
@@ -463,38 +452,5 @@ final class WorkspaceModelCacheTests: XCTestCase {
 
         XCTAssertEqual(model.tabs.filter { $0 == WorkspaceTab.execution }.count, 1)
         XCTAssertEqual(model.activeTab, .agent)
-    }
-
-    // MARK: - Run identity lifetime
-
-    /// `runGeneration` and `runCommandString` must outlive a *view remount* and
-    /// not an *app relaunch*, so they belong on the model but not in the
-    /// snapshot. Living on the model is structural — a test cannot observe
-    /// SwiftUI `@State` — but their absence from the snapshot is observable,
-    /// and adding them to it would restore a command string for a surface that
-    /// no longer exists.
-    func testRunIdentityIsNotCarriedAcrossASnapshotRoundTrip() {
-        let snapshot = WorkspaceTabSnapshot(
-            tabs: [.info, .agent],
-            terminalCount: 0,
-            browserCount: 0,
-            editorCount: 0,
-            activeTab: .info,
-            browserTitles: [:],
-            terminalTitles: [:],
-            editorFilePaths: [:],
-            runStarted: false,
-            runStoppedManually: false
-        )
-        let model = WorkspaceModel(workstreamID: UUID(), snapshot: snapshot)
-        model.runStarted = true
-        model.runGeneration = 7
-        model.runCommandString = "process-compose up -n execute"
-
-        let restored = WorkspaceModel(workstreamID: model.workstreamID, snapshot: model.snapshot())
-
-        XCTAssertTrue(restored.runStarted, "runStarted is persisted and must stay so")
-        XCTAssertEqual(restored.runGeneration, 0)
-        XCTAssertNil(restored.runCommandString)
     }
 }

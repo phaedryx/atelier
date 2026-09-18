@@ -288,6 +288,7 @@ struct ContentView: View {
                     bypassPermissions: workstream.bypassPermissions,
                     isActive: true,
                     model: workspaceModel,
+                    session: surfaceCache.runSession(for: workstreamID),
                     verificationRunner: verificationRunner
                 )
                 .id(workstreamID)

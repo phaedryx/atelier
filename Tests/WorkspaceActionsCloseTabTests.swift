@@ -22,6 +22,8 @@ final class WorkspaceActionsCloseTabTests: XCTestCase {
         )]
         projectList = list
         surfaceCache = TerminalSurfaceCache()
+        // No libghostty in a unit-test host, and a run starts a surface.
+        surfaceCache.terminalApp = { nil }
         WorkspaceActions.shared.projectList = list
         WorkspaceActions.shared.surfaceCache = surfaceCache
     }
@@ -117,29 +119,65 @@ final class WorkspaceActionsCloseTabTests: XCTestCase {
         XCTAssertNotEqual(m.activeTab, .changes)
     }
 
-    /// Refused by name, not closed: stopping the run needs view-local state
-    /// this singleton cannot reach. See `WorkspaceActions.closeTab`.
-    func testExecutionIsRefusedByNameRatherThanClosed() throws {
+    /// Execution used to be refused by name, because stopping the run meant
+    /// reaching view-local `@State` this singleton could not see. It closes now:
+    /// `ProcessCompose.RunSession` owns the run, the surface cache owns the
+    /// session, and this calls the same `stopIfTabOwnsRun` the user's ⌘W does.
+    func testExecutionClosesAndStopsTheRun() throws {
         _ = try WorkspaceActions.shared.openTab(workstreamID: workstreamID, kind: "execution")
+        let session = surfaceCache.runSession(for: workstreamID)
+        session.start(ProcessCompose.RunSession.StartContext(
+            command: "just dev",
+            workingDirectory: "/repo",
+            environment: [:],
+            launcherPath: nil,
+            tmux: nil,
+            shell: "/bin/zsh"
+        ))
+        XCTAssertTrue(session.runStarted)
 
-        XCTAssertThrowsError(
-            try WorkspaceActions.shared.closeTab(workstreamID: workstreamID, kind: "execution", surfaceID: nil)
-        ) { error in
-            XCTAssertTrue(self.message(error).contains("dev stack"), self.message(error))
-        }
-        XCTAssertTrue(try model().tabs.contains(.execution), "refusing must not close it as a side effect")
+        let result = try WorkspaceActions.shared.closeTab(
+            workstreamID: workstreamID, kind: "execution", surfaceID: nil
+        )
+
+        XCTAssertEqual(result.kind, "execution")
+        XCTAssertTrue(result.wasOpen)
+        XCTAssertFalse(try model().tabs.contains(.execution))
+        XCTAssertFalse(session.runStarted, "closing the run's owning tab must stop it")
     }
 
-    /// The unknown-kind message must not claim execution is legal — it is
-    /// refused, not closeable, so listing it here would tell an agent with a
-    /// typo the opposite of the truth.
-    func testAnUnknownKindNamesOnlyTheClosableOnesAndNotExecution() {
+    /// Closing a tab that was already closed is success, not a refusal — and it
+    /// must not stop a run, because the tab it would be stopping for was not
+    /// there to own it.
+    func testClosingAnUnopenedExecutionTabDoesNotStopTheRun() throws {
+        let session = surfaceCache.runSession(for: workstreamID)
+        session.start(ProcessCompose.RunSession.StartContext(
+            command: "just dev",
+            workingDirectory: "/repo",
+            environment: [:],
+            launcherPath: nil,
+            tmux: nil,
+            shell: "/bin/zsh"
+        ))
+
+        let result = try WorkspaceActions.shared.closeTab(
+            workstreamID: workstreamID, kind: "execution", surfaceID: nil
+        )
+
+        XCTAssertFalse(result.wasOpen)
+        XCTAssertTrue(session.runStarted)
+    }
+
+    /// The unknown-kind message lists every singleton an agent may close, and
+    /// execution is one of them now.
+    func testAnUnknownKindNamesTheClosableOnes() {
         XCTAssertThrowsError(
             try WorkspaceActions.shared.closeTab(workstreamID: workstreamID, kind: "logs", surfaceID: nil)
         ) { error in
             let text = self.message(error)
-            XCTAssertTrue(text.contains("changes, verification"), text)
-            XCTAssertFalse(text.contains("execution"), text)
+            XCTAssertTrue(text.contains("changes"), text)
+            XCTAssertTrue(text.contains("execution"), text)
+            XCTAssertTrue(text.contains("verification"), text)
         }
     }
 

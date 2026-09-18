@@ -1,57 +1,10 @@
-// ABOUTME: Tests for execution tab session restoration decisions.
-// ABOUTME: Verifies run panes reappear when tmux already has a persisted run session.
+// ABOUTME: Tests for what the Execution pane renders — the dev-command display and the checklist gate.
+// ABOUTME: The run lifecycle's own rules moved with it; see RunSessionTests.
 
 @testable import Atelier
 import XCTest
 
 final class ExecutionTabViewTests: XCTestCase {
-    func testRunSessionRestoresOnlyWhenTmuxSessionExists() {
-        XCTAssertTrue(shouldRestoreRunSession(useTmux: true, hasRunScript: true, hasExistingRunSession: true, wasStoppedManually: false))
-        XCTAssertFalse(shouldRestoreRunSession(useTmux: false, hasRunScript: true, hasExistingRunSession: true, wasStoppedManually: false))
-        XCTAssertFalse(shouldRestoreRunSession(useTmux: true, hasRunScript: false, hasExistingRunSession: true, wasStoppedManually: false))
-        XCTAssertFalse(shouldRestoreRunSession(useTmux: true, hasRunScript: true, hasExistingRunSession: false, wasStoppedManually: false))
-    }
-
-    func testRunSessionDoesNotRestoreAfterManualStop() {
-        XCTAssertFalse(shouldRestoreRunSession(useTmux: true, hasRunScript: true, hasExistingRunSession: true, wasStoppedManually: true))
-    }
-
-    func testRunScriptWrapsInLoginShell() {
-        let command = scriptCommand(script: "just local", shell: "/bin/zsh")
-
-        XCTAssertTrue(command.hasPrefix("/bin/zsh -lic "))
-        XCTAssertTrue(command.contains("just local"))
-    }
-
-    func testRunScriptCommandUsesLoginShell() {
-        let command = runScriptCommand(script: "bun dev", workstreamID: UUID(), launcherPath: "/path/to/atelier-run", shell: "/bin/zsh")
-
-        XCTAssertTrue(command.contains("/bin/zsh -lic"))
-        XCTAssertFalse(command.contains("/bin/sh"))
-    }
-
-    /// Both wrappers hand the script to the login shell as its `-c` argument,
-    /// and that argument sits inside a string ghostty's own `/bin/bash -c`
-    /// reads first. So it is POSIX-quoted — fish-quoting it, as both sites used
-    /// to, left every backtick in the script for bash to substitute.
-    func testScriptWrappersPosixQuoteTheScriptEvenForFish() {
-        let fish = "/opt/homebrew/bin/fish"
-        let script = "just local `whoami`"
-
-        XCTAssertTrue(
-            scriptCommand(script: script, shell: fish).hasSuffix("-lic 'just local `whoami`'"),
-            scriptCommand(script: script, shell: fish)
-        )
-        XCTAssertTrue(
-            runScriptCommand(
-                script: script,
-                workstreamID: UUID(),
-                launcherPath: "/path/to/atelier-run",
-                shell: fish
-            ).hasSuffix("-lic 'just local `whoami`'")
-        )
-    }
-
     // MARK: - What the pane displays
 
     private let displayCommand = "process-compose up -U -f /repo/execution.process-compose.yaml"
@@ -332,26 +285,6 @@ final class ExecutionTabViewTests: XCTestCase {
     /// but a zero-height scroll view is a bad thing to depend on that for.
     func testAnEmptyChecklistStillHasARowOfHeight() {
         XCTAssertEqual(processChecklistHeight(count: 0, rowHeight: 20, visibleRows: 8), 20)
-    }
-
-    /// The Execution tab is the only owner of the run. Closing anything else
-    /// leaves the processes alone, however much of the run that tab was
-    /// showing: a browser tab pointed at the dev server used to stop it too,
-    /// so closing the last browser killed a run an open Execution tab was
-    /// still watching.
-    func testOnlyTheExecutionTabStopsTheRunWhenClosed() {
-        XCTAssertTrue(closingTabStopsRun(.execution, runStarted: true))
-        XCTAssertFalse(closingTabStopsRun(.browser(UUID()), runStarted: true))
-        XCTAssertFalse(closingTabStopsRun(.terminal(UUID()), runStarted: true))
-        XCTAssertFalse(closingTabStopsRun(.editor(UUID()), runStarted: true))
-        XCTAssertFalse(closingTabStopsRun(.changes, runStarted: true))
-    }
-
-    /// Guards the `runStarted` half. `stopRun` sets `runStoppedManually`, which
-    /// suppresses the tmux restore for the rest of the session — so closing an
-    /// Execution tab that was not running anything must not reach it.
-    func testClosingAnExecutionTabWithNoRunStopsNothing() {
-        XCTAssertFalse(closingTabStopsRun(.execution, runStarted: false))
     }
 
     // MARK: - Selection storage
