@@ -4,19 +4,20 @@
 import AppKit
 import SwiftUI
 
-/// Keeps the highlighted row inside the result list as results change.
-func clampedPaletteSelection(_ index: Int, resultCount: Int) -> Int {
-    guard resultCount > 0 else { return 0 }
-    return min(max(index, 0), resultCount - 1)
-}
-
 struct CommandPaletteView: View {
     let registry: CommandRegistry
     let context: PaletteContext
     let onDismiss: () -> Void
 
+    /// One row's height. Fixed because `List` has no ideal height of its own,
+    /// so it is what the panel's height is counted in; both row layouts are
+    /// single-line.
+    private static let rowHeight: CGFloat = 31
+
     @State private var query = ""
-    @State private var selectedIndex = 0
+    /// The highlighted row's `PaletteCommand.id`. An id rather than an index
+    /// because `results` is recomputed on every keystroke.
+    @State private var selectedID: String?
     @State private var paletteWindow: NSWindow?
     /// Whoever held the keyboard before the palette opened, restored on dismiss.
     @State private var previousResponder: NSResponder?
@@ -36,12 +37,14 @@ struct CommandPaletteView: View {
                 .padding(12)
                 .focused($fieldFocused)
                 .onSubmit(runSelected)
+                // Focus stays here, so the arrows are read here: the list
+                // below is deliberately not a focus candidate.
                 .onKeyPress(.downArrow) {
-                    selectedIndex = clampedPaletteSelection(selectedIndex + 1, resultCount: results.count)
+                    moveSelection(1)
                     return .handled
                 }
                 .onKeyPress(.upArrow) {
-                    selectedIndex = clampedPaletteSelection(selectedIndex - 1, resultCount: results.count)
+                    moveSelection(-1)
                     return .handled
                 }
 
@@ -52,24 +55,15 @@ struct CommandPaletteView: View {
                     .foregroundStyle(.secondary)
                     .padding(20)
             } else {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(spacing: 0) {
-                            ForEach(Array(results.enumerated()), id: \.element.id) { index, command in
-                                row(command, isSelected: index == selectedIndex)
-                                    .id(command.id)
-                                    .onTapGesture {
-                                        selectedIndex = index
-                                        runSelected()
-                                    }
-                            }
-                        }
-                    }
-                    .frame(maxHeight: 320)
-                    .onChange(of: selectedIndex) {
-                        guard results.indices.contains(selectedIndex) else { return }
-                        proxy.scrollTo(results[selectedIndex].id)
-                    }
+                FilterResultList(
+                    items: results,
+                    id: \.id,
+                    selection: $selectedID,
+                    rowHeight: Self.rowHeight,
+                    maxHeight: 320,
+                    onActivate: run
+                ) { command, _ in
+                    row(command)
                 }
             }
         }
@@ -109,14 +103,17 @@ struct CommandPaletteView: View {
         }
         .onExitCommand(perform: onDismiss)
         .onChange(of: query) {
-            selectedIndex = 0
+            selectedID = results.first?.id
+        }
+        .onAppear {
+            selectedID = results.first?.id
         }
     }
 
     /// One row. A refused command keeps its row and shows why in place of its
     /// category and shortcut — the alternative, dropping it, is what made stored
     /// prompts look like a feature that came and went.
-    private func row(_ command: PaletteCommand, isSelected: Bool) -> some View {
+    private func row(_ command: PaletteCommand) -> some View {
         let reason = command.availability(context).reason
         return HStack {
             Text(command.title)
@@ -143,9 +140,10 @@ struct CommandPaletteView: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .contentShape(Rectangle())
-        .background(isSelected ? AnyShapeStyle(.selection) : AnyShapeStyle(.clear))
+        // The selection fill is `List`'s own now, not a painted background.
+        // The row is a real `Button` and stays enabled even when the command is
+        // refused, so the reason has to reach VoiceOver as a hint.
+        .accessibilityHint(Text(reason ?? ""))
     }
 
     /// Runs the highlighted command, unless it is a disabled row.
@@ -155,17 +153,28 @@ struct CommandPaletteView: View {
     /// `search` already sorts every disabled row below every runnable one, so
     /// Return lands on one only when the user has deliberately arrowed to it.
     private func runSelected() {
-        let current = results
-        let index = clampedPaletteSelection(selectedIndex, resultCount: current.count)
-        guard current.indices.contains(index) else {
+        // The highlighted id may name a row that no longer exists — `results`
+        // is recomputed from the live registry — and Return with nothing to run
+        // dismisses, as it did when the selection was an out-of-range index.
+        guard let selectedID, let command = results.first(where: { $0.id == selectedID }) else {
             onDismiss()
             return
         }
-        let command = current[index]
+        run(command)
+    }
+
+    /// Runs one command, or refuses it. The row itself is never `.disabled()`:
+    /// that would risk taking its selectability with it, and arrowing onto a
+    /// refused row to read its reason is the whole point of listing it.
+    private func run(_ command: PaletteCommand) {
         guard command.isAvailable(context) else { return }
         registry.recordUsage(command.id)
         onDismiss()
         command.action()
+    }
+
+    private func moveSelection(_ delta: Int) {
+        selectedID = neighbouringSelection(from: selectedID, in: results.map(\.id), delta: delta)
     }
 }
 

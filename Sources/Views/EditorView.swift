@@ -38,7 +38,15 @@ struct EditorView: View {
     // File finder (quick open)
     @State private var isFinderOpen = false
     @State private var finderQuery = ""
-    @State private var finderSelection: Int?
+    /// One result row's height. Fixed because `List` has no ideal height of its
+    /// own, so it is what the finder's height is counted in; the row is
+    /// single-line.
+    private static let finderRowHeight: CGFloat = 22
+
+    /// The highlighted result's path. An id rather than an index: the results
+    /// array is rebuilt on every keystroke, and an index into a stale array is
+    /// what the two-identity-systems bug below was a symptom of.
+    @State private var finderSelection: String?
     @State private var fileIndex: [FileFinder.Entry] = []
     @State private var finderResults: [String] = []
     @State private var isScanningFiles = false
@@ -313,29 +321,20 @@ struct EditorView: View {
                         .padding(.vertical, 24)
                 }
             } else {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(spacing: 0) {
-                            // Rows are identified by their POSITION, so SwiftUI
-                            // can never render stale content for an index: row
-                            // content is a pure function of the current array.
-                            // (Using the path string as ForEach id AND .id() on
-                            // rows caused two competing identity systems and
-                            // desynced rendering in the lazy container.)
-                            ForEach(Array(finderResults.enumerated()), id: \.offset) { index, path in
-                                finderRow(path: path, index: index)
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
-                    .onChange(of: finderSelection) { _, newValue in
-                        guard let newValue else { return }
-                        withAnimation(nil) {
-                            proxy.scrollTo(newValue, anchor: .center)
-                        }
-                    }
+                // Paths are unique, so the path is the row's identity and the
+                // selection's — one identity system rather than the two (a
+                // `ForEach` id *and* an `.id()`) that used to desync rendering
+                // in the lazy container this replaced.
+                FilterResultList(
+                    items: finderResults,
+                    id: \.self,
+                    selection: $finderSelection,
+                    rowHeight: Self.finderRowHeight,
+                    maxHeight: 260,
+                    onActivate: selectFinderResult
+                ) { path, isSelected in
+                    finderRow(path: path, isSelected: isSelected)
                 }
-                .frame(maxHeight: 260)
             }
             // Debug telemetry: makes the query/results state visible so any
             // divergence between what is typed and what is searched is obvious.
@@ -358,8 +357,7 @@ struct EditorView: View {
         .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
     }
 
-    private func finderRow(path: String, index: Int) -> some View {
-        let isSelected = index == finderSelection
+    private func finderRow(path: String, isSelected: Bool) -> some View {
         let name = (path as NSString).lastPathComponent
         let dir = (path as NSString).deletingLastPathComponent
         let icon = FileTypeIcon.icon(for: name)
@@ -379,12 +377,6 @@ struct EditorView: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 3)
-        .contentShape(Rectangle())
-        .background(isSelected ? Color.accentColor.opacity(0.18) : .clear)
-        .onTapGesture {
-            selectFinderResult(at: index)
-        }
     }
 
     private func openFileFinder() {
@@ -482,27 +474,23 @@ struct EditorView: View {
     private func refreshFinderResults() {
         let results = FileFinder.results(matching: finderQuery, in: fileIndex)
         finderResults = results
-        finderSelection = results.isEmpty ? nil : 0
+        finderSelection = results.first
         print("[Atelier] refresh(\(finderQuery)) -> \(results.prefix(3).map { ($0 as NSString).lastPathComponent }.joined(separator: ", "))")
     }
 
     private func moveFinderSelection(_ delta: Int) {
-        guard !finderResults.isEmpty else { return }
-        let current = finderSelection ?? (delta > 0 ? -1 : finderResults.count)
-        finderSelection = min(max(current + delta, 0), finderResults.count - 1)
+        finderSelection = neighbouringSelection(from: finderSelection, in: finderResults, delta: delta)
     }
 
     private func openSelectedFinderResult() {
         // Results are always current (recomputed synchronously on every
         // keystroke); never re-compute here — refreshFinderResults() resets the
-        // selection to 0 and would ignore a selection moved with the arrows.
-        guard let index = finderSelection, index < finderResults.count else { return }
-        selectFinderResult(at: index)
+        // selection to the first row and would ignore one moved with the arrows.
+        guard let path = finderSelection, finderResults.contains(path) else { return }
+        selectFinderResult(path)
     }
 
-    private func selectFinderResult(at index: Int) {
-        guard index < finderResults.count else { return }
-        let path = finderResults[index]
+    private func selectFinderResult(_ path: String) {
         closeFileFinder()
         handleFileSelection(path)
     }
