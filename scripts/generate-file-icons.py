@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-# ABOUTME: Turns an unpacked vscicons extension into Xcode imagesets plus a Swift lookup table.
+# ABOUTME: Turns an unpacked Material Icon Theme extension into Xcode imagesets plus a Swift lookup table.
 # ABOUTME: Driven by generate-file-icons.sh, which owns the download, checksum, and version pin.
 """Emit Assets.xcassets/FileIcons/ and Sources/Models/FileIconCatalog.swift.
 
-`icons.json` maps names and extensions to *icon definition ids* (`_f_swift`),
-which in turn point at SVG paths. Those ids are an implementation detail of the
+The theme's manifest maps names and extensions to *icon definition ids*, which
+in turn point at SVG paths. Those ids are an implementation detail of the
 extension, so they are resolved here and the Swift table maps straight to asset
 names.
 """
@@ -18,11 +18,10 @@ from pathlib import Path
 ICONSET_DIR = Path(os.environ["ICONSET_DIR"])
 CATALOG_SWIFT = Path(os.environ["CATALOG_SWIFT"])
 EXTENSION_DIR = Path(os.environ["EXTENSION_DIR"])
-VSCICONS_VERSION = os.environ["VSCICONS_VERSION"]
-FOLDER_BODY_FROM = os.environ["FOLDER_BODY_FROM"]
-FOLDER_BODY_TO = os.environ["FOLDER_BODY_TO"]
+THEME_MANIFEST = os.environ["THEME_MANIFEST"]
+THEME_VERSION = os.environ["THEME_VERSION"]
 
-theme = json.loads((EXTENSION_DIR / "icons.json").read_text())
+theme = json.loads((EXTENSION_DIR / THEME_MANIFEST).read_text())
 definitions = theme["iconDefinitions"]
 
 
@@ -41,6 +40,12 @@ def resolve(table):
     """Lowercase keys and resolve values, dropping entries with no definition."""
     resolved = {}
     for key, definition_id in sorted(table.items()):
+        if "/" in key:
+            # Material Icon Theme scopes some keys to a parent directory
+            # (e.g. "github/workflows"). FileTypeIcon matches a bare file or
+            # folder name only, so a key like this can never match anything —
+            # carrying it into the catalog would just be dead weight.
+            continue
         name = asset_name(definition_id)
         if name is None:
             # A mapping entry pointing at a definition the theme no longer
@@ -94,16 +99,12 @@ ICONSET_DIR.mkdir(parents=True)
     + "\n"
 )
 
-recoloured = 0
 for name in sorted(referenced):
     source = EXTENSION_DIR / "icons" / f"{name}.svg"
     if not source.exists():
         sys.exit(f"error: {name} is referenced by the theme but has no SVG")
 
     svg = source.read_text()
-    if FOLDER_BODY_FROM.lstrip("#") in svg:
-        svg = svg.replace(FOLDER_BODY_FROM.lstrip("#"), FOLDER_BODY_TO.lstrip("#"))
-        recoloured += 1
 
     # Most of the upstream SVGs have no trailing newline, which the repo's
     # end-of-file-fixer hook would rewrite on every commit after a regenerate.
@@ -150,15 +151,15 @@ body = "\n\n".join(
 )
 
 CATALOG_SWIFT.write_text(
-    f"""// ABOUTME: Generated file-tree icon tables from the vscicons extension — do not edit by hand.
+    f"""// ABOUTME: Generated file-tree icon tables from the Material Icon Theme extension — do not edit by hand.
 // ABOUTME: Regenerate with scripts/generate-file-icons.sh; see FileTypeIcon for the lookup rules.
 
-/// Name and extension tables lifted from vscicons {VSCICONS_VERSION} (MIT).
+/// Name and extension tables lifted from Material Icon Theme {THEME_VERSION} (MIT).
 ///
 /// Keys are lowercased; values are asset names inside the `FileIcons` namespace
 /// of `Resources/Assets.xcassets`. `FileTypeIcon` owns the matching rules.
 enum FileIconCatalog {{
-    static let version = "{VSCICONS_VERSION}"
+    static let version = "{THEME_VERSION}"
 
     static let defaultFile = "{defaults["file"]}"
     static let defaultFolder = "{defaults["folder"]}"
@@ -174,7 +175,7 @@ if dropped:
     for entry in dropped[:10]:
         print(f"      {entry}")
 
-print(f"    {len(referenced)} imagesets ({recoloured} folder bodies recoloured)")
+print(f"    {len(referenced)} imagesets")
 print(
     f"    {len(file_names)} file names, {len(file_extensions)} extensions, "
     f"{len(folder_names)} folders, {len(folder_names_expanded)} expanded folders"

@@ -107,7 +107,7 @@ struct FileTreeNode: Identifiable, Equatable {
 /// tree built from `files` as a collapsible outline; selecting a leaf invokes
 /// `onSelect` with its relative path (the diff webview scrolls to that block).
 ///
-/// Styled to match the editor's `FileTreeView`: the same vscicons file icons,
+/// Styled to match the editor's `FileTreeView`: the same Material Icon Theme file icons,
 /// the same 12pt rows, and a flat background rather than the sidebar material.
 /// `List` stays (rather than the editor's `ScrollView` of buttons) because its
 /// `selection` binding is what gives the tree keyboard navigation.
