@@ -447,7 +447,9 @@ private func verificationFormattedDuration(_ duration: TimeInterval) -> String {
 /// replaced, where the whole row was an invisible button and there was no
 /// triangle at all. A disclosure group is a thing users know how to operate, and
 /// the run button sitting inline meant a row-wide toggle would have to carve an
-/// exception around it.
+/// exception around it. `DisclosureGroup` is not the way to get the triangle
+/// back, either — see `disclosureButton`, which is the thing such a change would
+/// delete.
 ///
 /// **The run button follows the name rather than the trailing edge**, so it is
 /// unmistakably *this check's* button, and the column it forms is ragged by
@@ -523,6 +525,26 @@ struct VerificationCheckRow: View {
     /// A `Button` rather than an `.onTapGesture` on the glyph: a tap gesture is
     /// invisible to VoiceOver and unreachable from the keyboard, and this is the
     /// only way to open a check's output at all.
+    ///
+    /// **And a `Button` rather than a `DisclosureGroup`, which the group above is
+    /// otherwise a hand-rolled copy of.** The default style is out because it
+    /// makes the whole label a hit target, and the run button sits inline. A
+    /// custom `DisclosureGroupStyle` restricted to the triangle looks like the
+    /// answer and is worse — measured, not reasoned about: SwiftUI synthesizes an
+    /// `AXDisclosureTriangle` for the group **even under a custom style**,
+    /// labelled from the whole label `HStack` — the check's name, its state word,
+    /// the run button's label — and that element is **inert**.
+    /// `accessibilityPerformPress` on it does nothing, while the same call
+    /// against a default-style group expands it. So the row would carry two
+    /// accessibility elements for one control, and the one announcing itself as
+    /// this row's disclosure triangle is the one that does not work: a VoiceOver
+    /// user activates it, gets nothing, and has to find the button underneath.
+    /// One `Button` that works beats that, and it is ~19 lines shorter.
+    ///
+    /// To re-measure: an in-process accessibility tree stays empty until
+    /// `AXEnhancedUserInterface` is set on `NSApp`, which is what an assistive
+    /// client's attachment does. Compare against a default-style group in the
+    /// same window, or a dump that shows nothing will read as proof of nothing.
     private var disclosureButton: some View {
         Button {
             setExpanded(!isExpanded)
