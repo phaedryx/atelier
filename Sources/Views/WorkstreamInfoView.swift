@@ -381,9 +381,12 @@ struct WorkstreamInfoView: View {
         // not read "State unknown" for as long as fifteen seconds.
         Task {
             await appEnv.refreshGitFacts(for: workingDir)
-            if let branch = appEnv.branchName(for: workingDir) {
-                appEnv.refreshGitHubInfo(for: gitHubProjectDir, branch: branch)
-            }
+            // The branch goes in as the optional `refreshGitHubInfo` already
+            // takes, rather than gating the whole call on one. That call writes
+            // `githubRepoCache` and the open-PR list regardless of any branch —
+            // only the per-branch PR lookup needs one — so gating it meant a
+            // worktree on a detached HEAD got no GitHub info on this tab at all.
+            appEnv.refreshGitHubInfo(for: gitHubProjectDir, branch: appEnv.branchName(for: workingDir))
         }
 
         let dir = workingDirectory
