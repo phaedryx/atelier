@@ -1890,7 +1890,7 @@ hooking claim-release to peer release would spuriously un-claim a task the same 
 actively working, reintroducing the same race the surface-id decision exists to avoid. The real
 "this claim can never be finished" signal is a workstream ceasing to exist:
 `TaskState.claimed` carries `inWorkstreamID`, recorded at claim time from
-`request.client.workstreamID` (`IPCTaskStore.swift:27-31`), precisely so the sweep doesn't need
+`request.client.workstreamID` (`IPCTaskStore.swift:29`), precisely so the sweep doesn't need
 to resolve individual surfaces back to a workstream. `TaskStore.releaseClaims(inWorkstreamID:)`
 (`IPCTaskStore.swift:243-265`) reverts every task claimed there back to `.pending`, and
 `IPC.Service.releaseTaskClaims(inWorkstream:)` (`IPCService.swift:1461-1469`) is called
@@ -1911,7 +1911,7 @@ Every other tool here is `isSafeToReplay == true` (`IPCProtocol.swift:239-261`):
 replay of `claim_task`/`complete_task`/`fail_task` is a defined no-op, a different-surface replay
 is a defined refusal, and the two reads are pure. `add_task` is a *create*, and creates don't get
 to inherit that idempotence — the helper mints a fresh request id on every replay
-(`IPCBridge.attempt` in `Sources/MCPHelper/main.swift`), so there is no id `IPC.Service` could
+(`attempt(...)`, `Sources/MCPHelper/main.swift:917-925`), so there is no id `IPC.Service` could
 use to recognize "I already did this one." A duplicate-path `add_task` is refused rather than
 silently re-executed, and the refusal message is written to forbid a retry rather than invite
 one, the same rule the timeout message states above for `create_workstream`: "add_task is not
