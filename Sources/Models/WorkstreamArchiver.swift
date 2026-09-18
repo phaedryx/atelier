@@ -51,6 +51,14 @@ extension Workstream {
             // third having to invent a runner; both pass one.
             verificationRunner?.forget(workstreamID: workstreamID)
             surfaceCache.removeWorkstreamSurfaces(for: workstreamID)
+            // Fire-and-forget: reverting an in-memory dictionary entry back to
+            // `.pending` carries none of the weight `verificationRunner?.forget`
+            // above does (killing running processes, waiting on them), so this
+            // does not need the injected-optional-parameter pattern that exists
+            // for that heavier operation — same shape as the tmux-kill
+            // `Task.detached` at the top of this function. A project with no
+            // tasks, or a workstream with no claims, makes this a genuine no-op.
+            Task { await IPC.Service.shared.releaseTaskClaims(inWorkstream: workstreamID) }
             IPC.Config.remove(for: workstreamID)
             StatusLine.Config.remove(for: workstreamID)
             LaunchLogger.removeLog(for: workstreamID)
@@ -314,6 +322,7 @@ extension Workstream {
                 }
             }
             surfaceCache.removeWorkstreamSurfaces(for: workstreamID)
+            Task { await IPC.Service.shared.releaseTaskClaims(inWorkstream: workstreamID) }
             LaunchLogger.removeLog(for: workstreamID)
             project.workstreams.removeAll { $0.id == workstreamID }
             clearAgentState(workstreamID, tracker: agentStateTracker)
