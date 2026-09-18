@@ -69,4 +69,17 @@ final class IPCTaskSummaryTests: XCTestCase {
         XCTAssertLessThan(notice.utf8.count, 2_000)
         XCTAssertTrue(notice.hasSuffix("…"), notice)
     }
+
+    /// An oversized task path must not blow the notice past the 64KB cap.
+    /// Path is agent-chosen with no length validation in the store.
+    func test_notice_clipsAnOversizedPath() {
+        let hugePath = String(repeating: "z", count: 10_000)
+        let baseTask = task(state: .completed(bySurfaceID: UUID().uuidString, at: Date()))
+        let withHugePath = IPC.ProjectTask(
+            path: hugePath, name: baseTask.name, content: baseTask.content, tags: baseTask.tags,
+            createdAt: baseTask.createdAt, createdBySurfaceID: baseTask.createdBySurfaceID, state: baseTask.state
+        )
+        let notice = IPC.TaskSummary.notice(for: withHugePath)
+        XCTAssertLessThan(notice.utf8.count, 2_000)
+    }
 }

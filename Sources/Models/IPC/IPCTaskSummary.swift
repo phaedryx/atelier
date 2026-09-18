@@ -49,13 +49,14 @@ extension IPC {
         /// References the task's path and name only, **never its `content`**
         /// — content is agent-chosen up to 64KB, and CLAUDE.md's own language
         /// applies verbatim: an oversized notice "is lost, silently, exactly
-        /// when the agent is waiting for it."
+        /// when the agent is waiting for it." Both `path` and `name` are clipped
+        /// to `maxQuotedLength` to ensure the notice stays within bounds.
         ///
         /// Its one production caller (`IPC.Service`) only ever passes a task
         /// whose state is `.completed` or `.failed` — the `.pending`/
         /// `.claimed` branch below exists only so the switch is exhaustive.
         static func notice(for task: ProjectTask) -> String {
-            let label = "Task \"\(task.path)\" (\(clip(task.name)))"
+            let label = "Task \"\(clip(task.path))\" (\(clip(task.name)))"
             switch task.state {
             case let .completed(_, at):
                 return "\(label) was completed \(Int(Date().timeIntervalSince(at)))s ago. "
