@@ -1699,8 +1699,8 @@ checks rather than a comment:
 | Group | Tools | Trust story |
 |---|---|---|
 | Messaging | `register_peer`, `list_peers`, `send_message`, `receive_messages`, `broadcast`, `get_peer_status` | none needed — text between agents, nothing a user can see |
-| Workspace reads | `list_tabs`, `read_review_comments`, `check_verification`, `list_verification_checks` | none needed — answers about the caller's own workstream |
-| Workspace actions | `open_agent_tab`, `open_editor`, `open_tab`, `close_tab`, `request_attention`, `create_workstream`, `start_verification` | see below |
+| Workspace reads | `list_tabs`, `read_review_comments`, `check_verification`, `list_verification_checks`, `get_session_checkpoint` | none needed — answers about the caller's own workstream |
+| Workspace actions | `open_agent_tab`, `open_editor`, `open_tab`, `close_tab`, `request_attention`, `create_workstream`, `start_verification`, `update_session_checkpoint` | see below |
 | Project tasks | `add_task`, `get_pending_tasks`, `list_tasks`, `claim_task`, `complete_task`, `fail_task` | see "The project task queue" below — project-scoped, and ungated for a third reason distinct from the two above |
 
 The messaging six were once the whole enum. Calix's IPC core is the same six, and everything it
@@ -2323,6 +2323,15 @@ All user-facing strings MUST use localization. Never hardcode strings directly i
 - **AppKit APIs** (NSOpenPanel, NSAlert, etc.): Use `NSLocalizedString("string", comment: "")`.
 - **String interpolation with Images**: Split into `Text` concatenation. E.g., `(Text("Press ") + Text(Image(systemName: "command")) + Text(" N"))`.
 - **Every new user-facing string** must be added to `Localization/en.lproj/Localizable.strings`.
+- **The Monaco bundle (`editor/`) is the one carve-out, and it is narrow.** Labels
+  registered with Monaco's own APIs — `editor.addAction`'s `label`, a context-menu
+  entry — are JavaScript strings inside a Vite bundle that has no access to
+  `NSLocalizedString` and no bundle-loading story of its own. "Paste to Agent"
+  (`editor/src/main.js`) is the first and currently the only one. The carve-out is
+  for labels Monaco itself owns; anything Swift hands the bridge is an ordinary
+  Swift string and localizes normally. Adding a second locale makes this a real
+  gap — the fix then is to pass these over the editor↔Swift bridge at init, not
+  to widen the carve-out.
 - English (en) is the only locale. The indirection is kept deliberately: it keeps strings out of
   call sites, so adding a locale later is a data-only change. Do not replace `NSLocalizedString`
   with hardcoded strings.
