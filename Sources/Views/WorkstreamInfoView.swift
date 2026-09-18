@@ -77,12 +77,22 @@ struct WorkstreamInfoView: View {
 
     @EnvironmentObject var appEnv: AppEnvironment
     @AppStorage("atelier.defaultTerminal") private var defaultTerminal: String = ""
-    @State private var branchName: String?
-    @State private var isDirty = false
     @State private var copiedBranch = false
     @State private var copiedPath = false
     @State private var docFiles: [DocFile] = []
     @State private var selectedDoc: String?
+
+    /// What the app already knows about this worktree.
+    ///
+    /// This tab used to run its own `Git.Operations.repoInfo` on every
+    /// appearance for the branch and the dirtiness — the same probe the
+    /// path-validity sweep makes for the same worktree, and `AppEnvironment`
+    /// keeps the answer. Reading it here also stops the tab collapsing
+    /// `isDirtyUnknown`: it rendered a green "Clean" for a `git status` that had
+    /// not run, which is exactly what that flag exists to prevent.
+    private var facts: Worktree.Facts? {
+        appEnv.facts(for: workingDirectory)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -128,7 +138,7 @@ struct WorkstreamInfoView: View {
 
     private var localSection: some View {
         Section("Local") {
-            if let branch = branchName {
+            if let branch = facts?.branch {
                 LabeledContent {
                     HStack(spacing: 4) {
                         Text(branch)
@@ -175,12 +185,22 @@ struct WorkstreamInfoView: View {
             }
 
             LabeledContent("Working tree") {
-                Label(
-                    isDirty ? "Uncommitted changes" : "Clean",
-                    systemImage: isDirty ? "circle.fill" : "checkmark.circle"
-                )
-                .foregroundStyle(isDirty ? .orange : .secondary)
-                .font(isDirty ? .system(size: 11) : .body)
+                switch facts?.cleanliness ?? .unknown {
+                case .dirty:
+                    Label("Uncommitted changes", systemImage: "circle.fill")
+                        .foregroundStyle(.orange)
+                        .font(.system(size: 11))
+                case .clean:
+                    Label("Clean", systemImage: "checkmark.circle")
+                        .foregroundStyle(.secondary)
+                case .unknown:
+                    // Three states, not two. `git status` failing, or not having
+                    // run yet, is not the same as a clean tree, and saying so
+                    // costs a word — the same call `WorktreeInfoRow` makes for
+                    // `cleanlinessUnknown`.
+                    Label("State unknown", systemImage: "questionmark.circle")
+                        .foregroundStyle(.secondary)
+                }
             }
         }
     }
@@ -222,9 +242,7 @@ struct WorkstreamInfoView: View {
                 Text("gh not installed or not authenticated")
                     .foregroundStyle(.secondary)
             }
-        } else if let branch = branchName,
-                  let pr = appEnv.githubPR(for: projectDirectory, branch: branch)
-        {
+        } else if let pr = appEnv.pullRequest(forWorktree: workingDirectory, in: projectDirectory) {
             LabeledContent {
                 HStack(spacing: 6) {
                     Image(systemName: pr.status.symbolName)
@@ -356,9 +374,16 @@ struct WorkstreamInfoView: View {
     private func loadInfo() {
         let workingDir = workingDirectory
         let gitHubProjectDir = projectDirectory
-        Task.detached {
-            let info = Git.Operations.repoInfo(at: workingDir)
-            await updateRepoInfo(branch: info.branch, isDirty: info.isDirty, projectDirectory: gitHubProjectDir)
+        // The same `repoInfo` this tab used to run itself, published into the
+        // shared facts instead of into two `@State`s only this view could see.
+        // It stays a probe made on appearance rather than a wait for the
+        // fifteen-second sweep, because a tab the user has just opened should
+        // not read "State unknown" for as long as fifteen seconds.
+        Task {
+            await appEnv.refreshGitFacts(for: workingDir)
+            if let branch = appEnv.branchName(for: workingDir) {
+                appEnv.refreshGitHubInfo(for: gitHubProjectDir, branch: branch)
+            }
         }
 
         let dir = workingDirectory
@@ -370,13 +395,6 @@ struct WorkstreamInfoView: View {
         // Re-read the story on every visit so an edit in Shortcut shows up. The cache
         // publishes only when the story actually changed, so a revisit redraws nothing.
         Task { await appEnv.refreshShortcutStory(for: workingDir) }
-    }
-
-    @MainActor
-    private func updateRepoInfo(branch: String?, isDirty: Bool, projectDirectory: String) {
-        branchName = branch
-        self.isDirty = isDirty
-        appEnv.refreshGitHubInfo(for: projectDirectory, branch: branch)
     }
 
     @MainActor

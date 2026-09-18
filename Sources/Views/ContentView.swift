@@ -204,13 +204,22 @@ struct ContentView: View {
     /// the receiver opens when it is chosen — one resolution, so the two cannot
     /// disagree about whether a pull request exists.
     private var workstreamActionTarget: WorkstreamActionTarget? {
-        guard let workstream = activeWorkstream, let project = activeProject else { return nil }
+        // Resolved through the same static `WorkspaceActions` uses for an IPC
+        // call, rather than re-deriving the pair from `activeProject` and
+        // `activeWorkstream`. Those two stay: they answer for `.project`,
+        // `.settings` and `.help` as well, and log a miss — none of which a
+        // workstream-id lookup does. What they must not do is be a *second*
+        // answer to "which project owns this workstream".
+        guard let workstreamID = selection?.workstreamID,
+              let found = WorkspaceActions.resolve(workstreamID: workstreamID, in: projects)
+        else { return nil }
+        let (project, workstream) = found
         let worktreePath = workstream.workingDirectory(checkout: project.checkout)
-        let branch = appEnvironment.branchName(for: worktreePath)
-        let pr = branch.flatMap { appEnvironment.githubPR(for: project.directory, branch: $0) }
+        let facts = appEnvironment.facts(for: worktreePath)
+        let pr = appEnvironment.pullRequest(forWorktree: worktreePath, in: project.directory)
         return WorkstreamActionTarget(
             worktreePath: worktreePath,
-            branchName: branch,
+            branchName: facts?.branch,
             githubURL: appEnvironment.githubURL(for: project.directory),
             pullRequestURL: pr.flatMap { URL(string: $0.url) },
             shortcutURL: appEnvironment.shortcutStory(for: worktreePath).flatMap { URL(string: $0.appURL) }

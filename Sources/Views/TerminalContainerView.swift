@@ -545,8 +545,7 @@ struct TerminalContainerView: View {
     }
 
     private var branchPR: GitHub.PR? {
-        guard let branch = appEnv.branchName(for: workingDirectory) else { return nil }
-        return appEnv.githubPR(for: projectDirectory, branch: branch)
+        appEnv.pullRequest(forWorktree: workingDirectory, in: projectDirectory)
     }
 
     private func buildClaudeCommand() -> String? {

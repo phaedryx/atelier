@@ -6,15 +6,6 @@ import SwiftUI
 
 private let logger = Logger(subsystem: "atelier", category: "environment")
 
-extension Worktree {
-    struct State {
-        var hasUncommittedChanges: Bool = false
-        var hasUnpushedCommits: Bool = false
-        var hasBranchCommits: Bool = false
-        var hasRemote: Bool = false
-    }
-}
-
 @MainActor
 final class AppEnvironment: ObservableObject {
     // Published backing values are mutated through `commitChanges` so a batch of
@@ -28,23 +19,18 @@ final class AppEnvironment: ObservableObject {
     private var repoInfoCache: [String: Git.RepoInfo] = [:]
     private var repoInfoTimestamps: [String: Date] = [:]
 
-    /// Worktree path validity cache
-    private var pathValidityCache: [String: Bool] = [:]
-
-    /// Branch name cache per worktree path
-    private var branchNameCache: [String: String] = [:]
+    /// Everything known about each worktree, keyed by worktree path.
+    ///
+    /// One value per worktree rather than one dictionary per fact. See
+    /// `Worktree.Facts` for what is in it, what deliberately is not, and why.
+    /// Written by `refreshPathValidity`'s sweep, by `refreshBranchName` and
+    /// `refreshWorktreeState` for a single field each, and by
+    /// `registerShortcutStory`; every one of those goes through `mutateFacts` or
+    /// the sweep's own equality guard, so nothing publishes unless a value moved.
+    private var factsCache: [String: Worktree.Facts] = [:]
 
     /// Git repo detection cache per project directory
     private var gitRepoCache: [String: Bool] = [:]
-
-    /// Working tree state cache per worktree path
-    private var worktreeStateCache: [String: Worktree.State] = [:]
-
-    /// Active port cache per workstream ID
-    private var activePortCache: Set<UUID> = []
-
-    /// Task description cache per worktree path
-    private var taskDescriptionCache: [String: String] = [:]
 
     /// GitHub remote detection cache per project directory (lightweight git check)
     private var githubRemoteCache: [String: Bool] = [:]
@@ -209,14 +195,44 @@ final class AppEnvironment: ObservableObject {
 
     // MARK: - Path Validity
 
+    /// Everything known about one worktree, or nil for a path nothing has swept.
+    ///
+    /// The accessors below are thin wrappers over this. They are kept because
+    /// each answers a question with a default a caller would otherwise have to
+    /// remember — an unswept path is *valid*, not invalid — and because keeping
+    /// them let the value type land without rewriting every reader in the same
+    /// change.
+    func facts(for worktreePath: String?) -> Worktree.Facts? {
+        guard let path = worktreePath else { return nil }
+        return factsCache[path]
+    }
+
     func isPathValid(_ path: String?) -> Bool {
         guard let path else { return true }
-        return pathValidityCache[path] ?? true
+        return facts(for: path)?.isPathValid ?? true
     }
 
     func branchName(for worktreePath: String?) -> String? {
-        guard let path = worktreePath else { return nil }
-        return branchNameCache[path]
+        facts(for: worktreePath)?.branch
+    }
+
+    /// Apply one change to one worktree's facts, publishing only if it moved.
+    ///
+    /// The guard is outside `commitChanges` on purpose: that method sends
+    /// `objectWillChange` as its first act, so an equality check inside it would
+    /// publish and then decline to change anything — which is the churn this
+    /// whole value exists to remove.
+    ///
+    /// An absent entry is compared as a default `Facts` rather than as nil, so a
+    /// write that lands nothing new — `refreshBranchName` finding no branch for a
+    /// path nothing has swept — creates no entry and publishes nothing. Absence
+    /// and a default value read identically through every accessor above.
+    private func mutateFacts(for worktreePath: String, _ body: (inout Worktree.Facts) -> Void) {
+        let existing = factsCache[worktreePath] ?? Worktree.Facts()
+        var facts = existing
+        body(&facts)
+        guard facts != existing else { return }
+        commitChanges { factsCache[worktreePath] = facts }
     }
 
     /// Re-read the branch for a single worktree and publish it if it changed.
@@ -242,13 +258,28 @@ final class AppEnvironment: ObservableObject {
     @MainActor
     func refreshBranchName(for worktreePath: String) async {
         let branch = await Task.detached { Git.Operations.currentBranch(at: worktreePath) }.value
-        guard branchNameCache[worktreePath] != branch else { return }
-        commitChanges {
-            if let branch {
-                branchNameCache[worktreePath] = branch
-            } else {
-                branchNameCache.removeValue(forKey: worktreePath)
-            }
+        mutateFacts(for: worktreePath) { $0.branch = branch }
+    }
+
+    /// `refreshBranchName`'s wider sibling: one `repoInfo`, for the branch *and*
+    /// the working tree's cleanliness.
+    ///
+    /// `WorkstreamInfoView` needs both the moment it appears, and the sweep that
+    /// normally supplies cleanliness runs on a fifteen-second timer — so waiting
+    /// for it would render "State unknown" on a tab the user has just opened.
+    /// That tab used to run this same `repoInfo` itself and hold the answer in
+    /// its own `@State`, which is what made the branch there a second, quietly
+    /// divergent copy of the one in this cache.
+    ///
+    /// Deliberately *not* what `Worktree.HeadWatcher` calls: that fires on any
+    /// git activity in a worktree, and `repoInfo` is several subprocesses where
+    /// `refreshBranchName`'s `rev-parse` is one.
+    @MainActor
+    func refreshGitFacts(for worktreePath: String) async {
+        let info = await Task.detached { Git.Operations.repoInfo(at: worktreePath) }.value
+        mutateFacts(for: worktreePath) {
+            $0.branch = info.branch
+            $0.cleanliness = Worktree.Cleanliness(isDirty: info.isDirty, isDirtyUnknown: info.isDirtyUnknown)
         }
     }
 
@@ -256,11 +287,13 @@ final class AppEnvironment: ObservableObject {
 
     /// Fetched story per worktree path. Keyed by path, not story id, because
     /// `WorkstreamInfoView` receives `workingDirectory` but never the `Workstream`
-    /// itself — the same reason `taskDescriptionCache` is keyed this way.
+    /// itself — the same reason `Worktree.Facts` is keyed this way.
+    ///
+    /// Only the story *id* lives in `Worktree.Facts`; the fetched story stays
+    /// here because it is the one fact on this path that comes off the network
+    /// rather than off the disk, and it is reconciled with the id by
+    /// `pruneShortcutStories`.
     private var shortcutStoryCache: [String: Shortcut.Story] = [:]
-    /// Worktree path to story id, populated from the project list, which is the only
-    /// place that knows the mapping.
-    private var shortcutStoryIDs: [String: Int] = [:]
     /// Workflow states are shared across all stories and change rarely, so they are
     /// fetched once per launch rather than per story.
     private var shortcutWorkflows: [Shortcut.Workflow] = []
@@ -290,7 +323,7 @@ final class AppEnvironment: ObservableObject {
     }
 
     func registerShortcutStory(id: Int, for worktreePath: String) {
-        shortcutStoryIDs[worktreePath] = id
+        mutateFacts(for: worktreePath) { $0.shortcutStoryID = id }
 
         // Promote the staged copy now that there is a path to key it by. The removal happens
         // before the equality guard: leaving it after meant a re-registration with the story
@@ -307,11 +340,12 @@ final class AppEnvironment: ObservableObject {
     /// Shortcut workstream and creating a plain one that reuses the path — likelier now
     /// that worktree directories are named after the branch — renders the old story.
     func pruneShortcutStories(keeping livePaths: Set<String>) {
-        let stalePaths = Set(shortcutStoryIDs.keys).subtracting(livePaths)
+        let carryingAStory = factsCache.filter { $0.value.shortcutStoryID != nil }.keys
+        let stalePaths = Set(carryingAStory).subtracting(livePaths)
         guard !stalePaths.isEmpty else { return }
         commitChanges {
             for path in stalePaths {
-                shortcutStoryIDs.removeValue(forKey: path)
+                factsCache[path]?.shortcutStoryID = nil
                 shortcutStoryCache.removeValue(forKey: path)
             }
         }
@@ -325,7 +359,7 @@ final class AppEnvironment: ObservableObject {
     /// keeps a revisit from redrawing.
     @MainActor
     func refreshShortcutStory(for worktreePath: String) async {
-        guard let storyID = shortcutStoryIDs[worktreePath] else { return }
+        guard let storyID = factsCache[worktreePath]?.shortcutStoryID else { return }
 
         if shortcutWorkflows.isEmpty {
             do {
@@ -379,7 +413,7 @@ final class AppEnvironment: ObservableObject {
     }
 
     func worktreeState(for path: String) -> Worktree.State {
-        worktreeStateCache[path] ?? Worktree.State()
+        facts(for: path)?.state ?? Worktree.State()
     }
 
     private var worktreeStateTimestamps: [String: Date] = [:]
@@ -420,19 +454,22 @@ final class AppEnvironment: ObservableObject {
     private func deferWorktreeStateUpdate(_ state: Worktree.State, for path: String) {
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 50_000_000)
-            self.commitChanges {
-                self.worktreeStateCache[path] = state
-            }
+            self.mutateFacts(for: path) { $0.state = state }
         }
     }
 
-    func hasActivePort(_ workstreamID: UUID) -> Bool {
-        activePortCache.contains(workstreamID)
+    /// Whether the workstream at this worktree has a detected listening port.
+    ///
+    /// Re-keyed from the workstream's UUID to its worktree path when the facts
+    /// were folded into one value. The one consequence: a workstream with no
+    /// `worktreePath` — which the sweep already skips for every other fact —
+    /// no longer reports a port. There is nothing for one to be detected in.
+    func hasActivePort(for worktreePath: String?) -> Bool {
+        facts(for: worktreePath)?.hasActivePort ?? false
     }
 
     func taskDescription(for worktreePath: String?) -> String? {
-        guard let path = worktreePath else { return nil }
-        return taskDescriptionCache[path]
+        facts(for: worktreePath)?.taskDescription
     }
 
     /// Returns IDs of projects whose directories no longer exist.
@@ -494,13 +531,17 @@ final class AppEnvironment: ObservableObject {
         pendingPathValidityProjects = nil
 
         Task.detached {
-            var results: [String: Bool] = [:]
+            // One entry per worktree path the sweep sees, folded over what is
+            // already known at the end. Six dictionaries used to be assembled
+            // here, and the reason that mattered is not tidiness: two of them
+            // were assigned wholesale and four were merged, so which rule a
+            // given fact followed lived only in the shape of the write.
+            // `Worktree.Facts.Swept` states each rule at the field.
+            var swept: [String: Worktree.Facts.Swept] = [:]
             var missing: Set<UUID> = []
             var gitRepoResults: [String: Bool] = [:]
             var githubRemoteResults: [String: Bool] = [:]
             var githubBrowserURLResults: [String: URL] = [:]
-            var portResults: Set<UUID> = []
-            var descriptionResults: [String: String] = [:]
 
             // Collect valid worktree paths that need git info
             var validPaths: [String] = []
@@ -536,13 +577,11 @@ final class AppEnvironment: ObservableObject {
                     .flatMap(GitHub.Operations.browserURL(from:))
 
                 for ws in project.workstreams {
-                    if RunState.Store.loadValidated(for: ws.id)?.detectedPorts.isEmpty == false {
-                        portResults.insert(ws.id)
-                    }
                     guard let path = ws.worktreePath else { continue }
+                    let hasPort = RunState.Store.loadValidated(for: ws.id)?.detectedPorts.isEmpty == false
                     var wsIsDir: ObjCBool = false
                     let valid = FileManager.default.fileExists(atPath: path, isDirectory: &wsIsDir) && wsIsDir.boolValue
-                    results[path] = valid
+                    var entry = Worktree.Facts.Swept(isPathValid: valid, hasActivePort: hasPort)
                     if valid {
                         validPaths.append(path)
                         let descURL = URL(fileURLWithPath: path)
@@ -552,10 +591,11 @@ final class AppEnvironment: ObservableObject {
                         {
                             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                             if !trimmed.isEmpty {
-                                descriptionResults[path] = trimmed
+                                entry.taskDescription = trimmed
                             }
                         }
                     }
+                    swept[path] = entry
                 }
             }
 
@@ -569,21 +609,29 @@ final class AppEnvironment: ObservableObject {
                 }
             }
 
-            // Run git info calls in parallel
-            let branches: [String: String] = await withTaskGroup(
-                of: (String, String?).self
+            // Run git info calls in parallel.
+            //
+            // Cleanliness is free here: this `repoInfo` call already computes it
+            // and used to throw it away, keeping only the branch. Taking it is
+            // what lets the Info tab stop shelling out for the same answer — and
+            // it arrives with `isDirtyUnknown` intact, which that tab's own
+            // probe was collapsing into a green "Clean".
+            let probes: [String: (branch: String?, cleanliness: Worktree.Cleanliness)] = await withTaskGroup(
+                of: (String, String?, Worktree.Cleanliness).self
             ) { group in
                 for path in validPaths {
                     group.addTask {
                         let info = Git.Operations.repoInfo(at: path)
-                        return (path, info.branch)
+                        return (
+                            path,
+                            info.branch,
+                            Worktree.Cleanliness(isDirty: info.isDirty, isDirtyUnknown: info.isDirtyUnknown)
+                        )
                     }
                 }
-                var collected: [String: String] = [:]
-                for await (path, branch) in group {
-                    if let branch {
-                        collected[path] = branch
-                    }
+                var collected: [String: (branch: String?, cleanliness: Worktree.Cleanliness)] = [:]
+                for await (path, branch, cleanliness) in group {
+                    collected[path] = (branch, cleanliness)
                 }
                 return collected
             }
@@ -617,17 +665,42 @@ final class AppEnvironment: ObservableObject {
                 return collected
             }
 
+            // Fold the two parallel probes back onto the entries they belong to.
+            for (path, probe) in probes {
+                swept[path]?.branch = probe.branch
+                swept[path]?.cleanliness = probe.cleanliness
+            }
+            for (path, state) in worktreeStates {
+                swept[path]?.state = state
+            }
+            let sweptFacts = swept
+
             await MainActor.run {
-                self.commitChanges {
-                    self.pathValidityCache.merge(results) { _, new in new }
-                    self.branchNameCache.merge(branches) { _, new in new }
-                    self.missingProjectIDs = missing
-                    self.gitRepoCache.merge(gitRepoResults) { _, new in new }
-                    self.githubRemoteCache.merge(githubRemoteResults) { _, new in new }
-                    self.githubBrowserURLCache.merge(githubBrowserURLResults) { _, new in new }
-                    self.worktreeStateCache.merge(worktreeStates) { _, new in new }
-                    self.activePortCache = portResults
-                    self.taskDescriptionCache = descriptionResults
+                let updatedFacts = Worktree.Facts.applying(sweptFacts, to: self.factsCache)
+                var gitRepos = self.gitRepoCache
+                gitRepos.merge(gitRepoResults) { _, new in new }
+                var githubRemotes = self.githubRemoteCache
+                githubRemotes.merge(githubRemoteResults) { _, new in new }
+                var githubBrowserURLs = self.githubBrowserURLCache
+                githubBrowserURLs.merge(githubBrowserURLResults) { _, new in new }
+
+                // Compared before publishing, not inside `commitChanges` — which
+                // sends `objectWillChange` as its first act. The sweep runs every
+                // fifteen seconds and almost always finds the world unchanged, so
+                // an unconditional publish redrew every row in the app on a timer.
+                let changed = updatedFacts != self.factsCache
+                    || missing != self.missingProjectIDs
+                    || gitRepos != self.gitRepoCache
+                    || githubRemotes != self.githubRemoteCache
+                    || githubBrowserURLs != self.githubBrowserURLCache
+                if changed {
+                    self.commitChanges {
+                        self.factsCache = updatedFacts
+                        self.missingProjectIDs = missing
+                        self.gitRepoCache = gitRepos
+                        self.githubRemoteCache = githubRemotes
+                        self.githubBrowserURLCache = githubBrowserURLs
+                    }
                 }
                 // Compared rather than assigned nil: a sweep admitted past the
                 // ceiling has already claimed the slot, and a late completion from
@@ -659,6 +732,23 @@ final class AppEnvironment: ObservableObject {
 
     func githubPR(for directory: String, branch: String) -> GitHub.PR? {
         githubBranchPRCache["\(directory)|\(branch)"]
+    }
+
+    /// The pull request for whatever branch a worktree currently holds.
+    ///
+    /// The composition of the two lookups, in one place. It was written out
+    /// verbatim — `branch.flatMap { appEnv.githubPR(for: dir, branch: $0) }` — at
+    /// six call sites, which is what a fact split across two differently-keyed
+    /// caches costs its readers.
+    ///
+    /// The PR itself stays keyed by `"dir|branch"` rather than moving into
+    /// `Worktree.Facts`, because `ProjectOverviewView`'s worktree list renders a
+    /// badge for worktrees that are not workstreams at all — rows a path-keyed
+    /// cache filled from `project.workstreams` can never cover. That row asks
+    /// `githubPR(for:branch:)` directly, and is the one caller that should.
+    func pullRequest(forWorktree worktreePath: String?, in projectDirectory: String) -> GitHub.PR? {
+        guard let branch = branchName(for: worktreePath) else { return nil }
+        return githubPR(for: projectDirectory, branch: branch)
     }
 
     func clearBranchPR(for directory: String, branch: String) {
@@ -793,7 +883,7 @@ final class AppEnvironment: ObservableObject {
             var branches: Set<String> = []
             for ws in project.workstreams {
                 guard let path = ws.worktreePath,
-                      let branch = branchNameCache[path] else { continue }
+                      let branch = factsCache[path]?.branch else { continue }
                 branches.insert(branch)
             }
             if !branches.isEmpty {
