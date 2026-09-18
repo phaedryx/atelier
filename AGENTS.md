@@ -1901,10 +1901,13 @@ injected-optional-parameter pattern (`WorkstreamArchiver.swift:54-60`): that pat
 because verification teardown is heavyweight and ordered — killing running processes and
 awaiting a bounded timeout the archive flow genuinely needs before `git worktree remove` — and
 reverting a handful of in-memory dictionary entries to `.pending` carries none of that weight.
-Calling the actor singleton directly and detached is the same shape `Archiver.remove`'s own top
-already uses for killing tmux sessions. A project with no tasks, or a workstream with no claims,
-makes the call a genuine no-op, so neither archive path needs a new precondition to add it
-safely.
+Calling the actor singleton from a plain, un-awaited `Task { ... }` is the same fire-and-forget
+shape `Archiver.remove`'s own top already uses to kill tmux sessions, though that call is
+`Task.detached` — the two share only "kicked off and not waited on," not the detached/
+non-detached distinction itself; a plain `Task` is enough here because this has no captured
+`@MainActor` state to escape the way the detached tmux kill does. A project with no tasks, or a
+workstream with no claims, makes the call a genuine no-op, so neither archive path needs a new
+precondition to add it safely.
 
 **`add_task` is the one non-replayable tool in this group, alongside `create_workstream`.**
 Every other tool here is `isSafeToReplay == true` (`IPCProtocol.swift:239-261`): a same-surface
@@ -1915,10 +1918,11 @@ to inherit that idempotence — the helper mints a fresh request id on every rep
 use to recognize "I already did this one." A duplicate-path `add_task` is refused rather than
 silently re-executed, and the refusal message is written to forbid a retry rather than invite
 one, the same rule the timeout message states above for `create_workstream`: "add_task is not
-replayed automatically after a lost connection... check list_tasks before retrying — your first
-call likely already succeeded" (`TaskQueueFailure.alreadyExists`,
-`Sources/Models/IPC/IPCTaskStore.swift:69-72`). A caller cannot tell a genuine path collision
-from one its own retry caused, so the honest answer is "don't," not "try a different path."
+replayed automatically after a lost connection, so this may mean your earlier call already
+succeeded — check list_tasks rather than retrying under the same path"
+(`TaskQueueFailure.alreadyExists`, `Sources/Models/IPC/IPCTaskStore.swift:70-72`). A caller
+cannot tell a genuine path collision from one its own retry caused, so the honest answer is
+"don't," not "try a different path."
 
 **Do not reintroduce persistence, an approval gate, a claim TTL, or task editing.** All four
 were considered and declined, not overlooked:
