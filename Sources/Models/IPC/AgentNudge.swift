@@ -116,6 +116,13 @@ final class AgentNudge {
 
         record("typing a notice from \(senderName)", surfaceID: surfaceID)
         lastNudge[surfaceID] = now
+        // This submission is Atelier's own, not the human occupying this pane —
+        // mark it so `Workstream.AgentStateTracker` doesn't record it as direct
+        // user input for IPC's peer-attribution field. Untested here for the
+        // same reason the rest of this method is (see the file's ABOUTME): it
+        // needs a live Ghostty surface. The marking logic itself is covered in
+        // `WorkstreamAgentStateTrackerTests`.
+        tracker.expectSyntheticPrompt(surfaceID: surfaceID)
         let plural = waiting == 1 ? "message" : "messages"
         // Deliberately says nothing the sender chose. Stripping control
         // characters made the name safe for a *terminal*, but this text is

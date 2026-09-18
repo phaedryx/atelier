@@ -344,6 +344,15 @@ extension IPC {
         /// Seconds since this peer was last heard from.
         let lastSeenSecondsAgo: Int
         let pendingMessages: Int
+        /// Seconds since this peer's surface last had a `UserPromptSubmit` hook
+        /// event — a human typing into that pane, as opposed to the peer acting on
+        /// its own or on another agent's instruction. Nil means no such event has
+        /// been observed this session, which covers both "never happened yet" and
+        /// "this peer has no surface to type into" (`surfaceID == nil`). A
+        /// coordinator compares this against its own dispatch time to tell whether
+        /// a peer has had direct human input since; Atelier has no notion of
+        /// "dispatch" of its own to compare against.
+        let lastUserPromptSecondsAgo: Int?
     }
 
     /// A delivered message as reported to an agent.

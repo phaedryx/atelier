@@ -1546,6 +1546,68 @@ shared enum and the exhaustive dispatch switch land ahead of the handlers.
 advertised name is a real `Tool`, and the unadvertised set is exactly the expected one — so a
 tool cannot be advertised before its handler exists or stay hidden after.
 
+**`PeerInfo.lastUserPromptSecondsAgo` answers "has a human typed into this peer directly", and
+Atelier deliberately has no notion of "since I dispatched it" to compare against.** It is
+`nil` when no `UserPromptSubmit` hook event has been observed for that peer's surface this
+session — which covers both "never happened yet" and "this peer has no surface at all"
+(`surfaceID == nil`) — and otherwise the seconds since the most recent one, mirroring
+`lastSeenSecondsAgo` rather than collapsing to a boolean: a boolean would force Atelier to
+decide what "since dispatch" means, and dispatch is not a concept Atelier has. A coordinator
+that just sent a peer a brief (via `send_message`, or an initial prompt through
+`open_agent_tab`/`create_workstream`) knows its own dispatch time; comparing that against this
+field is how it tells whether a human has since typed into that peer's own session — the
+incident this field exists for: a coordinator saw a peer merge a PR, assumed it had gone off
+brief, and broadcast that conclusion, when the user had in fact told the peer to do exactly
+that in its own terminal. Tracked per **surface** (`Workstream.AgentStateTracker`'s
+`surfaceLastUserPromptAt`, alongside `surfaceStates`), not per workstream, for the reason
+`surfaceStates` already gives: two agents can share one workstream.
+
+**The read is `nonisolated`, and that is not a style choice — a `MainActor.run` hop here
+deadlocked a real socket round trip.** `IPC.Service` is an actor answering requests from
+`IPC.Server`'s own dispatch queue, and `IPCServerTests` exercises it by blocking the *test's*
+thread in a raw, untimed `recv()` waiting for the reply. `Workstream.AgentStateTracker` is
+`@MainActor`, so producing that reply by hopping to the main actor works only if the main
+thread is free to run the hop — and in that test it is the very thread parked in `recv()`.
+Neither side can proceed: the reply can't be produced until the main thread goes idle, and the
+main thread won't go idle until the reply arrives. `AgentStateTracker.lastUserPromptAt(forSurface:)`
+is therefore `nonisolated`, backed by a lock-guarded box (`UserPromptClock`) rather than a plain
+dictionary — the same reasoning as `Git.Operations.defaultBranch`'s cache living outside
+`AppEnvironment`, for the same reason stated there: "half the callers structurally cannot reach
+a `@MainActor` type." Writes still only ever happen from MainActor code, in `updateSurfaceState`.
+Do not route this field back through a `MainActor.run` read to "simplify" it — that reintroduces
+the deadlock, and `IPCServerTests` is what will hang to prove it.
+
+**Not every synthetic keystroke should count, and the two Atelier already has disagree.**
+`PromptInjector`'s stored prompts are a human's own decision — they choose, in the moment, which
+saved prompt to send into which pane — so a `UserPromptSubmit` that follows one is genuinely
+attributable to that human, however it was typed. `AgentNudge`'s unread-messages notice is the
+opposite: fully autonomous text Atelier types on the recipient's behalf when nothing has been
+read yet, and unrelated to the sender's own conduct. Left alone it would have made every
+`send_message` to an idle peer look like a human just walked up to that peer's terminal, which is
+the exact false positive this field exists to prevent, just self-inflicted rather than caused by
+the coordinator's misreading — so `AgentNudge.nudge` calls
+`Workstream.AgentStateTracker.shared.expectSyntheticPrompt(surfaceID:)` immediately before typing,
+and `updateSurfaceState`'s `.agentWaiting` case consumes that marker instead of recording the
+prompt, provided it arrives within `syntheticPromptWindow` (10s — generous headroom over
+`typeAndSubmit`'s own ~1s of delay plus hook latency). Past the window an unconsumed marker is
+discarded and the next prompt counts as human regardless: `typeAndSubmit`'s own safety check can
+skip its Return keypress entirely if the pane stops looking idle mid-delivery, and a marker with
+no expiry would then go on suppressing attribution for whatever genuinely human prompt eventually
+arrived — silently, at an arbitrary point later in the session. Add a marker-and-consume pair like
+this for any *other* future mechanism that submits synthetic text into a Coding Agent tab; do not
+extend `PromptInjector`'s path the same way, since its submissions are the human input this field
+is supposed to report.
+
+**Known, accepted gap: the CLI-supplied initial prompt from `open_agent_tab`/`create_workstream`
+may itself read as a human prompt.** If Claude Code's harness fires `UserPromptSubmit` for that
+first turn the same way it does for one typed after the session starts, a peer's
+`lastUserPromptSecondsAgo` will read as "just now" from the moment it is created by *another
+agent's* dispatch, not a human's. This is deliberately not suppressed the way `AgentNudge`'s
+notice is: the dispatching coordinator already knows exactly what it just sent and when, so its
+own "since I dispatched" comparison naturally reads this as unremarkable rather than as evidence
+of a human redirect. Suppressing it would also require assuming a fact about Claude Code's own
+hook semantics for a CLI-argument-supplied first turn that has not been verified here.
+
 **A tool call that is interrupted is never re-sent unless re-sending it changes nothing.**
 `IPC.Tool` carries two properties the helper reads — `replyDeadline` and `isSafeToReplay` —
 and both exist because one 15-second socket timeout with one reconnect-and-replay policy

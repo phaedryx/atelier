@@ -325,6 +325,59 @@ final class IPCServiceTests: XCTestCase {
         XCTAssertEqual(peer.pendingMessages, 1)
     }
 
+    // MARK: - Last user prompt
+
+    func test_getPeerStatus_lastUserPromptSecondsAgo_isNilWithNoObservedPrompt() async {
+        let surface = UUID()
+        let response = await call(.registerPeer, ["name": "peer"], as: client(project: projectA, surfaceID: surface))
+        guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
+
+        let status = await call(.getPeerStatus, ["peer_id": peer.id], as: client(project: projectA))
+        guard case let .peer(info) = status.payload else { return XCTFail("expected a peer") }
+        XCTAssertNil(info.lastUserPromptSecondsAgo, "no UserPromptSubmit has ever been observed on this surface")
+    }
+
+    func test_getPeerStatus_reportsARecentUserPrompt() async {
+        let surface = UUID()
+        let response = await call(.registerPeer, ["name": "peer"], as: client(project: projectA, surfaceID: surface))
+        guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
+
+        await MainActor.run {
+            Workstream.AgentStateTracker.shared._testSetLastUserPrompt(surfaceID: surface, at: Date())
+        }
+
+        let status = await call(.getPeerStatus, ["peer_id": peer.id], as: client(project: projectA))
+        guard case let .peer(info) = status.payload else { return XCTFail("expected a peer") }
+        guard let secondsAgo = info.lastUserPromptSecondsAgo else { return XCTFail("expected a value") }
+        XCTAssertLessThan(secondsAgo, 5)
+    }
+
+    func test_listPeers_alsoReportsLastUserPromptSecondsAgo() async throws {
+        let surface = UUID()
+        let sender = try await register(name: "sender", project: projectA)
+        let response = await call(.registerPeer, ["name": "peer"], as: client(project: projectA, surfaceID: surface))
+        guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
+
+        await MainActor.run {
+            Workstream.AgentStateTracker.shared._testSetLastUserPrompt(surfaceID: surface, at: Date())
+        }
+
+        let listed = try await peers(of: call(.listPeers, as: client(project: projectA, peerID: sender)))
+        guard let info = listed.first(where: { $0.id == peer.id }) else { return XCTFail("peer not listed") }
+        XCTAssertNotNil(info.lastUserPromptSecondsAgo)
+    }
+
+    func test_getPeerStatus_pullOnlyPeer_neverReportsLastUserPrompt() async {
+        // No surface means no pane a human could type into, so this must never
+        // borrow another surface's timestamp.
+        let response = await call(.registerPeer, ["name": "elsewhere"], as: client(project: projectA, surfaceID: nil))
+        guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
+
+        let status = await call(.getPeerStatus, ["peer_id": peer.id], as: client(project: projectA))
+        guard case let .peer(info) = status.payload else { return XCTFail("expected a peer") }
+        XCTAssertNil(info.lastUserPromptSecondsAgo)
+    }
+
     // MARK: - open_tab
 
     func test_openTab_withoutAKind_saysWhichArgumentIsMissing() async {

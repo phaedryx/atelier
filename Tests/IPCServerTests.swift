@@ -202,7 +202,7 @@ final class IPCServerTests: XCTestCase {
         let observer = try connect(to: endpoint)
         defer { close(observer) }
         let deadline = Date().addingTimeInterval(5)
-        var listed: [IPC.PeerInfo] = [IPC.PeerInfo(id: peer.id, name: peer.name, role: "", workstream: nil, surfaceID: nil, lastSeenSecondsAgo: 0, pendingMessages: 0)]
+        var listed: [IPC.PeerInfo] = [IPC.PeerInfo(id: peer.id, name: peer.name, role: "", workstream: nil, surfaceID: nil, lastSeenSecondsAgo: 0, pendingMessages: 0, lastUserPromptSecondsAgo: nil)]
         while Date() < deadline, !listed.isEmpty {
             let response = try roundTrip(
                 IPC.Request(token: endpoint.token, tool: .listPeers, client: identity(project: "/repos/atelier")),
@@ -762,6 +762,14 @@ final class IPCServerTests: XCTestCase {
             text.contains("surface=\(context.surfaceID?.uuidString ?? "")"),
             "expected the peer's surface id in: \(text)"
         )
+        // No UserPromptSubmit has been recorded for this peer's surface, so the
+        // rendered text must say so rather than silently dropping the field —
+        // this is the only place `renderText`'s peers case is exercised at all,
+        // since it lives in the helper target, which `AtelierTests` cannot import.
+        XCTAssertTrue(
+            text.contains("last-user-prompt=never"),
+            "expected the last-user-prompt field in: \(text)"
+        )
 
         // The only exercise `renderText`'s verification case ever gets. It lives
         // in the helper target, which `AtelierTests` cannot import, so nothing
@@ -977,7 +985,8 @@ private final class HangUpListener {
                 workstream: "wry-amber-lexer",
                 surfaceID: nil,
                 lastSeenSecondsAgo: 0,
-                pendingMessages: 0
+                pendingMessages: 0,
+                lastUserPromptSecondsAgo: nil
             )))
         case .listPeers:
             .success(id: request.id, .peers([]))
@@ -1133,7 +1142,8 @@ private final class TrickleListener {
                 workstream: "wry-amber-lexer",
                 surfaceID: nil,
                 lastSeenSecondsAgo: 0,
-                pendingMessages: 0
+                pendingMessages: 0,
+                lastUserPromptSecondsAgo: nil
             )))
         default:
             .success(id: request.id, .text("the stub answered \(request.tool.rawValue)"))

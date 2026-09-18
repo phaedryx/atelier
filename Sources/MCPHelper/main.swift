@@ -196,8 +196,10 @@ let toolDefinitions: [ToolDefinition] = [
         tool: .listPeers,
         description: """
         List the other agents currently reachable, with how long ago each was
-        last heard from and how many messages are waiting for it. Only agents
-        working in the same project are listed.
+        last heard from, how many messages are waiting for it, and how long ago
+        a human last typed directly into its session (null if never, or if it
+        has no terminal of its own). Only agents working in the same project are
+        listed.
         """,
         properties: [:],
         required: []
@@ -240,7 +242,11 @@ let toolDefinitions: [ToolDefinition] = [
     ),
     ToolDefinition(
         tool: .getPeerStatus,
-        description: "Check one agent: whether it is still registered, and how many messages are waiting for it.",
+        description: """
+        Check one agent: whether it is still registered, how many messages are
+        waiting for it, and how long ago a human last typed directly into its
+        session (null if never, or if it has no terminal of its own).
+        """,
         properties: [
             "peer_id": ["type": "string", "description": "Peer id from list_peers."],
         ],
@@ -541,6 +547,13 @@ func reply(id: Any, code: Int, message: String) {
     writeLine(["jsonrpc": "2.0", "id": id, "error": ["code": code, "message": message]])
 }
 
+/// "never" is deliberately not "0s-ago": a value of 0 means a prompt just
+/// landed, which is a very different fact from "none has ever been observed
+/// on this surface, or it has no surface at all."
+func lastUserPromptText(_ secondsAgo: Int?) -> String {
+    secondsAgo.map { "\($0)s-ago" } ?? "never"
+}
+
 /// Renders a payload as the plain text an agent reads.
 func renderText(_ payload: IPC.Payload?) -> String {
     switch payload {
@@ -551,9 +564,11 @@ func renderText(_ payload: IPC.Payload?) -> String {
                 + (peer.workstream.map { " workstream=\($0)" } ?? "")
                 + (peer.surfaceID.map { " surface=\($0)" } ?? "")
                 + " last-seen=\(peer.lastSeenSecondsAgo)s-ago pending=\(peer.pendingMessages)"
+                + " last-user-prompt=\(lastUserPromptText(peer.lastUserPromptSecondsAgo))"
         }.joined(separator: "\n")
     case let .peer(peer):
         return "\(peer.name) [\(peer.role)] id=\(peer.id) last-seen=\(peer.lastSeenSecondsAgo)s-ago pending=\(peer.pendingMessages)"
+            + " last-user-prompt=\(lastUserPromptText(peer.lastUserPromptSecondsAgo))"
     case let .messages(messages):
         guard !messages.isEmpty else { return "No new messages." }
         return messages.map { message in
