@@ -680,3 +680,8 @@
 "State unknown" = "State unknown";
 "Workstream order" = "Workstream order";
 "How workstreams are ordered in the sidebar, on the project overview, and when cycling with Command-bracket." = "How workstreams are ordered in the sidebar, on the project overview, and when cycling with Command-bracket.";
+
+/* Execution tab - process table column headings */
+"Process" = "Process";
+"Namespace" = "Namespace";
+"Ready" = "Ready";

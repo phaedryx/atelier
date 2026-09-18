@@ -3,10 +3,69 @@
 
 import SwiftUI
 
+/// The height of one process-table row.
+///
+/// Pinned rather than inferred, for the reason `processChecklistRowHeight` is:
+/// `processTableHeight` multiplies by it to decide the table's frame, so a row
+/// that renders at some other height would make that arithmetic a guess.
+///
+/// Deliberately **not** shared with `processChecklistRowHeight`, which is the
+/// intrinsic height of a checkbox control. This is a `Table` row's own chrome
+/// around an 11pt label; the two numbers describe different things and have no
+/// reason to stay equal.
+///
+/// Both numbers here are **measured, not chosen**: under `.tableStyle(.inset)`
+/// the backing `NSTableView` reports `rowHeight == 24` and a header view
+/// exactly 28 points tall. They are duplicated here because nothing exposes
+/// them to the layout in time to be read, so a change to the table's style is
+/// a reason to re-measure rather than to reason about.
+let processTableRowHeight: CGFloat = 24
+
+/// The height of the table's header row, measured the same way and for the
+/// same reason. Separate from the row height because it is added once rather
+/// than multiplied, and because the header is the thing this table gained.
+let processTableHeaderHeight: CGFloat = 28
+
+/// How tall the process table is: a header plus one row each, up to
+/// `visibleRows`, and then it scrolls.
+///
+/// A `Table` is greedy in both axes, where the `HStack` rows it replaced were
+/// intrinsically sized. Left unframed it takes the pane from the terminal
+/// below it, which is the surface a run is actually read in — so growth is
+/// capped here rather than negotiated in the layout. Below the cap it is
+/// exactly as tall as its contents, for the reason `processChecklistHeight`
+/// gives: a fixed height would hand a two-process stack six rows of dead space
+/// above its terminal.
+///
+/// A free function, like its neighbours, so both ends can be tested without a
+/// view.
+func processTableHeight(
+    count: Int,
+    rowHeight: CGFloat = processTableRowHeight,
+    headerHeight: CGFloat = processTableHeaderHeight,
+    visibleRows: Int = 8
+) -> CGFloat {
+    headerHeight + CGFloat(min(max(count, 1), visibleRows)) * rowHeight
+}
+
 struct ProcessTableView: View {
     @ObservedObject var model: ProcessCompose.TableModel
     /// Variable name to port, so a row can show the port it owns.
     let portsByName: [String: String]
+
+    /// Name-ascending to start with.
+    ///
+    /// The rows used to render in whatever order process-compose's API
+    /// returned them. Sorting them here makes the order a property of the
+    /// table, which is the rule `ProcessSelectionView.sortedProcesses` already
+    /// states for the checklist that names the same processes — and the two
+    /// lists reading differently was its own small lie.
+    ///
+    /// Sorting is on the status *string* rather than on `isRunning`, for the
+    /// column that offers it: the string is what the row displays, and
+    /// grouping equal strings together is what a user scanning thirty
+    /// processes for the ones that are not up actually wants.
+    @State private var sortOrder = [KeyPathComparator(\ProcessCompose.ProcessEntry.name)]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -18,6 +77,10 @@ struct ProcessTableView: View {
                     .padding(.vertical, 6)
             }
 
+            // Kept as a sentence rather than becoming a headered empty table.
+            // "Nothing running." is a statement about the *run*, not about what
+            // the project declares, and five column headings over no rows is
+            // more chrome carrying less of it.
             if model.processes.isEmpty {
                 Text("Nothing running.")
                     .font(.system(size: 11))
@@ -25,15 +88,21 @@ struct ProcessTableView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
             } else {
-                ForEach(model.processes) { process in
-                    row(for: process)
-                }
+                table
             }
         }
         // On the outer stack, not per-`Text`: selectability travels through the
         // environment, so one modifier covers every label a row renders and any
         // added later. The `Button`s are unaffected — they are controls, and a
         // control's label is not selectable text.
+        //
+        // It still reaches a `Table`'s cells, which was the open question when
+        // the rows stopped being an `HStack`: a cell is hosted in its own
+        // `TableCellHostingView` inside an `NSTableView`, and the environment
+        // crosses that boundary. Verified by hand against this table and the
+        // stack it replaced, side by side — drag-select a process name, copy,
+        // and both yield the text. Keep the modifier here rather than moving it
+        // onto the `Table`: the "Nothing running." sentence is a label too.
         //
         // The terminal beside this table needs no equivalent. `execute` is the
         // one phase that runs with process-compose's TUI (`PhaseRunner.command`
@@ -44,33 +113,69 @@ struct ProcessTableView: View {
         .textSelection(.enabled)
     }
 
-    private func row(for process: ProcessCompose.ProcessEntry) -> some View {
-        HStack(spacing: 8) {
-            Text(process.name)
-                .font(.system(size: 11, design: .monospaced))
-                .frame(width: 140, alignment: .leading)
+    /// No selection binding, deliberately. Nothing in this pane acts on "the
+    /// selected process" — every action is a button on its own row — so a
+    /// selection would be a gesture with no meaning, and one that the
+    /// borderless buttons in the trailing column would then have to compete
+    /// with for the click.
+    private var table: some View {
+        Table(model.processes.sorted(using: sortOrder), sortOrder: $sortOrder) {
+            TableColumn("Process", value: \.name) { process in
+                Text(process.name)
+                    .font(.system(size: 11, design: .monospaced))
+            }
+            .width(min: 90, ideal: 160)
 
-            Text(process.namespace)
-                .font(.system(size: 9, design: .monospaced))
-                .foregroundStyle(.tertiary)
-                .frame(width: 70, alignment: .leading)
+            TableColumn("Namespace", value: \.namespace) { process in
+                Text(process.namespace)
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+            }
+            .width(min: 60, ideal: 80)
 
-            Text(process.status)
-                .font(.system(size: 11))
-                .foregroundStyle(process.isRunning ? Color.green : Color.secondary)
-                .frame(width: 80, alignment: .leading)
+            TableColumn("Status", value: \.status) { process in
+                Text(process.status)
+                    .font(.system(size: 11))
+                    .foregroundStyle(process.isRunning ? Color.green : Color.secondary)
+            }
+            .width(min: 60, ideal: 90)
 
             // Only meaningful when the process declares a probe; otherwise the
-            // API reports "-" and a tick would be a lie.
-            Text(process.hasReadyProbe ? process.isReady : "")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .frame(width: 24, alignment: .leading)
+            // API reports "-" and a tick would be a lie. The blank now sits
+            // under a heading that names the column, which is what it was
+            // missing: an empty cell in an unlabelled 24-point strip was
+            // indistinguishable from a column that was not there.
+            //
+            // Not sortable: it is derived from two fields rather than being one.
+            TableColumn("Ready") { process in
+                Text(process.hasReadyProbe ? process.isReady : "")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            .width(min: 48, ideal: 56)
 
-            portCell(for: process)
+            // Not sortable either: the value comes from the port plan passed in,
+            // not from `ProcessEntry`, so there is no key path to compare on —
+            // and inventing a stored property on the model to make one would put
+            // the plan inside the row.
+            TableColumn("Port") { process in
+                portCell(for: process)
+            }
+            .width(min: 48, ideal: 60)
 
-            Spacer()
+            // Unlabelled on purpose. Buttons say what they do, and a heading
+            // over them would name the column after the controls in it.
+            TableColumn("") { process in
+                controls(for: process)
+            }
+            .width(min: 100, ideal: 124)
+        }
+        .tableStyle(.inset)
+        .frame(height: processTableHeight(count: model.processes.count))
+    }
 
+    private func controls(for process: ProcessCompose.ProcessEntry) -> some View {
+        HStack(spacing: 8) {
             if process.isRunning {
                 Button("Stop") { Task { await model.stop(process.name) } }
                     .buttonStyle(.borderless)
@@ -83,9 +188,8 @@ struct ProcessTableView: View {
                     .buttonStyle(.borderless)
                     .font(.system(size: 11))
             }
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 3)
     }
 
     /// The port this process owns, matched by name against the port plan. An em
@@ -96,7 +200,6 @@ struct ProcessTableView: View {
         Text(ProcessCompose.TableModel.port(for: process.name, in: portsByName) ?? "\u{2014}")
             .font(.system(size: 11, design: .monospaced))
             .foregroundStyle(.secondary)
-            .frame(width: 50, alignment: .leading)
     }
 }
 
