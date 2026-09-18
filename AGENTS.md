@@ -703,11 +703,26 @@ commented template per config file the app reads from the project directory:
 directory the user already had (the picker and the drag-and-drop) deliberately do not:
 writing there would leave untracked files in a repository they merely registered.
 
-Each writer lives on its config type beside that type's `fileNames`, so only one place
-knows each filename, and each refuses when **either** spelling is already present —
-seeding a `ports.yaml` beside an existing `ports.yml` would win the lookup and hide the
-project's real declarations. The refusals are per file, not all-or-nothing: a project
-that already carries its own `ports.yml` still gains the templates it lacks.
+Each file is **declared** on its config type as a `Project.ConfigFile` — its two
+spellings, its template, and its parser — so only one place knows each filename, and
+`Project.configFiles` is the list `seedDefaultConfigs` loops over. The **mechanism** is
+`Project.ConfigFile`'s and is written once (`Sources/Models/ProjectConfigFile.swift`):
+first spelling present wins, nothing inside a work tree is read, and a template is
+written only when **neither** spelling is already present — seeding a `ports.yaml`
+beside an existing `ports.yml` would win the lookup and hide the project's real
+declarations. The refusals are per file, not all-or-nothing: a project that already
+carries its own `ports.yml` still gains the templates it lacks. Each config type keeps
+its own `locate`/`load`/`writeDefault` names and delegates, so nothing outside had to
+move; `ProcessCompose.PortsConfig` keeps its `LoadError` and wraps rather than adopts
+`ConfigLoad`, and `ProcessCompose.Config`'s declaration carries a trivial parser whose
+`load` is never called — `namespacePresence` still answers `.unknown` for a file it
+cannot decode, which is what `RunCommandPlan`'s `.empty`-and-only-`.empty` gate needs.
+
+`Project.ConfigLoad` is the three-case `Load` shared by `Verification.Config` and
+`Initialization.Config` (each a `typealias` onto it), with the *wording* —
+`unavailableReason` — in a constrained extension per file, because verification's is
+present tense for the tab and initialization's is past tense for the Info row. The node
+walk both share is `Project.parseCommandEntries`.
 
 **Whether a template's example is commented out is a per-file safety decision, not
 style.** `verification.yaml`'s example check is uncommented (a check runs only on a
@@ -891,6 +906,15 @@ there is no binary to resolve and no approval to check, so "can a check run" is 
 file parse and does it declare anything", and `Runner.start` performs the same load and refuses on
 the same three cases. That retires the hand-mirrored `verificationUnavailableReason` that nothing
 made agree with `PhasePolicy.plan`.
+
+**And `Verification.Runner.loadConfig` now *renders* `unavailableReason` rather than wording its
+own refusal.** For two of the three cases it did not: `.missing` threw "This project has no
+verification.yaml." where the tab says "Add a verification.yaml to this project's directory to
+declare checks.", and `.invalid` threw the bare parse reason where the tab wraps it as "This
+project's verification.yaml could not be read: …". An agent reading a refusal and a user reading
+the tab were told different things about one file, under a doc comment claiming they could not be.
+The empty-checks case deliberately stays worded at `start`'s own call site, because that site also
+has to refuse an explicit empty `checks:` list and those are different sentences.
 
 **Parsed as YAML nodes, not decoded as a dictionary**, so rows appear in **file order**. A Swift
 dictionary has no order and rows would shuffle between launches. Yams refuses a duplicated key
