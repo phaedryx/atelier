@@ -9,21 +9,21 @@ final class FileTypeIconTests: XCTestCase {
     // MARK: Files
 
     func testExactFileNameBeatsExtension() {
-        // "cargo.toml" is keyed by name; ".toml" alone maps elsewhere.
-        XCTAssertEqual(FileTypeIcon.icon(for: "Cargo.toml").assetName, "cargo")
+        // "package.json" is keyed by name; ".json" alone maps elsewhere.
+        XCTAssertEqual(FileTypeIcon.icon(for: "package.json").assetName, "nodejs")
         XCTAssertNotEqual(
-            FileTypeIcon.icon(for: "settings.toml").assetName,
-            "cargo",
-            "A plain .toml should not borrow the Cargo icon"
+            FileTypeIcon.icon(for: "settings.json").assetName,
+            "nodejs",
+            "A plain .json should not borrow the package.json icon"
         )
     }
 
     func testLookupIsCaseInsensitive() {
-        // A few vscicons keys ship capitalised (CLAUDE.md, Cargo.toml, Rakefile),
+        // A few Material Icon Theme keys ship capitalised (CLAUDE.md, PKGBUILD),
         // so matching folds case on both sides.
         XCTAssertEqual(
-            FileTypeIcon.icon(for: "cargo.toml").assetName,
-            FileTypeIcon.icon(for: "CARGO.TOML").assetName
+            FileTypeIcon.icon(for: "package.json").assetName,
+            FileTypeIcon.icon(for: "PACKAGE.JSON").assetName
         )
         XCTAssertEqual(
             FileTypeIcon.icon(for: "readme.md").assetName,
@@ -31,14 +31,14 @@ final class FileTypeIconTests: XCTestCase {
         )
     }
 
-    /// vscicons keys framework conventions as compound extensions — "service.ts",
-    /// "spec.ts", "d.ts" — so `user.service.ts` is meant to read as a service
-    /// rather than as plain TypeScript. Walking dots left to right tries the
-    /// longest suffix first, which is what makes the specific key win.
+    /// Material Icon Theme keys framework conventions as compound extensions —
+    /// "service.ts", "spec.ts", "d.ts" — so `user.service.ts` is meant to read as
+    /// a service rather than as plain TypeScript. Walking dots left to right
+    /// tries the longest suffix first, which is what makes the specific key win.
     func testCompoundExtensionBeatsItsBareSuffix() {
-        XCTAssertEqual(FileTypeIcon.icon(for: "user.service.ts").assetName, "angular-service")
-        XCTAssertEqual(FileTypeIcon.icon(for: "user.spec.ts").assetName, "testts")
-        XCTAssertEqual(FileTypeIcon.icon(for: "index.d.ts").assetName, "typescriptdef")
+        XCTAssertEqual(FileTypeIcon.icon(for: "user.service.ts").assetName, "angular-service.clone")
+        XCTAssertEqual(FileTypeIcon.icon(for: "user.spec.ts").assetName, "test-ts")
+        XCTAssertEqual(FileTypeIcon.icon(for: "index.d.ts").assetName, "typescript-def")
         XCTAssertEqual(FileTypeIcon.icon(for: "user.ts").assetName, "typescript")
     }
 
@@ -62,10 +62,10 @@ final class FileTypeIconTests: XCTestCase {
         XCTAssertEqual(FileTypeIcon.icon(for: "next.config.ts").assetName, "next")
     }
 
-    /// The dot-prefixed extension keys (".travis.yml") are only reachable if the
+    /// The dot-prefixed extension keys (".ncurc.yml") are only reachable if the
     /// walk tries each dot *with* itself before stripping it.
     func testDotPrefixedExtensionKeyIsReachable() {
-        XCTAssertEqual(FileTypeIcon.icon(for: ".travis.yml").assetName, "travis")
+        XCTAssertEqual(FileTypeIcon.icon(for: ".ncurc.yml").assetName, "dependencies-update")
     }
 
     /// Guards the assertions above: an unknown extension must not resolve to
@@ -116,8 +116,8 @@ final class FileTypeIconTests: XCTestCase {
     func testKnownFolderResolvesAndTracksExpansion() {
         let collapsed = FileTypeIcon.folderIcon(for: "src", isExpanded: false)
         let expanded = FileTypeIcon.folderIcon(for: "src", isExpanded: true)
-        XCTAssertEqual(collapsed.assetName, "folder_src")
-        XCTAssertEqual(expanded.assetName, "folder_src_open")
+        XCTAssertEqual(collapsed.assetName, "folder-src")
+        XCTAssertEqual(expanded.assetName, "folder-src-open")
     }
 
     func testUnknownFolderFallsBackAndStillTracksExpansion() {
@@ -151,7 +151,7 @@ final class FileTypeIconTests: XCTestCase {
             names.formUnion(table.values)
         }
 
-        XCTAssertGreaterThan(names.count, 700, "Expected the full vscicons set to be generated")
+        XCTAssertGreaterThan(names.count, 1000, "Expected the full Material Icon Theme set to be generated")
 
         // NSImage(named:) resolves against the main bundle — the app, since these
         // tests are hosted in it — which is the same path SwiftUI's Image(_:)

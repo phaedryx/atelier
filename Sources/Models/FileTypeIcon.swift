@@ -1,4 +1,4 @@
-// ABOUTME: Resolves file and folder names to vscicons assets for the file tree.
+// ABOUTME: Resolves file and folder names to Material Icon Theme assets for the file tree.
 // ABOUTME: Holds the matching rules only; the lookup tables live in the generated FileIconCatalog.
 
 import SwiftUI

@@ -6,7 +6,7 @@ import SwiftUI
 /// Draws one row's icon: in its own colours on the dark sidebar, tinted to match
 /// the surrounding secondary text on the light one.
 ///
-/// vscicons artwork carries saturated brand colour that reads well on a dark
+/// Material Icon Theme artwork carries saturated brand colour that reads well on a dark
 /// background and fights a light one. Template rendering keys off the alpha
 /// channel, so tinting keeps the glyph — including knocked-out detail like the
 /// letters in the TypeScript tile — rather than flattening it to a block.
