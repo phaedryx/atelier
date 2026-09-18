@@ -19,8 +19,11 @@ struct ProjectOverviewView: View {
     @State private var showingPruneConfirm = false
     @State private var isPruning = false
     @State private var purgingPaths: Set<String> = []
-    @State private var worktreeToPurge: Worktree.Info?
-    @State private var worktreePurgeWarning: String?
+    /// The pending orphan-worktree Purge, its warning and its alert copy. The
+    /// *workstream* purge this pane offers is not here: those rows call up
+    /// through `onPurgeWorkstream` to `ContentView`, which owns the one archive
+    /// context, so this instance only ever holds an orphan target.
+    @StateObject private var purgeConfirmation = Workstream.PurgeConfirmation()
 
     @AppStorage("atelier.defaultTerminal") private var defaultTerminal: String = ""
     @State private var docFiles: [DocFile] = []
@@ -357,30 +360,13 @@ struct ProjectOverviewView: View {
         } message: { msg in
             Text(Git.Operations.truncatedForAlert(msg))
         }
-        .alert(
-            "Purge Worktree",
-            isPresented: Binding(
-                get: { worktreeToPurge != nil },
-                set: {
-                    if !$0 {
-                        worktreeToPurge = nil; worktreePurgeWarning = nil
-                    }
-                }
-            )
-        ) {
-            Button("Cancel", role: .cancel) {
-                worktreeToPurge = nil
-                worktreePurgeWarning = nil
-            }
-            Button(worktreePurgeWarning != nil ? "Purge Anyway" : "Purge", role: .destructive) {
-                performPurgeWorktree()
-            }
-        } message: {
-            if let warning = worktreePurgeWarning {
-                Text(warning)
-            } else {
-                Text("The worktree and its branch will be permanently deleted.")
-            }
+        .purgeConfirmationAlert(purgeConfirmation) { _ in
+            // Empty on purpose, and the emptiness is load-bearing rather than an
+            // omission: `purgeOrphanWorktree` posts `archivingDidStart` before it
+            // begins and `archivingDidComplete` when it ends, and both receivers
+            // above already call `refreshWorktrees()` — so the purged row leaves
+            // the list on the notification, not on this closure. The method this
+            // replaced did nothing else either.
         }
     }
 
@@ -481,15 +467,11 @@ struct ProjectOverviewView: View {
     }
 
     private func confirmPurgeWorktree(_ worktree: Worktree.Info) {
-        worktreePurgeWarning = Workstream.Archiver.orphanPurgeWarning(at: worktree.path)
-        worktreeToPurge = worktree
-    }
-
-    private func performPurgeWorktree() {
-        guard let wt = worktreeToPurge else { return }
-        Workstream.Archiver.purgeOrphanWorktree(projectDirectory: project.directory, worktreePath: wt.path)
-        worktreeToPurge = nil
-        worktreePurgeWarning = nil
+        purgeConfirmation.confirm(
+            orphanWorktree: worktree.path,
+            projectDirectory: project.directory,
+            checkoutDirectory: project.checkoutDirectory
+        )
     }
 
     private func pruneWorktrees() {

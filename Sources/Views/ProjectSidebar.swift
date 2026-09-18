@@ -53,9 +53,9 @@ struct ProjectSidebar: View {
     @Binding var projects: [Project]
     @Binding var selection: SidebarSelection?
     /// The app's one verification runner, handed down rather than taken from
-    /// the environment: `performPurge` needs the reference, and nothing here
-    /// renders a run — an `@EnvironmentObject` would redraw the whole sidebar
-    /// on every live poll of every workstream's suite.
+    /// the environment: the purge confirmation's `ArchiveContext` needs the
+    /// reference, and nothing here renders a run — an `@EnvironmentObject` would
+    /// redraw the whole sidebar on every live poll of every workstream's suite.
     let verificationRunner: Verification.Runner
     let onProjectsChanged: () -> Void
 
@@ -73,8 +73,10 @@ struct ProjectSidebar: View {
     @State private var isDropTargeted = false
     @State private var projectToDelete: UUID?
     @State private var workstreamToRemove: UUID?
-    @State private var workstreamToPurge: UUID?
-    @State private var purgeWarningMessage: String?
+    /// The pending Purge, its warning and its alert copy — see
+    /// `Workstream.PurgeConfirmation`. Remove above stays a plain `UUID?`: it
+    /// has no warning and no button-title rule to share.
+    @StateObject private var purgeConfirmation = Workstream.PurgeConfirmation()
     @State private var expandedProjects: Set<UUID> = SidebarState.loadExpanded()
     @State private var cachedSortedIDs: [UUID] = []
     @State private var cachedSortedWorkstreamIDs: [UUID: [UUID]] = [:]
@@ -460,27 +462,23 @@ struct ProjectSidebar: View {
             } message: {
                 Text("Ongoing terminals and Coding Agent sessions will be killed. The worktree and its files will remain on disk.")
             }
-            .alert(
-                "Purge Workstream",
-                isPresented: Binding(
-                    get: { workstreamToPurge != nil },
-                    set: {
-                        if !$0 {
-                            workstreamToPurge = nil
-                        }
-                    }
+            .purgeConfirmationAlert(
+                purgeConfirmation,
+                archiving: Workstream.PurgeConfirmation.ArchiveContext(
+                    projects: $projects,
+                    surfaceCache: surfaceCache,
+                    tmuxPath: appEnv.toolStatus.tmux.path,
+                    verificationRunner: verificationRunner,
+                    agentStateTracker: agentStateTracker
                 )
-            ) {
-                Button("Cancel", role: .cancel) { workstreamToPurge = nil }
-                Button(purgeWarningMessage != nil ? "Purge Anyway" : "Purge", role: .destructive) {
-                    performPurge()
+            ) { completion in
+                guard case let .workstream(wsID, projectID) = completion else { return }
+                rebuildIndices()
+                if case let .workstream(id) = selection, id == wsID {
+                    selection = projects.first(where: { $0.id == projectID })?
+                        .workstreams.first.map { .workstream($0.id) } ?? .project(projectID)
                 }
-            } message: {
-                if let warning = purgeWarningMessage {
-                    Text(warning)
-                } else {
-                    Text("The worktree and its branch will be permanently deleted.")
-                }
+                onProjectsChanged()
             }
             .alert(
                 "Worktree Creation Failed",
@@ -1024,8 +1022,7 @@ struct ProjectSidebar: View {
     @EnvironmentObject private var channelProbe: HookChannelProbe
 
     private func confirmPurge(_ workstream: Workstream) {
-        purgeWarningMessage = Workstream.Archiver.purgeWarning(for: workstream)
-        workstreamToPurge = workstream.id
+        purgeConfirmation.confirm(workstream: workstream)
     }
 
     /// Selects a workstream and focuses its Coding Agent tab. When the
@@ -1105,24 +1102,6 @@ struct ProjectSidebar: View {
         }
         onProjectsChanged()
         workstreamToRemove = nil
-    }
-
-    private func performPurge() {
-        guard let wsID = workstreamToPurge,
-              let pi = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
-        let projectID = projects[pi].id
-        Workstream.Archiver.purge(
-            wsID, in: &projects[pi], surfaceCache: surfaceCache,
-            tmuxPath: appEnv.toolStatus.tmux.path,
-            verificationRunner: verificationRunner,
-            agentStateTracker: agentStateTracker
-        )
-        rebuildIndices()
-        if case let .workstream(id) = selection, id == wsID {
-            selection = projects[pi].workstreams.first.map { .workstream($0.id) } ?? .project(projectID)
-        }
-        onProjectsChanged()
-        workstreamToPurge = nil
     }
 
     // MARK: - Project management
