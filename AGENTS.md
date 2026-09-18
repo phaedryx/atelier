@@ -1516,7 +1516,7 @@ diagnosable.
 
 ### Agent workspace tools (IPC)
 
-`IPC.Tool` is three groups, not one, and `Tool.surface` makes the grouping a value the compiler
+`IPC.Tool` is four groups, not one, and `Tool.surface` makes the grouping a value the compiler
 checks rather than a comment:
 
 | Group | Tools | Trust story |
@@ -1524,6 +1524,7 @@ checks rather than a comment:
 | Messaging | `register_peer`, `list_peers`, `send_message`, `receive_messages`, `broadcast`, `get_peer_status` | none needed — text between agents, nothing a user can see |
 | Workspace reads | `list_tabs`, `read_review_comments`, `check_verification`, `list_verification_checks` | none needed — answers about the caller's own workstream |
 | Workspace actions | `open_agent_tab`, `open_editor`, `open_tab`, `close_tab`, `request_attention`, `create_workstream`, `start_verification` | see below |
+| Project tasks | `add_task`, `get_pending_tasks`, `list_tasks`, `claim_task`, `complete_task`, `fail_task` | see "The project task queue" below — project-scoped, and ungated for a third reason distinct from the two above |
 
 The messaging six were once the whole enum. Calix's IPC core is the same six, and everything it
 grew on top — pane/tab control, LSP, shell integration — arrived as separate tool surfaces with
@@ -1531,12 +1532,14 @@ separate gates. This is where Atelier takes that step.
 
 **No approval gate, and that is a decision rather than an omission.** Calix gates its
 `pane_run` because it can target any pane in any window, including one the caller does not own.
-Every tool here acts on the caller's *own* workstream and no other, which is the same
-attended-ness argument that leaves `execute` ungated. `atelier.agentIPC` already defaults off
-and already gates whether an agent knows these tools exist. Do not add an approval inbox here
-without a reason that survives that comparison; `PermissionApprovalStore` in particular is the
-wrong type to reuse — its expiry resolves to "no decision, let Claude Code ask in the terminal",
-a fallback an MCP tool call does not have.
+Every workspace tool here acts on the caller's *own* workstream and no other, which is the same
+attended-ness argument that leaves `execute` ungated — the project task queue is the one group
+that is project-scoped rather than workstream-scoped, and it earns its own ungated argument
+rather than inheriting this one; see "The project task queue" below. `atelier.agentIPC` already
+defaults off and already gates whether an agent knows any of these tools exist. Do not add an
+approval inbox here without a reason that survives that comparison; `PermissionApprovalStore` in
+particular is the wrong type to reuse — its expiry resolves to "no decision, let Claude Code ask
+in the terminal", a fallback an MCP tool call does not have.
 
 **A `Tool` case is not a tool an agent can see.** `toolDefinitions` in
 `Sources/MCPHelper/main.swift` is what is advertised; a case with no entry there is dispatchable
@@ -1937,6 +1940,111 @@ the skipped nudge was meant to provoke. Contexts cannot outlive their peers for 
 case — a connected helper's peer is pinned past the TTL, and the context goes with it in
 `release`, in `touch`, or in `pruneContexts`. `releaseAll` clears unconditionally and stays
 that way: at shutdown every context goes at once, so there is no successor to reach past.
+
+### The project task queue
+
+Six tools — `add_task`, `get_pending_tasks`, `list_tasks`, `claim_task`, `complete_task`,
+`fail_task` (`IPC.Tool`, `Sources/Models/IPC/IPCProtocol.swift:121-133`) — give a project a
+shared, claimable work queue: add several units of work once and let any peer in the project
+pull the next one, instead of a coordinator hand-dispatching each with `create_workstream`. The
+incident this answers: a coordinator once dispatched seven workstreams by hand, one per audited
+finding, with no atomicity (two peers could claim the same finding), no pull (a peer finishing
+early had to be noticed rather than ask), and no record (a dead peer's finding stayed silently
+claimed). `list_tasks` is the one tool with no Scenius counterpart — a coordinator that's
+mid-task when a completion notice arrives can miss it the way any pull-based inbox can be
+missed, and this is how it recovers the whole picture without every notice having landed.
+
+**A fourth `Surface` case, `.projectTasks`, and it is deliberately not `.messaging`.**
+(`Surface`, `IPCProtocol.swift:265-290`, case at `:289`.) Messaging's trust story is "none
+needed — nothing a user can see"; these six mutate durable, queryable state that *another
+agent's correctness depends on* — a wrong claim is two agents doing the same audited finding,
+not a stray chat message. It isn't `.workspaceRead`/`.workspaceAction` either: both those groups
+are scoped to the caller's own workstream in their own doc comments, and this queue is
+project-wide by design, the same scope peers and messages already have (a coordinator in one
+workstream has to reach peers in others). **The ungating is a third argument, not a copy of
+either existing one**: workspace actions go ungated because they're attended, messaging because
+nothing here is visible to the user at all; project tasks go ungated because nothing in this
+surface executes code, spawns a process, or touches the user's files or git state — it's
+structured coordination data between peers already inside the one trust boundary
+`atelier.agentIPC` draws around the whole IPC surface. All six sit in the 15s `replyDeadline`
+tier with the messaging six and the workspace reads (`IPCProtocol.swift:192-196`): actor hops
+over an in-memory dictionary, no shell, no process, no network.
+
+**Ownership is keyed by surface id, never peer id, and that is the load-bearing decision.**
+(`IPC.TaskStore`'s doc comment, `Sources/Models/IPC/IPCTaskStore.swift:93-107`; the actor at
+`:108`.) CLAUDE.md already documents the reconnect race two sections up: a helper whose old
+socket hasn't closed yet drops its identity and re-registers under a **new** peer id carrying
+the **same** `ATELIER_SURFACE_ID`. Keying a claim on peer id would make that ordinary reconnect
+look like a different actor attempting its own earlier claim — `claim_task` would refuse its own
+replay, and `complete_task` would return `wrongClaimer` against its rightful claimer for the
+rest of the session, deadlocking the task by machinery rather than by any agent's mistake.
+`ATELIER_SURFACE_ID` is stable for the life of a terminal independent of how many times its
+helper reconnects, so `claim_task`/`complete_task`/`fail_task` key on it via one shared guard,
+`surfaceAndWorkstream(_:)` (`Sources/Models/IPC/IPCService.swift:1256-1261`), and refuse cleanly
+when it's absent — an agent Atelier didn't launch has no surface for ownership to attach to. A
+useful side effect: a claim is fully decoupled from `IPC.Store`'s own peer lifecycle (the 600s
+TTL, `pin`/`release`) — a task stays claimed even if the claimer's peer entry itself expires or
+is re-registered under a new id, because ownership was never routed through the peer store at
+all.
+
+**The cleanup hook is workstream teardown, never `IPC.Service.release(peerID:)`.**
+`Service.release(peerID:)` fires on the ordinary reconnect race above, not only on a genuine
+departure — and since surface id is exactly the identity a reconnect is designed to preserve,
+hooking claim-release to peer release would spuriously un-claim a task the same agent is still
+actively working, reintroducing the same race the surface-id decision exists to avoid. The real
+"this claim can never be finished" signal is a workstream ceasing to exist:
+`TaskState.claimed` carries `inWorkstreamID`, recorded at claim time from
+`request.client.workstreamID` (`IPCTaskStore.swift:29`), precisely so the sweep doesn't need
+to resolve individual surfaces back to a workstream. `TaskStore.releaseClaims(inWorkstreamID:)`
+(`IPCTaskStore.swift:243-265`) reverts every task claimed there back to `.pending`, and
+`IPC.Service.releaseTaskClaims(inWorkstream:)` (`IPCService.swift:1461-1469`) is called
+fire-and-forget from both archive paths, `Workstream.Archiver.remove` and `.purge`
+(`Sources/Models/WorkstreamArchiver.swift:61` and `:325`), the same two sites that already call
+`verificationRunner?.forget(workstreamID:)`. It deliberately does **not** follow that call's
+injected-optional-parameter pattern (`WorkstreamArchiver.swift:54-60`): that pattern exists
+because verification teardown is heavyweight and ordered — killing running processes and
+awaiting a bounded timeout the archive flow genuinely needs before `git worktree remove` — and
+reverting a handful of in-memory dictionary entries to `.pending` carries none of that weight.
+Calling the actor singleton from a plain, un-awaited `Task { ... }` is the same fire-and-forget
+shape `Archiver.remove`'s own top already uses to kill tmux sessions, though that call is
+`Task.detached` — the two share only "kicked off and not waited on," not the detached/
+non-detached distinction itself; a plain `Task` is enough here because this has no captured
+`@MainActor` state to escape the way the detached tmux kill does. A project with no tasks, or a
+workstream with no claims, makes the call a genuine no-op, so neither archive path needs a new
+precondition to add it safely.
+
+**`add_task` is the one non-replayable tool in this group, alongside `create_workstream`.**
+Every other tool here is `isSafeToReplay == true` (`IPCProtocol.swift:239-261`): a same-surface
+replay of `claim_task`/`complete_task`/`fail_task` is a defined no-op, a different-surface replay
+is a defined refusal, and the two reads are pure. `add_task` is a *create*, and creates don't get
+to inherit that idempotence — the helper mints a fresh request id on every replay
+(`attempt(...)`, `Sources/MCPHelper/main.swift:917-925`), so there is no id `IPC.Service` could
+use to recognize "I already did this one." A duplicate-path `add_task` is refused rather than
+silently re-executed, and the refusal message is written to forbid a retry rather than invite
+one, the same rule the timeout message states above for `create_workstream`: "add_task is not
+replayed automatically after a lost connection, so this may mean your earlier call already
+succeeded — check list_tasks rather than retrying under the same path"
+(`TaskQueueFailure.alreadyExists`, `Sources/Models/IPC/IPCTaskStore.swift:70-72`). A caller
+cannot tell a genuine path collision from one its own retry caused, so the honest answer is
+"don't," not "try a different path."
+
+**Do not reintroduce persistence, an approval gate, a claim TTL, or task editing.** All four
+were considered and declined, not overlooked:
+
+- **No persistence.** `TaskStore` is in-memory and wiped exactly when `IPC.Store` is — at
+  `Server.stop()`, via `Service.releaseAll()` — because this coordinates live agents in one
+  Atelier session; if the app restarts, every workstream's Coding Agent process is gone too, and
+  there is no restart-survival story worth building before anyone has asked for one.
+- **No approval gate.** Restated from above: nothing here executes code, spawns a process, or
+  touches the user's files or git state. Adding one needs a reason that survives the comparison
+  to the two existing ungated groups, not just "it's new."
+- **No claim TTL or heartbeat.** A claim lives until `complete_task`, `fail_task`, or the owning
+  workstream is torn down. A time-based expiry needs a policy for "how long is too long" that
+  nothing in the reported incident calls for, and risks yanking a claim out from under a peer
+  doing genuinely slow work.
+- **No task deletion or editing.** `add_task` creates; nothing removes a completed or failed
+  task from the store. A long session accumulating a few dozen coordination tasks — audit
+  findings, review items — is the expected scale, not a production job queue needing pruning.
 
 ## Localization
 
