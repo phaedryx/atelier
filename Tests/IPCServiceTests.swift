@@ -524,4 +524,19 @@ final class IPCServiceTests: XCTestCase {
         let listed = try await tasks(of: call(.getPendingTasks, as: client(project: projectA)))
         XCTAssertEqual(listed.map(\.path), ["p"], "the claim must revert to pending so another peer can claim it")
     }
+
+    // MARK: - Shutdown
+
+    func test_releaseAll_wipesBothThePeerStoreAndTheTaskQueue() async throws {
+        _ = try await register(name: "peerA", project: projectA)
+        _ = await call(.addTask, ["path": "p", "name": "n", "content": "c"], as: client(project: projectA))
+
+        await service.releaseAll()
+
+        let listedPeers = try await peers(of: call(.listPeers, as: client(project: projectA)))
+        XCTAssertTrue(listedPeers.isEmpty, "releaseAll must drop every registered peer")
+
+        let listedTasks = try await tasks(of: call(.getPendingTasks, as: client(project: projectA)))
+        XCTAssertTrue(listedTasks.isEmpty, "releaseAll must wipe the task queue, not just the peer store")
+    }
 }

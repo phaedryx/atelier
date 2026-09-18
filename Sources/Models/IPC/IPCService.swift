@@ -328,6 +328,7 @@ extension IPC {
         /// app afterwards, and pinned peers would otherwise outlive their sockets.
         func releaseAll() async {
             await store.cleanup()
+            await tasks.cleanup()
 
             // Same reason `release(peerID:)` clears it: a surface left in the tracker
             // keeps reporting whatever its agent last said — usually .idle — and a
