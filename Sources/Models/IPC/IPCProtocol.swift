@@ -139,9 +139,11 @@ extension IPC {
         /// its job, most of all a peer `open_agent_tab` spawned for a bounded
         /// task.
         ///
-        /// Does not close Info, Agent, or Execution — see
-        /// `WorkspaceActions.closeTab` for why Execution is refused rather than
-        /// closed.
+        /// Closes every singleton, Execution included — and closing Execution
+        /// **stops the running dev stack**, exactly as the user's own close of
+        /// that tab does. Info and Agent are permanent and are not closeable.
+        /// See `WorkspaceActions.closeTab` for why Execution stopped being
+        /// refused.
         case closeTab = "close_tab"
 
         /// Project tasks — a claimable, project-scoped work queue. See

@@ -727,7 +727,8 @@ final class IPCServiceTests: XCTestCase {
     // MARK: - close_tab
 
     /// The full argument contract — exactly one of `kind`/`surface_id`, the
-    /// Execution refusal, the singleton and terminal behaviors — is tested
+    /// singleton and terminal behaviors, and Execution stopping the run on its
+    /// way out — is tested
     /// against `WorkspaceActions.shared.closeTab` directly in
     /// `WorkspaceActionsCloseTabTests`, the same split `open_tab` uses. Here
     /// there is only the one thing this layer alone can answer: whether the

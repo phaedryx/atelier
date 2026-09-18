@@ -479,14 +479,15 @@ extension IPC.Tool {
                 (review a diff, run a check) should be closed with this once that job
                 is done, rather than left running for the user to close by hand.
 
-                Give exactly one of "kind" (for "changes" or "verification") or
+                Give exactly one of "kind" (for \(IPC.Vocabulary.quotedCloseableTabKinds)) or
                 "surface_id" (for a terminal tab, from open_agent_tab's result or
                 list_tabs). Closing a tab that is already closed, or a surface_id
                 nothing currently owns, does nothing and says so rather than erroring.
 
-                Info, Agent and Execution cannot be closed this way. Execution also
-                stops the running dev stack when closed, which this tool cannot do —
-                use its own Stop control, or ask the user. Editor and browser tabs
+                Closing "execution" also STOPS the workstream's running dev stack,
+                exactly as the user's own close of that tab does — so do not close it
+                to tidy up unless you mean to take the dev server down. Info and Agent
+                are permanent and cannot be closed this way. Editor and browser tabs
                 have no id exposed over IPC yet, so there is no way to close one of
                 those through this tool either.
 
@@ -1102,13 +1103,20 @@ extension IPC {
             TabKind.allCases.map { "\"\($0.rawValue)\"" }.joined(separator: ", ")
         }
 
-        /// The kinds `close_tab` will actually close — every singleton but
-        /// Execution, which is refused rather than closed because closing it
-        /// also stops the dev stack. A filtered view rather than a second list,
-        /// the same shape `WorkspaceActions.closeableSingletonKinds` takes.
+        /// The kinds `close_tab` will actually close — **every** singleton,
+        /// Execution included, which is closed rather than refused and stops
+        /// the dev stack on its way out. It was refused while stopping a run
+        /// meant reaching view-local `@State`; `ProcessCompose.RunSession` owns
+        /// that now, so `WorkspaceActions.closeSingleton` can call it with no
+        /// view mounted. Derived from the same `TabKind` list
+        /// `WorkspaceActions.closeableSingletonKinds` is, so the advertised set
+        /// and the set the tool accepts cannot name different kinds.
+        ///
+        /// Joined with `" or "` rather than `quotedTabKinds`' `", "` because
+        /// this reads inside an argument description, and the two are not
+        /// interchangeable even now that they list the same kinds.
         static var quotedCloseableTabKinds: String {
             TabKind.allCases
-                .filter { $0 != .execution }
                 .map { "\"\($0.rawValue)\"" }
                 .joined(separator: " or ")
         }
