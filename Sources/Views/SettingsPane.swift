@@ -1,5 +1,5 @@
 // ABOUTME: Identifies the tabbed panes of the Settings view, in on-screen tab order.
-// ABOUTME: Raw values are persisted and carried by .openSettings deep-links — do not rename.
+// ABOUTME: Raw values are persisted in UserDefaults and name the remembered pane — do not rename.
 
 import Foundation
 
@@ -39,12 +39,5 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .integrations: "puzzlepiece.extension"
         case .advanced: "gearshape.2"
         }
-    }
-
-    /// The pane an `.openSettings` notification targets, if any. Posters pass
-    /// the pane's raw value as the notification object, so they don't need
-    /// this type; a plain open (nil object) targets no particular pane.
-    static func deepLinkTarget(from notification: Notification) -> SettingsPane? {
-        (notification.object as? String).flatMap(SettingsPane.init(rawValue:))
     }
 }

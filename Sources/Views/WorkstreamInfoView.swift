@@ -289,7 +289,7 @@ struct WorkstreamInfoView: View {
                         .foregroundStyle(.secondary)
                     Spacer()
                     Button("Purge") {
-                        NotificationCenter.default.post(name: .purgeWorkstream, object: workstreamID)
+                        AppCommandChannel.shared.send(.purgeWorkstream(workstreamID))
                     }
                     .foregroundStyle(.purple)
                 }

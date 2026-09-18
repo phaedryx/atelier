@@ -12,33 +12,11 @@ extension Notification.Name {
     static let workstreamWorktreeReady = Notification.Name("atelier.workstreamWorktreeReady")
     static let workstreamCreationFailed = Notification.Name("atelier.workstreamCreationFailed")
     static let projectCreated = Notification.Name("atelier.projectCreated")
-    /// object: the workstream's `UUID`, or nil to mean the selected workstream.
-    /// Nil is what the palette posts — a command closure is built once and never
-    /// learns which workstream is active — and either way this lands on
-    /// `confirmPurge`, so the warning sheet stands where it always did.
-    static let purgeWorkstream = Notification.Name("atelier.purgeWorkstream")
-    // The sidebar's context-menu actions, reachable by name from the palette.
-    // Received here because this is the one view that can resolve "the selected
-    // workstream" into a worktree path, a branch and a project directory; the
-    // sidebar's own items read row-local values the palette has no access to.
-    static let revealInFinder = Notification.Name("atelier.revealInFinder")
-    static let openOnGitHub = Notification.Name("atelier.openOnGitHub")
-    static let openPullRequest = Notification.Name("atelier.openPullRequest")
-    static let openInShortcut = Notification.Name("atelier.openInShortcut")
-    static let copyBranchName = Notification.Name("atelier.copyBranchName")
-    static let copyWorktreePath = Notification.Name("atelier.copyWorktreePath")
     /// object: the workstream's `UUID`. Posted by `Workstream.AgentStateTracker`
     /// on the edges into and out of a permission block; received here, where the
     /// workstream's name and the current selection are known.
     static let agentBlockedOnPermission = Notification.Name("atelier.agentBlockedOnPermission")
     static let agentPermissionResolved = Notification.Name("atelier.agentPermissionResolved")
-    /// object: the workstream's `UUID`. Posted when a blocked-agent notification
-    /// is clicked, so the sidebar selects the workstream that was waiting.
-    static let focusWorkstream = Notification.Name("atelier.focusWorkstream")
-    /// object: the project's `UUID`. The named-destination counterpart to
-    /// `.switchToProject`, which carries no payload and can only mean "the
-    /// project the selected workstream belongs to".
-    static let focusProject = Notification.Name("atelier.focusProject")
     /// object: the worktree path (`String`), from `Worktree.HeadWatcher`'s own
     /// callback in `startHeadWatcher`. A hint, not a diff, exactly as the
     /// watcher's own doc says: any git activity in that worktree, not only a
@@ -99,7 +77,20 @@ func cycledWorkstreamID(
     return sorted[next].id
 }
 
-func commandKeyNotification(charactersIgnoringModifiers: String?, modifierFlags: NSEvent.ModifierFlags) -> Notification.Name? {
+/// What a ⌘-chord the key monitor swallows should do.
+///
+/// Two transports on purpose, and the split is temporary rather than
+/// principled: the bracket pair is an app-level command `ContentView` receives,
+/// while the tab chords are still received in `TerminalContainerView` and stay
+/// on `NotificationCenter` until that file gets a channel of its own. One
+/// lookup answers both so the chord table cannot fork into two functions that
+/// drift — which is the whole reason this returns a value rather than acting.
+enum CommandKeyAction: Equatable {
+    case app(AppCommand)
+    case notification(Notification.Name)
+}
+
+func commandKeyAction(charactersIgnoringModifiers: String?, modifierFlags: NSEvent.ModifierFlags) -> CommandKeyAction? {
     guard let charactersIgnoringModifiers else { return nil }
     let flags = modifierFlags.intersection(.deviceIndependentFlagsMask)
     guard flags.contains(.command), !flags.contains(.option), !flags.contains(.control) else { return nil }
@@ -108,11 +99,11 @@ func commandKeyNotification(charactersIgnoringModifiers: String?, modifierFlags:
     // charactersIgnoringModifiers strips every modifier except Shift, so the
     // shifted brackets arrive as "{" / "}" — matching "[" / "]" there never fired.
     switch (charactersIgnoringModifiers, hasShift) {
-    case ("[", false): return .prevWorkstream
-    case ("]", false): return .nextWorkstream
-    case ("{", true): return .prevTab
-    case ("}", true): return .nextTab
-    case ("w", false): return .closeTerminal
+    case ("[", false): return .app(.prevWorkstream)
+    case ("]", false): return .app(.nextWorkstream)
+    case ("{", true): return .notification(.prevTab)
+    case ("}", true): return .notification(.nextTab)
+    case ("w", false): return .notification(.closeTerminal)
     default: return nil
     }
 }
@@ -121,6 +112,11 @@ struct ContentView: View {
     @StateObject private var projectList = ProjectList()
     @State private var selection: SidebarSelection? = SidebarSelection.loadSaved() ?? ContentView.initialSelection()
     @State private var selectionBeforeSettings: SidebarSelection?
+
+    /// The app's one command channel. A plain reference to the singleton rather
+    /// than an `@ObservedObject`: nothing here renders from the channel, it only
+    /// subscribes to the event publisher.
+    private let commandChannel = AppCommandChannel.shared
 
     private var projects: [Project] {
         get { projectList.items }
@@ -329,8 +325,14 @@ struct ContentView: View {
     var body: some View {
         navigationView
             .overlay { commandPaletteOverlay }
-            .onReceive(NotificationCenter.default.publisher(for: .toggleCommandPalette)) { _ in
-                showCommandPalette.toggle()
+            // The one receiver for every app-level command. It is here rather
+            // than in either half of the split below because `ContentView` is
+            // the always-mounted root: an `.onReceive` in a `@ViewBuilder`
+            // branch exists only while that branch is on screen, and a sender
+            // reaching nothing is the silent failure `AppCommand` exists to
+            // make impossible.
+            .onReceive(commandChannel.publisher) { command in
+                handle(command)
             }
             // @Published replays the current prompts on subscription, so this
             // both seeds the registry at launch and rebuilds it on every edit.
@@ -347,47 +349,6 @@ struct ContentView: View {
             // is what gets the launch seeding for free.
             .onReceive(projectList.$items) { items in
                 syncGotoCommands(projects: items)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .toggleSidebar)) { _ in
-                NSApp.sendAction(#selector(NSSplitViewController.toggleSidebar(_:)), to: nil, from: nil)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .openHelp)) { _ in
-                if selection == .help {
-                    selection = selectionBeforeSettings
-                } else {
-                    selectionBeforeSettings = selection
-                    selection = .help
-                }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .openSettings)) { note in
-                if let pane = SettingsPane.deepLinkTarget(from: note) {
-                    // A pane-targeted open always lands on that pane; it never
-                    // toggles settings closed like the plain menu action does.
-                    UserDefaults.standard.set(pane.rawValue, forKey: SettingsPane.storageKey)
-                    if selection != .settings {
-                        selectionBeforeSettings = selection
-                        selection = .settings
-                    }
-                } else if selection == .settings {
-                    selection = selectionBeforeSettings
-                } else {
-                    selection = .settings
-                }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .clearProjects)) { _ in
-                for project in projects {
-                    for ws in project.workstreams {
-                        surfaceCache.removeWorkstreamSurfaces(for: ws.id)
-                        agentStateTracker.clear(workstreamID: ws.id)
-                    }
-                }
-                projects.removeAll()
-                selectionBeforeSettings = nil
-                selection = .settings
-                ProjectStore.save([])
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .openExternalTerminal)) { _ in
-                openExternalTerminal()
             }
             .onChange(of: projectList.items) { _, newValue in
                 // Debounce saves to avoid rapid I/O from activity updates
@@ -516,25 +477,33 @@ struct ContentView: View {
                 guard !keyMonitorInstalled else { return }
                 keyMonitorInstalled = true
                 NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                    if let notification = commandKeyNotification(
+                    switch commandKeyAction(
                         charactersIgnoringModifiers: event.charactersIgnoringModifiers,
                         modifierFlags: event.modifierFlags
                     ) {
-                        NotificationCenter.default.post(name: notification, object: nil)
+                    case let .app(command):
+                        AppCommandChannel.shared.send(command)
                         return nil // swallow the event
+                    case let .notification(name):
+                        NotificationCenter.default.post(name: name, object: nil)
+                        return nil
+                    case nil:
+                        return event
                     }
-                    return event
                 }
             }
     }
 
     /// The split view and the receivers that change what is *selected*.
     ///
-    /// Split out of `navigationViewBase` below, and it has to stay split: the
-    /// two together are one modifier chain of twenty-odd `.onReceive`s, and the
-    /// Swift type-checker gives up on it ("unable to type-check this expression
-    /// in reasonable time"). Adding a receiver to either half is fine; merging
-    /// them back is not.
+    /// Split out of `navigationViewBase` below, and it stays split. The two
+    /// together were one modifier chain of twenty-odd `.onReceive`s and the
+    /// Swift type-checker gave up on it ("unable to type-check this expression
+    /// in reasonable time"). `AppCommand` took twenty of those receivers down to
+    /// one, so the chain is far shorter now — but *shorter* is not *measured*,
+    /// and the failure mode is a build that starts timing out rather than a
+    /// test that goes red. Adding a receiver to either half is fine; merging
+    /// them back needs somebody to check, not to assume.
     private var selectionReceivingSplitView: some View {
         NavigationSplitView {
             ProjectSidebar(
@@ -613,14 +582,6 @@ struct ContentView: View {
             default: NSApp.appearance = nil
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .switchToProject)) { _ in
-            // Go back to project view from any workstream
-            if let wsID = selection?.workstreamID,
-               let project = projects.first(where: { $0.workstreams.contains(where: { $0.id == wsID }) })
-            {
-                selection = .project(project.id)
-            }
-        }
         .onReceive(NotificationCenter.default.publisher(for: .agentBlockedOnPermission)) { notification in
             guard let wsID = notification.object as? UUID else { return }
             notifyAgentBlocked(wsID)
@@ -629,38 +590,12 @@ struct ContentView: View {
             guard let wsID = notification.object as? UUID else { return }
             Workstream.PermissionNotifier.shared.withdraw(workstreamID: wsID)
         }
-        .onReceive(NotificationCenter.default.publisher(for: .focusWorkstream)) { notification in
-            guard let wsID = notification.object as? UUID,
-                  projects.contains(where: { $0.workstreams.contains(where: { $0.id == wsID }) })
-            else { return }
-            selection = .workstream(wsID)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .focusProject)) { notification in
-            focusProject(from: notification)
-        }
     }
 
     /// The rest of the chain: cycling, workstream lifecycle, and the polls.
     /// See `selectionReceivingSplitView` above for why this is two properties.
     private var navigationViewBase: some View {
         selectionReceivingSplitView
-            .onReceive(NotificationCenter.default.publisher(for: .nextWorkstream)) { _ in
-                cycleWorkstream(direction: 1)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .prevWorkstream)) { _ in
-                cycleWorkstream(direction: -1)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .nextProject)) { _ in
-                cycleProject(direction: 1)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .prevProject)) { _ in
-                cycleProject(direction: -1)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .archiveWorkstream)) { _ in
-                if let wsID = selection?.workstreamID {
-                    workstreamToRemove = wsID
-                }
-            }
             .onReceive(NotificationCenter.default.publisher(for: .workstreamCreated)) { notification in
                 guard let info = notification.userInfo,
                       let projectID = info["projectID"] as? UUID,
@@ -725,15 +660,6 @@ struct ContentView: View {
                 appEnvironment.refreshAllRepoInfo(projects: projects)
                 logger.warning("[Atelier] projectCreated notification handled: \(project.name, privacy: .public)")
             }
-            .onReceive(NotificationCenter.default.publisher(for: .purgeWorkstream)) { notification in
-                // A nil object means "the selected workstream", which is what the
-                // palette posts. Either way this goes through `confirmPurge`, so
-                // the warning sheet is still what stands in front of the delete.
-                if let wsID = notification.object as? UUID ?? activeWorkstream?.id {
-                    confirmPurge(wsID)
-                }
-            }
-            .modifier(WorkstreamActionCommands(target: workstreamActionTarget))
             .onReceive(Timer.publish(every: 15, on: .main, in: .common).autoconnect()) { _ in
                 appEnvironment.refreshAllRepoInfo(projects: projects)
                 appEnvironment.refreshPathValidity(projects: projects)
@@ -1032,18 +958,122 @@ struct ContentView: View {
         appEnvironment.pruneShortcutStories(keeping: livePaths)
     }
 
-    /// Selects the project a `.focusProject` notification names, ignoring one
-    /// that names a project no longer in the list — the go-to command family is
+    /// Acts on one `AppCommand`.
+    ///
+    /// Exhaustive with no `default:`, deliberately: a case nobody handles must
+    /// not build. That is the property the twenty notifications this replaced
+    /// could not have — an unreceived one was a silent no-op, and an observer
+    /// installed in a branch that happened to be unmounted was the same thing
+    /// again, intermittently.
+    ///
+    /// Extracted rather than inlined in the modifier chain for the reason
+    /// `selectionReceivingSplitView` documents: `body`'s run of `.onReceive`s is
+    /// long enough that one more multi-statement closure tips the type-checker
+    /// over its time limit.
+    private func handle(_ command: AppCommand) {
+        switch command {
+        case .toggleSidebar:
+            NSApp.sendAction(#selector(NSSplitViewController.toggleSidebar(_:)), to: nil, from: nil)
+        case .toggleCommandPalette:
+            showCommandPalette.toggle()
+        case .openHelp:
+            if selection == .help {
+                selection = selectionBeforeSettings
+            } else {
+                selectionBeforeSettings = selection
+                selection = .help
+            }
+        case let .openSettings(pane):
+            openSettings(pane: pane)
+        case .openExternalTerminal:
+            openExternalTerminal()
+        case .clearProjects:
+            clearProjects()
+        case .switchToProject:
+            // Go back to project view from any workstream
+            if let wsID = selection?.workstreamID,
+               let project = projects.first(where: { $0.workstreams.contains(where: { $0.id == wsID }) })
+            {
+                selection = .project(project.id)
+            }
+        case let .focusWorkstream(wsID):
+            guard projects.contains(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
+            selection = .workstream(wsID)
+        case let .focusProject(projectID):
+            focusProject(projectID)
+        case .nextWorkstream:
+            cycleWorkstream(direction: 1)
+        case .prevWorkstream:
+            cycleWorkstream(direction: -1)
+        case .nextProject:
+            cycleProject(direction: 1)
+        case .prevProject:
+            cycleProject(direction: -1)
+        case .archiveWorkstream:
+            if let wsID = selection?.workstreamID {
+                workstreamToRemove = wsID
+            }
+        case let .purgeWorkstream(wsID):
+            // A nil id means "the selected workstream", which is what the
+            // palette sends. Either way this goes through `confirmPurge`, so
+            // the warning sheet is still what stands in front of the delete.
+            if let wsID = wsID ?? activeWorkstream?.id {
+                confirmPurge(wsID)
+            }
+        case .revealInFinder:
+            guard let path = workstreamActionTarget?.worktreePath else { return }
+            NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: path)
+        case .openOnGitHub:
+            guard let url = workstreamActionTarget?.githubURL else { return }
+            NSWorkspace.shared.open(url)
+        case .openPullRequest:
+            guard let url = workstreamActionTarget?.pullRequestURL else { return }
+            NSWorkspace.shared.open(url)
+        case .openInShortcut:
+            guard let url = workstreamActionTarget?.shortcutURL else { return }
+            NSWorkspace.shared.open(url)
+        case .copyBranchName:
+            guard let branch = workstreamActionTarget?.branchName else { return }
+            copyTextToPasteboard(branch)
+        case .copyWorktreePath:
+            guard let path = workstreamActionTarget?.worktreePath else { return }
+            copyTextToPasteboard(path)
+        }
+    }
+
+    /// A named pane always lands on that pane and is remembered; it never
+    /// toggles Settings closed the way the plain ⌘, does.
+    private func openSettings(pane: SettingsPane?) {
+        guard let pane else {
+            selection = selection == .settings ? selectionBeforeSettings : .settings
+            return
+        }
+        UserDefaults.standard.set(pane.rawValue, forKey: SettingsPane.storageKey)
+        if selection != .settings {
+            selectionBeforeSettings = selection
+            selection = .settings
+        }
+    }
+
+    private func clearProjects() {
+        for project in projects {
+            for ws in project.workstreams {
+                surfaceCache.removeWorkstreamSurfaces(for: ws.id)
+                agentStateTracker.clear(workstreamID: ws.id)
+            }
+        }
+        projects.removeAll()
+        selectionBeforeSettings = nil
+        selection = .settings
+        ProjectStore.save([])
+    }
+
+    /// Selects the project a `.focusProject` command names, ignoring one that
+    /// names a project no longer in the list — the go-to command family is
     /// rebuilt from that list, but a stale command could still be in flight from
     /// an open palette.
-    ///
-    /// Extracted rather than inlined in the modifier chain: `body`'s run of
-    /// `.onReceive`s is long enough that one more multi-statement closure tips
-    /// the type-checker over its time limit.
-    private func focusProject(from notification: Notification) {
-        guard let projectID = notification.object as? UUID,
-              projects.contains(where: { $0.id == projectID })
-        else { return }
+    private func focusProject(_ projectID: UUID) {
+        guard projects.contains(where: { $0.id == projectID }) else { return }
         selection = .project(projectID)
     }
 
@@ -1269,43 +1299,4 @@ struct WorkstreamActionTarget: Equatable {
     let githubURL: URL?
     let pullRequestURL: URL?
     let shortcutURL: URL?
-}
-
-/// The palette's six workstream actions, as one modifier rather than six more
-/// `onReceive`s in `ContentView.body`.
-///
-/// Each is the sidebar context menu's item aimed at the *selected* workstream
-/// instead of the hovered row. They no-op when `target` is nil, which is the
-/// state the palette hides the rows in — the receiver checks anyway, because
-/// nothing stops a notification arriving between a body evaluation and a click.
-private struct WorkstreamActionCommands: ViewModifier {
-    let target: WorkstreamActionTarget?
-
-    func body(content: Content) -> some View {
-        content
-            .onReceive(NotificationCenter.default.publisher(for: .revealInFinder)) { _ in
-                guard let path = target?.worktreePath else { return }
-                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: path)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .openOnGitHub)) { _ in
-                guard let url = target?.githubURL else { return }
-                NSWorkspace.shared.open(url)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .openPullRequest)) { _ in
-                guard let url = target?.pullRequestURL else { return }
-                NSWorkspace.shared.open(url)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .openInShortcut)) { _ in
-                guard let url = target?.shortcutURL else { return }
-                NSWorkspace.shared.open(url)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .copyBranchName)) { _ in
-                guard let branch = target?.branchName else { return }
-                copyTextToPasteboard(branch)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .copyWorktreePath)) { _ in
-                guard let path = target?.worktreePath else { return }
-                copyTextToPasteboard(path)
-            }
-    }
 }

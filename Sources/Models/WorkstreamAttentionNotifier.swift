@@ -79,7 +79,8 @@ extension Workstream {
             content.body = Self.truncate(reason)
             content.sound = UNNotificationSound(named: UNNotificationSoundName("notification.wav"))
             // The same key PermissionNotifier uses, so a click routes through
-            // AppDelegate's existing `.focusWorkstream` path unchanged.
+            // AppDelegate's existing focus path unchanged — `handleClick`, which
+            // sends `AppCommand.focusWorkstream`.
             content.userInfo = [PermissionNotifier.userInfoKey: workstreamID.uuidString]
 
             center.add(

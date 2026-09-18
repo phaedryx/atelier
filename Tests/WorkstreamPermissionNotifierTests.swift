@@ -2,6 +2,7 @@
 // ABOUTME: Also covers the tracker edges that post and clear it.
 
 @testable import Atelier
+import Combine
 import UserNotifications
 import XCTest
 
@@ -131,37 +132,31 @@ final class WorkstreamPermissionNotifierTests: XCTestCase {
 
     // MARK: - Click
 
-    func testClickOnABlockedAgentBannerPostsFocusWorkstream() {
-        let center = NotificationCenter()
-        var focused: [UUID] = []
-        let token = center.addObserver(forName: .focusWorkstream, object: nil, queue: nil) { note in
-            if let id = note.object as? UUID {
-                focused.append(id)
-            }
-        }
-        defer { center.removeObserver(token) }
+    func testClickOnABlockedAgentBannerSendsFocusWorkstream() {
+        let channel = AppCommandChannel()
+        var sent: [AppCommand] = []
+        let subscription = channel.publisher.sink { sent.append($0) }
+        defer { subscription.cancel() }
 
-        let handled = Workstream.PermissionNotifier.handleClick(workstreamID: wsID, center: center)
+        let handled = Workstream.PermissionNotifier.handleClick(workstreamID: wsID, channel: channel)
 
         XCTAssertTrue(handled)
-        XCTAssertEqual(focused, [wsID])
+        XCTAssertEqual(sent, [.focusWorkstream(wsID)])
     }
 
     /// The terminal's bell notifications name no workstream, and clicking one
-    /// must not post: a `.focusWorkstream` with a nil object would move the
-    /// selection nowhere and make the click look handled.
-    func testClickOnABannerNamingNoWorkstreamPostsNothing() {
-        let center = NotificationCenter()
-        var posts = 0
-        let token = center.addObserver(forName: .focusWorkstream, object: nil, queue: nil) { _ in
-            posts += 1
-        }
-        defer { center.removeObserver(token) }
+    /// must send nothing: focusing no workstream would move the selection
+    /// nowhere and make the click look handled.
+    func testClickOnABannerNamingNoWorkstreamSendsNothing() {
+        let channel = AppCommandChannel()
+        var sent: [AppCommand] = []
+        let subscription = channel.publisher.sink { sent.append($0) }
+        defer { subscription.cancel() }
 
-        let handled = Workstream.PermissionNotifier.handleClick(workstreamID: nil, center: center)
+        let handled = Workstream.PermissionNotifier.handleClick(workstreamID: nil, channel: channel)
 
         XCTAssertFalse(handled)
-        XCTAssertEqual(posts, 0)
+        XCTAssertTrue(sent.isEmpty)
     }
 
     /// What the delegate decodes before it hops to the main actor. Anything but

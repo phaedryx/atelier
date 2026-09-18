@@ -857,7 +857,7 @@ private struct AdvancedSettingsPane: View {
         .alert("Clear project list?", isPresented: $showingClearConfirm) {
             Button("Cancel", role: .cancel) {}
             Button("Clear All", role: .destructive) {
-                NotificationCenter.default.post(name: .clearProjects, object: nil)
+                AppCommandChannel.shared.send(.clearProjects)
             }
         } message: {
             Text("This will remove all projects and workstreams from the sidebar. No files on disk will be deleted. This cannot be undone.")

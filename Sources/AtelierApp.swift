@@ -16,23 +16,15 @@ protocol NotificationAuthorizationRequesting {
 
 extension UNUserNotificationCenter: NotificationAuthorizationRequesting {}
 
+/// What is left here is what still has a receiver outside `ContentView`: the
+/// first two are `ProjectSidebar`'s and the last two are `TerminalContainerView`'s.
+/// The twelve app-level names that used to sit beside them are `AppCommand` cases
+/// now — see that type for why, and for what stays on `NotificationCenter`.
 extension Notification.Name {
     static let openDirectory = Notification.Name("atelier.openDirectory")
-    static let openSettings = Notification.Name("atelier.openSettings")
-    static let openHelp = Notification.Name("atelier.openHelp")
-    static let switchToProject = Notification.Name("atelier.switchToProject")
-    static let toggleSidebar = Notification.Name("atelier.toggleSidebar")
+    static let renameWorkstream = Notification.Name("atelier.renameWorkstream")
     static let switchByNumber = Notification.Name("atelier.switchByNumber") // object: Int (1-9)
     static let openExternalBrowser = Notification.Name("atelier.openExternalBrowser")
-    static let clearProjects = Notification.Name("atelier.clearProjects")
-    static let openExternalTerminal = Notification.Name("atelier.openExternalTerminal")
-    static let nextWorkstream = Notification.Name("atelier.nextWorkstream")
-    static let prevWorkstream = Notification.Name("atelier.prevWorkstream")
-    static let nextProject = Notification.Name("atelier.nextProject")
-    static let prevProject = Notification.Name("atelier.prevProject")
-    static let archiveWorkstream = Notification.Name("atelier.archiveWorkstream")
-    static let renameWorkstream = Notification.Name("atelier.renameWorkstream")
-    static let toggleCommandPalette = Notification.Name("atelier.toggleCommandPalette")
 }
 
 @MainActor
@@ -420,24 +412,24 @@ struct AtelierApp: App {
             // Cmd+,: toggle settings
             CommandGroup(after: .appSettings) {
                 Button("Settings") {
-                    NotificationCenter.default.post(name: .openSettings, object: nil)
+                    AppCommandChannel.shared.send(.openSettings(pane: nil))
                 }
                 .keyboardShortcut(",", modifiers: .command)
 
                 Button("Help") {
-                    NotificationCenter.default.post(name: .openHelp, object: nil)
+                    AppCommandChannel.shared.send(.openHelp)
                 }
                 .keyboardShortcut("/", modifiers: .command)
             }
             // View menu
             CommandGroup(after: .sidebar) {
                 Button("Toggle Sidebar") {
-                    NotificationCenter.default.post(name: .toggleSidebar, object: nil)
+                    AppCommandChannel.shared.send(.toggleSidebar)
                 }
                 .keyboardShortcut("c", modifiers: [.command, .shift])
 
                 Button("Command Palette…") {
-                    NotificationCenter.default.post(name: .toggleCommandPalette, object: nil)
+                    AppCommandChannel.shared.send(.toggleCommandPalette)
                 }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
             }
@@ -483,29 +475,29 @@ struct AtelierApp: App {
                 .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
 
                 Button("Back to Project") {
-                    NotificationCenter.default.post(name: .switchToProject, object: nil)
+                    AppCommandChannel.shared.send(.switchToProject)
                 }
                 .keyboardShortcut("0", modifiers: .command)
 
                 Divider()
 
                 Button("Next Workstream") {
-                    NotificationCenter.default.post(name: .nextWorkstream, object: nil)
+                    AppCommandChannel.shared.send(.nextWorkstream)
                 }
                 .keyboardShortcut("]", modifiers: .command)
 
                 Button("Previous Workstream") {
-                    NotificationCenter.default.post(name: .prevWorkstream, object: nil)
+                    AppCommandChannel.shared.send(.prevWorkstream)
                 }
                 .keyboardShortcut("[", modifiers: .command)
 
                 Button("Next Project") {
-                    NotificationCenter.default.post(name: .nextProject, object: nil)
+                    AppCommandChannel.shared.send(.nextProject)
                 }
                 .keyboardShortcut(.downArrow, modifiers: .command)
 
                 Button("Previous Project") {
-                    NotificationCenter.default.post(name: .prevProject, object: nil)
+                    AppCommandChannel.shared.send(.prevProject)
                 }
                 .keyboardShortcut(.upArrow, modifiers: .command)
 
@@ -517,7 +509,7 @@ struct AtelierApp: App {
                 .keyboardShortcut("b", modifiers: [.command, .option])
 
                 Button("Open in External Terminal") {
-                    NotificationCenter.default.post(name: .openExternalTerminal, object: nil)
+                    AppCommandChannel.shared.send(.openExternalTerminal)
                 }
                 .keyboardShortcut("t", modifiers: [.command, .option])
 
@@ -529,7 +521,7 @@ struct AtelierApp: App {
                 .keyboardShortcut("r", modifiers: [.command, .shift])
 
                 Button("Archive Workstream") {
-                    NotificationCenter.default.post(name: .archiveWorkstream, object: nil)
+                    AppCommandChannel.shared.send(.archiveWorkstream)
                 }
                 .keyboardShortcut("w", modifiers: [.command, .shift])
             }
