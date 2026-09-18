@@ -327,8 +327,8 @@ struct ProjectSidebar: View {
                projects[pIdx].workstreams.indices.contains(wIdx)
             {
                 let workstream = projects[pIdx].workstreams[wIdx]
-                let branch = appEnv.branchName(for: workstream.worktreePath)
-                let pr = branch.flatMap { appEnv.githubPR(for: project.directory, branch: $0) }
+                let facts = appEnv.facts(for: workstream.worktreePath)
+                let pr = appEnv.pullRequest(forWorktree: workstream.worktreePath, in: project.directory)
                 let wsRuns = agentStateTracker.runs(for: workstream.id)
                 let mainRun = wsRuns.first(where: \.isMain)
                 let subRuns = wsRuns.filter { !$0.isMain }
@@ -336,9 +336,9 @@ struct ProjectSidebar: View {
                 VStack(alignment: .leading, spacing: 2) {
                     WorkstreamRow(
                         name: workstream.label,
-                        branchName: branch,
+                        branchName: facts?.branch,
                         worktreePath: workstream.worktreePath,
-                        isPathValid: appEnv.isPathValid(workstream.worktreePath),
+                        isPathValid: facts?.isPathValid ?? true,
                         isSelected: selection == .workstream(workstream.id),
                         agentState: agentStateTracker.state(for: workstream.id),
                         hasLiveSession: agentStateTracker.hasLiveSession(for: workstream.id),
@@ -351,7 +351,7 @@ struct ProjectSidebar: View {
                         mainContextUsage: agentStateTracker.mainContextUsage(for: workstream.id),
                         startedAt: mainRun?.startedAt,
                         githubURL: appEnv.githubURL(for: project.directory),
-                        taskDescription: appEnv.taskDescription(for: workstream.worktreePath),
+                        taskDescription: facts?.taskDescription,
                         prTitle: pr?.title,
                         prNumber: pr?.number,
                         prState: pr?.state,

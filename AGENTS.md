@@ -176,6 +176,40 @@ it receives only the `X.Y.Z` core; the suffix naming the commit rides on
 - **Settings** use `@AppStorage` (UserDefaults), keyed as `atelier.*`
 - **Terminal surfaces** cached in `TerminalSurfaceCache` (keyed by UUID)
 - **Git repo info** cached in `AppEnvironment`, refreshed async every 15s
+- **What is known about a worktree is one value, `Worktree.Facts`**, keyed by worktree path
+  and read through `AppEnvironment.facts(for:)`. It replaced five path-keyed dictionaries —
+  branch, path validity, task description, Shortcut story id, active port — plus
+  `Worktree.State`, each with its own accessor, and the older accessors survive as thin
+  wrappers over it so the defaults they encode (an unswept path is *valid*) stay in one place.
+  Three things about it are load-bearing:
+  - **Two facts deliberately stayed out.** A **pull request** is a *branch* fact and stays in
+    `githubBranchPRCache` keyed `"dir|branch"`, because `ProjectOverviewView`'s worktree list
+    renders a PR badge for worktrees that are not workstreams at all — rows fed by
+    `listWorktreesWithInfo`, which a cache filled from `project.workstreams` can never cover.
+    `AppEnvironment.pullRequest(forWorktree:in:)` is the one place the two lookups are
+    composed; it replaced `branch.flatMap { appEnv.githubPR(for: dir, branch: $0) }` written
+    out verbatim at six call sites. `hasGitHubRemote` and the GitHub browser URL are **project**
+    facts keyed by `directory`, for the reason the sidebar's branch button already documents.
+  - **The sweep folds rather than assigns.** `Worktree.Facts.applying(_:to:)` is pure and is the
+    only place each field's carry-forward rule is written down, because the six caches it
+    replaced disagreed: four were `merge`d and two were assigned wholesale. `shortcutStoryID`
+    appears nowhere in `Swept` — no sweep can learn it, `ContentView.syncShortcutStoryIDs`
+    writes it — so it survives only by being carried, and an assignment would have dropped
+    every workstream's story on the next tick. Paths the sweep did not visit are kept, never
+    pruned: a sweep carries the project snapshot it started with, so a workstream created while
+    it was in flight is not in it.
+  - **`Facts` is `Equatable` and the sweep compares before publishing.** `commitChanges` sends
+    `objectWillChange` as its *first* act, so a guard inside it publishes anyway; the sweep runs
+    every fifteen seconds and almost always finds nothing moved, so an unconditional publish
+    redrew every row in the app on a timer. `mutateFacts` applies the same rule to the
+    single-field writers — `refreshBranchName` off the HeadWatcher, `refreshWorktreeState`,
+    `registerShortcutStory`.
+  Dirtiness rides in as a **tri-state** (`Worktree.Cleanliness`), taken from the `repoInfo` the
+  sweep already ran and threw away. That is what let `WorkstreamInfoView` stop shelling out for
+  its own branch and dirtiness into view-local `@State` — a second, quietly divergent copy of
+  both — and it stopped that tab rendering a green "Clean" for a `git status` that never ran.
+  Its appearance still probes, through `refreshGitFacts(for:)` — `refreshBranchName`'s wider
+  sibling, and deliberately not what the HeadWatcher calls.
 - **Branch renames** land immediately: `Worktree.HeadWatcher` watches each worktree's resolved
   git directory (the one holding `HEAD`, which for a linked worktree is *not* `<worktree>/.git`)
   and fires a debounced callback, which re-reads that one branch via

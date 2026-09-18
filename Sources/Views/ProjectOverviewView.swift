@@ -194,14 +194,14 @@ struct ProjectOverviewView: View {
                     } else {
                         let sorted = sortedWorkstreams(project.workstreams)
                         ForEach(sorted) { workstream in
-                            let branch = appEnv.branchName(for: workstream.worktreePath)
-                            let pr = branch.flatMap { appEnv.githubPR(for: project.directory, branch: $0) }
+                            let facts = appEnv.facts(for: workstream.worktreePath)
+                            let pr = appEnv.pullRequest(forWorktree: workstream.worktreePath, in: project.directory)
                             WorkstreamRow(
                                 workstream: workstream,
-                                isPathValid: appEnv.isPathValid(workstream.worktreePath),
-                                hasActivePort: appEnv.hasActivePort(workstream.id),
-                                taskDescription: appEnv.taskDescription(for: workstream.worktreePath),
-                                branchName: branch,
+                                isPathValid: facts?.isPathValid ?? true,
+                                hasActivePort: facts?.hasActivePort ?? false,
+                                taskDescription: facts?.taskDescription,
+                                branchName: facts?.branch,
                                 prTitle: pr?.title,
                                 prNumber: pr?.number,
                                 prState: pr?.state,
