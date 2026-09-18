@@ -430,13 +430,19 @@ struct ProjectOverviewView: View {
         }
     }
 
+    /// Registers a worktree git already has as a workstream.
+    ///
+    /// Through `Workstream.Launcher` rather than by posting `.workstreamCreated`
+    /// by hand, which is what this did and which made it a third producer of the
+    /// seam that knew only half of it — see `Launcher.adopt` for what the missing
+    /// `.workstreamWorktreeReady` was skipping, and for why the tree's
+    /// pre-existence travels with it.
     private func adoptWorktree(_ worktree: Worktree.Info) {
         let name = worktree.branch ?? worktree.path.components(separatedBy: "/").last ?? "workstream"
-        let workstream = Workstream(name: name, worktreePath: worktree.path)
-        NotificationCenter.default.post(
-            name: .workstreamCreated,
-            object: nil,
-            userInfo: ["projectID": project.id, "workstream": workstream]
+        Workstream.Launcher.shared.adopt(
+            projectID: project.id,
+            name: name,
+            worktreePath: worktree.path
         )
     }
 

@@ -801,7 +801,7 @@ struct ProjectSidebar: View {
                 // Keep the story we just fetched: it carries the description, and the
                 // worktree path it will be cached under does not exist yet.
                 appEnv.stageShortcutStory(story)
-                launchWorkstream(
+                startLaunch(
                     project: project,
                     projectID: projectID,
                     name: name,
@@ -915,7 +915,7 @@ struct ProjectSidebar: View {
             case .ready:
                 showingGitHubBranch = false
                 pendingWorkstreamProjectID = nil
-                launchWorkstream(
+                startLaunch(
                     project: project,
                     projectID: projectID,
                     name: branch,
@@ -960,20 +960,32 @@ struct ProjectSidebar: View {
         showingNewWorkstreamName = false
         pendingWorkstreamProjectID = nil
         pendingWorkstreamBypass = nil
-        launchWorkstream(project: project, projectID: projectID, name: name, bypass: bypass)
+        startLaunch(project: project, projectID: projectID, name: name, bypass: bypass)
     }
 
-    /// Posts the optimistic creation, then builds the worktree in the background.
+    /// Hands the creation sequence to `Workstream.Launcher`, which owns it for
+    /// every producer — these three entry points, `ProjectOverviewView`'s
+    /// adoption, and `create_workstream` over IPC.
     ///
-    /// Shared by the plain `+` flow, the Shortcut flow and the GitHub flow so all three get
-    /// identical notification behaviour; only the name, the story id, and whether the branch
-    /// already exists differ.
+    /// This function used to *be* that sequence, on its own `DispatchQueue`,
+    /// with its own rollback. What is left is what only a mounted view can do:
+    /// expanding the project's row so the optimistic workstream is visible, and
+    /// raising the alert when the launch refuses. `rebuildIndices()` is no
+    /// longer called here and is not lost — the `.onChange(of:
+    /// totalWorkstreamCount())` and `.onChange(of: projects.count)` handlers
+    /// above fire in the same update cycle, and the explicit call was already
+    /// redundant with them.
     ///
-    /// `existingBranch` decides *which* git operation runs, and it is not cosmetic:
-    /// `createWorktree` cuts a new branch from the base branch, so using it for a branch that
-    /// lives on origin succeeds and produces a worktree holding the base branch's code under
-    /// the name the user asked for.
-    private func launchWorkstream(
+    /// `existingBranch` decides *which* git operation the launcher runs, and it
+    /// is not cosmetic: `createWorktree` cuts a new branch from the base branch,
+    /// so using it for a branch that lives on origin succeeds and produces a
+    /// worktree holding the base branch's code under the name the user asked
+    /// for. This view used to assemble that git call itself; it now names the
+    /// choice — `Workstream.Launcher.WorktreeSource` — and the launcher runs it.
+    /// The two operations stay distinct and neither is routed through the other:
+    /// see CLAUDE.md, "Two ways to create a worktree, and they are not
+    /// interchangeable".
+    private func startLaunch(
         project: Project,
         projectID: UUID,
         name: String,
@@ -981,56 +993,27 @@ struct ProjectSidebar: View {
         shortcutStoryID: Int? = nil,
         existingBranch: String? = nil
     ) {
-        let workstream = Workstream(
-            name: name,
-            worktreePath: nil,
-            bypassPermissions: bypass,
-            shortcutStoryID: shortcutStoryID
-        )
         expandedProjects.insert(projectID)
-        NotificationCenter.default.post(
-            name: .workstreamCreated,
-            object: nil,
-            userInfo: ["projectID": projectID, "workstream": workstream]
-        )
-        rebuildIndices()
-        logger.warning("[Atelier] addWorkstream: posted notification (optimistic), starting background worktree creation")
 
-        let projectPath = project.checkout
-        let projectName = project.name
-        let workstreamID = workstream.id
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            let worktreePath = if let existingBranch {
-                Git.Operations.createWorktreeTrackingRemote(
-                    projectPath: projectPath,
-                    projectName: projectName,
-                    branch: existingBranch
+        Task {
+            do {
+                _ = try await Workstream.Launcher.shared.launch(
+                    in: Workstream.Launcher.target(for: project),
+                    requestedName: name,
+                    bypassPermissions: bypass,
+                    select: true,
+                    shortcutStoryID: shortcutStoryID,
+                    source: existingBranch.map { .existingRemoteBranch($0) } ?? .newBranch
                 )
-            } else {
-                Git.Operations.createWorktree(
-                    projectPath: projectPath,
-                    projectName: projectName,
-                    workstreamName: name
-                )
-            }
-            DispatchQueue.main.async {
-                if let worktreePath {
-                    logger.warning("[Atelier] addWorkstream: worktree created at \(worktreePath, privacy: .public)")
-                    NotificationCenter.default.post(
-                        name: .workstreamWorktreeReady,
-                        object: nil,
-                        userInfo: ["workstreamID": workstreamID, "worktreePath": worktreePath]
-                    )
-                } else {
-                    logger.warning("[Atelier] addWorkstream: createWorktree FAILED, rolling back")
-                    NotificationCenter.default.post(
-                        name: .workstreamCreationFailed,
-                        object: nil,
-                        userInfo: ["projectID": projectID, "workstreamID": workstreamID]
-                    )
-                    showWorktreeError = true
-                }
+            } catch {
+                // Every refusal lands on one alert, deliberately. The launcher
+                // also throws `.invalidName` and `.nameInUse`, which each of
+                // these three entry points has already checked against the same
+                // rules — so reaching them here means a race, by which point the
+                // sheet that owns the field-level message is dismissed and there
+                // is nowhere else to say it.
+                logger.warning("[Atelier] startLaunch failed: \(error.localizedDescription, privacy: .public)")
+                showWorktreeError = true
             }
         }
     }
