@@ -404,15 +404,27 @@ extension IPC {
             await info(for: peer, pending: store.inboxCount(for: peer.id), now: Date())
         }
 
+        /// Synchronous on purpose: `lastUserPromptAt(forSurface:)` is `nonisolated`
+        /// precisely so this can stay off the main actor. A `MainActor.run` hop
+        /// here once deadlocked a real socket round trip — `IPCServerTests` blocks
+        /// its own thread in a raw `recv()` waiting for the reply this function
+        /// produces, so if producing it needed the main thread to go idle first,
+        /// and the main thread was the one blocked in `recv()`, neither side could
+        /// proceed.
         private func info(for peer: Peer, pending: Int, now: Date) -> PeerInfo {
-            PeerInfo(
+            let surfaceID = contexts[peer.id]?.surfaceID
+            let lastUserPromptSecondsAgo = surfaceID
+                .flatMap { Workstream.AgentStateTracker.shared.lastUserPromptAt(forSurface: $0) }
+                .map { Int(now.timeIntervalSince($0)) }
+            return PeerInfo(
                 id: peer.id.uuidString,
                 name: peer.name,
                 role: peer.role,
                 workstream: contexts[peer.id]?.workstreamName,
-                surfaceID: contexts[peer.id]?.surfaceID?.uuidString,
+                surfaceID: surfaceID?.uuidString,
                 lastSeenSecondsAgo: Int(now.timeIntervalSince(peer.lastSeen)),
-                pendingMessages: pending
+                pendingMessages: pending,
+                lastUserPromptSecondsAgo: lastUserPromptSecondsAgo
             )
         }
 

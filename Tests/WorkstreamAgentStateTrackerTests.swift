@@ -678,6 +678,105 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.state(forSurface: paneB), .idle)
     }
 
+    // MARK: - Per-surface last user prompt
+
+    func test_lastUserPromptAt_isNilUntilUserPromptSubmitFires() {
+        handle(.idle(agentId: "main"))
+        XCTAssertNil(tracker.lastUserPromptAt(forSurface: UUID()), "no evidence must read as nil")
+    }
+
+    func test_lastUserPromptAt_setOnUserPromptSubmit() {
+        let pane = UUID()
+        handle(fromSurface(pane, .waiting(agentId: "main")))
+        guard let promptAt = tracker.lastUserPromptAt(forSurface: pane) else {
+            return XCTFail("expected a timestamp")
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(promptAt), 1, "should be stamped with the current time")
+    }
+
+    func test_lastUserPromptAt_ignoresSubagents() {
+        let pane = UUID()
+        handle(fromSurface(pane, .waiting(agentId: "sub-1")))
+        XCTAssertNil(tracker.lastUserPromptAt(forSurface: pane), "a subagent cannot receive UserPromptSubmit")
+    }
+
+    func test_lastUserPromptAt_clearedOnSessionEnd() {
+        let pane = UUID()
+        handle(fromSurface(pane, .waiting(agentId: "main")))
+        XCTAssertNotNil(tracker.lastUserPromptAt(forSurface: pane))
+
+        handle(fromSurface(pane, .sessionEnded()))
+        XCTAssertNil(tracker.lastUserPromptAt(forSurface: pane), "a new session has no memory of the old one")
+    }
+
+    func test_lastUserPromptAt_clearedOnNewSessionEvenIfSessionEndWasDropped() {
+        // Hook delivery is a one-second curl that fails silently, so `SessionEnd`
+        // can go missing. Without this, a dropped end leaves the next session in
+        // the same pane inheriting the previous session's timestamp.
+        let pane = UUID()
+        handle(fromSurface(pane, .waiting(agentId: "main")))
+        XCTAssertNotNil(tracker.lastUserPromptAt(forSurface: pane))
+
+        handle(fromSurface(pane, .sessionStarted()))
+        XCTAssertNil(tracker.lastUserPromptAt(forSurface: pane), "a new session has no memory of the old one")
+    }
+
+    func test_lastUserPromptAt_ignoresAMarkedSyntheticPrompt() {
+        // AgentNudge types its own "you have unread messages" notice and submits
+        // it, which fires a real UserPromptSubmit — but no human sent it.
+        let pane = UUID()
+        tracker.expectSyntheticPrompt(surfaceID: pane)
+        handle(fromSurface(pane, .waiting(agentId: "main")))
+
+        XCTAssertNil(tracker.lastUserPromptAt(forSurface: pane), "a synthetic submission is not direct user input")
+        XCTAssertEqual(tracker.state(forSurface: pane), .working, "the surface is still genuinely busy")
+    }
+
+    func test_expectSyntheticPrompt_isConsumedByTheNextEventOnly() {
+        // A second, unrelated UserPromptSubmit later must count normally — the
+        // marker is for the *next* one, not every future one.
+        let pane = UUID()
+        tracker.expectSyntheticPrompt(surfaceID: pane)
+        handle(fromSurface(pane, .waiting(agentId: "main")))
+        XCTAssertNil(tracker.lastUserPromptAt(forSurface: pane))
+
+        handle(fromSurface(pane, .idle(agentId: "main")))
+        handle(fromSurface(pane, .waiting(agentId: "main")))
+        XCTAssertNotNil(tracker.lastUserPromptAt(forSurface: pane), "a later prompt was not marked and must count as human")
+    }
+
+    func test_expectSyntheticPrompt_expiresRatherThanSuppressingForever() {
+        // typeAndSubmit's own safety check can skip the Return keypress
+        // entirely, in which case nothing ever consumes the marker. Past the
+        // window, the next prompt must count as human — that is the safe
+        // direction to be wrong in, since the alternative is silently eating a
+        // real human prompt at an arbitrary point later in the session.
+        let pane = UUID()
+        tracker._testExpectSyntheticPrompt(surfaceID: pane, at: Date().addingTimeInterval(-30))
+        handle(fromSurface(pane, .waiting(agentId: "main")))
+        XCTAssertNotNil(tracker.lastUserPromptAt(forSurface: pane), "an expired marker must not suppress this prompt")
+    }
+
+    func test_clearSurface_dropsLastUserPrompt() {
+        let paneA = UUID()
+        let paneB = UUID()
+        handle(fromSurface(paneA, .waiting(agentId: "main")))
+        handle(fromSurface(paneB, .waiting(agentId: "main")))
+
+        tracker.clear(surfaceID: paneA)
+        XCTAssertNil(tracker.lastUserPromptAt(forSurface: paneA))
+        XCTAssertNotNil(tracker.lastUserPromptAt(forSurface: paneB))
+    }
+
+    func test_clear_workstreamDropsLastUserPromptForItsSurfaces() {
+        let pane = UUID()
+        handle(fromSurface(pane, .waiting(agentId: "main")))
+        XCTAssertNotNil(tracker.lastUserPromptAt(forSurface: pane))
+
+        tracker.clear(workstreamID: wsID)
+        XCTAssertNil(tracker.lastUserPromptAt(forSurface: pane))
+    }
+
     func test_state_defaultsToIdleForAWorkstreamThatHasReportedNothing() {
         XCTAssertEqual(tracker.state(for: UUID()), .idle, "the sidebar row still has something to draw")
     }
