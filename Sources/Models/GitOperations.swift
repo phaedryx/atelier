@@ -206,6 +206,202 @@ extension Git {
 }
 
 extension Git {
+    /// Why an operation that changes something did not.
+    ///
+    /// The five mutators that used to return `Void` — `removeWorktree`,
+    /// `deleteLocalBranch`, `discardAllChanges`, `addExcludeEntry`,
+    /// `fetchDefaultBranch` — discarded git's exit status and its stderr at the
+    /// spawn site, so a caller learned nothing and the log line was the only
+    /// record. `Workstream.Archiver.purge` in particular found out that a
+    /// `removeWorktree` had failed from a *later* `worktree list`, which reports
+    /// that the worktree is still registered and not one word about why.
+    ///
+    /// `Result<Void, Failure>` rather than `throws`, because this file has no
+    /// `throws` anywhere and already models every other failure as a value —
+    /// `PullResult`, `Bool?`, `RepoInfo.isDirtyUnknown`. `try?` would also erase
+    /// the error at the call site, which is exactly the silent discard being
+    /// removed here; ignoring a `Result` at least costs a compiler warning.
+    struct Failure: Error, Equatable {
+        /// The command that failed, as it would be typed. For a refusal decided
+        /// before anything was spawned, the command that was *not* run.
+        let command: String
+
+        /// git's exit status, or nil when no process ran: a refusal, a missing
+        /// git binary, a deadline, or a step that is not a git spawn at all.
+        let exitCode: Int32?
+
+        /// The tail of stderr, bounded by `stderrTail`. Empty when there was none.
+        let stderr: String
+
+        /// One line fit to log or show. Never empty — a `Failure` whose only
+        /// content was an exit code is the thing this type exists to replace.
+        let reason: String
+
+        /// stderr's last few lines, bounded.
+        ///
+        /// Whole stderr is unbounded and caller-controlled — a `git clean -fd`
+        /// over a large tree, a hook printing a wall of text — and every consumer
+        /// here is a log line or an alert. The tail rather than the head because
+        /// git's own diagnosis is the last thing it says.
+        static func stderrTail(_ text: String, lines maxLines: Int = 5, characters maxCharacters: Int = 500) -> String {
+            let kept = text
+                .components(separatedBy: "\n")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+                .suffix(maxLines)
+                .joined(separator: "; ")
+            return kept.count > maxCharacters ? String(kept.suffix(maxCharacters)) : kept
+        }
+
+        /// Atelier declined before running anything — the path is the project
+        /// directory, the trunk's checkout, the bare repository.
+        static func refusing(_ command: String, _ reason: String) -> Failure {
+            Failure(command: command, exitCode: nil, stderr: "", reason: reason)
+        }
+
+        /// A step that is not a git spawn: writing `info/exclude`, removing a
+        /// directory git has already forgotten.
+        static func system(_ command: String, _ reason: String) -> Failure {
+            Failure(command: command, exitCode: nil, stderr: "", reason: reason)
+        }
+
+        /// What a log line or an alert shows: the reason, and the command that
+        /// produced it so a user can run it themselves.
+        var description: String {
+            "\(reason) (\(command))"
+        }
+    }
+}
+
+extension Git {
+    /// One parse of `git worktree list --porcelain`, and the only one.
+    ///
+    /// There were three — `worktreePath(forBranch:)`, `listWorktreesWithInfo` and
+    /// `registeredWorktrees` — each walking the same lines with its own state
+    /// machine, two of them defining their own `flush()`. They agreed on the two
+    /// prefixes they happened to need and on nothing else: none of them noticed
+    /// `detached` or `locked`, and the bare entry was skipped by two of the three
+    /// with the third relying on a bare repository having no `branch` line.
+    ///
+    /// The three public functions are now filters over `worktreeList(at:)`, so a
+    /// porcelain field learned here is learned by all of them at once.
+    enum WorktreeListing {
+        /// One `worktree` block of the porcelain listing.
+        struct Entry: Equatable {
+            /// The work tree's path, taken as the whole remainder of the line.
+            ///
+            /// **Never tokenized on whitespace**: `git worktree add "/tmp/my repo"`
+            /// is legal and porcelain does not quote or escape it, so a
+            /// `split(separator: " ")` truncates that path to `/tmp/my`.
+            let path: String
+
+            /// The full ref this worktree holds, e.g. `refs/heads/feat/thing`.
+            /// Nil for a detached HEAD and for the bare entry, neither of which
+            /// emits a `branch` line.
+            ///
+            /// The **full** ref, because `worktreePath(forBranch:)` matches on
+            /// `refs/heads/<branch>` and only `branch` below wants it shortened.
+            let ref: String?
+
+            /// The commit the worktree is at, from the `HEAD` line. Absent on the
+            /// bare entry.
+            let head: String?
+
+            /// The bare repository's own row. In the `.bare` container layout it is
+            /// an entry in `worktree list` like any other, and it has no work tree,
+            /// so nothing that surfaces worktrees to a user may include it.
+            let isBare: Bool
+
+            /// `detached` was reported: this worktree is on no branch.
+            let isDetached: Bool
+
+            /// `locked` was reported, with or without a reason. Nothing reads it
+            /// yet; it is parsed because dropping a field the porcelain emits is
+            /// how the three hand-rolled walkers ended up disagreeing.
+            let isLocked: Bool
+
+            /// The branch name without its `refs/heads/` prefix — what the sidebar
+            /// and every stored record spell.
+            ///
+            /// Nil for anything that is not a local branch, which is what the
+            /// walkers this replaced did by only ever matching the literal
+            /// `branch refs/heads/` prefix. Strips exactly that prefix and nothing
+            /// else: a branch legitimately named `feat/thing` must come back whole,
+            /// so no path-component or last-separator trick may stand here.
+            var branch: String? {
+                guard let ref, ref.hasPrefix("refs/heads/") else { return nil }
+                return String(ref.dropFirst("refs/heads/".count))
+            }
+        }
+
+        /// Parse porcelain output. Pure — no git, no filesystem — so the fixture
+        /// cases live in `Tests/GitWorktreeListingTests.swift` and cost nothing.
+        ///
+        /// A `worktree ` line opens a block and everything up to the next one
+        /// belongs to it; the blank line between blocks is not relied on, because
+        /// the last block does not always have one after it.
+        static func parse(porcelain: String) -> [Entry] {
+            var entries: [Entry] = []
+
+            var path: String?
+            var ref: String?
+            var head: String?
+            var isBare = false
+            var isDetached = false
+            var isLocked = false
+
+            func flush() {
+                guard let path else { return }
+                entries.append(Entry(
+                    path: path,
+                    ref: ref,
+                    head: head,
+                    isBare: isBare,
+                    isDetached: isDetached,
+                    isLocked: isLocked
+                ))
+            }
+
+            func value(_ line: String, after key: String) -> String? {
+                guard line.hasPrefix(key + " ") else { return nil }
+                return String(line.dropFirst(key.count + 1))
+            }
+
+            for rawLine in porcelain.components(separatedBy: "\n") {
+                // Porcelain is newline-terminated; a \r would end up inside a path
+                // or a ref if the output ever arrived with CRLF endings.
+                let line = rawLine.hasSuffix("\r") ? String(rawLine.dropLast()) : rawLine
+
+                if let next = value(line, after: "worktree") {
+                    flush()
+                    path = next
+                    ref = nil
+                    head = nil
+                    isBare = false
+                    isDetached = false
+                    isLocked = false
+                } else if let next = value(line, after: "branch") {
+                    ref = next
+                } else if let next = value(line, after: "HEAD") {
+                    head = next
+                } else if line == "bare" {
+                    isBare = true
+                } else if line == "detached" {
+                    isDetached = true
+                } else if line == "locked" || line.hasPrefix("locked ") {
+                    // `locked` stands alone when no reason was given and carries the
+                    // reason otherwise, so neither form may be the only one matched.
+                    isLocked = true
+                }
+            }
+            flush()
+
+            return entries
+        }
+    }
+}
+
+extension Git {
     enum Operations {
         /// Resolved once per process. `CommandLineTools.path(for:)` stats each PATH
         /// entry until it hits, and `listWorktreesWithInfo` spawns three git
@@ -959,24 +1155,38 @@ extension Git {
         /// on screen. Like `worktreePaths` this is a single git command, so it is cheap enough
         /// to ask before starting.
         static func worktreePath(forBranch branch: String, at path: String) -> String? {
-            guard let output = run(args: ["worktree", "list", "--porcelain"], in: path) else { return nil }
+            // Matched on the full ref, not on `Entry.branch`: a worktree holding a
+            // ref outside `refs/heads/` must not answer for a local branch of the
+            // same tail.
+            worktreeList(at: path)?.first { $0.ref == "refs/heads/\(branch)" }?.path
+        }
 
-            var current: String?
-            for line in output.components(separatedBy: "\n") {
-                if line.hasPrefix("worktree ") {
-                    current = String(line.dropFirst("worktree ".count))
-                } else if line.hasPrefix("branch "), let holder = current {
-                    guard String(line.dropFirst("branch ".count)) == "refs/heads/\(branch)" else { continue }
-                    return holder
-                } else if line.isEmpty {
-                    current = nil
-                }
-            }
-            return nil
+        /// Every row of `git worktree list --porcelain`, parsed once.
+        ///
+        /// **Nil means the question could not be asked**, and it is the reason this
+        /// is optional at all: `registeredWorktrees` is what stranded-workstream
+        /// repair reads, and it has to tell "git says this worktree is gone" from
+        /// "git did not answer" — collapsing the two lets a transient git failure
+        /// look like proof a worktree no longer exists. Callers that genuinely do
+        /// not need the distinction say `?? []` for themselves, where a reader can
+        /// see them saying it.
+        ///
+        /// The bare entry is **not** filtered here. It is a real row and one caller
+        /// — nothing today, but `worktreePath(forBranch:)` would match it if a bare
+        /// repository ever reported a branch — should see the listing git gave.
+        /// Each public function drops what it does not want, and says why.
+        private static func worktreeList(at path: String) -> [Git.WorktreeListing.Entry]? {
+            guard let output = run(args: ["worktree", "list", "--porcelain"], in: path) else { return nil }
+            return Git.WorktreeListing.parse(porcelain: output)
         }
 
         /// Append a pattern to the repo's info/exclude if not already present.
-        static func addExcludeEntry(at repoPath: String, pattern: String) {
+        ///
+        /// Failure is the *write* failing, never the `rev-parse --git-path` probe:
+        /// that probe missing is an ordinary case with a documented fallback below,
+        /// and reporting it would make a successful write look failed.
+        @discardableResult
+        static func addExcludeEntry(at repoPath: String, pattern: String) -> Result<Void, Git.Failure> {
             // Ask git where the file lives rather than assuming `.git` is a
             // directory — in a worktree, and in the .bare container layout, it is a
             // file pointing elsewhere, and the hardcoded path silently goes nowhere.
@@ -1001,7 +1211,7 @@ extension Git {
             let existing = (try? String(contentsOf: excludeURL, encoding: .utf8)) ?? ""
             let lines = existing.components(separatedBy: .newlines)
             if lines.contains(pattern) {
-                return
+                return .success(())
             }
 
             let entry = existing.hasSuffix("\n") || existing.isEmpty ? pattern + "\n" : "\n" + pattern + "\n"
@@ -1009,8 +1219,16 @@ extension Git {
                 handle.seekToEndOfFile()
                 handle.write(data)
                 handle.closeFile()
-            } else {
-                try? (existing + entry).write(to: excludeURL, atomically: true, encoding: .utf8)
+                return .success(())
+            }
+            do {
+                try (existing + entry).write(to: excludeURL, atomically: true, encoding: .utf8)
+                return .success(())
+            } catch {
+                return .failure(.system(
+                    "write \(excludeURL.path)",
+                    String(format: NSLocalizedString("Could not write the repository's exclude file: %@", comment: "info/exclude write failed"), error.localizedDescription)
+                ))
             }
         }
 
@@ -1031,15 +1249,19 @@ extension Git {
         /// `removeItem` follows a symlinked parent to the real directory.
         /// `resolvingSymlinksInPath()` alone would settle that only while both
         /// paths were on disk.
-        static func removeWorktree(projectPath: String, worktreePath: String) {
+        static func removeWorktree(projectPath: String, worktreePath: String) -> Result<Void, Git.Failure> {
             let worktreeDir = URL(fileURLWithPath: worktreePath).standardizedFileURL
             let resolvedWorktree = worktreePath.canonicalPath
             let resolvedProject = projectPath.canonicalPath
+            let command = "git worktree remove --force \(worktreePath)"
             guard resolvedWorktree != resolvedProject else {
                 logger.error(
                     "[Atelier] Refusing to remove \(resolvedProject, privacy: .public): that is the project directory, not a worktree of it"
                 )
-                return
+                return .failure(.refusing(command, String(
+                    format: NSLocalizedString("Refusing to remove %@: that is the project directory, not a worktree of it.", comment: "removeWorktree refusal"),
+                    resolvedProject
+                )))
             }
 
             /// Whether the root `args` reports is `worktreePath` itself, rather than
@@ -1068,23 +1290,57 @@ extension Git {
                 logger.error(
                     "[Atelier] Refusing to remove \(resolvedWorktree, privacy: .public): it is the checkout of protected branch \(branch, privacy: .public)"
                 )
-                return
+                return .failure(.refusing(command, String(
+                    format: NSLocalizedString("Refusing to remove %1$@: it is the checkout of protected branch %2$@.", comment: "removeWorktree refusal"),
+                    resolvedWorktree, branch
+                )))
             }
             if isRoot(["rev-parse", "--path-format=absolute", "--git-dir"]), isBareRepository(at: worktreePath) {
                 logger.error(
                     "[Atelier] Refusing to remove \(resolvedWorktree, privacy: .public): that is the bare repository, not a worktree"
                 )
-                return
+                return .failure(.refusing(command, String(
+                    format: NSLocalizedString("Refusing to remove %@: that is the bare repository, not a worktree.", comment: "removeWorktree refusal"),
+                    resolvedWorktree
+                )))
             }
 
-            _ = runOnWholeTree(args: ["worktree", "remove", "--force", worktreePath], in: projectPath)
+            let gitOutcome = runOnWholeTreeReporting(
+                args: ["worktree", "remove", "--force", worktreePath],
+                in: projectPath
+            )
 
             // Clean up empty directories
-            try? FileManager.default.removeItem(at: worktreeDir)
+            var removalError: Error?
+            do {
+                try FileManager.default.removeItem(at: worktreeDir)
+            } catch {
+                removalError = error
+            }
             let parentDir = worktreeDir.deletingLastPathComponent()
             if let contents = try? FileManager.default.contentsOfDirectory(atPath: parentDir.path), contents.isEmpty {
                 try? FileManager.default.removeItem(at: parentDir)
             }
+
+            // **The verdict is whether the directory is gone, not whether git
+            // agreed.** An orphan — one git has already forgotten — makes
+            // `worktree remove` fail every time, and the `removeItem` above is the
+            // only thing that ever cleans it up; `purgeOrphanWorktree` is built on
+            // exactly that. Reporting git's exit code as the verdict would make a
+            // successful orphan purge report failure, which is the one thing a
+            // caller must not be told here.
+            //
+            // git's stderr is still what a survivor's failure carries, because it
+            // is the diagnosis: "is a main working tree", "contains modified files".
+            guard FileManager.default.fileExists(atPath: worktreeDir.path) else { return .success(()) }
+            if case let .failure(failure) = gitOutcome {
+                return .failure(failure)
+            }
+            return .failure(.system(command, String(
+                format: NSLocalizedString("The worktree directory is still at %1$@: %2$@", comment: "removeWorktree left the directory behind"),
+                worktreeDir.path,
+                removalError?.localizedDescription ?? NSLocalizedString("git reported success but the directory remains.", comment: "removeWorktree unexplained survivor")
+            )))
         }
 
         /// Whether a worktree has uncommitted changes (staged, unstaged, or untracked
@@ -1148,10 +1404,25 @@ extension Git {
         }
 
         /// Discard all uncommitted changes: reset staged, checkout unstaged, clean untracked.
-        static func discardAllChanges(at path: String) {
-            _ = run(args: ["reset", "HEAD"], in: path)
-            _ = runOnWholeTree(args: ["checkout", "--", "."], in: path)
-            _ = runOnWholeTree(args: ["clean", "-fd"], in: path)
+        ///
+        /// **All three run whatever the earlier ones did**, unchanged from when this
+        /// returned `Void`, and the first failure is what comes back. That is not an
+        /// oversight to tidy into an early return: a `reset` that fails still leaves
+        /// a tree the `checkout` and `clean` can strip, and stopping at the first
+        /// error would leave the user staring at changes a Discard All said it had
+        /// discarded.
+        static func discardAllChanges(at path: String) -> Result<Void, Git.Failure> {
+            let outcomes = [
+                runReporting(args: ["reset", "HEAD"], in: path),
+                runOnWholeTreeReporting(args: ["checkout", "--", "."], in: path),
+                runOnWholeTreeReporting(args: ["clean", "-fd"], in: path),
+            ]
+            for outcome in outcomes {
+                if case let .failure(failure) = outcome {
+                    return .failure(failure)
+                }
+            }
+            return .success(())
         }
 
         private static func parseStatus(_ char: Character) -> Worktree.Detail.FileChange.Status {
@@ -1237,7 +1508,10 @@ extension Git {
 
         /// List existing worktrees for a project with branch and dirty status.
         static func listWorktreesWithInfo(at projectPath: String) -> [Worktree.Info] {
-            guard let output = run(args: ["worktree", "list", "--porcelain"], in: projectPath) else {
+            // `?? []` on purpose, and unchanged: this feeds the project overview,
+            // which redraws on a timer and has an empty state. `registeredWorktrees`
+            // is the caller that may not flatten the distinction.
+            guard let entries = worktreeList(at: projectPath), !entries.isEmpty else {
                 return []
             }
 
@@ -1248,15 +1522,13 @@ extension Git {
             let protectedBranches = protectedBranchNames(at: projectPath)
 
             var results: [Worktree.Info] = []
-            var currentPath: String?
-            var currentBranch: String?
-            var currentIsBare = false
 
-            /// In the .bare container layout the bare repository is itself an entry
-            /// in `worktree list`. It has no work tree and no branch, so it must not
-            /// be surfaced as a workstream.
-            func flush() {
-                guard let path = currentPath, !currentIsBare else { return }
+            // In the .bare container layout the bare repository is itself an entry
+            // in `worktree list`. It has no work tree and no branch, so it must not
+            // be surfaced as a workstream.
+            for entry in entries where !entry.isBare {
+                let path = entry.path
+                let currentBranch = entry.branch
                 let isMain = URL(fileURLWithPath: path).standardizedFileURL.path == mainPath
                 let isProtected = isMain || currentBranch.map(protectedBranches.contains) == true
                 let dirtyProbe = isMain ? false : hasUncommittedChanges(at: path)
@@ -1276,20 +1548,6 @@ extension Git {
                     cleanlinessUnknown: dirtyProbe == nil || unpushedProbe == nil || branchCommitsProbe == nil
                 ))
             }
-
-            for line in output.components(separatedBy: "\n") {
-                if line.hasPrefix("worktree ") {
-                    flush()
-                    currentPath = String(line.dropFirst("worktree ".count))
-                    currentBranch = nil
-                    currentIsBare = false
-                } else if line.hasPrefix("branch refs/heads/") {
-                    currentBranch = String(line.dropFirst("branch refs/heads/".count))
-                } else if line == "bare" {
-                    currentIsBare = true
-                }
-            }
-            flush()
 
             return results
         }
@@ -1486,36 +1744,13 @@ extension Git {
         /// not answer"; collapsing the two would let a transient git failure look
         /// like proof that a worktree no longer exists.
         static func registeredWorktrees(at path: String) -> [Worktree.Registration]? {
-            guard let output = run(args: ["worktree", "list", "--porcelain"], in: path) else { return nil }
-
-            var results: [Worktree.Registration] = []
-            var currentPath: String?
-            var currentBranch: String?
-            var currentIsBare = false
-
-            /// The bare repository is itself an entry in the `.bare` container
-            /// layout. It has no work tree, so it is not a worktree anyone can be
-            /// pointed at.
-            func flush() {
-                guard let currentPath, !currentIsBare else { return }
-                results.append(Worktree.Registration(path: currentPath, branch: currentBranch))
-            }
-
-            for line in output.components(separatedBy: "\n") {
-                if line.hasPrefix("worktree ") {
-                    flush()
-                    currentPath = String(line.dropFirst("worktree ".count))
-                    currentBranch = nil
-                    currentIsBare = false
-                } else if line.hasPrefix("branch refs/heads/") {
-                    currentBranch = String(line.dropFirst("branch refs/heads/".count))
-                } else if line == "bare" {
-                    currentIsBare = true
-                }
-            }
-            flush()
-
-            return results
+            // The bare repository is itself an entry in the `.bare` container
+            // layout. It has no work tree, so it is not a worktree anyone can be
+            // pointed at. The optional is passed straight through — see
+            // `worktreeList`, whose nil this is the reason for.
+            worktreeList(at: path)?
+                .filter { !$0.isBare }
+                .map { Worktree.Registration(path: $0.path, branch: $0.branch) }
         }
 
         /// Worktree paths only, skipping the bare repository entry. Cheap enough
@@ -1541,8 +1776,8 @@ extension Git {
         }
 
         /// Delete a local branch by name.
-        static func deleteLocalBranch(at path: String, branchName: String) {
-            _ = run(args: ["branch", "-D", branchName], in: path)
+        static func deleteLocalBranch(at path: String, branchName: String) -> Result<Void, Git.Failure> {
+            runReporting(args: ["branch", "-D", branchName], in: path).map { _ in () }
         }
 
         /// Per-file git status for the file tree (modified, untracked, ignored).
@@ -1674,7 +1909,8 @@ extension Git {
         /// `BaseBranchSetting`), fetches exactly that branch instead, stripping
         /// an `origin/` prefix if present since `git fetch origin <ref>` wants
         /// the bare name.
-        static func fetchDefaultBranch(at path: String, branch: String? = nil) {
+        @discardableResult
+        static func fetchDefaultBranch(at path: String, branch: String? = nil) -> Result<Void, Git.Failure> {
             // Determine which branch to fetch. `fetchBranch` makes the no-remote check, so
             // there is no guard here — asking twice was one git spawn per call for nothing.
             let branchToFetch: String = if let branch {
@@ -1686,7 +1922,7 @@ extension Git {
                 "main"
             }
 
-            fetchBranch(at: path, branch: branchToFetch)
+            return fetchBranch(at: path, branch: branchToFetch)
         }
 
         /// Fetch one named branch from origin. No-ops without a remote, and gives up rather
@@ -1695,23 +1931,50 @@ extension Git {
         /// The 5s bound is much tighter than `ProcessRunner.Timeout.network`, and stays that
         /// way: every caller either has a stale ref to fall back on or a `rev-parse` that will
         /// report the miss, so waiting two minutes on a wedged link buys nothing.
-        private static func fetchBranch(at path: String, branch: String) {
-            guard run(args: ["remote", "get-url", "origin"], in: path) != nil else { return }
-            runWithTimeout(args: ["fetch", "origin", stripOriginPrefix(branch), "--no-tags"], in: path, timeout: 5)
+        ///
+        /// **No remote is `.success`, not a failure.** A local-only repository is an
+        /// ordinary state in which there is nothing to fetch, and `fetchOrigin`
+        /// sweeps every project on a two-minute timer — reporting it would put a
+        /// line in the log every two minutes for a repository that is working
+        /// exactly as intended.
+        /// `@discardableResult` for the reason the doc comment gives: both
+        /// creation paths call this for refs they can proceed without, and a
+        /// local-only repository reaches the `.success` above on every call.
+        @discardableResult
+        private static func fetchBranch(at path: String, branch: String) -> Result<Void, Git.Failure> {
+            guard run(args: ["remote", "get-url", "origin"], in: path) != nil else { return .success(()) }
+            // The 5s bound is deliberate and stays inline: it is tighter than every
+            // `ProcessRunner.Timeout` tier on purpose (see the doc comment above),
+            // and there is no tier for "give up fast because a stale ref will do".
+            return capture(
+                args: ["fetch", "origin", stripOriginPrefix(branch), "--no-tags"],
+                in: path,
+                timeout: 5
+            ).map { _ in () }
         }
 
-        /// Runs git and returns stdout, or nil if git is missing, exited non-zero,
-        /// or outlived `timeout`.
+        /// Runs git and reports either stdout or why it did not run.
+        ///
+        /// **The one spawn site.** `runWithTimeout`, `run` and `runOnWholeTree` are
+        /// all projections of this, so the deadline, `gitEnvironment`'s
+        /// `GIT_TERMINAL_PROMPT=0`/`GIT_ASKPASS` pair and the concurrent pipe drain
+        /// are decided once. Every mutator returning a `Git.Failure` gets its exit
+        /// code and stderr from here rather than re-spawning to ask.
         ///
         /// `ProcessRunner` owns the deadline and drains both pipes concurrently,
         /// which is what makes a large `git show`/`git status` safe: git blocks
         /// writing to a full pipe once its output passes the ~64 KB macOS buffer,
         /// so draining one stream while the other fills would wedge it.
-        @discardableResult
-        private static func runWithTimeout(args: [String], in directory: String, timeout: TimeInterval) -> String? {
+        private static func capture(
+            args: [String],
+            in directory: String,
+            timeout: TimeInterval
+        ) -> Result<String, Git.Failure> {
+            let command = "git " + args.joined(separator: " ")
+
             guard let gitPath else {
                 logger.warning("[Atelier] git run: gitPath is nil")
-                return nil
+                return .failure(.system(command, NSLocalizedString("git was not found", comment: "git binary missing")))
             }
             guard let output = ProcessRunner.capture(
                 executable: gitPath,
@@ -1719,13 +1982,40 @@ extension Git {
                 environment: gitEnvironment,
                 currentDirectory: URL(fileURLWithPath: directory),
                 timeout: timeout
-            ) else { return nil }
+            ) else {
+                return .failure(.system(
+                    command,
+                    String(format: NSLocalizedString("git did not finish within %ds", comment: "git deadline"), Int(timeout))
+                ))
+            }
 
             guard output.isSuccess else {
                 logger.warning("[Atelier] git \(args.joined(separator: " "), privacy: .public) failed (exit \(output.status, privacy: .public)): \(output.stderrText, privacy: .public)")
-                return nil
+                let tail = Git.Failure.stderrTail(output.stderrText)
+                return .failure(Git.Failure(
+                    command: command,
+                    exitCode: output.status,
+                    stderr: tail,
+                    reason: tail.isEmpty
+                        ? String(format: NSLocalizedString("git exited %d", comment: "git exit status"), output.status)
+                        : tail
+                ))
             }
-            return String(data: output.stdout, encoding: .utf8)
+            // Nil only for stdout that is not UTF-8, which none of these commands
+            // produce. Kept as a failure rather than coerced to "" because every
+            // caller above reads an empty listing as a real answer.
+            guard let text = String(data: output.stdout, encoding: .utf8) else {
+                return .failure(.system(command, NSLocalizedString("git output was not readable as text", comment: "git non-UTF8 output")))
+            }
+            return .success(text)
+        }
+
+        /// Runs git and returns stdout, or nil if git is missing, exited non-zero,
+        /// or outlived `timeout`. The read-shaped projection of `capture`, for the
+        /// three dozen probes whose only question is "what did git say".
+        @discardableResult
+        private static func runWithTimeout(args: [String], in directory: String, timeout: TimeInterval) -> String? {
+            try? capture(args: args, in: directory, timeout: timeout).get()
         }
 
         /// Validates a candidate workstream name for use as a git branch name.
@@ -1781,6 +2071,11 @@ extension Git {
             runWithTimeout(args: args, in: directory, timeout: ProcessRunner.Timeout.local)
         }
 
+        /// `run`, for a mutator that has to report why git refused.
+        private static func runReporting(args: [String], in directory: String) -> Result<String, Git.Failure> {
+            capture(args: args, in: directory, timeout: ProcessRunner.Timeout.local)
+        }
+
         /// Git commands that write a whole working tree — `worktree add` checks one
         /// out, `worktree remove`, `reset --hard`, `checkout -- .` and `clean -fd`
         /// rewrite or delete one. How long they take is a property of the user's
@@ -1788,6 +2083,11 @@ extension Git {
         /// legitimate checkout of a large repository partway through.
         private static func runOnWholeTree(args: [String], in directory: String) -> String? {
             runWithTimeout(args: args, in: directory, timeout: ProcessRunner.Timeout.userCommand)
+        }
+
+        /// `runOnWholeTree`, for a mutator that has to report why git refused.
+        private static func runOnWholeTreeReporting(args: [String], in directory: String) -> Result<String, Git.Failure> {
+            capture(args: args, in: directory, timeout: ProcessRunner.Timeout.userCommand)
         }
     }
 }

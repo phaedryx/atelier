@@ -293,9 +293,24 @@ extension Workstream {
                                     worktreePath: worktreePath,
                                     projectDirectory: projectDir
                                 )
-                                Git.Operations.removeWorktree(projectPath: projectDir, worktreePath: worktreePath)
-                                if let branchName {
-                                    Git.Operations.deleteLocalBranch(at: projectDir, branchName: branchName)
+                                // Logged here rather than left to the caller: a purge
+                                // that cannot remove the worktree used to be found out
+                                // from a *later* `worktree list`, which says the
+                                // worktree is still registered and not one word about
+                                // why. git's own stderr — "contains modified files",
+                                // "is a main working tree" — is the answer, and this
+                                // is the only place it exists.
+                                if case let .failure(failure) = Git.Operations.removeWorktree(
+                                    projectPath: projectDir, worktreePath: worktreePath
+                                ) {
+                                    logger.error("[Atelier] purge could not remove the worktree: \(failure.description, privacy: .public)")
+                                }
+                                if let branchName,
+                                   case let .failure(failure) = Git.Operations.deleteLocalBranch(
+                                       at: projectDir, branchName: branchName
+                                   )
+                                {
+                                    logger.error("[Atelier] purge could not delete branch \(branchName, privacy: .public): \(failure.description, privacy: .public)")
                                 }
                             }
                             Git.Operations.fetchDefaultBranch(at: projectDir)
@@ -507,9 +522,19 @@ extension Workstream {
                         NotificationCenter.default.post(name: archivingDidComplete, object: nil)
                     }
                 }
-                Git.Operations.removeWorktree(projectPath: projectDirectory, worktreePath: worktreePath)
-                if let branchName {
-                    Git.Operations.deleteLocalBranch(at: projectDirectory, branchName: branchName)
+                // Same as `purge`: git's stderr is the only account of why an
+                // orphan could not be removed, and nothing downstream can recover it.
+                if case let .failure(failure) = Git.Operations.removeWorktree(
+                    projectPath: projectDirectory, worktreePath: worktreePath
+                ) {
+                    logger.error("[Atelier] orphan purge could not remove the worktree: \(failure.description, privacy: .public)")
+                }
+                if let branchName,
+                   case let .failure(failure) = Git.Operations.deleteLocalBranch(
+                       at: projectDirectory, branchName: branchName
+                   )
+                {
+                    logger.error("[Atelier] orphan purge could not delete branch \(branchName, privacy: .public): \(failure.description, privacy: .public)")
                 }
                 Git.Operations.fetchDefaultBranch(at: projectDirectory)
             }

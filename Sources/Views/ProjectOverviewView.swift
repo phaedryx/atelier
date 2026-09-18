@@ -1,7 +1,10 @@
 // ABOUTME: Overview shown when a project is selected but no workstream is active.
 // ABOUTME: Native Form layout with project info, repo status, and workstream list.
 
+import OSLog
 import SwiftUI
+
+private let logger = Logger(subsystem: "atelier", category: "project-overview")
 
 struct ProjectOverviewView: View {
     @Binding var project: Project
@@ -914,7 +917,13 @@ private struct RepoChangesPopover: View {
     private func discardAll() {
         let dir = directory
         Task.detached {
-            Git.Operations.discardAllChanges(at: dir)
+            // Discard All is the one place a user watches for an empty list
+            // afterwards, so a git refusal that leaves the changes in place has to
+            // reach the log rather than looking like a no-op. The refresh still
+            // runs: whatever survived is what the list should now show.
+            if case let .failure(failure) = Git.Operations.discardAllChanges(at: dir) {
+                logger.error("[Atelier] discard all changes failed: \(failure.description, privacy: .public)")
+            }
             await MainActor.run { onDiscarded() }
         }
     }

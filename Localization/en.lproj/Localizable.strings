@@ -513,6 +513,18 @@
 "Could not determine the repository's default branch." = "Could not determine the repository's default branch.";
 "git was not found on your PATH." = "git was not found on your PATH.";
 "git %@ failed (exit %d)" = "git %@ failed (exit %d)";
+/* Git.Failure — why a git mutation did not happen */
+"git was not found" = "git was not found";
+"git did not finish within %ds" = "git did not finish within %ds";
+"git exited %d" = "git exited %d";
+"git output was not readable as text" = "git output was not readable as text";
+"Could not write the repository's exclude file: %@" = "Could not write the repository's exclude file: %@";
+"Refusing to remove %@: that is the project directory, not a worktree of it." = "Refusing to remove %@: that is the project directory, not a worktree of it.";
+"Refusing to remove %1$@: it is the checkout of protected branch %2$@." = "Refusing to remove %1$@: it is the checkout of protected branch %2$@.";
+"Refusing to remove %@: that is the bare repository, not a worktree." = "Refusing to remove %@: that is the bare repository, not a worktree.";
+"The worktree directory is still at %1$@: %2$@" = "The worktree directory is still at %1$@: %2$@";
+"git reported success but the directory remains." = "git reported success but the directory remains.";
+
 /* Process deadlines */
 "git push did not finish in time." = "git push did not finish in time.";
 "git pull did not finish in time." = "git pull did not finish in time.";
