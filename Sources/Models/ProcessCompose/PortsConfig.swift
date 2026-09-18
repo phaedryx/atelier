@@ -2,10 +2,7 @@
 // ABOUTME: Names come from the file; numbers come from ProcessCompose.PortPlan.
 
 import Foundation
-import os
 import Yams
-
-private let logger = Logger(subsystem: "atelier", category: "ports.config")
 
 extension ProcessCompose {
     /// One declared port variable.
@@ -29,7 +26,27 @@ extension ProcessCompose {
         /// ordering — an assigned port must not move because a key was reordered.
         let entries: [ProcessCompose.PortEntry]
 
-        static let fileNames = ["ports.yaml", "ports.yml"]
+        static var fileNames: [String] {
+            configFile.fileNames
+        }
+
+        /// The file, described once. `Project.ConfigFile` owns the mechanics
+        /// every project-directory config shares — first spelling present wins,
+        /// nothing inside a work tree is read, a template is seeded only when
+        /// neither spelling exists — and the trust argument behind them.
+        ///
+        /// **`load(from:)` below is the surface callers use, and it keeps
+        /// throwing `LoadError`.** This declaration wraps the same parse rather
+        /// than replacing it: `LoadError`'s three cases are switched on by
+        /// callers and each names the offending entry, which a single
+        /// `Project.ConfigLoad.invalid(reason:)` string cannot. So the shared
+        /// mechanism supplies the *location* and the *seed*, and this file keeps
+        /// its own error type.
+        static let configFile = Project.ConfigFile<ProcessCompose.PortsConfig>(
+            fileNames: ["ports.yaml", "ports.yml"],
+            defaultContents: ProcessCompose.PortsConfig.defaultContents,
+            parse: { text, _ in try ProcessCompose.PortsConfig.parse(text) }
+        )
 
         enum LoadError: Error, LocalizedError, Equatable {
             case malformed(String)
@@ -122,19 +139,20 @@ extension ProcessCompose {
         /// Load `ports.yaml` from a directory. Returns nil when there is no such
         /// file — that is the normal state for a project that does not use ports.
         static func load(from directory: String) throws -> ProcessCompose.PortsConfig? {
-            let url = URL(fileURLWithPath: directory)
-            guard let path = fileNames
-                .map({ url.appendingPathComponent($0) })
-                .first(where: { FileManager.default.fileExists(atPath: $0.path) })
-            else { return nil }
+            guard let path = configFile.locate(projectDirectory: directory) else { return nil }
 
             let text: String
             do {
-                text = try String(contentsOf: path, encoding: .utf8)
+                text = try String(contentsOfFile: path, encoding: .utf8)
             } catch {
                 throw LoadError.malformed(error.localizedDescription)
             }
+            return try parse(text)
+        }
 
+        /// The parse, separated from the file system so the schema can be tested
+        /// without one — and so `configFile` can name it.
+        static func parse(_ text: String) throws -> ProcessCompose.PortsConfig {
             // An empty or comment-only file has no YAML document for Yams to decode
             // at all, so it cannot be distinguished from a broken one further down.
             // Answer it here: nothing declared is a valid way to declare nothing.
@@ -264,27 +282,12 @@ extension ProcessCompose.PortsConfig {
     /// directory the user already had, which would drop an untracked file into a
     /// repository they merely registered.
     ///
-    /// Does nothing when either name in `fileNames` is already present, and
-    /// reports rather than throws: a convenience template must not fail project
-    /// creation, but a write that silently did not happen is worse than one that
-    /// says so.
+    /// `Project.ConfigFile.writeDefault` is the whole of it: this delegates so
+    /// callers and tests keep one name to reach for, and so the refusal rule —
+    /// nothing is written when *either* spelling is present — has one
+    /// implementation rather than four.
     @discardableResult
     static func writeDefault(projectDirectory: String) -> Bool {
-        let fileManager = FileManager.default
-        let directory = URL(fileURLWithPath: projectDirectory, isDirectory: true)
-        guard !fileNames.contains(where: {
-            fileManager.fileExists(atPath: directory.appendingPathComponent($0).path)
-        }) else { return false }
-
-        let path = directory.appendingPathComponent(fileNames[0])
-        do {
-            try defaultContents.write(to: path, atomically: true, encoding: .utf8)
-            return true
-        } catch {
-            logger.warning(
-                "[Atelier] could not write default ports.yaml: \(error.localizedDescription, privacy: .public)"
-            )
-            return false
-        }
+        configFile.writeDefault(projectDirectory: projectDirectory)
     }
 }

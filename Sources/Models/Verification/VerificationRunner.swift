@@ -391,18 +391,25 @@ extension Verification {
             return run
         }
 
+        /// **`Load.unavailableReason` is the wording, never a second set here.**
+        /// The doc comment on that property claims the runner refuses on the same
+        /// three cases the tab draws, and for two of them it did not: `.missing`
+        /// threw "This project has no verification.yaml." where the tab says "Add
+        /// a verification.yaml to this project's directory to declare checks.",
+        /// and `.invalid` threw the bare parse reason where the tab wraps it as
+        /// "This project's verification.yaml could not be read: …". An agent
+        /// reading a refusal and a user reading the tab were told different
+        /// things about one file.
+        ///
+        /// The empty-checks case deliberately does **not** come through here: it
+        /// is refused at the call site, which also has to refuse an explicit
+        /// empty `checks:` list, and those are different sentences.
         private func loadConfig(projectDirectory: String) throws -> Verification.Config {
-            switch Verification.Config.load(projectDirectory: projectDirectory) {
-            case .missing:
-                throw Failure.unavailable(NSLocalizedString(
-                    "This project has no verification.yaml.",
-                    comment: "Verification: no config in the project directory"
-                ))
-            case let .invalid(reason):
-                throw Failure.unavailable(reason)
-            case let .loaded(config):
-                return config
+            let load = Verification.Config.load(projectDirectory: projectDirectory)
+            guard let config = load.config else {
+                throw Failure.unavailable(load.unavailableReason ?? "")
             }
+            return config
         }
 
         /// Runs are small now — no output rides on them — but a long session with a

@@ -70,11 +70,10 @@ extension ProcessCompose {
         /// not just that instance.
         ///
         /// `loadedFiles` does **not** existence-filter: it always includes `path`,
-        /// the config `locate` found by checking it exists, and only the override
-        /// half goes through `firstPresent`. So a `-f` target that has since been
-        /// deleted is named and process-compose treats that as fatal — a window
-        /// nothing here closes, and a claim to the contrary once stood in this
-        /// doc block.
+        /// which `ProcessCompose.Config.locate` found by checking it exists at
+        /// that moment. So a `-f` target that has since been deleted is named and
+        /// process-compose treats that as fatal — a window nothing here closes,
+        /// and a claim to the contrary once stood in this doc block.
         ///
         /// `keepProject` holds the control server open after every process in the
         /// namespace has finished, so a caller can read their exit codes before

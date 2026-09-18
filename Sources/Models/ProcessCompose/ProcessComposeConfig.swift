@@ -2,10 +2,7 @@
 // ABOUTME: The project directory, outside every work tree, so it cannot arrive with a clone.
 
 import Foundation
-import os
 import Yams
-
-private let logger = Logger(subsystem: "atelier", category: "processcompose.config")
 
 /// The process-compose subsystem: its config schema, the client that drives
 /// the daemon, and the phased execution model built on top.
@@ -35,7 +32,29 @@ extension ProcessCompose {
         /// is a name that never executes — verified against v1.122.0, where
         /// `compose.yaml` wins discovery outright and `process-compose.yaml` is
         /// never read.
-        static let fileNames = ["execution.process-compose.yaml", "execution.process-compose.yml"]
+        static var fileNames: [String] {
+            configFile.fileNames
+        }
+
+        /// The file, described once. `Project.ConfigFile` owns the mechanics
+        /// every project-directory config shares — first spelling present wins,
+        /// nothing inside a work tree is read, a template is seeded only when
+        /// neither spelling exists — and the trust argument behind them.
+        ///
+        /// **Its `parse` is trivial, and its `load` is never called**, which is
+        /// the one thing to keep straight here. This config's *location* is all
+        /// `locate` needs: what the file says is answered by `namespacePresence`
+        /// and `declaredProcesses`, which read it themselves and report
+        /// `.unknown`/nil for a file they cannot decode. Routing either through
+        /// `Project.ConfigLoad.invalid` would look tidier and would break the
+        /// gate that matters: `ProcessCompose.RunCommandPlan` skips `execute` on
+        /// `.empty` and **only** `.empty`, failing open on `.unknown` so a parse
+        /// bug cannot silently skip a namespace the project really declared.
+        static let configFile = Project.ConfigFile<ProcessCompose.Config>(
+            fileNames: ["execution.process-compose.yaml", "execution.process-compose.yml"],
+            defaultContents: ProcessCompose.Config.defaultContents,
+            parse: { _, path in ProcessCompose.Config(path: path) }
+        )
 
         /// Find the project's config.
         ///
@@ -67,13 +86,7 @@ extension ProcessCompose {
         /// one location this lookup exists to avoid — where the config is simply
         /// never found.
         static func locate(projectDirectory: String) -> ProcessCompose.Config? {
-            let directory = URL(fileURLWithPath: projectDirectory, isDirectory: true)
-            guard let name = firstPresent(fileNames, in: directory) else { return nil }
-            return ProcessCompose.Config(path: directory.appendingPathComponent(name).path)
-        }
-
-        static func firstPresent(_ names: [String], in directory: URL) -> String? {
-            names.first { FileManager.default.fileExists(atPath: directory.appendingPathComponent($0).path) }
+            configFile.locate(projectDirectory: projectDirectory).map(ProcessCompose.Config.init(path:))
         }
 
         // MARK: - Namespace declarations
@@ -284,27 +297,12 @@ extension ProcessCompose.Config {
     /// here would not close anything; it would only make the empty state worse on
     /// the one path where a template helps most.
     ///
-    /// Does nothing when either name in `fileNames` is already present, and
-    /// reports rather than throws: a convenience template must not fail project
-    /// creation, but a write that silently did not happen is worse than one that
-    /// says so.
+    /// `Project.ConfigFile.writeDefault` is the whole of it: this delegates so
+    /// callers and tests keep one name to reach for, and so the refusal rule —
+    /// nothing is written when *either* spelling is present — has one
+    /// implementation rather than four.
     @discardableResult
     static func writeDefault(projectDirectory: String) -> Bool {
-        let fileManager = FileManager.default
-        let directory = URL(fileURLWithPath: projectDirectory, isDirectory: true)
-        guard !fileNames.contains(where: {
-            fileManager.fileExists(atPath: directory.appendingPathComponent($0).path)
-        }) else { return false }
-
-        let path = directory.appendingPathComponent(fileNames[0])
-        do {
-            try defaultContents.write(to: path, atomically: true, encoding: .utf8)
-            return true
-        } catch {
-            logger.warning(
-                "[Atelier] could not write default execution.process-compose.yaml: \(error.localizedDescription, privacy: .public)"
-            )
-            return false
-        }
+        configFile.writeDefault(projectDirectory: projectDirectory)
     }
 }

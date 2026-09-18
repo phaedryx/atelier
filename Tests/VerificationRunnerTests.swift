@@ -158,13 +158,45 @@ final class VerificationRunnerTests: XCTestCase {
 
     /// The runner performs the same load the tab's empty state is drawn from, so
     /// the two cannot disagree about what can run.
+    ///
+    /// **Asserted against `Load.unavailableReason` itself, never a string
+    /// literal.** A literal here would be a second copy of the wording, which is
+    /// the drift this pins: the runner used to throw "This project has no
+    /// verification.yaml." while the tab said "Add a verification.yaml to this
+    /// project's directory to declare checks.", under a doc comment claiming the
+    /// two could not disagree. Comparing against the property is what makes them
+    /// unable to. It also proves `loadConfig`'s `?? ""` is unreachable here — an
+    /// empty `.unavailable("")` would reach an agent as a blank refusal.
     func test_start_refusesWhenThereIsNoConfig() {
         let runner = makeRunner(StubSurfaceHost())
 
         XCTAssertThrowsError(try start(runner, checks: nil)) { error in
-            guard case Verification.Runner.Failure.unavailable = error else {
+            guard case let Verification.Runner.Failure.unavailable(reason) = error else {
                 return XCTFail("expected .unavailable, got \(error)")
             }
+            XCTAssertEqual(reason, Verification.Config.Load.missing.unavailableReason)
+        }
+    }
+
+    /// The other half of the same rule: a file that is present and broken is
+    /// refused with the tab's wrapped sentence, not the bare parse error.
+    func test_start_refusesABrokenConfigWithTheWordingTheTabShows() throws {
+        try "rspec:\n  command: one\n command: two\n".write(
+            toFile: projectDirectory.appendingPathComponent("verification.yaml").path,
+            atomically: true,
+            encoding: .utf8
+        )
+        let runner = makeRunner(StubSurfaceHost())
+        let load = Verification.Config.load(projectDirectory: projectDirectory.path)
+        guard case .invalid = load else {
+            return XCTFail("expected the fixture to be unreadable, got \(load)")
+        }
+
+        XCTAssertThrowsError(try start(runner, checks: nil)) { error in
+            guard case let Verification.Runner.Failure.unavailable(reason) = error else {
+                return XCTFail("expected .unavailable, got \(error)")
+            }
+            XCTAssertEqual(reason, load.unavailableReason)
         }
     }
 

@@ -2,10 +2,6 @@
 // ABOUTME: Project directory only, so it can never arrive with the repository.
 
 import Foundation
-import os
-import Yams
-
-private let logger = Logger(subsystem: "atelier", category: "initialization.config")
 
 /// A project's worktree setup: named steps, run in order, once, at creation.
 ///
@@ -83,73 +79,121 @@ extension Initialization.Config {
     /// must never render as "this project declares no setup", which is the same
     /// sentence a project with genuinely no steps gets and the only diagnostic
     /// either one has — a single line on the Info tab.
-    enum Load: Equatable {
-        /// No `initialization.yaml` in the project directory.
-        case missing
-        /// A file is there and could not be read as one.
-        case invalid(reason: String)
-        /// Parsed. May legitimately declare zero steps.
-        case loaded(Initialization.Config)
+    ///
+    /// The three cases and `config` are `Project.ConfigLoad`'s, shared with
+    /// `Verification.Config.Load` — the mechanism is one file's, the *wording*
+    /// below is this file's.
+    typealias Load = Project.ConfigLoad<Initialization.Config>
+}
 
-        var config: Initialization.Config? {
-            if case let .loaded(config) = self {
-                return config
-            }
-            return nil
-        }
+extension Project.ConfigLoad where Contents == Initialization.Config {
+    /// The steps that will run, in order. Empty whenever `unavailableReason`
+    /// is set, so the two cannot describe different states.
+    var steps: [Initialization.Config.Step] {
+        config?.steps ?? []
+    }
 
-        /// The steps that will run, in order. Empty whenever `unavailableReason`
-        /// is set, so the two cannot describe different states.
-        var steps: [Initialization.Config.Step] {
-            config?.steps ?? []
-        }
+    var stepNames: [String] {
+        config?.stepNames ?? []
+    }
 
-        var stepNames: [String] {
-            config?.stepNames ?? []
-        }
-
-        /// Why nothing will run, or nil when something will.
-        ///
-        /// **This is the availability decision, not a mirror of one.** The gate
-        /// the process-compose phases have — `PhasePolicy.plan` — has no
-        /// counterpart here: there is no binary to resolve and no approval to
-        /// check, so "will anything run" is exactly "did this file parse and does
-        /// it declare anything". `Initialization.Runner` asks the same `load` and
-        /// reports the same three cases, which is what keeps the Info row's note
-        /// and the runner's refusal in step.
-        ///
-        /// Past tense, because the only place this is rendered is the Info row
-        /// after setup has finished.
-        var unavailableReason: String? {
-            switch self {
-            case .missing:
-                NSLocalizedString(
-                    "This project has no initialization.yaml, so no setup ran.",
-                    comment: "Info tab: no initialization config"
+    /// Why nothing will run, or nil when something will.
+    ///
+    /// **This is the availability decision, not a mirror of one.** The gate
+    /// the process-compose phases have — `PhasePolicy.plan` — has no
+    /// counterpart here: there is no binary to resolve and no approval to
+    /// check, so "will anything run" is exactly "did this file parse and does
+    /// it declare anything". `Initialization.Runner` asks the same `load` and
+    /// reports the same three cases, which is what keeps the Info row's note
+    /// and the runner's refusal in step.
+    ///
+    /// Past tense, because the only place this is rendered is the Info row
+    /// after setup has finished — the one difference from
+    /// `Verification.Config.Load`'s otherwise identical set, and the reason the
+    /// two are separate extensions on one shared enum rather than one copy.
+    var unavailableReason: String? {
+        switch self {
+        case .missing:
+            NSLocalizedString(
+                "This project has no initialization.yaml, so no setup ran.",
+                comment: "Info tab: no initialization config"
+            )
+        case let .invalid(reason):
+            String(
+                format: NSLocalizedString(
+                    "This project's initialization.yaml could not be read, so no setup ran: %@",
+                    comment: "Info tab: the config is present and broken"
+                ),
+                reason
+            )
+        case let .loaded(config):
+            config.steps.isEmpty
+                ? NSLocalizedString(
+                    "This project's initialization.yaml declares no steps, so nothing ran.",
+                    comment: "Info tab: the config parsed and is empty"
                 )
-            case let .invalid(reason):
-                String(
-                    format: NSLocalizedString(
-                        "This project's initialization.yaml could not be read, so no setup ran: %@",
-                        comment: "Info tab: the config is present and broken"
-                    ),
-                    reason
-                )
-            case let .loaded(config):
-                config.steps.isEmpty
-                    ? NSLocalizedString(
-                        "This project's initialization.yaml declares no steps, so nothing ran.",
-                        comment: "Info tab: the config parsed and is empty"
-                    )
-                    : nil
-            }
+                : nil
         }
     }
+}
+
+extension Initialization.Config {
+    /// The file, described once: its two spellings, its template, and how to
+    /// turn its text into steps.
+    ///
+    /// `Project.ConfigFile` owns the mechanics every project-directory config
+    /// shares — first spelling present wins, nothing inside a work tree is read,
+    /// a template is seeded only when neither spelling exists — and the trust
+    /// argument behind them. What stays here is what is this file's alone: the
+    /// names, the template, and the schema.
+    static let configFile = Project.ConfigFile<Initialization.Config>(
+        fileNames: ["initialization.yaml", "initialization.yml"],
+        defaultContents: defaultContents,
+        parse: { text, path in
+            try Initialization.Config(
+                path: path,
+                steps: Project.parseCommandEntries(text, messages: messages).map {
+                    Step(name: $0.name, command: $0.command, shell: $0.shell)
+                }
+            )
+        }
+    )
 
     /// The names looked for, in order. The first that exists is the one read —
     /// a second is never merged, because two files whose precedence a reader has
     /// to hold in their head is the shape `ProcessCompose.Config` retired.
-    static let fileNames = ["initialization.yaml", "initialization.yml"]
+    static var fileNames: [String] {
+        configFile.fileNames
+    }
+
+    /// How this file describes its own shape when it is wrong. Shared schema,
+    /// its own nouns: a *step*, named after `initialization.yaml`.
+    private static let messages = Project.CommandEntryMessages(
+        notValidYAML: NSLocalizedString(
+            "The file is not valid YAML: %@",
+            comment: "initialization.yaml: Yams could not parse it"
+        ),
+        topLevelIsNotAMapping: NSLocalizedString(
+            "The file must be a mapping of step names to their commands.",
+            comment: "initialization.yaml: the top level is a list or a scalar"
+        ),
+        entryHasNoName: NSLocalizedString(
+            "Every step needs a name.",
+            comment: "initialization.yaml: a key that is not a non-empty string"
+        ),
+        entryIsNotAMapping: NSLocalizedString(
+            "“%@” must be a mapping with a command:.",
+            comment: "initialization.yaml: a step given as a bare string or a list"
+        ),
+        entryHasNoCommand: NSLocalizedString(
+            "“%@” needs a command: to run.",
+            comment: "initialization.yaml: a step with no command"
+        ),
+        entryHasAnUnusableShell: NSLocalizedString(
+            "“%@” has a shell: that is not a shell name.",
+            comment: "initialization.yaml: shell given as a list or a mapping"
+        )
+    )
 
     /// Read the project's setup steps.
     ///
@@ -158,107 +202,17 @@ extension Initialization.Config {
     /// inside `main/` — a work tree — which is both the wrong place and the one
     /// location this type exists to avoid.
     static func load(projectDirectory: String) -> Load {
-        let fileManager = FileManager.default
-        let directory = URL(fileURLWithPath: projectDirectory, isDirectory: true)
-        guard let path = fileNames
-            .map({ directory.appendingPathComponent($0).path })
-            .first(where: { fileManager.fileExists(atPath: $0) })
-        else { return .missing }
-
-        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else {
-            return .invalid(reason: NSLocalizedString(
-                "The file could not be read.",
-                comment: "initialization.yaml: present but unreadable"
-            ))
-        }
-        return parse(text, path: path)
+        configFile.load(projectDirectory: projectDirectory)
     }
 
     /// The parse, separated from the file system so the schema can be tested
     /// without one.
     ///
-    /// **Ordered, which is why this walks `Yams.compose`'s nodes rather than
-    /// decoding a `[String: Step]`.** A Swift dictionary has no order, and here
-    /// order is not cosmetic the way it is for verification's rows: steps run in
-    /// this sequence and each one may depend on the last, so a decoded config
-    /// would run setup in an arbitrary order that changed between launches.
+    /// **File order is run order here**, which is why `Project.parseCommandEntries`
+    /// walks `Yams.compose`'s nodes rather than decoding a dictionary — see its
+    /// own doc comment.
     static func parse(_ text: String, path: String) -> Load {
-        let document: Yams.Node?
-        do {
-            document = try Yams.compose(yaml: text)
-        } catch {
-            return .invalid(reason: String(
-                format: NSLocalizedString(
-                    "The file is not valid YAML: %@",
-                    comment: "initialization.yaml: Yams could not parse it"
-                ),
-                error.localizedDescription
-            ))
-        }
-
-        // An empty file, or one holding nothing but comments, composes to nil.
-        // That is a file declaring no steps rather than a broken one.
-        guard let document else {
-            return .loaded(Initialization.Config(path: path, steps: []))
-        }
-        guard let mapping = document.mapping else {
-            return .invalid(reason: NSLocalizedString(
-                "The file must be a mapping of step names to their commands.",
-                comment: "initialization.yaml: the top level is a list or a scalar"
-            ))
-        }
-
-        // No duplicate-name guard: **Yams refuses a duplicated key itself**, as a
-        // parse error, so such a file lands in `.invalid` above and never reaches
-        // this loop. Two steps of one name would be indistinguishable in every
-        // report there is, so the refusal matters; it just is not this
-        // function's to make.
-        var steps: [Initialization.Config.Step] = []
-        for (keyNode, valueNode) in mapping {
-            guard let name = keyNode.string, !name.isEmpty else {
-                return .invalid(reason: NSLocalizedString(
-                    "Every step needs a name.",
-                    comment: "initialization.yaml: a key that is not a non-empty string"
-                ))
-            }
-            guard let entry = valueNode.mapping else {
-                return .invalid(reason: String(
-                    format: NSLocalizedString(
-                        "“%@” must be a mapping with a command:.",
-                        comment: "initialization.yaml: a step given as a bare string or a list"
-                    ),
-                    name
-                ))
-            }
-            guard let command = entry["command"]?.string,
-                  !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            else {
-                return .invalid(reason: String(
-                    format: NSLocalizedString(
-                        "“%@” needs a command: to run.",
-                        comment: "initialization.yaml: a step with no command"
-                    ),
-                    name
-                ))
-            }
-            let shellNode = entry["shell"]
-            if shellNode != nil, shellNode?.string == nil {
-                return .invalid(reason: String(
-                    format: NSLocalizedString(
-                        "“%@” has a shell: that is not a shell name.",
-                        comment: "initialization.yaml: shell given as a list or a mapping"
-                    ),
-                    name
-                ))
-            }
-            let shell = shellNode?.string?.trimmingCharacters(in: .whitespacesAndNewlines)
-            steps.append(Initialization.Config.Step(
-                name: name,
-                command: command,
-                shell: (shell?.isEmpty ?? true) ? nil : shell
-            ))
-        }
-        return .loaded(Initialization.Config(path: path, steps: steps))
+        configFile.load(text: text, path: path)
     }
 }
 
@@ -301,32 +255,12 @@ extension Initialization.Config {
 
     /// Seed a newly created project with `defaultContents`.
     ///
-    /// Called only by the two paths that *create* the project directory — a new
-    /// empty project and a fresh clone — and never by the paths that adopt a
-    /// directory the user already had, which would drop an untracked file into a
-    /// repository they merely registered.
-    ///
-    /// Does nothing when either name in `fileNames` is already present, and
-    /// reports rather than throws: a convenience template must not fail project
-    /// creation, but a write that silently did not happen is worse than one that
-    /// says so.
+    /// `Project.ConfigFile.writeDefault` is the whole of it: this delegates so
+    /// callers and tests keep one name to reach for, and so the refusal rule —
+    /// nothing is written when *either* spelling is present — has one
+    /// implementation rather than four.
     @discardableResult
     static func writeDefault(projectDirectory: String) -> Bool {
-        let fileManager = FileManager.default
-        let directory = URL(fileURLWithPath: projectDirectory, isDirectory: true)
-        guard !fileNames.contains(where: {
-            fileManager.fileExists(atPath: directory.appendingPathComponent($0).path)
-        }) else { return false }
-
-        let path = directory.appendingPathComponent(fileNames[0])
-        do {
-            try defaultContents.write(to: path, atomically: true, encoding: .utf8)
-            return true
-        } catch {
-            logger.warning(
-                "[Atelier] could not write default initialization.yaml: \(error.localizedDescription, privacy: .public)"
-            )
-            return false
-        }
+        configFile.writeDefault(projectDirectory: projectDirectory)
     }
 }
