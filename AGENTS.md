@@ -1358,6 +1358,28 @@ Coding Agent is mid-turn, `gh` is not installed. `CommandRegistry.search` drops
 and `runSelected` refuses it *without dismissing* — the palette stays up with the
 reason on screen, which is the whole point of listing it.
 
+**The row itself is never `.disabled()`, and that is the invariant to keep.** The
+palette and the editor's ⌘P file finder share one `FilterResultList` — a
+`List(selection:)` keyed on the item's id, rows as real `Button`s — and a `List` row
+marked `.disabled()` may stop being selectable at all, which would take away the only
+way to reach a refused row and read why. So the refusal stays in one place at the
+consumer, `CommandPaletteView.run`, and the reason reaches VoiceOver as an
+`.accessibilityHint` instead. The row's `Button` also sets the selection *before*
+activating, because a `Button` filling a `List` row swallows the click the list would
+otherwise have selected with.
+
+**Selection is an id, never an index**, in both surfaces: `results` is recomputed on
+every keystroke, and an index into an array that no longer exists is how the finder's
+lazy container ended up with two competing identity systems and desynced rendering.
+`neighbouringSelection(from:in:delta:)` is the one place the arrows are resolved — it
+clamps at both ends rather than wrapping, and treats an id the results no longer
+contain as no selection. Focus stays in the filter field, so the arrows are read there
+with `.onKeyPress` and the list is `.focusable(false)`; the finder is the exception
+only in *how* — its query and arrows come from an `NSEvent` local monitor, with the
+field as pure display. `FilterResultList` deliberately draws **no** empty state,
+because the finder distinguishes three (scanning, no match, nothing typed yet) and a
+component owning one would collapse them.
+
 **That distinction exists because of the stored prompts.** They were `.hidden`
 whenever `PromptInjector` would refuse, which is the common case — an agent is mid-turn
 most of the time you reach for a prompt — so the palette simply came up shorter, with

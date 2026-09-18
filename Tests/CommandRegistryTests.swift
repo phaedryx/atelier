@@ -134,10 +134,32 @@ final class CommandRegistryTests: XCTestCase {
         XCTAssertTrue(registry.search("", context: anyContext).isEmpty)
     }
 
-    func testClampedPaletteSelection() {
-        XCTAssertEqual(clampedPaletteSelection(0, resultCount: 0), 0)
-        XCTAssertEqual(clampedPaletteSelection(5, resultCount: 3), 2)
-        XCTAssertEqual(clampedPaletteSelection(-1, resultCount: 3), 0)
-        XCTAssertEqual(clampedPaletteSelection(1, resultCount: 3), 1)
+    /// Replaces `clampedPaletteSelection`, which clamped an *index*. Selection
+    /// is an id now — both the palette and the editor's file finder rebuild
+    /// their result array on every keystroke — so what has to be pinned is that
+    /// moving past either end stays put rather than wrapping, and that a
+    /// selection naming a row that is gone is treated as no selection.
+    func testNeighbouringSelectionClampsAtBothEnds() {
+        let ids = ["a", "b", "c"]
+
+        XCTAssertEqual(neighbouringSelection(from: "a", in: ids, delta: 1), "b")
+        XCTAssertEqual(neighbouringSelection(from: "b", in: ids, delta: -1), "a")
+        XCTAssertEqual(neighbouringSelection(from: "c", in: ids, delta: 1), "c")
+        XCTAssertEqual(neighbouringSelection(from: "a", in: ids, delta: -1), "a")
+    }
+
+    func testNeighbouringSelectionEntersTheListFromEitherEnd() {
+        let ids = ["a", "b", "c"]
+
+        XCTAssertEqual(neighbouringSelection(from: nil, in: ids, delta: 1), "a")
+        XCTAssertEqual(neighbouringSelection(from: nil, in: ids, delta: -1), "c")
+        // An id the results no longer contain names a row that is gone, so it
+        // is worth exactly as much as no selection at all.
+        XCTAssertEqual(neighbouringSelection(from: "gone", in: ids, delta: 1), "a")
+    }
+
+    func testNeighbouringSelectionOfAnEmptyListIsNothing() {
+        XCTAssertNil(neighbouringSelection(from: nil, in: [String](), delta: 1))
+        XCTAssertNil(neighbouringSelection(from: "a", in: [String](), delta: -1))
     }
 }
