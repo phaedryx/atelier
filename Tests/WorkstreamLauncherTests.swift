@@ -235,7 +235,7 @@ final class WorkstreamLauncherTests: XCTestCase {
         let launched = try await launcher.launch(
             in: target(launcher, projectDirectory: "/repos/app"),
             requestedName: "feat-ipc",
-            createWorktree: { _, _, name in "/repos/app/\(name)" }
+            createWorktree: { _, _, _, name in "/repos/app/\(name)" }
         )
 
         XCTAssertEqual(launched.name, "feat-ipc")
@@ -266,7 +266,7 @@ final class WorkstreamLauncherTests: XCTestCase {
         let launched = try await launcher.launch(
             in: target(launcher, projectDirectory: "/repos/app"),
             requestedName: "feat-ipc",
-            createWorktree: { _, _, name in "/repos/app/\(name)" },
+            createWorktree: { _, _, _, name in "/repos/app/\(name)" },
             beforeReady: { launched in
                 seen.value = recorder.events.map(\.name)
                 launchedAtHook.value = launched
@@ -298,7 +298,7 @@ final class WorkstreamLauncherTests: XCTestCase {
             _ = try await launcher.launch(
                 in: target(launcher, projectDirectory: "/repos/app"),
                 requestedName: "feat-ipc",
-                createWorktree: { _, _, _ in nil },
+                createWorktree: { _, _, _, _ in nil },
                 beforeReady: { _ in ran.value = true }
             )
             XCTFail("expected the launch to throw")
@@ -320,7 +320,7 @@ final class WorkstreamLauncherTests: XCTestCase {
         _ = try await launcher.launch(
             in: target(launcher, projectDirectory: "/repos/app"),
             requestedName: "feat-ipc",
-            createWorktree: { checkout, _, name in
+            createWorktree: { _, checkout, _, name in
                 seenPath.value = checkout
                 return "/repos/app/\(name)"
             }
@@ -340,10 +340,222 @@ final class WorkstreamLauncherTests: XCTestCase {
         _ = try await launcher.launch(
             in: target(launcher, projectDirectory: "/repos/app"),
             requestedName: "feat-ipc",
-            createWorktree: { _, _, name in "/repos/app/\(name)" }
+            createWorktree: { _, _, _, name in "/repos/app/\(name)" }
         )
 
         XCTAssertEqual(recorder.events[0].userInfo["select"] as? Bool, false)
+    }
+
+    /// The other direction, which the sidebar's three entry points now depend on
+    /// entirely: they were posting `.workstreamCreated` themselves and relying on
+    /// `ContentView`'s `?? true`, and they now ask for the selection by name.
+    @MainActor
+    func testLaunchCanAskForTheSelection() async throws {
+        let launcher = makeLauncher([project(directory: "/repos/app")])
+        let recorder = Recorder()
+
+        _ = try await launcher.launch(
+            in: target(launcher, projectDirectory: "/repos/app"),
+            requestedName: "feat-ipc",
+            select: true,
+            createWorktree: { _, _, _, name in "/repos/app/\(name)" }
+        )
+
+        XCTAssertEqual(recorder.events[0].userInfo["select"] as? Bool, true)
+    }
+
+    /// The Shortcut flow's whole point: `syncShortcutStoryIDs` keys the staged
+    /// story by the worktree path, and it can only promote a story the posted
+    /// workstream already carries. The sidebar's own copy of the sequence built
+    /// the `Workstream` itself and set this; the launcher's did not, so routing
+    /// the sidebar through it without this parameter would have dropped every
+    /// story id in silence.
+    @MainActor
+    func testShortcutStoryIDLandsOnThePostedWorkstream() async throws {
+        let launcher = makeLauncher([project(directory: "/repos/app")])
+        let recorder = Recorder()
+
+        _ = try await launcher.launch(
+            in: target(launcher, projectDirectory: "/repos/app"),
+            requestedName: "sc-482-fix",
+            shortcutStoryID: 482,
+            createWorktree: { _, _, _, name in "/repos/app/\(name)" }
+        )
+
+        let posted = recorder.events[0].userInfo["workstream"] as? Workstream
+        XCTAssertEqual(posted?.shortcutStoryID, 482)
+    }
+
+    /// Absent by default, so the two flows that have no story do not have to say
+    /// so and a stale id cannot ride along from a previous launch.
+    @MainActor
+    func testAWorkstreamWithNoStoryCarriesNone() async throws {
+        let launcher = makeLauncher([project(directory: "/repos/app")])
+        let recorder = Recorder()
+
+        _ = try await launcher.launch(
+            in: target(launcher, projectDirectory: "/repos/app"),
+            requestedName: "feat-ipc",
+            createWorktree: { _, _, _, name in "/repos/app/\(name)" }
+        )
+
+        let posted = recorder.events[0].userInfo["workstream"] as? Workstream
+        XCTAssertNil(posted?.shortcutStoryID)
+    }
+
+    /// The GitHub-branch flow does not get its own launch path — it names a
+    /// different `WorktreeSource`, and that is the whole of the choice.
+    ///
+    /// CLAUDE.md, "Two ways to create a worktree, and they are not
+    /// interchangeable": `createWorktree` cuts a *new* branch from the base
+    /// branch, so running it for a branch that already exists on origin succeeds
+    /// and produces a worktree named for that branch while holding the base
+    /// branch's code. Nothing in the notification sequence can tell the two apart
+    /// afterwards, which is why the choice is pinned at the point it is made.
+    @MainActor
+    func testAnExistingRemoteBranchReachesTheCreatorAsTheTrackingSource() async throws {
+        let launcher = makeLauncher([project(name: "app", directory: "/repos/app")])
+        let seen = Box<Workstream.Launcher.WorktreeSource?>(nil)
+
+        _ = try await launcher.launch(
+            in: target(launcher, projectDirectory: "/repos/app"),
+            requestedName: "renovate/npm-foo-1.x",
+            source: .existingRemoteBranch("renovate/npm-foo-1.x"),
+            createWorktree: { source, _, _, _ in
+                seen.value = source
+                return "/repos/app/renovate--npm-foo-1.x"
+            }
+        )
+
+        XCTAssertEqual(seen.value, .existingRemoteBranch("renovate/npm-foo-1.x"))
+    }
+
+    /// The default, which the `+` dialog and the Shortcut flow take by saying
+    /// nothing. A source that defaulted the other way would silently give every
+    /// generated name `createWorktreeTrackingRemote`, whose fetch of a branch
+    /// origin has never heard of is an ordinary failure arriving after the
+    /// optimistic row is drawn.
+    @MainActor
+    func testALaunchCutsANewBranchUnlessToldOtherwise() async throws {
+        let launcher = makeLauncher([project(directory: "/repos/app")])
+        let seen = Box<Workstream.Launcher.WorktreeSource?>(nil)
+
+        _ = try await launcher.launch(
+            in: target(launcher, projectDirectory: "/repos/app"),
+            requestedName: "feat-ipc",
+            createWorktree: { source, _, _, name in
+                seen.value = source
+                return "/repos/app/\(name)"
+            }
+        )
+
+        XCTAssertEqual(seen.value, .newBranch)
+    }
+
+    /// The branch rides on the case, not on the workstream name. They are equal
+    /// in the flow that produces this — the sidebar names the workstream for the
+    /// branch — and a creator that read the name parameter instead would work
+    /// until something created a workstream whose label differed from its branch.
+    @MainActor
+    func testTheTrackedBranchTravelsWithTheSourceRatherThanTheWorkstreamName() async throws {
+        let launcher = makeLauncher([project(directory: "/repos/app")])
+        let seen = Box<Workstream.Launcher.WorktreeSource?>(nil)
+
+        _ = try await launcher.launch(
+            in: target(launcher, projectDirectory: "/repos/app"),
+            requestedName: "adopt-renovate",
+            source: .existingRemoteBranch("renovate/npm-foo-1.x"),
+            createWorktree: { source, _, _, _ in
+                seen.value = source
+                return "/repos/app/adopt-renovate"
+            }
+        )
+
+        XCTAssertEqual(seen.value, .existingRemoteBranch("renovate/npm-foo-1.x"))
+    }
+
+    // MARK: - Adoption
+
+    /// Adoption posts the same pair `launch` does, in the same order, so a
+    /// consumer cannot tell an adopted workstream from a created one. It posts
+    /// the optimistic row with a `nil` path for the same reason: the path arrives
+    /// through `.workstreamWorktreeReady` and `attachWorktreePath`, which is what
+    /// `ProjectOverviewView` was skipping when it posted `.workstreamCreated`
+    /// alone with the path already filled in.
+    ///
+    /// There is deliberately no create closure to assert was not called: `adopt`
+    /// does not take one. The worktree exists — that is the whole premise — and a
+    /// parameter that could make it create one would be a fourth way to create a
+    /// worktree.
+    @MainActor
+    func testAdoptPostsTheSameNotificationPairAsALaunch() {
+        let projectID = UUID()
+        let recorder = Recorder()
+
+        let launched = Workstream.Launcher.shared.adopt(
+            projectID: projectID,
+            name: "renovate/npm-foo-1.x",
+            worktreePath: "/repos/app/renovate--npm-foo-1.x"
+        )
+
+        XCTAssertEqual(recorder.events.map(\.name), [.workstreamCreated, .workstreamWorktreeReady])
+        XCTAssertEqual(recorder.events[0].userInfo["projectID"] as? UUID, projectID)
+        let posted = recorder.events[0].userInfo["workstream"] as? Workstream
+        XCTAssertEqual(posted?.id, launched.workstreamID)
+        XCTAssertEqual(posted?.name, "renovate/npm-foo-1.x")
+        XCTAssertNil(posted?.worktreePath)
+        XCTAssertEqual(recorder.events[1].userInfo["workstreamID"] as? UUID, launched.workstreamID)
+        XCTAssertEqual(recorder.events[1].userInfo["worktreePath"] as? String, "/repos/app/renovate--npm-foo-1.x")
+        XCTAssertEqual(launched.worktreePath, "/repos/app/renovate--npm-foo-1.x")
+    }
+
+    /// The one key that separates the two, and it states a fact rather than a
+    /// decision: `ContentView` is what decides that a worktree the user already
+    /// had does not get `initialization.yaml` run in it unprompted.
+    @MainActor
+    func testAdoptSaysTheWorktreeAlreadyExisted() {
+        let recorder = Recorder()
+
+        Workstream.Launcher.shared.adopt(
+            projectID: UUID(),
+            name: "feat-b",
+            worktreePath: "/repos/app/feat-b"
+        )
+
+        XCTAssertEqual(recorder.events[1].userInfo["worktreeIsPreexisting"] as? Bool, true)
+    }
+
+    /// A launch must *not* carry it, or `ContentView` would skip initialization
+    /// for the worktree it just created — the case the flag exists to leave
+    /// alone.
+    @MainActor
+    func testALaunchDoesNotClaimItsWorktreeAlreadyExisted() async throws {
+        let launcher = makeLauncher([project(directory: "/repos/app")])
+        let recorder = Recorder()
+
+        _ = try await launcher.launch(
+            in: target(launcher, projectDirectory: "/repos/app"),
+            requestedName: "feat-ipc",
+            createWorktree: { _, _, _, name in "/repos/app/\(name)" }
+        )
+
+        XCTAssertNil(recorder.events[1].userInfo["worktreeIsPreexisting"])
+    }
+
+    /// The overview's Adopt button is a button the user just pressed, so the row
+    /// it creates takes the selection — the opposite default from `launch`, whose
+    /// only caller that omits `select` is `create_workstream`.
+    @MainActor
+    func testAdoptTakesTheSelectionByDefault() {
+        let recorder = Recorder()
+
+        Workstream.Launcher.shared.adopt(
+            projectID: UUID(),
+            name: "feat-b",
+            worktreePath: "/repos/app/feat-b"
+        )
+
+        XCTAssertEqual(recorder.events[0].userInfo["select"] as? Bool, true)
     }
 
     @MainActor
@@ -355,7 +567,7 @@ final class WorkstreamLauncherTests: XCTestCase {
             _ = try await launcher.launch(
                 in: target(launcher, projectDirectory: "/repos/app"),
                 requestedName: "feat-ipc",
-                createWorktree: { _, _, _ in nil }
+                createWorktree: { _, _, _, _ in nil }
             )
             XCTFail("a failed worktree must throw rather than report a workstream that does not exist")
         } catch {
@@ -376,7 +588,7 @@ final class WorkstreamLauncherTests: XCTestCase {
         _ = try? await launcher.launch(
             in: target(launcher, projectDirectory: "/repos/app"),
             requestedName: "feat-ipc",
-            createWorktree: { _, _, _ in nil }
+            createWorktree: { _, _, _, _ in nil }
         )
 
         XCTAssertEqual(recorder.events.last?.userInfo["projectID"] as? UUID, projects[0].id)
@@ -406,7 +618,7 @@ final class WorkstreamLauncherTests: XCTestCase {
         _ = try? await launcher.launch(
             in: target(launcher, projectDirectory: "/repos/app"),
             requestedName: "feat-ipc",
-            createWorktree: { _, _, name in "/repos/app/\(name)" }
+            createWorktree: { _, _, _, name in "/repos/app/\(name)" }
         )
 
         XCTAssertTrue(recorder.events.isEmpty)

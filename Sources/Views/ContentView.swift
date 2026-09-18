@@ -602,12 +602,14 @@ struct ContentView: View {
                       let workstream = info["workstream"] as? Workstream,
                       let index = projects.firstIndex(where: { $0.id == projectID }) else { return }
                 projects[index].workstreams.append(workstream)
-                // Every UI producer of this notification is a button the user
-                // just pressed, so selecting is the right default and they omit
-                // the key. `Workstream.Launcher` passes false: an agent creating
-                // a workstream over IPC must not pull the user out of the pane
-                // they are in. The row still appears here immediately, so the
-                // creation is visible without being disruptive.
+                // `Workstream.Launcher` is the only producer and always sets
+                // the key: true for the sidebar's three entry points and for
+                // adoption, which are buttons the user just pressed, and false
+                // for `create_workstream`, because an agent must not pull the
+                // user out of the pane they are in. The row still appears here
+                // immediately either way, so the creation is visible without
+                // being disruptive. The default stays as a defence, not as a
+                // description of a producer that omits it.
                 if info["select"] as? Bool ?? true {
                     selection = .workstream(workstream.id)
                 }
@@ -620,6 +622,14 @@ struct ContentView: View {
                       let worktreePath = info["worktreePath"] as? String,
                       let found = attachWorktreePath(worktreePath, to: workstreamID) else { return }
                 logger.warning("[Atelier] workstreamWorktreeReady: updated \(workstreamID, privacy: .public) with path \(worktreePath, privacy: .public)")
+                // Adoption posts this notification too, so that a consumer
+                // cannot tell an adopted workstream from a created one — and
+                // carries the one fact that separates them rather than the
+                // decision it implies. The decision is here: a worktree the user
+                // already had does not get the project's setup commands run in
+                // it unprompted. It reads as `.idle` on the Info tab, with Rerun
+                // enabled beside it for a tree that genuinely needs them.
+                guard info["worktreeIsPreexisting"] as? Bool != true else { return }
                 // Run the project's initialization steps in the background. This
                 // is the half `attachWorktreePath` deliberately leaves to its
                 // callers — see its doc for why a repair must not do it.

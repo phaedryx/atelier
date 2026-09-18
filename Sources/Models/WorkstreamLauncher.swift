@@ -103,6 +103,63 @@ extension Workstream {
             let worktreePath: String
         }
 
+        /// Which of the two worktree operations a launch runs.
+        ///
+        /// A value rather than a closure, because CLAUDE.md's "Two ways to
+        /// create a worktree, and they are not interchangeable" is a rule about
+        /// a *choice*, and a choice buried in a closure a caller assembles is
+        /// one nothing can read back. `ProjectSidebar` assembled exactly that,
+        /// in a view no test mounts; saying it here makes the GitHub-branch
+        /// flow's decision a thing `launch` carries and a test can assert.
+        ///
+        /// The two operations stay distinct and neither is routed through the
+        /// other: `gitWorktreeCreator` below is the one place both are named,
+        /// and it is a `switch` with no shared tail.
+        enum WorktreeSource: Equatable, Sendable {
+            /// Cut a new branch from `BaseBranchSetting`.
+            case newBranch
+            /// Check out a branch that already exists on origin.
+            ///
+            /// The branch travels with the case rather than being taken from the
+            /// workstream name. They are equal in the only flow that uses this —
+            /// the sidebar names the workstream for the branch — but that is
+            /// that flow's choice, not an invariant this type should inherit.
+            case existingRemoteBranch(String)
+        }
+
+        /// The seam `launch` calls, and the shape an injected one must match.
+        ///
+        /// It takes the source rather than being *chosen by* it, so a test sees
+        /// which operation a caller asked for without a git repository to run
+        /// either one in.
+        typealias WorktreeCreator = @Sendable (
+            _ source: WorktreeSource,
+            _ checkout: String,
+            _ projectName: String,
+            _ workstreamName: String
+        ) -> String?
+
+        /// What every production launch uses.
+        ///
+        /// `checkout` and not `directory`: `Git.Operations` needs a work tree.
+        /// See `Target` for why those are two fields.
+        static let gitWorktreeCreator: WorktreeCreator = { source, checkout, projectName, workstreamName in
+            switch source {
+            case .newBranch:
+                Git.Operations.createWorktree(
+                    projectPath: checkout,
+                    projectName: projectName,
+                    workstreamName: workstreamName
+                )
+            case let .existingRemoteBranch(branch):
+                Git.Operations.createWorktreeTrackingRemote(
+                    projectPath: checkout,
+                    projectName: projectName,
+                    branch: branch
+                )
+            }
+        }
+
         // MARK: - Reading
 
         /// Resolves the project an agent belongs to from the directory its
@@ -169,7 +226,14 @@ extension Workstream {
             return resolved
         }
 
-        private nonisolated static func target(for project: Project) -> Target {
+        /// The same value, for a caller that already holds the `Project`.
+        ///
+        /// `ProjectSidebar` and `ProjectOverviewView` are rendering the project
+        /// they are about to create in, so the resolution above — which exists
+        /// because `IPC.Service` has only a directory string — is a step they do
+        /// not need. It is the same struct either way, so the launch they get is
+        /// the same launch.
+        nonisolated static func target(for project: Project) -> Target {
             Target(
                 projectID: project.id,
                 projectName: project.name,
@@ -220,15 +284,30 @@ extension Workstream {
 
         // MARK: - Launching
 
-        /// Creates a workstream in the project the caller belongs to and returns
-        /// once its worktree exists.
+        /// Creates a workstream in the project the caller names and returns once
+        /// its worktree exists.
         ///
-        /// Follows `ProjectSidebar.launchWorkstream` exactly: post the optimistic
-        /// row, do the git work off the main thread, then post the outcome. The
-        /// one difference is `select`, which this path passes as `false` — an
-        /// agent creating a workstream should not pull the user out of the pane
-        /// they are working in. The row still appears in the sidebar
-        /// immediately, so the creation is visible without being disruptive.
+        /// **This is the only place that sequence is written.** Post the
+        /// optimistic row, do the git work off the main thread, then post the
+        /// outcome — the seam CLAUDE.md describes, and what a second copy would
+        /// forget: path persistence, the HeadWatcher, the agent-state lookup,
+        /// the Shortcut story id, and `Initialization.Runner`. `ProjectSidebar`
+        /// held a hand-rolled copy of it until this became the only one; it now
+        /// hands its three entry points here and keeps what only a mounted view
+        /// can do — its sheets, the expanded-project set, and the failure alert.
+        ///
+        /// `select` is the one thing the producers disagree about: the sidebar's
+        /// are buttons the user just pressed and pass `true`, while
+        /// `create_workstream` passes `false`, because an agent creating a
+        /// workstream must not pull the user out of the pane they are working
+        /// in. The row appears in the sidebar immediately either way.
+        ///
+        /// `source` is the GitHub-branch flow's whole contribution: it says the
+        /// branch already exists on origin, so `gitWorktreeCreator` runs
+        /// `createWorktreeTrackingRemote` rather than `createWorktree`. See
+        /// CLAUDE.md, "Two ways to create a worktree, and they are not
+        /// interchangeable" — the two stay distinct and neither is routed
+        /// through the other.
         ///
         /// `createWorktree` is injected so the notification sequence can be
         /// tested without a git repository. Production callers use the default.
@@ -256,9 +335,9 @@ extension Workstream {
             requestedName: String?,
             bypassPermissions: Bool = false,
             select: Bool = false,
-            createWorktree: @escaping @Sendable (_ checkout: String, _ projectName: String, _ workstreamName: String) -> String? = {
-                Git.Operations.createWorktree(projectPath: $0, projectName: $1, workstreamName: $2)
-            },
+            shortcutStoryID: Int? = nil,
+            source: WorktreeSource = .newBranch,
+            createWorktree: @escaping WorktreeCreator = Launcher.gitWorktreeCreator,
             beforeReady: (@Sendable (Launched) async -> Void)? = nil
         ) async throws -> Launched {
             let name = try Self.resolveName(
@@ -269,7 +348,8 @@ extension Workstream {
             let workstream = Workstream(
                 name: name,
                 worktreePath: nil,
-                bypassPermissions: bypassPermissions
+                bypassPermissions: bypassPermissions,
+                shortcutStoryID: shortcutStoryID
             )
             logger.warning("[Atelier] Launcher: creating \(name, privacy: .public) in \(target.projectName, privacy: .public)")
 
@@ -290,7 +370,7 @@ extension Workstream {
                 // it: `createWorktree` checks out a whole tree, and it runs under
                 // `ProcessRunner.Timeout.userCommand` rather than a short one.
                 DispatchQueue.global(qos: .userInitiated).async {
-                    continuation.resume(returning: createWorktree(checkout, projectName, name))
+                    continuation.resume(returning: createWorktree(source, checkout, projectName, name))
                 }
             }
 
@@ -319,6 +399,66 @@ extension Workstream {
             logger.warning("[Atelier] Launcher: \(name, privacy: .public) ready at \(worktreePath, privacy: .public)")
 
             return launched
+        }
+
+        /// Registers a worktree git already has as a workstream.
+        ///
+        /// `ProjectOverviewView`'s adoption used to post `.workstreamCreated`
+        /// alone, with the path already filled in, and skip
+        /// `.workstreamWorktreeReady` on the reasoning that there was nothing
+        /// left to wait for. What that skipped was the *handler*:
+        /// `attachWorktreePath` is where the path is persisted,
+        /// `refreshPathValidity` runs, the HeadWatcher starts watching and a
+        /// staged Shortcut story is promoted. Most of those are reached a second
+        /// way — `ContentView`'s `.onChange(of: projectList.items)` — which is
+        /// why nobody noticed, and is exactly the accidental redundancy a third
+        /// creation path accumulates. So adoption posts the same pair, in the
+        /// same order, with a `nil` path on the optimistic row: a consumer
+        /// reading these notifications cannot tell an adopted workstream from a
+        /// created one.
+        ///
+        /// **Except for one key, and it carries a fact rather than a decision.**
+        /// `worktreeIsPreexisting` says only that the tree was not made by this
+        /// call. `ContentView` is what decides what that means, and what it
+        /// decides is not to run `initialization.yaml` in a directory the user
+        /// already had: adoption registers a worktree, it does not build one,
+        /// and running the project's setup commands unprompted in a tree that
+        /// may hold work in progress is a side effect nobody asked for. The
+        /// Info tab renders the resulting `.idle` as "Nothing reported this
+        /// session." with Rerun enabled beside it, so the steps stay one press
+        /// away for a worktree that genuinely needs them.
+        ///
+        /// Synchronous, unlike `launch`: there is no git work to wait for.
+        @discardableResult
+        func adopt(
+            projectID: UUID,
+            name: String,
+            worktreePath: String,
+            select: Bool = true
+        ) -> Launched {
+            let workstream = Workstream(name: name, worktreePath: nil)
+            logger.warning("[Atelier] Launcher: adopting \(name, privacy: .public) at \(worktreePath, privacy: .public)")
+
+            NotificationCenter.default.post(
+                name: .workstreamCreated,
+                object: nil,
+                userInfo: [
+                    "projectID": projectID,
+                    "workstream": workstream,
+                    "select": select,
+                ]
+            )
+            NotificationCenter.default.post(
+                name: .workstreamWorktreeReady,
+                object: nil,
+                userInfo: [
+                    "workstreamID": workstream.id,
+                    "worktreePath": worktreePath,
+                    "worktreeIsPreexisting": true,
+                ]
+            )
+
+            return Launched(workstreamID: workstream.id, name: name, worktreePath: worktreePath)
         }
     }
 }

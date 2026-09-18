@@ -275,7 +275,10 @@ it receives only the `X.Y.Z` core; the suffix naming the commit rides on
 ### Two ways to create a worktree, and they are not interchangeable
 `Git.Operations.createWorktree` cuts a **new** branch from `BaseBranchSetting`. The GitHub
 button on a project row goes through `createWorktreeTrackingRemote` instead, which checks out a
-branch that already exists on origin. Do not merge them or reroute one through the other:
+branch that already exists on origin. **Which one runs is named, once, as a value** —
+`Workstream.Launcher.WorktreeSource`, dispatched by `Launcher.gitWorktreeCreator`, because a
+choice assembled inline in a view is one no test can read back; the `create_workstream` section
+has the rest of that story. Do not merge them or reroute one through the other:
 `createWorktree` runs `worktree add --no-track -b <name> <dir> <start>`, so handing it a branch
 that lives only as `origin/<name>` **succeeds** and produces a worktree named for that branch
 while holding the base branch's code — and its `-b`-less fallback only rescues a *local* branch
@@ -1875,18 +1878,54 @@ workstream runs the project's `bootstrap` namespace — the thing `PhasePolicy.p
 decide. The
 handler never calls `AsyncSetupService.setupExistingWorktree`. It posts `.workstreamCreated`,
 does the git work off the main thread, and posts `.workstreamWorktreeReady`; `ContentView`'s
-handler for that notification is what calls `Initialization.Runner`. Those three notifications are the seam — `ProjectSidebar.launchWorkstream` and
-`ProjectOverviewView` are the other two producers — and going through them is also what gets
-path persistence, the HeadWatcher, the agent-state lookup and the Shortcut story id, none of
-which a second creation path would remember. Calling `Initialization.Runner.run` directly here
-is the inlined second copy that section forbids.
+handler for that notification is what calls `Initialization.Runner`. Those three notifications are
+the seam, and going through them is also what gets path persistence, the HeadWatcher, the
+agent-state lookup and the Shortcut story id, none of which a second creation path would remember.
+Calling `Initialization.Runner.run` directly here is the inlined second copy that section forbids.
+
+**There used to be three producers of that seam and now there is one.**
+`ProjectSidebar.launchWorkstream` was a hand-rolled copy of the sequence on its own
+`DispatchQueue`, with its own choice of git operation, its own rollback and its own alert, and
+`ProjectOverviewView.adoptWorktree` was a third that posted `.workstreamCreated` alone and skipped
+the ready notification because the path already existed — which skipped `attachWorktreePath`, the
+half that persists the path, refreshes path validity, starts the HeadWatcher and promotes a staged
+Shortcut story. Most of that is reached a second way, through `ContentView`'s `.onChange(of:
+projectList.items)`, which is why nothing visibly broke; accidental redundancy of that kind is what
+a third copy accumulates rather than a reason to keep it. Every producer now goes through
+`Workstream.Launcher`: `launch` for the sidebar's three entry points and `create_workstream`,
+`adopt` for the overview's Adopt button. The views keep what only a mounted view can do — sheets,
+the expanded-project set, and the failure alert the launcher's `throw` raises. Do not add a fourth.
+
+**Adoption posts the same pair as a creation, and differs by one key that states a fact rather
+than a decision.** `Launcher.adopt` posts `.workstreamCreated` with a `nil` path and then
+`.workstreamWorktreeReady`, so nothing downstream can tell an adopted workstream from a created
+one — except for `worktreeIsPreexisting`, which says only that the tree was not made by this call.
+`ContentView` is what decides what that means, the way `RunCommandPlan` keeps its invariant at the
+consumer, and what it decides is **not** to run `initialization.yaml` in a directory the user
+already had: adoption registers a worktree, it does not build one, and running a project's setup
+commands unprompted in a tree that may hold work in progress is a side effect nobody asked for. It
+renders as `.idle` on the Info tab — "Nothing reported this session.", benign, with Rerun enabled
+beside it — so the steps stay one press away. Do not turn that key into a `runInitialization`
+flag; the producer states what happened and the consumer states the policy.
+
+**Which of the two git operations runs is a value, `Launcher.WorktreeSource`, not a closure a
+caller assembles.** `ProjectSidebar` used to build the `createWorktreeTrackingRemote` call itself,
+in a view no test mounts, so the rule in "Two ways to create a worktree, and they are not
+interchangeable" had nothing pinning it. The sidebar now names `.existingRemoteBranch(branch)` or
+`.newBranch` and `Launcher.gitWorktreeCreator` is the one place both operations are spelled — a
+`switch` with no shared tail, so they still cannot be routed through each other. The branch travels
+on the case rather than being read off the workstream name: they are equal in the only flow that
+produces it, and that is that flow's choice rather than an invariant to inherit.
+`Tests/WorkstreamLauncherTests.swift` pins the source reaching the creator in both directions.
 
 Two further things about it that are not guesses:
 
-- **It does not take the selection.** `.workstreamCreated` carries an optional `select` key,
-  defaulting to true so every UI producer is unchanged; the launcher passes false. An agent
-  spinning up a workstream must not pull the user out of the pane they are working in, and the
-  sidebar row appears optimistically either way.
+- **It does not take the selection.** `.workstreamCreated` carries a `select` key that
+  `Workstream.Launcher` always sets — true for the sidebar's entry points and for adoption, which
+  are buttons the user just pressed, false for `create_workstream`. `ContentView`'s `?? true`
+  survives as a defence, not as a description of a producer that omits it. An agent spinning up a
+  workstream must not pull the user out of the pane they are working in, and the sidebar row
+  appears optimistically either way.
 - **Its agent goes in the Coding Agent tab**, on the surface whose id *is* the workstream id, so
   the user opening that workstream lands on the conversation. Nobody is looking at the workstream
   when it is created, so the surface has to exist before `TerminalContainerView` renders — and it
