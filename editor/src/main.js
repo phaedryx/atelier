@@ -33,6 +33,19 @@ editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.K
 
 // The "Command Palette..." context-menu item is removed in shared-init.js.
 
+// Right-click on a selection to type it into the Coding Agent's terminal
+// (without submitting), so the user can add context before sending.
+editor.addAction({
+  id: 'pasteToAgent',
+  label: 'Paste to Agent',
+  contextMenuGroupId: '9_cutcopypaste',
+  precondition: 'editorHasSelection',
+  run: (ed) => {
+    const text = ed.getModel().getValueInRange(ed.getSelection())
+    postToSwift({ type: 'pasteToAgent', text })
+  }
+})
+
 // --- Multi-model management ---
 // One model per open file, keyed by UUID string from Swift.
 // Switching tabs calls editor.setModel() — instant, preserves undo history.

@@ -160,6 +160,10 @@ final class MonacoEditorBridge {
     /// Called when any model's dirty state changes. Parameters: (modelId, isDirty).
     var onContentChanged: ((String, Bool) -> Void)?
 
+    /// Called with the selected text when the user chooses "Paste to Agent"
+    /// from the editor's context menu.
+    var onPasteToAgent: ((String) -> Void)?
+
     // MARK: - WebView lifecycle
 
     /// Lazily creates the WKWebView and starts loading Monaco.
@@ -367,6 +371,10 @@ final class MonacoEditorBridge {
                        let dirty = body["dirty"] as? Bool
                     {
                         bridge.onContentChanged?(modelId, dirty)
+                    }
+                case "pasteToAgent":
+                    if let text = body["text"] as? String {
+                        bridge.onPasteToAgent?(text)
                     }
                 case "error":
                     if let msg = body["message"] as? String {
