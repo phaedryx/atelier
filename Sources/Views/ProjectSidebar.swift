@@ -405,11 +405,11 @@ struct ProjectSidebar: View {
                 .accessibilityLabel("Add project")
                 Spacer()
                 SidebarBottomButton(icon: "questionmark.circle") {
-                    NotificationCenter.default.post(name: .openHelp, object: nil)
+                    AppCommandChannel.shared.send(.openHelp)
                 }
                 .accessibilityLabel("Help")
                 SidebarBottomButton(icon: "gear") {
-                    NotificationCenter.default.post(name: .openSettings, object: nil)
+                    AppCommandChannel.shared.send(.openSettings(pane: nil))
                 }
                 .accessibilityLabel("Settings")
             }
@@ -572,10 +572,7 @@ struct ProjectSidebar: View {
                     onCreate: { createWorkstreamFromShortcut() },
                     onOpenSettings: {
                         showingShortcutStory = false
-                        NotificationCenter.default.post(
-                            name: .openSettings,
-                            object: SettingsPane.integrations.rawValue
-                        )
+                        AppCommandChannel.shared.send(.openSettings(pane: .integrations))
                     },
                     onCancel: {
                         shortcutFetchTask?.cancel()

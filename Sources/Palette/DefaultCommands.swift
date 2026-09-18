@@ -1,6 +1,7 @@
 // ABOUTME: The built-in palette command set — every workspace action the menus expose.
-// ABOUTME: Each action posts the same notification its menu item posts; guards in the
-// ABOUTME: receiving views make them safe no-ops when nothing relevant is mounted.
+// ABOUTME: Each action does exactly what its menu item does: sends an AppCommand, or posts
+// ABOUTME: the notification the tab and sidebar families still use. Guards in the receiving
+// ABOUTME: views make the notification half safe no-ops when nothing relevant is mounted.
 
 import Foundation
 
@@ -8,6 +9,13 @@ import Foundation
 func defaultPaletteCommands() -> [PaletteCommand] {
     let workstream: @MainActor @Sendable (PaletteContext) -> Bool = { $0.workstreamActive }
     let editor: @MainActor @Sendable (PaletteContext) -> Bool = { $0.workstreamActive && $0.editorActive }
+
+    // Two helpers, because the conversion to `AppCommand` is half done by
+    // design: `send` is for the commands `ContentView` receives, `post` for the
+    // families still received in `ProjectSidebar` and `TerminalContainerView`.
+    func send(_ command: AppCommand) -> @MainActor @Sendable () -> Void {
+        { AppCommandChannel.shared.send(command) }
+    }
 
     func post(_ name: Notification.Name) -> @MainActor @Sendable () -> Void {
         { NotificationCenter.default.post(name: name, object: nil) }
@@ -117,48 +125,48 @@ func defaultPaletteCommands() -> [PaletteCommand] {
         // `ContentView` — the sidebar's own context-menu items read row-local
         // values the palette has no access to.
         PaletteCommand(id: "workstream.revealInFinder", title: NSLocalizedString("Reveal in Finder", comment: ""),
-                       category: external, isAvailable: workstream, action: post(.revealInFinder)),
+                       category: external, isAvailable: workstream, action: send(.revealInFinder)),
         // Hidden rather than disabled when there is nothing to open, the same
         // choice the sidebar's context menu makes by omitting the item: a
         // workstream with no pull request has no reason for the row to exist,
         // and "there is no PR" is not a condition the user acts on from here.
         PaletteCommand(id: "workstream.openOnGitHub", title: NSLocalizedString("Open on GitHub", comment: ""),
                        category: external,
-                       isAvailable: { $0.workstreamActive && $0.hasGitHubRemote }, action: post(.openOnGitHub)),
+                       isAvailable: { $0.workstreamActive && $0.hasGitHubRemote }, action: send(.openOnGitHub)),
         PaletteCommand(id: "workstream.openPullRequest", title: NSLocalizedString("Open Pull Request", comment: ""),
                        category: external,
-                       isAvailable: { $0.workstreamActive && $0.hasPullRequest }, action: post(.openPullRequest)),
+                       isAvailable: { $0.workstreamActive && $0.hasPullRequest }, action: send(.openPullRequest)),
         PaletteCommand(id: "workstream.openInShortcut", title: NSLocalizedString("Open in Shortcut", comment: ""),
                        category: external,
-                       isAvailable: { $0.workstreamActive && $0.hasShortcutStory }, action: post(.openInShortcut)),
+                       isAvailable: { $0.workstreamActive && $0.hasShortcutStory }, action: send(.openInShortcut)),
         PaletteCommand(id: "workstream.copyBranchName", title: NSLocalizedString("Copy Branch Name", comment: ""),
-                       category: navigation, isAvailable: workstream, action: post(.copyBranchName)),
+                       category: navigation, isAvailable: workstream, action: send(.copyBranchName)),
         PaletteCommand(id: "workstream.copyWorktreePath", title: NSLocalizedString("Copy Worktree Path", comment: ""),
-                       category: navigation, isAvailable: workstream, action: post(.copyWorktreePath)),
+                       category: navigation, isAvailable: workstream, action: send(.copyWorktreePath)),
 
         PaletteCommand(id: "external.browser", title: NSLocalizedString("Open in External Browser", comment: ""), category: external,
                        shortcut: "⌘⌥B", isAvailable: workstream, action: post(.openExternalBrowser)),
         PaletteCommand(id: "external.terminal", title: NSLocalizedString("Open in External Terminal", comment: ""), category: external,
-                       shortcut: "⌘⌥T", isAvailable: workstream, action: post(.openExternalTerminal)),
+                       shortcut: "⌘⌥T", isAvailable: workstream, action: send(.openExternalTerminal)),
 
         PaletteCommand(id: "nav.backToProject", title: NSLocalizedString("Back to Project", comment: ""), category: navigation,
-                       shortcut: "⌘0", isAvailable: workstream, action: post(.switchToProject)),
+                       shortcut: "⌘0", isAvailable: workstream, action: send(.switchToProject)),
         // Not workstream-gated: all four work from a selected project row too,
         // and their receivers in `ContentView` already refuse when there is
         // nothing to cycle. Gating on `workstreamActive` would hide them in
         // exactly the view where "next workstream" is the obvious next move.
         PaletteCommand(id: "nav.nextWorkstream", title: NSLocalizedString("Next Workstream", comment: ""),
-                       category: navigation, shortcut: "⌘]", action: post(.nextWorkstream)),
+                       category: navigation, shortcut: "⌘]", action: send(.nextWorkstream)),
         PaletteCommand(id: "nav.previousWorkstream", title: NSLocalizedString("Previous Workstream", comment: ""),
-                       category: navigation, shortcut: "⌘[", action: post(.prevWorkstream)),
+                       category: navigation, shortcut: "⌘[", action: send(.prevWorkstream)),
         PaletteCommand(id: "nav.nextProject", title: NSLocalizedString("Next Project", comment: ""),
-                       category: navigation, shortcut: "⌘↓", action: post(.nextProject)),
+                       category: navigation, shortcut: "⌘↓", action: send(.nextProject)),
         PaletteCommand(id: "nav.previousProject", title: NSLocalizedString("Previous Project", comment: ""),
-                       category: navigation, shortcut: "⌘↑", action: post(.prevProject)),
+                       category: navigation, shortcut: "⌘↑", action: send(.prevProject)),
         PaletteCommand(id: "workstream.rename", title: NSLocalizedString("Rename Workstream", comment: ""), category: navigation,
                        shortcut: "⌘⇧R", isAvailable: workstream, action: post(.renameWorkstream)),
         PaletteCommand(id: "workstream.archive", title: NSLocalizedString("Archive Workstream", comment: ""), category: navigation,
-                       shortcut: "⌘⇧W", isAvailable: workstream, action: post(.archiveWorkstream)),
+                       shortcut: "⌘⇧W", isAvailable: workstream, action: send(.archiveWorkstream)),
         // Destructive, and sitting one fuzzy match away from Archive — but the
         // receiver is `ContentView.confirmPurge`, the same entrance the sidebar's
         // context menu uses, so `purgeWarning` and `destroyableWorktreePath` still
@@ -166,24 +174,19 @@ func defaultPaletteCommands() -> [PaletteCommand] {
         // the receiver reads the current selection, because a palette command
         // closure is built once and cannot know which workstream is active.
         PaletteCommand(id: "workstream.purge", title: NSLocalizedString("Purge Workstream", comment: ""), category: navigation,
-                       isAvailable: workstream, action: post(.purgeWorkstream)),
+                       isAvailable: workstream, action: send(.purgeWorkstream(nil))),
 
         PaletteCommand(id: "app.toggleSidebar", title: NSLocalizedString("Toggle Sidebar", comment: ""), category: app,
-                       shortcut: "⌘⇧C", action: post(.toggleSidebar)),
+                       shortcut: "⌘⇧C", action: send(.toggleSidebar)),
         PaletteCommand(id: "app.settings", title: NSLocalizedString("Settings", comment: ""), category: app,
-                       shortcut: "⌘,", action: post(.openSettings)),
+                       shortcut: "⌘,", action: send(.openSettings(pane: nil))),
         // Deep-links straight to the Prompts pane. Note this is `app.` and not
         // `prompt.`: ids under that prefix belong to the stored-prompt family
         // and are replaced wholesale on every store change.
         PaletteCommand(id: "app.editPrompts", title: NSLocalizedString("Edit Stored Prompts...", comment: ""),
-                       category: app, action: {
-                           NotificationCenter.default.post(
-                               name: .openSettings,
-                               object: SettingsPane.prompts.rawValue
-                           )
-                       }),
+                       category: app, action: send(.openSettings(pane: .prompts))),
         PaletteCommand(id: "app.help", title: NSLocalizedString("Help", comment: ""), category: app,
-                       shortcut: "⌘/", action: post(.openHelp)),
+                       shortcut: "⌘/", action: send(.openHelp)),
     ]
 
     return commands + quickActionCommands(category: git) + settingsPaneCommands(category: app)
@@ -228,8 +231,8 @@ private func quickActionCommands(category: String) -> [PaletteCommand] {
 }
 
 /// One deep-link per Settings pane, so the palette reaches a named pane rather
-/// than only "Settings" — `.openSettings` already carries a pane's raw value,
-/// so nothing new is needed on the receiving side.
+/// than only "Settings" — `AppCommand.openSettings` already carries a pane, so
+/// nothing new is needed on the receiving side.
 ///
 /// `.prompts` is skipped because `app.editPrompts` above already opens it under
 /// a title that says what the pane is for; two rows opening one pane is noise,
@@ -245,7 +248,7 @@ private func settingsPaneCommands(category: String) -> [PaletteCommand] {
             ),
             category: category,
             action: {
-                NotificationCenter.default.post(name: .openSettings, object: pane.rawValue)
+                AppCommandChannel.shared.send(.openSettings(pane: pane))
             }
         )
     }
@@ -285,7 +288,7 @@ func gotoPaletteCommands(for projects: [Project]) -> [PaletteCommand] {
             title: project.name,
             category: category,
             action: {
-                NotificationCenter.default.post(name: .focusProject, object: project.id)
+                AppCommandChannel.shared.send(.focusProject(project.id))
             }
         )
         return [projectCommand] + project.workstreams.map { workstream in
@@ -294,7 +297,7 @@ func gotoPaletteCommands(for projects: [Project]) -> [PaletteCommand] {
                 title: "\(project.name) / \(workstream.label)",
                 category: category,
                 action: {
-                    NotificationCenter.default.post(name: .focusWorkstream, object: workstream.id)
+                    AppCommandChannel.shared.send(.focusWorkstream(workstream.id))
                 }
             )
         }

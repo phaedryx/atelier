@@ -163,11 +163,9 @@ final class PromptPaletteCommandTests: XCTestCase {
         let command = defaultPaletteCommands().first { $0.id == "app.editPrompts" }
         let editPrompts = try XCTUnwrap(command)
 
-        let posted = expectation(forNotification: .openSettings, object: nil) { note in
-            SettingsPane.deepLinkTarget(from: note) == .prompts
-        }
+        let collector = AppCommandCollector()
         editPrompts.action()
-        wait(for: [posted], timeout: 1)
+        XCTAssertEqual(collector.sent, [.openSettings(pane: .prompts)])
     }
 
     func testAvailabilityRequiresWorkstreamAndReceptiveAgent() {

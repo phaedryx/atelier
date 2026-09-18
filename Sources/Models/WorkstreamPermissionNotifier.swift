@@ -107,20 +107,21 @@ extension Workstream {
 
         // MARK: - Click
 
-        /// Turns a clicked banner into a `.focusWorkstream` post, or reports
-        /// that it named no workstream.
+        /// Turns a clicked banner into an `AppCommand.focusWorkstream`, or
+        /// reports that it named no workstream.
         ///
-        /// Returns false rather than posting with a nil object: a
-        /// `.focusWorkstream` carrying nothing would move the selection nowhere
-        /// and make the click look handled. Notifications from the terminal
-        /// (bell, OSC 777) name no workstream and land here as nil.
+        /// Returns false rather than sending with no id: `focusWorkstream`
+        /// carries a `UUID` and not an optional precisely so there is no
+        /// "focus nothing" to send, which would move the selection nowhere and
+        /// make the click look handled. Notifications from the terminal (bell,
+        /// OSC 777) name no workstream and land here as nil.
         @discardableResult
         static func handleClick(
             workstreamID: UUID?,
-            center: NotificationCenter = .default
+            channel: AppCommandChannel = .shared
         ) -> Bool {
             guard let workstreamID else { return false }
-            center.post(name: .focusWorkstream, object: workstreamID)
+            channel.send(.focusWorkstream(workstreamID))
             return true
         }
 

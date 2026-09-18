@@ -53,40 +53,43 @@ final class WorkspaceTabSnapshotTests: XCTestCase {
 }
 
 final class WorkspaceTabStateTests: XCTestCase {
+    /// The bracket pair is an `AppCommand` and the tab chords are still
+    /// notifications, which is what `CommandKeyAction`'s two cases carry. The
+    /// split is temporary; the table staying one table is not.
     func testCommandBracketShortcutsAreHandledBeforeTerminalInput() {
         XCTAssertEqual(
-            commandKeyNotification(charactersIgnoringModifiers: "[", modifierFlags: [.command]),
-            .prevWorkstream
+            commandKeyAction(charactersIgnoringModifiers: "[", modifierFlags: [.command]),
+            .app(.prevWorkstream)
         )
         XCTAssertEqual(
-            commandKeyNotification(charactersIgnoringModifiers: "]", modifierFlags: [.command]),
-            .nextWorkstream
+            commandKeyAction(charactersIgnoringModifiers: "]", modifierFlags: [.command]),
+            .app(.nextWorkstream)
         )
         // AppKit reports the shifted brackets as "{" / "}" — charactersIgnoringModifiers
         // drops every modifier except Shift, so these are the characters that arrive.
         XCTAssertEqual(
-            commandKeyNotification(charactersIgnoringModifiers: "{", modifierFlags: [.command, .shift]),
-            .prevTab
+            commandKeyAction(charactersIgnoringModifiers: "{", modifierFlags: [.command, .shift]),
+            .notification(.prevTab)
         )
         XCTAssertEqual(
-            commandKeyNotification(charactersIgnoringModifiers: "}", modifierFlags: [.command, .shift]),
-            .nextTab
+            commandKeyAction(charactersIgnoringModifiers: "}", modifierFlags: [.command, .shift]),
+            .notification(.nextTab)
         )
         XCTAssertEqual(
-            commandKeyNotification(charactersIgnoringModifiers: "w", modifierFlags: [.command]),
-            .closeTerminal
+            commandKeyAction(charactersIgnoringModifiers: "w", modifierFlags: [.command]),
+            .notification(.closeTerminal)
         )
     }
 
     func testShiftedBracketsAreNotReportedAsUnshiftedBrackets() {
-        XCTAssertNil(commandKeyNotification(charactersIgnoringModifiers: "[", modifierFlags: [.command, .shift]))
-        XCTAssertNil(commandKeyNotification(charactersIgnoringModifiers: "]", modifierFlags: [.command, .shift]))
+        XCTAssertNil(commandKeyAction(charactersIgnoringModifiers: "[", modifierFlags: [.command, .shift]))
+        XCTAssertNil(commandKeyAction(charactersIgnoringModifiers: "]", modifierFlags: [.command, .shift]))
     }
 
     func testCommandBracketShortcutsIgnoreOptionAndControlChords() {
-        XCTAssertNil(commandKeyNotification(charactersIgnoringModifiers: "[", modifierFlags: [.command, .option]))
-        XCTAssertNil(commandKeyNotification(charactersIgnoringModifiers: "[", modifierFlags: [.command, .control]))
-        XCTAssertNil(commandKeyNotification(charactersIgnoringModifiers: "x", modifierFlags: [.command]))
+        XCTAssertNil(commandKeyAction(charactersIgnoringModifiers: "[", modifierFlags: [.command, .option]))
+        XCTAssertNil(commandKeyAction(charactersIgnoringModifiers: "[", modifierFlags: [.command, .control]))
+        XCTAssertNil(commandKeyAction(charactersIgnoringModifiers: "x", modifierFlags: [.command]))
     }
 
     func testCustomTabsPersistAsInfo() {

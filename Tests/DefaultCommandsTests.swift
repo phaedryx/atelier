@@ -1,8 +1,32 @@
 // ABOUTME: Tests for the built-in palette command set.
-// ABOUTME: Pins id uniqueness, availability gating, and that actions post the expected notifications.
+// ABOUTME: Pins id uniqueness, availability gating, and that actions send/post what the receivers expect.
 
 @testable import Atelier
+import Combine
 import XCTest
+
+/// Collects everything sent on the shared channel while it lives.
+///
+/// The palette's command closures are built once in a free function with no
+/// view context, so they send on `AppCommandChannel.shared` and there is
+/// nothing to inject — subscribing to `shared` is how a test sees them. The
+/// channel is a `PassthroughSubject`, so nothing is replayed and a collector
+/// only ever sees what was sent after it started.
+@MainActor
+final class AppCommandCollector {
+    private(set) var sent: [AppCommand] = []
+    private var subscription: AnyCancellable?
+
+    init(_ channel: AppCommandChannel = .shared) {
+        subscription = channel.publisher.sink { [weak self] in self?.sent.append($0) }
+    }
+
+    // No `deinit` cancelling the subscription: a `deinit` is nonisolated and
+    // cannot touch a non-`Sendable` `AnyCancellable`. Dropping the collector
+    // drops its only strong reference to the `AnyCancellable`, which cancels
+    // on its own way out — which is what keeps a collector from outliving its
+    // test and seeing the next one's commands.
+}
 
 @MainActor
 final class DefaultCommandsTests: XCTestCase {
@@ -123,17 +147,33 @@ final class DefaultCommandsTests: XCTestCase {
         }
     }
 
-    /// Both directions of every cycling pair post a distinct notification. A
-    /// copy-paste that pointed "Previous" at the "Next" name would look right in
+    /// Both directions of every cycling pair send a distinct command. A
+    /// copy-paste that pointed "Previous" at the "Next" case would look right in
     /// the palette and move the wrong way.
-    func testCyclingCommandsPostTheirOwnDirection() throws {
-        let expected: [(String, Notification.Name)] = [
-            ("tab.next", .nextTab),
-            ("tab.previous", .prevTab),
+    func testCyclingCommandsSendTheirOwnDirection() throws {
+        let expected: [(String, AppCommand)] = [
             ("nav.nextWorkstream", .nextWorkstream),
             ("nav.previousWorkstream", .prevWorkstream),
             ("nav.nextProject", .nextProject),
             ("nav.previousProject", .prevProject),
+        ]
+        let commands = defaultPaletteCommands()
+
+        for (id, expectedCommand) in expected {
+            let command = try XCTUnwrap(commands.first { $0.id == id }, id)
+            let collector = AppCommandCollector()
+            command.action()
+            XCTAssertEqual(collector.sent, [expectedCommand], id)
+        }
+    }
+
+    /// The tab half of the same pair, still on `NotificationCenter` because
+    /// `TerminalContainerView` is where it is received. Kept beside its sibling
+    /// above so the two halves of the chord table stay visibly one table.
+    func testTabCyclingCommandsPostTheirOwnDirection() throws {
+        let expected: [(String, Notification.Name)] = [
+            ("tab.next", .nextTab),
+            ("tab.previous", .prevTab),
         ]
         let commands = defaultPaletteCommands()
 
@@ -169,13 +209,16 @@ final class DefaultCommandsTests: XCTestCase {
         var reached: [SettingsPane] = []
 
         for command in deepLinks {
-            let posted = expectation(forNotification: .openSettings, object: nil) { note in
-                guard let pane = SettingsPane.deepLinkTarget(from: note) else { return false }
-                reached.append(pane)
-                return true
-            }
+            let collector = AppCommandCollector()
             command.action()
-            wait(for: [posted], timeout: 1)
+            // The whole of what it sent, not just the first: a row that opened a
+            // pane *and* did something else would otherwise pass.
+            guard collector.sent.count == 1,
+                  case let .openSettings(pane) = collector.sent[0], let pane
+            else {
+                return XCTFail("\(command.id) did not deep-link to exactly one pane")
+            }
+            reached.append(pane)
         }
 
         XCTAssertEqual(Set(reached), Set(SettingsPane.allCases))
@@ -183,24 +226,29 @@ final class DefaultCommandsTests: XCTestCase {
     }
 
     /// Destructive, and one fuzzy match from "Archive Workstream" — so what it
-    /// posts matters: `.purgeWorkstream` with no payload, which `ContentView`
-    /// resolves to the selection and hands to `confirmPurge`. A command closure
-    /// is built once and can never know which workstream is active.
+    /// sends matters: `.purgeWorkstream(nil)`, which `ContentView` resolves to
+    /// the selection and hands to `confirmPurge`. A command closure is built
+    /// once and can never know which workstream is active, and a nil that
+    /// became some *other* workstream's id would purge the wrong worktree.
     @MainActor
-    func testPurgeCommandPostsWithNoPayloadAndIsWorkstreamGated() throws {
+    func testPurgeCommandSendsNoWorkstreamIDAndIsWorkstreamGated() throws {
         let command = try XCTUnwrap(defaultPaletteCommands().first { $0.id == "workstream.purge" })
 
         XCTAssertFalse(command.isAvailable(PaletteContext(workstreamActive: false, editorActive: false)))
         XCTAssertTrue(command.isAvailable(PaletteContext(workstreamActive: true, editorActive: false)))
 
-        let posted = expectation(forNotification: .purgeWorkstream, object: nil) { $0.object == nil }
+        let collector = AppCommandCollector()
         command.action()
-        wait(for: [posted], timeout: 1)
+        XCTAssertEqual(collector.sent, [.purgeWorkstream(nil)])
     }
 
     /// The add menu's two variants carry their choice as `.addNew`'s payload.
     /// Absent means "the default", which is what `create.new` posts — reading a
     /// missing payload as `false` would silently strip permissions from ⌘N.
+    ///
+    /// Still a notification, deliberately: `.addNew`'s receiver is
+    /// `ProjectSidebar`, not `ContentView`, so it is outside `AppCommand`'s
+    /// scope. See that type's doc comment.
     @MainActor
     func testNewWorkstreamVariantsCarryTheirPermissionChoice() throws {
         let commands = defaultPaletteCommands()
@@ -397,31 +445,27 @@ final class GotoPaletteCommandTests: XCTestCase {
         XCTAssertFalse(titles.contains("alpha / brave-otter"))
     }
 
-    func testWorkstreamCommandPostsFocusWorkstreamWithItsID() throws {
+    func testWorkstreamCommandSendsFocusWorkstreamWithItsID() throws {
         let workstream = Workstream(name: "one")
         let project = Project(name: "alpha", directory: "/tmp/alpha", workstreams: [workstream])
         let commands = gotoPaletteCommands(for: [project])
         let command = try XCTUnwrap(commands.first { $0.id.contains("workstream.") })
 
-        let posted = expectation(forNotification: .focusWorkstream, object: nil) { note in
-            note.object as? UUID == workstream.id
-        }
+        let collector = AppCommandCollector()
         command.action()
-        wait(for: [posted], timeout: 1)
+        XCTAssertEqual(collector.sent, [.focusWorkstream(workstream.id)])
     }
 
     /// `.switchToProject` carries no payload and can only mean "the project of
     /// the selected workstream", so a named project jump needs `.focusProject`.
-    func testProjectCommandPostsFocusProjectWithItsID() throws {
+    func testProjectCommandSendsFocusProjectWithItsID() throws {
         let project = Project(name: "alpha", directory: "/tmp/alpha")
         let commands = gotoPaletteCommands(for: [project])
         let command = try XCTUnwrap(commands.first { $0.id.contains("project.") })
 
-        let posted = expectation(forNotification: .focusProject, object: nil) { note in
-            note.object as? UUID == project.id
-        }
+        let collector = AppCommandCollector()
         command.action()
-        wait(for: [posted], timeout: 1)
+        XCTAssertEqual(collector.sent, [.focusProject(project.id)])
     }
 }
 

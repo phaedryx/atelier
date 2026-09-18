@@ -1,14 +1,13 @@
 // ABOUTME: Tests for the SettingsPane enum backing the tabbed Settings view.
-// ABOUTME: Covers raw-value persistence stability, tab order, and deep-link parsing.
+// ABOUTME: Covers raw-value persistence stability and tab order.
 
 @testable import Atelier
 import XCTest
 
 final class SettingsPaneTests: XCTestCase {
     func testRawValuesAreStable() {
-        // Raw values are persisted in UserDefaults (atelier.settingsPane)
-        // and carried in .openSettings notifications; renaming one silently
-        // resets the user's remembered pane.
+        // Raw values are persisted in UserDefaults (atelier.settingsPane);
+        // renaming one silently resets the user's remembered pane.
         XCTAssertEqual(SettingsPane.environment.rawValue, "environment")
         XCTAssertEqual(SettingsPane.general.rawValue, "general")
         XCTAssertEqual(SettingsPane.codingAgent.rawValue, "codingAgent")
@@ -24,12 +23,6 @@ final class SettingsPaneTests: XCTestCase {
         )
     }
 
-    func testIntegrationsIsDeepLinkable() {
-        // The Shortcut dialog's "unauthorized" error links straight to the token field.
-        let note = Notification(name: .openSettings, object: "integrations")
-        XCTAssertEqual(SettingsPane.deepLinkTarget(from: note), .integrations)
-    }
-
     func testEveryPaneHasTitleAndIcon() {
         for pane in SettingsPane.allCases {
             XCTAssertFalse(pane.title.isEmpty, "\(pane) has no title")
@@ -37,18 +30,16 @@ final class SettingsPaneTests: XCTestCase {
         }
     }
 
-    func testDeepLinkTargetParsesRawValueObject() {
-        let note = Notification(name: .openSettings, object: "codingAgent")
-        XCTAssertEqual(SettingsPane.deepLinkTarget(from: note), .codingAgent)
-    }
-
-    func testDeepLinkTargetIsNilForPlainOpen() {
-        XCTAssertNil(SettingsPane.deepLinkTarget(from: Notification(name: .openSettings)))
-    }
-
-    func testDeepLinkTargetIsNilForUnknownOrNonStringObjects() {
-        XCTAssertNil(SettingsPane.deepLinkTarget(from: Notification(name: .openSettings, object: "notAPane")))
-        XCTAssertNil(SettingsPane.deepLinkTarget(from: Notification(name: .openSettings, object: 42)))
+    /// A deep link carries a typed `SettingsPane` now, so the only string
+    /// boundary left is the UserDefaults round trip `SettingsView` reads back —
+    /// which is what makes the raw values above load-bearing. A value written
+    /// by an older build (or a hand-edited plist) has to fall back rather than
+    /// crash, the same rule `BaseBranchSetting` states below.
+    func testEveryPaneSurvivesTheUserDefaultsRoundTrip() {
+        for pane in SettingsPane.allCases {
+            XCTAssertEqual(SettingsPane(rawValue: pane.rawValue), pane)
+        }
+        XCTAssertNil(SettingsPane(rawValue: "notAPane"))
     }
 }
 

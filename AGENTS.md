@@ -1456,14 +1456,43 @@ so a row offering "Open Pull Request" and a receiver finding no URL cannot happe
 three "open" rows are `.hidden` with nothing to open, the same choice the context menu
 makes by omitting the item.
 
-**`.purgeWorkstream` and `.addNew` gained optional payloads**, and the absent case is
-load-bearing in both. A nil `.purgeWorkstream` object means "the selected workstream" —
+**`AppCommand.purgeWorkstream` and `.addNew` carry optional payloads**, and the absent
+case is load-bearing in both. `purgeWorkstream(nil)` means "the selected workstream" —
 a command closure is built once and never learns which one is active — and it still
 lands on `confirmPurge`, so `purgeWarning` and `destroyableWorktreePath` stand where
 they always did. A nil `.addNew` object means "the `atelier.bypassPermissions` default",
 which is what ⌘N and every other producer wants; the palette's two variant rows post
 `true` and `false`. Reading a missing payload as `false` would silently strip
 permissions from ⌘N.
+
+The two are on different transports, and the split is by *receiver*, not by importance.
+**`AppCommand` is the typed channel for the commands `ContentView` receives** — the
+twenty app-level ones: the sidebar/palette/help/settings four, the six navigation cases,
+archive and purge, and the six selected-workstream actions above.
+`AppCommandChannel.shared.send(_:)` replaces the post, `ContentView.handle(_:)` is the
+single exhaustive switch that replaces twenty `.onReceive`s, and there is no `default:`,
+so a case nothing handles does not compile. That is the property a `Notification.Name`
+could never have: an unreceived post was a silent no-op, and an `.onReceive` installed in
+a `@ViewBuilder` branch that happened to be unmounted was the same thing again,
+intermittently. It is scoped to `ContentView` because `ContentView` is the always-mounted
+root — the mount guarantee, not the transport, is what makes a single receiver safe.
+
+**`.addNew` stays a notification because its receiver is `ProjectSidebar`**, along with
+`.addProject`, `.renameWorkstream` and `.openDirectory`; the tab family
+(`.toggleInfo`, `.focusAgent`, the toggles, `.switchByNumber`, `.openExternalBrowser`,
+`.rerunScript` and the rest) stays because its receiver is `TerminalContainerView`. Each
+of those is a second phase with its own always-mounted receiver, not an exception to this
+one. Everything with more than one receiver or a genuinely broadcast meaning stays on
+`NotificationCenter` permanently: the launcher seam
+(`.workstreamCreated`/`.workstreamWorktreeReady`/`.workstreamCreationFailed`,
+`.projectCreated`), `.agentBlockedOnPermission`/`.agentPermissionResolved`,
+`.terminalActivity`, `.initializationStateChanged`, `.archivingDidStart`/`.archivingDidComplete`,
+`.terminalSurfaceClosed`, `.worktreeGitActivity` and `Shortcut.Settings.tokenChanged`.
+
+**`commandKeyAction` is one table across both transports**, deliberately. The ⌘-chords
+the key monitor swallows are mixed — `⌘[`/`⌘]` are `AppCommand`s and `⌘{`/`⌘}`/`⌘W` are
+still notifications — so it returns a `CommandKeyAction` naming which, rather than
+forking into two lookup functions that can disagree about which chords exist.
 
 **`QuickAction.unavailableReason` is the one copy of the quick actions' gate**, read by
 the toolbar menu's `.disabled`, by the palette row that shows it, and by the receiver in
