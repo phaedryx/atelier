@@ -286,7 +286,7 @@ final class GitOperationsTests: XCTestCase {
              "commit", "--allow-empty", "-m", "init"], in: repoDir)
         git(["branch", "feature"], in: repoDir)
 
-        Git.Operations.deleteLocalBranch(at: repoDir.path, branchName: "feature")
+        XCTAssertNil(Git.Operations.deleteLocalBranch(at: repoDir.path, branchName: "feature").gitFailure)
 
         // Verify branch no longer exists
         let result = git(["rev-parse", "--verify", "refs/heads/feature"], in: repoDir)
@@ -542,6 +542,60 @@ final class GitOperationsTests: XCTestCase {
 
         XCTAssertNotNil(entry, "the detached worktree was dropped from the listing")
         XCTAssertNil(entry?.branch)
+    }
+
+    /// The two cases `GitWorktreeListingTests` can only assert against a
+    /// hand-written fixture, pinned here against real git so the fixture cannot
+    /// be green against a contract git does not actually have: a path with a
+    /// space in it — porcelain neither quotes nor escapes it — and a branch whose
+    /// name contains slashes.
+    ///
+    /// Both are what the parser's "take the whole remainder of the line" and
+    /// "strip exactly the `refs/heads/` prefix" rules exist for, and both are
+    /// silently wrong under any tokenizing implementation.
+    func testRegisteredWorktreesSurvivesASpacedPathAndASlashedBranch() throws {
+        let repoDir = tempDir.appendingPathComponent("repo")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: repoDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "--allow-empty", "-m", "init"], in: repoDir)
+        let spaced = tempDir.appendingPathComponent("my worktree")
+        git(["worktree", "add", "-b", "feat/nested/thing", spaced.path], in: repoDir)
+
+        let registered = try XCTUnwrap(Git.Operations.registeredWorktrees(at: repoDir.path))
+        let entry = registered.first { $0.branch == "feat/nested/thing" }
+
+        XCTAssertNotNil(entry, "a slashed branch name was truncated or dropped")
+        XCTAssertEqual(
+            entry.map { URL(fileURLWithPath: $0.path).standardizedFileURL.path },
+            spaced.standardizedFileURL.path,
+            "the path was cut at the space"
+        )
+    }
+
+    /// `worktreePath(forBranch:)` matches on the full `refs/heads/<branch>`, so
+    /// the slashed name has to round-trip through that form too.
+    func testWorktreePathForBranchFindsASlashedBranch() throws {
+        let repoDir = tempDir.appendingPathComponent("repo")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: repoDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "--allow-empty", "-m", "init"], in: repoDir)
+        let nested = tempDir.appendingPathComponent("nested")
+        git(["worktree", "add", "-b", "feat/nested/thing", nested.path], in: repoDir)
+
+        let found = try XCTUnwrap(
+            Git.Operations.worktreePath(forBranch: "feat/nested/thing", at: repoDir.path)
+        )
+
+        XCTAssertEqual(
+            URL(fileURLWithPath: found).standardizedFileURL.path,
+            nested.standardizedFileURL.path
+        )
+        XCTAssertNil(
+            Git.Operations.worktreePath(forBranch: "thing", at: repoDir.path),
+            "the branch's last path component is not the branch"
+        )
     }
 
     // MARK: - pruneCleanWorktrees
@@ -1904,18 +1958,20 @@ final class GitOperationsTests: XCTestCase {
         let container = try makeBareContainer(named: "bare-project")
         let trunk = container.appendingPathComponent("main")
 
-        Git.Operations.removeWorktree(projectPath: container.path, worktreePath: trunk.path)
+        let outcome = Git.Operations.removeWorktree(projectPath: container.path, worktreePath: trunk.path)
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: trunk.path))
+        XCTAssertNotNil(outcome.gitFailure, "a refusal is a failure the caller can log, not a silent no-op")
     }
 
     func testRemoveWorktreeRefusesTheBareRepository() throws {
         let container = try makeBareContainer(named: "bare-project")
         let bare = container.appendingPathComponent(".bare")
 
-        Git.Operations.removeWorktree(projectPath: container.path, worktreePath: bare.path)
+        let outcome = Git.Operations.removeWorktree(projectPath: container.path, worktreePath: bare.path)
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: bare.path))
+        XCTAssertNotNil(outcome.gitFailure)
     }
 
     /// The guards above must not swallow the orphan cleanup they sit in front of.
@@ -1927,9 +1983,13 @@ final class GitOperationsTests: XCTestCase {
         let orphan = container.appendingPathComponent("orphan")
         try FileManager.default.createDirectory(at: orphan, withIntermediateDirectories: true)
 
-        Git.Operations.removeWorktree(projectPath: container.path, worktreePath: orphan.path)
+        let outcome = Git.Operations.removeWorktree(projectPath: container.path, worktreePath: orphan.path)
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: orphan.path))
+        XCTAssertNil(
+            outcome.gitFailure,
+            "git fails on an orphan every time; the verdict is whether the directory is gone"
+        )
     }
 
     // MARK: - removeWorktree
@@ -1945,10 +2005,11 @@ final class GitOperationsTests: XCTestCase {
         let file = repoDir.appendingPathComponent("keep-me.txt")
         try "important".write(to: file, atomically: true, encoding: .utf8)
 
-        Git.Operations.removeWorktree(projectPath: repoDir.path, worktreePath: repoDir.path)
+        let outcome = Git.Operations.removeWorktree(projectPath: repoDir.path, worktreePath: repoDir.path)
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: repoDir.path), "the main checkout must survive")
         XCTAssertTrue(FileManager.default.fileExists(atPath: file.path), "its contents must survive")
+        XCTAssertNotNil(outcome.gitFailure)
     }
 
     /// The same guard has to hold when the two paths differ only by a trailing
@@ -1958,9 +2019,10 @@ final class GitOperationsTests: XCTestCase {
         try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
         git(["init", "-q"], in: repoDir)
 
-        Git.Operations.removeWorktree(projectPath: repoDir.path, worktreePath: repoDir.path + "/./")
+        let outcome = Git.Operations.removeWorktree(projectPath: repoDir.path, worktreePath: repoDir.path + "/./")
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: repoDir.path))
+        XCTAssertNotNil(outcome.gitFailure)
     }
 
     /// Comparing the two spellings textually is not enough. A stored worktree path
@@ -1975,12 +2037,13 @@ final class GitOperationsTests: XCTestCase {
         let linkedParent = tempDir.appendingPathComponent("linked")
         try FileManager.default.createSymbolicLink(at: linkedParent, withDestinationURL: realParent)
 
-        Git.Operations.removeWorktree(
+        let outcome = Git.Operations.removeWorktree(
             projectPath: repoDir.path,
             worktreePath: linkedParent.appendingPathComponent("main-repo").path
         )
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: repoDir.path), "the main checkout must survive")
+        XCTAssertNotNil(outcome.gitFailure)
     }
 
     /// The guard must not cost the feature: a real linked worktree still goes.
@@ -1991,9 +2054,10 @@ final class GitOperationsTests: XCTestCase {
         let feature = checkout.appendingPathComponent("feature")
         XCTAssertTrue(FileManager.default.fileExists(atPath: feature.path), "precondition")
 
-        Git.Operations.removeWorktree(projectPath: checkout.path, worktreePath: feature.path)
+        let outcome = Git.Operations.removeWorktree(projectPath: checkout.path, worktreePath: feature.path)
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: feature.path))
+        XCTAssertNil(outcome.gitFailure)
     }
 
     /// `purgeOrphanWorktree` depends on the filesystem fallback: git has already
@@ -2005,9 +2069,13 @@ final class GitOperationsTests: XCTestCase {
         let orphan = checkout.appendingPathComponent("orphan")
         try FileManager.default.createDirectory(at: orphan, withIntermediateDirectories: true)
 
-        Git.Operations.removeWorktree(projectPath: checkout.path, worktreePath: orphan.path)
+        let outcome = Git.Operations.removeWorktree(projectPath: checkout.path, worktreePath: orphan.path)
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: orphan.path))
+        XCTAssertNil(
+            outcome.gitFailure,
+            "git has forgotten this worktree, so its failure is expected and is not the verdict"
+        )
     }
 
     // MARK: - Helpers
@@ -2221,5 +2289,165 @@ final class GitOperationsTests: XCTestCase {
     func testTruncatedForAlertIsBoundedRegardlessOfFileCount() {
         let result = Git.Operations.truncatedForAlert(pullConflictOutput(files: 2000))
         XCTAssertLessThanOrEqual(result.count, 900)
+    }
+}
+
+/// `Result<Void, Git.Failure>` read the way these tests care about it.
+///
+/// Nil is success. Non-nil is the failure, and every assertion below reaches
+/// into it rather than just checking the case — a `Failure` whose `reason` is
+/// empty is exactly the silent discard this shape replaced.
+extension Result where Success == Void, Failure == Git.Failure {
+    var gitFailure: Git.Failure? {
+        if case let .failure(failure) = self {
+            return failure
+        }
+        return nil
+    }
+}
+
+/// The five mutators that used to return `Void`. Each one now says why it did
+/// not happen, and "why" has to survive as far as the caller: `purge` learned
+/// that a `removeWorktree` had failed from a *later* `worktree list`, which
+/// reports only that the worktree is still registered.
+final class GitFailureShapeTests: XCTestCase {
+    private var tempDir: URL!
+
+    override func setUpWithError() throws {
+        tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("atelier-git-failure-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: tempDir)
+        tempDir = nil
+    }
+
+    private func notARepository() throws -> URL {
+        let dir = tempDir.appendingPathComponent("not-a-repo")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// The point of the type: git's own diagnosis reaches the caller. Pointed at
+    /// a directory that is not a repository, git writes "not a git repository"
+    /// to stderr and exits 128, and both have to arrive.
+    func testDeleteLocalBranchCarriesGitsExitCodeAndStderr() throws {
+        let dir = try notARepository()
+
+        let failure = try XCTUnwrap(
+            Git.Operations.deleteLocalBranch(at: dir.path, branchName: "anything").gitFailure
+        )
+
+        XCTAssertEqual(failure.exitCode, 128, "git's own exit status, not a stand-in")
+        XCTAssertFalse(failure.stderr.isEmpty, "git said why; the caller must be able to read it")
+        XCTAssertTrue(
+            failure.stderr.lowercased().contains("not a git repository"),
+            "expected git's diagnosis, got: \(failure.stderr)"
+        )
+        XCTAssertTrue(failure.command.hasPrefix("git branch -D"), "got: \(failure.command)")
+        XCTAssertFalse(failure.reason.isEmpty)
+    }
+
+    /// All three commands run whatever the earlier ones did, and the first
+    /// failure is what comes back — so outside a repository this is `reset`'s.
+    func testDiscardAllChangesReportsTheFirstFailure() throws {
+        let dir = try notARepository()
+
+        let failure = try XCTUnwrap(Git.Operations.discardAllChanges(at: dir.path).gitFailure)
+
+        XCTAssertEqual(failure.command, "git reset HEAD", "got: \(failure.command)")
+        XCTAssertEqual(failure.exitCode, 128)
+        XCTAssertFalse(failure.stderr.isEmpty)
+    }
+
+    /// A refusal decided before anything is spawned has no exit code and no
+    /// stderr, which is why `Failure.exitCode` is optional. It still has to say
+    /// something: `reason` is what a log line or an alert shows.
+    func testARefusalHasNoExitCodeButStillHasAReason() throws {
+        let dir = try notARepository()
+
+        let failure = try XCTUnwrap(
+            Git.Operations.removeWorktree(projectPath: dir.path, worktreePath: dir.path).gitFailure
+        )
+
+        XCTAssertNil(failure.exitCode, "nothing was spawned, so there is no exit status to report")
+        XCTAssertTrue(failure.stderr.isEmpty)
+        XCTAssertTrue(
+            failure.reason.contains("project directory"),
+            "the reason must name what was refused, got: \(failure.reason)"
+        )
+    }
+
+    /// A local-only repository is an ordinary state with nothing to fetch.
+    /// `fetchOrigin` sweeps every project every two minutes, so reporting it
+    /// would be a log line every two minutes for a repository working correctly.
+    func testFetchDefaultBranchSucceedsWithNoRemote() throws {
+        let repoDir = tempDir.appendingPathComponent("local-only")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        runGit(["init", "-q", "-b", "main"], in: repoDir)
+
+        XCTAssertNil(Git.Operations.fetchDefaultBranch(at: repoDir.path).gitFailure)
+    }
+
+    /// Outside a repository there is no remote to check either, and the
+    /// `remote get-url` probe fails — which is the same "nothing to fetch"
+    /// answer. Pinned so a later change cannot turn a quiet path noisy without
+    /// someone deciding to.
+    func testFetchDefaultBranchSucceedsOutsideARepository() throws {
+        let dir = try notARepository()
+
+        XCTAssertNil(Git.Operations.fetchDefaultBranch(at: dir.path).gitFailure)
+    }
+
+    /// The write is the only thing that can fail here. The `rev-parse
+    /// --git-path` probe missing is an ordinary case with a fallback, so it must
+    /// not be reported — outside a repository the fallback writes
+    /// `<dir>/.git/info/exclude` and succeeds.
+    func testAddExcludeEntrySucceedsThroughItsFallbackPath() throws {
+        let dir = try notARepository()
+
+        XCTAssertNil(Git.Operations.addExcludeEntry(at: dir.path, pattern: ".atelier-state/").gitFailure)
+        let written = try String(
+            contentsOf: dir.appendingPathComponent(".git/info/exclude"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(written.contains(".atelier-state/"))
+    }
+
+    /// `stderrTail` bounds what a `Failure` carries: stderr is unbounded and
+    /// caller-controlled, and every consumer is a log line or an alert.
+    func testStderrTailKeepsTheLastLinesAndDropsTheRest() {
+        let tail = Git.Failure.stderrTail((1 ... 20).map { "line \($0)" }.joined(separator: "\n"))
+
+        XCTAssertTrue(tail.contains("line 20"), "git's diagnosis is the last thing it says")
+        XCTAssertFalse(tail.contains("line 1;"), "the head must be dropped, got: \(tail)")
+        XCTAssertFalse(tail.contains("line 15"))
+    }
+
+    func testStderrTailIsBoundedByCharactersToo() {
+        let tail = Git.Failure.stderrTail(String(repeating: "x", count: 4000))
+
+        XCTAssertEqual(tail.count, 500)
+    }
+
+    func testStderrTailOfNothingIsEmpty() {
+        XCTAssertTrue(Git.Failure.stderrTail("\n  \n\n").isEmpty)
+    }
+
+    @discardableResult
+    private func runGit(_ args: [String], in directory: URL) -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["git"] + args
+        process.currentDirectoryURL = directory
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+        try? process.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(data: data, encoding: .utf8) ?? ""
     }
 }
