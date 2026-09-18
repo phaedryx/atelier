@@ -262,7 +262,20 @@ extension IPC {
             var reverted: [ProjectTask] = []
             for (project, tasks) in tasksByProject {
                 for (path, task) in tasks {
-                    guard case let .claimed(_, taskWorkstreamID, _) = task.state, taskWorkstreamID == workstreamID else {
+                    guard case let .claimed(_, taskWorkstreamID, _) = task.state,
+                          // Case-insensitively, because the two sides are spelled by
+                          // different producers: a claim records what the agent's own
+                          // environment carries — `ATELIER_WORKSTREAM_ID`, which
+                          // `Workstream.Environment.variables` exports **lowercased** —
+                          // while the archive paths release by `UUID.uuidString`, which
+                          // Foundation spells **uppercase**. A `==` between the two
+                          // matched nothing, so a purge left every task claimed in that
+                          // workstream claimed forever. The same comparison
+                          // `IPC.Service`'s verification-run scope check already makes,
+                          // and it belongs here rather than at the caller so the store
+                          // is not case-sensitive for the next one.
+                          taskWorkstreamID.caseInsensitiveCompare(workstreamID) == .orderedSame
+                    else {
                         continue
                     }
                     var updated = task
