@@ -199,6 +199,40 @@ final class RunSessionTests: XCTestCase {
         XCTAssertEqual(session.runGeneration, 1)
     }
 
+    /// A workstream torn down while its socket reclaim is in flight must not
+    /// get a run out of that reclaim.
+    ///
+    /// `start` awaits `process-compose down` before `beginRun`, and that wait
+    /// used to retain the session through its own `Task` — so an archive that
+    /// dropped the session from `TerminalSurfaceCache.runSessions` did not stop
+    /// the run that landed afterwards, and `beginRun` put a dev-server surface
+    /// (cwd = a worktree being deleted) into the long-lived surface cache with
+    /// nothing left to evict it. `teardown` cancels it, and the cancellation is
+    /// checked on the way back out because it does not propagate into the
+    /// detached child.
+    ///
+    /// Deterministic without sleeps: `start` returns as soon as it has
+    /// *scheduled* the task, so `teardown` on the next line lands in the same
+    /// main-actor turn, before the task body has run at all.
+    func test_teardownDuringAReclaim_abandonsTheRunItWouldHaveStarted() async {
+        let recorder = Recorder()
+        recorder.socketBusy = true
+        let session = makeSession(recorder)
+
+        session.start(context())
+        XCTAssertTrue(session.isReclaimingSocket)
+        session.teardown()
+
+        await drain(until: { !session.isReclaimingSocket })
+
+        XCTAssertTrue(
+            recorder.createdSurfaceIDs.isEmpty,
+            "a cancelled reclaim must not create a run surface for a workstream that is going away"
+        )
+        XCTAssertFalse(session.runStarted)
+        XCTAssertEqual(session.runGeneration, 0)
+    }
+
     /// No binary to run `down` with is not a reason to refuse the run: the
     /// probe is a best-effort cleanup, and `RunCommandPlan` is what decides
     /// whether there is anything to start.
@@ -274,6 +308,52 @@ final class RunSessionTests: XCTestCase {
                 false
             }
         })
+    }
+
+    /// The first Start of a launch, with a tmux session left over from the last
+    /// one.
+    ///
+    /// `restore` returns early whenever the view cannot resolve a command — an
+    /// empty execute selection, an unresolvable binary — so `tmux` is still nil
+    /// when the user fixes that and presses Start. `TmuxSession.wrapCommand`
+    /// uses `new-session -A`, so a Start that killed only the session it had
+    /// *recorded* silently reattached to the old server, still running the old
+    /// selection, while `runStarted` flipped true.
+    func test_start_killsAStaleTmuxSessionItNeverRecorded() {
+        let recorder = Recorder()
+        let session = makeSession(recorder)
+        // Nothing has been recorded: no prior `beginRun`, no adopted `restore`.
+        XCTAssertNil(session.tmux)
+
+        session.start(context(tmux: tmuxContext))
+
+        XCTAssertTrue(
+            recorder.contains(.killTmux(session: tmuxContext.sessionName)),
+            "the session the run is about to start in must be killed, not only the one already recorded"
+        )
+    }
+
+    /// And it is killed exactly once when the two are the same session, which is
+    /// the ordinary case — the name is derived from the project and workstream,
+    /// so a re-Start names what the last Start recorded.
+    func test_start_killsTheSessionOnceWhenTheRecordedAndIncomingOnesMatch() {
+        let recorder = Recorder()
+        let session = makeSession(recorder)
+
+        session.start(context(tmux: tmuxContext))
+        recorder.reset()
+        session.start(context(tmux: tmuxContext))
+
+        XCTAssertEqual(
+            recorder.log.filter {
+                if case .killTmux = $0 {
+                    true
+                } else {
+                    false
+                }
+            },
+            [.killTmux(session: tmuxContext.sessionName)]
+        )
     }
 
     // MARK: - Restarting
