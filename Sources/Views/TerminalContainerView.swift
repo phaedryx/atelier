@@ -1869,6 +1869,12 @@ struct TerminalContainerView: View {
             guard let model, let uuid = UUID(uuidString: modelId) else { return }
             model.editorDirtyState[uuid] = dirty
         }
+        // Types the selection into the Coding Agent's surface without submitting.
+        // `sendText` no-ops if that surface was never opened, the same quiet
+        // fallback every other terminal-injection caller in the app relies on.
+        bridge.onPasteToAgent = { [surfaceCache, workstreamID] text in
+            surfaceCache.sendText(to: workstreamID, text: text)
+        }
     }
 
     private func createDiffBridgeIfNeeded() {
