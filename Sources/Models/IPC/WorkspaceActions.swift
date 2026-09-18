@@ -341,6 +341,13 @@ final class WorkspaceActions {
         // goes first, then the one rule that decides whether its close stops the
         // run. Unconditional on `wasOpen` would stop a run for a tab that was
         // already closed; `closingTabStopsRun` is what keeps it to the owner.
+        //
+        // Asked for every closeable kind rather than only Execution, which does
+        // mean closing a Changes tab creates that workstream's `RunSession` if
+        // nothing has yet. That is deliberate: gating on the kind here would be
+        // a second copy of the owner rule, which is the thing this call exists
+        // to avoid, and a session with no run is a few fields and one
+        // notification subscription.
         if wasOpen {
             surfaceCache?.runSession(for: workstreamID).stopIfTabOwnsRun(tab)
         }

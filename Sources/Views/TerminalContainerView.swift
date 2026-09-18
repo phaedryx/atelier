@@ -1475,6 +1475,18 @@ struct TerminalContainerView: View {
         restartRun()
     }
 
+    /// The cheap half of `restore`'s preconditions, asked before the expensive
+    /// one. `runStartContext` resolves `resolvedRunCommand`, which on the
+    /// process-compose branch parses the config's YAML, reads the selection
+    /// store and calls `ensureSocketDirectory` — and both callers here fire on
+    /// every `.onAppear` and every tool-detection change, most often with a run
+    /// already up or tmux off. `RunSession.restore` asks these again and is
+    /// still the authority; this only keeps the filesystem work behind them,
+    /// the way the guard it replaced did.
+    private var mayRestoreRun: Bool {
+        !session.runStarted && useTmux
+    }
+
     /// Everything the run session needs that only this view can resolve.
     ///
     /// **Nil is the whole of "there is nothing to run", and it is resolved
@@ -1608,7 +1620,7 @@ struct TerminalContainerView: View {
     /// `ProcessCompose.RunSession.restore`'s; the guards make re-invocation
     /// harmless on both sides.
     private func restoreRunState() {
-        guard let context = runStartContext else { return }
+        guard mayRestoreRun, let context = runStartContext else { return }
         session.restore(context)
     }
 

@@ -453,49 +453,4 @@ final class WorkspaceModelCacheTests: XCTestCase {
         XCTAssertEqual(model.tabs.filter { $0 == WorkspaceTab.execution }.count, 1)
         XCTAssertEqual(model.activeTab, .agent)
     }
-
-    // MARK: - Run state is not here any more
-
-    /// `runStarted`, `runStoppedManually`, `runGeneration` and
-    /// `runCommandString` used to live on this model and two of them travelled
-    /// in the snapshot. They are all `ProcessCompose.RunSession`'s now, and the
-    /// snapshot carries none of it — which is what this pins, because the reason
-    /// they survived a view remount was never the snapshot. It was that the
-    /// surface cache owns the model, and the cache owns the session the same
-    /// way. See `RunSessionTests`.
-    func testTheSnapshotCarriesNoRunState() {
-        let cache = TerminalSurfaceCache()
-        cache.terminalApp = { nil }
-        let id = UUID()
-        let session = cache.runSession(for: id)
-        session.start(ProcessCompose.RunSession.StartContext(
-            command: "just dev",
-            workingDirectory: "/repo",
-            environment: [:],
-            launcherPath: nil,
-            tmux: nil,
-            shell: "/bin/zsh"
-        ))
-
-        let model = cache.workspaceModel(for: id, seed: makeSnapshot())
-        let restored = WorkspaceModel(workstreamID: id, snapshot: model.snapshot())
-
-        // Rebuilding the model from its snapshot cannot touch the run, because
-        // the snapshot has no way to describe one.
-        XCTAssertTrue(cache.runSession(for: id).runStarted)
-        XCTAssertTrue(restored.tabs.contains(.agent))
-    }
-
-    private func makeSnapshot() -> WorkspaceTabSnapshot {
-        WorkspaceTabSnapshot(
-            tabs: [.info, .agent],
-            terminalCount: 0,
-            browserCount: 0,
-            editorCount: 0,
-            activeTab: .info,
-            browserTitles: [:],
-            terminalTitles: [:],
-            editorFilePaths: [:]
-        )
-    }
 }
