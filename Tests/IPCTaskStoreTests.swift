@@ -249,6 +249,36 @@ final class IPCTaskStoreTests: XCTestCase {
         guard case .completed = task?.state else { return XCTFail("a completed task must not be reverted") }
     }
 
+    /// The claim stores the workstream id as the agent's own environment spells
+    /// it — `ATELIER_WORKSTREAM_ID`, which `Workstream.Environment.variables`
+    /// exports **lowercased** — while the archive paths release by
+    /// `UUID.uuidString`, which Foundation spells **uppercase**. A
+    /// case-sensitive `==` between the two matches nothing, so purging a
+    /// workstream left its tasks claimed for the rest of the session: the exact
+    /// incident the queue was built to fix.
+    ///
+    /// The existing cases above cannot catch it — they claim and release with
+    /// the same string — so this one deliberately spells each side the way its
+    /// real producer does.
+    func test_releaseClaims_matchesTheWorkstreamIDCaseInsensitively() async throws {
+        let workstreamID = UUID()
+        _ = try await store.add(projectDirectory: projectA, path: "p", name: "n", content: "x", tags: [], createdBySurfaceID: nil)
+        _ = try await store.claim(
+            projectDirectory: projectA,
+            path: "p",
+            surfaceID: surfaceX,
+            // What `ATELIER_WORKSTREAM_ID` actually carries.
+            workstreamID: workstreamID.uuidString.lowercased()
+        )
+
+        // What `IPC.Service.releaseTaskClaims(inWorkstream:)` passes.
+        let reverted = await store.releaseClaims(inWorkstreamID: workstreamID.uuidString)
+
+        XCTAssertEqual(reverted.map(\.path), ["p"])
+        let task = await store.all(projectDirectory: projectA, pathPrefix: nil, tags: []).first
+        XCTAssertEqual(task?.state, .pending)
+    }
+
     func test_releaseClaims_searchesEveryProject() async throws {
         _ = try await store.add(projectDirectory: projectA, path: "p", name: "n", content: "x", tags: [], createdBySurfaceID: nil)
         _ = try await store.add(projectDirectory: projectB, path: "p", name: "n", content: "x", tags: [], createdBySurfaceID: nil)

@@ -2875,6 +2875,13 @@ final class TerminalSurfaceCache: ObservableObject {
         // the process.
         let model = workspaceModels[workstreamID]
         let session = runSessions[workstreamID]
+        // Before the session is dropped, because that is the last moment anything
+        // can reach it: a reclaim in flight retains the session through its own
+        // `Task`, so dropping it from here is not enough to stop the `beginRun`
+        // waiting on the far side — which would otherwise spawn a run surface
+        // into this cache, in a worktree that is being removed, with nothing left
+        // to evict it.
+        session?.teardown()
         workspaceModels.removeValue(forKey: workstreamID)
         runSessions.removeValue(forKey: workstreamID)
         if let runner = quickActionRunners.removeValue(forKey: workstreamID) {

@@ -258,6 +258,16 @@ final class AppEnvironment: ObservableObject {
     @MainActor
     func refreshBranchName(for worktreePath: String) async {
         let branch = await Task.detached { Git.Operations.currentBranch(at: worktreePath) }.value
+        // Nil keeps the last known branch — the rule `Worktree.Facts.Swept`
+        // states and `applying` enforces for the sweep's own answer, applied
+        // here so the single-field writers cannot contradict it. `currentBranch`
+        // answers nil for a **detached HEAD**, which is what the middle of a
+        // rebase or a bisect looks like, and this fires off the HeadWatcher on
+        // any git activity in the worktree — so an unconditional assignment
+        // wiped the branch out of the sidebar label, the PR badge and Copy
+        // Branch Name the moment a rebase started, and left them empty until the
+        // next successful probe.
+        guard let branch else { return }
         mutateFacts(for: worktreePath) { $0.branch = branch }
     }
 
@@ -278,7 +288,11 @@ final class AppEnvironment: ObservableObject {
     func refreshGitFacts(for worktreePath: String) async {
         let info = await Task.detached { Git.Operations.repoInfo(at: worktreePath) }.value
         mutateFacts(for: worktreePath) {
-            $0.branch = info.branch
+            // Carried forward when nil, for the reason `refreshBranchName`
+            // states: a detached HEAD is not "this worktree has no branch".
+            if let branch = info.branch {
+                $0.branch = branch
+            }
             $0.cleanliness = Worktree.Cleanliness(isDirty: info.isDirty, isDirtyUnknown: info.isDirtyUnknown)
         }
     }
@@ -434,6 +448,11 @@ final class AppEnvironment: ObservableObject {
         let path = worktreePath
         let projectDir = projectDirectory
         Task.detached {
+            // One dirtiness probe, feeding both fields — the same rule the sweep
+            // follows, stated there. This path runs no `repoInfo`, so the probe
+            // stays; what it must not do is write only half the pair and leave
+            // `cleanliness` reading whatever the last sweep found.
+            let dirty = Git.Operations.hasUncommittedChanges(at: path)
             let state = Worktree.State(
                 // Advisory UI only — this picks which quick action is offered, and
                 // unknown offers nothing. Both actions gated on these spawn work rather
@@ -442,19 +461,30 @@ final class AppEnvironment: ObservableObject {
                 // run to find nothing — and it sits ahead of push and openPR in the
                 // chain, so it would keep doing that. Not surfacing a shortcut costs the
                 // user a menu; nothing is lost or hidden.
-                hasUncommittedChanges: Git.Operations.hasUncommittedChanges(at: path) ?? false,
+                hasUncommittedChanges: dirty ?? false,
                 hasUnpushedCommits: Git.Operations.hasUnpushedCommits(at: path) ?? false,
                 hasBranchCommits: Git.Operations.hasBranchCommits(at: path, projectPath: projectDir) ?? false,
                 hasRemote: Git.Operations.hasRemote(at: path)
             )
-            await self.deferWorktreeStateUpdate(state, for: path)
+            await self.deferWorktreeStateUpdate(
+                state,
+                cleanliness: Worktree.Cleanliness(isDirty: dirty ?? false, isDirtyUnknown: dirty == nil),
+                for: path
+            )
         }
     }
 
-    private func deferWorktreeStateUpdate(_ state: Worktree.State, for path: String) {
+    private func deferWorktreeStateUpdate(
+        _ state: Worktree.State,
+        cleanliness: Worktree.Cleanliness,
+        for path: String
+    ) {
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 50_000_000)
-            self.mutateFacts(for: path) { $0.state = state }
+            self.mutateFacts(for: path) {
+                $0.state = state
+                $0.cleanliness = cleanliness
+            }
         }
     }
 
@@ -643,14 +673,14 @@ final class AppEnvironment: ObservableObject {
                 for (path, projectDir) in worktreeToProject {
                     group.addTask {
                         let state = Worktree.State(
-                            // Advisory UI only — this picks which quick action is offered, and
-                            // unknown offers nothing. Both actions gated on these spawn work rather
-                            // than a dialog: `.commit` runs `claude -p "Stage and commit all
-                            // changes"`, so suggesting it on a tree that may be clean spends an agent
-                            // run to find nothing — and it sits ahead of push and openPR in the
-                            // chain, so it would keep doing that. Not surfacing a shortcut costs the
-                            // user a menu; nothing is lost or hidden.
-                            hasUncommittedChanges: Git.Operations.hasUncommittedChanges(at: path) ?? false,
+                            // Filled in from `probes` below rather than probed here. It
+                            // is the same question `repoInfo`'s `isDirty` already
+                            // answered — the same `git status --porcelain
+                            // --ignore-submodules=dirty` — so asking twice was a second
+                            // spawn per worktree per tick whose answers could *disagree*,
+                            // and did: the Info tab renders the `cleanliness` half and
+                            // the quick-action menu renders this one.
+                            hasUncommittedChanges: false,
                             hasUnpushedCommits: Git.Operations.hasUnpushedCommits(at: path) ?? false,
                             hasBranchCommits: Git.Operations.hasBranchCommits(at: path, projectPath: projectDir) ?? false,
                             hasRemote: Git.Operations.hasRemote(at: path)
@@ -671,6 +701,19 @@ final class AppEnvironment: ObservableObject {
                 swept[path]?.cleanliness = probe.cleanliness
             }
             for (path, state) in worktreeStates {
+                var state = state
+                // The one dirtiness answer, taken from the `repoInfo` the probe
+                // group already ran. Folded in here rather than awaited inside the
+                // state group, so the two groups stay concurrent — sequencing them
+                // would turn a max() into a sum, per worktree, on a fifteen-second
+                // timer.
+                //
+                // `.unknown` maps to false, which is the mapping the deleted
+                // `?? false` made and for the reason stated where this used to be
+                // probed: this is advisory UI that picks which quick action is
+                // offered, both offers spawn work rather than a dialog, and unknown
+                // offering nothing costs the user a menu item.
+                state.hasUncommittedChanges = probes[path]?.cleanliness == .dirty
                 swept[path]?.state = state
             }
             let sweptFacts = swept

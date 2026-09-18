@@ -163,6 +163,9 @@ extension ProcessCompose {
         private let browserStartGrace: Duration
 
         private var browserStartTask: Task<Void, Never>?
+        /// The in-flight socket reclaim, held so a workstream being torn down can
+        /// cancel the `beginRun` waiting on the far side of it. See `teardown`.
+        private var reclaimTask: Task<Void, Never>?
         /// The `.terminalTabExited` registration, in a box that unregisters it
         /// when the session is released.
         ///
@@ -267,19 +270,43 @@ extension ProcessCompose {
             let worktree = context.workingDirectory
             let reclaim = reclaimSocket
             isReclaimingSocket = true
-            Task {
+            reclaimTask = Task { [weak self] in
                 // Cleared however this ends — a thrown or cancelled Task that
                 // left the flag set would make Start permanently inert for this
                 // workstream, which is worse than the double-press it prevents.
-                defer { isReclaimingSocket = false }
+                defer { self?.isReclaimingSocket = false }
                 // `down` spawns a child and waits on it, so it stays off the
                 // main actor. The run begins once the socket is free, not
                 // before: that ordering is the whole point.
                 await Task.detached {
                     reclaim(binary, socketPath, worktree)
                 }.value
+                // Checked explicitly rather than with `checkCancellation`:
+                // cancellation does not propagate into the detached child above,
+                // so the only place it can be observed is here, on the way back
+                // out. Without `teardown` and this guard the session was retained
+                // by its own `Task` — `removeWorkstreamSurfaces` drops it from
+                // the cache without stopping it — and `beginRun` then spawned a
+                // run surface (cwd = a worktree that is being deleted) into the
+                // long-lived surface cache with nothing left to evict it.
+                guard !Task.isCancelled, let self else { return }
                 beginRun(context)
             }
+        }
+
+        /// Cancels anything this session has in flight, for a workstream that is
+        /// going away.
+        ///
+        /// Called by `TerminalSurfaceCache.removeWorkstreamSurfaces` *before* the
+        /// session is dropped, which is the only moment it can still be reached.
+        /// Deliberately not `stop()`: the archive paths already kill the tmux
+        /// session and sweep the surfaces, and a `stop()` here would bump the
+        /// generation the sweep is about to read.
+        func teardown() {
+            reclaimTask?.cancel()
+            reclaimTask = nil
+            browserStartTask?.cancel()
+            browserStartTask = nil
         }
 
         /// Rerun: stop what is running, then go through `start`.
@@ -314,7 +341,17 @@ extension ProcessCompose {
             // Ensure rather than activate: the browser tab the user just asked
             // for must keep focus.
             ensureExecutionTab()
-            killRunTmuxSession()
+            // Both the session this run recorded *and* the one this run is about
+            // to start in. The recorded one is usually the only one there is, but
+            // it is nil on the first Start of a launch — and a tmux session from
+            // the *previous* launch can still be alive then, because `restore`
+            // returns early whenever the view cannot resolve a command (an empty
+            // execute selection, an unresolvable binary) and so never records
+            // one. `TmuxSession.wrapCommand` uses `new-session -A`, so without
+            // this the run silently *reattaches* to that old server, still
+            // running the old selection, while `runStarted` flips true and the
+            // selection the user just made never starts.
+            killRunTmuxSession(alsoKilling: context.tmux)
             removeSurface(runID)
             tmux = context.tmux
             runStoppedManually = false
@@ -539,9 +576,21 @@ extension ProcessCompose {
             createSurface(runID, commandString, context.workingDirectory, context.environment)
         }
 
-        private func killRunTmuxSession() {
-            guard let tmux else { return }
-            killTmuxSession(tmux.path, tmux.sessionName)
+        /// Kills the recorded run session, and optionally one more.
+        ///
+        /// `stop()` passes nothing, deliberately: killing only what `beginRun`
+        /// recorded is what makes it self-contained enough for
+        /// `WorkspaceActions` to call with no view mounted, and strictly more
+        /// correct than the live tmux read it replaced. `beginRun` is the one
+        /// caller that also knows the session it is *about* to use — see its
+        /// own comment.
+        private func killRunTmuxSession(alsoKilling incoming: TmuxContext? = nil) {
+            if let tmux {
+                killTmuxSession(tmux.path, tmux.sessionName)
+            }
+            if let incoming, incoming != tmux {
+                killTmuxSession(incoming.path, incoming.sessionName)
+            }
         }
 
         // MARK: - The rules

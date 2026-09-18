@@ -84,14 +84,40 @@ final class IPCToolRegistryTests: XCTestCase {
         }
     }
 
-    /// `close_tab` refuses Execution by name rather than closing it — closing
-    /// that tab also stops the dev stack, which `WorkspaceActions` cannot do —
-    /// so the advertised list must not offer it.
-    func test_closeTab_doesNotAdvertiseExecution() {
+    /// `close_tab` closes **every** singleton, Execution included — it was
+    /// refused only while stopping a run meant reaching view-local `@State`,
+    /// and `ProcessCompose.RunSession` owns that now. So the advertised list
+    /// must offer all three.
+    ///
+    /// This test pinned the opposite for a release: the code had accepted
+    /// Execution since `RunSession` landed (`testExecutionClosesAndStopsTheRun`
+    /// pins it) while the prose here, in the tool description and in the
+    /// helper's own server instructions all still told an agent it was refused
+    /// and that the tool could not stop a dev server. An agent acting on that
+    /// would take down the user's dev stack believing the call was inert, which
+    /// is why the safety half is asserted too rather than just the kind.
+    func test_closeTab_advertisesEverySingletonIncludingExecution() {
         let description = IPC.Tool.closeTab.spec.arguments.first { $0.name == "kind" }?.description
-        XCTAssertEqual(description?.contains("\"changes\""), true)
-        XCTAssertEqual(description?.contains("\"verification\""), true)
-        XCTAssertEqual(description?.contains("\"execution\""), false, "execution is refused, so it must not be offered")
+        for kind in IPC.Vocabulary.TabKind.allCases {
+            XCTAssertEqual(
+                description?.contains("\"\(kind.rawValue)\""),
+                true,
+                "close_tab's schema does not offer \(kind.rawValue)"
+            )
+        }
+    }
+
+    /// And the tool's own description must say that closing Execution stops the
+    /// dev stack. The kind being offered is not enough on its own: an agent
+    /// closing a tab to tidy up needs to know this one has a side effect the
+    /// others do not.
+    func test_closeTab_warnsThatClosingExecutionStopsTheRun() {
+        let description = IPC.Tool.closeTab.spec.description.lowercased()
+        XCTAssertTrue(description.contains("execution"))
+        XCTAssertTrue(
+            description.contains("stops") && description.contains("dev stack"),
+            "close_tab must tell an agent that closing execution stops the dev stack"
+        )
     }
 
     // MARK: - Decoding

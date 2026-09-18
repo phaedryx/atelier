@@ -4,7 +4,9 @@
 import SwiftUI
 
 /// The editor's file navigator: a lazily-loaded tree of the worktree, with
-/// vscicons file icons, git status colors and dimmed gitignored entries.
+/// Material Icon Theme file icons, git status colors and dimmed gitignored
+/// entries. (It credited vscicons until #175 swapped the vendored theme out;
+/// `Resources/material-icon-theme-LICENSE.txt` is the bundled licence.)
 ///
 /// `List(selection:)` over `DisclosureGroup`, the shape `ChangesFileTreeSidebar`
 /// already uses — its own comment names this tree as the one that had no keyboard
@@ -34,14 +36,18 @@ struct FileTreeView: View {
     /// not be walked past one either. nil means "wherever the open file is", which
     /// is what every change of `selectedPath` puts it back to.
     ///
-    /// It is deliberately *not* cleared when the owner refuses a file. Doing that
-    /// needs a comparison against `selectedPath`, and inside the same update pass
-    /// that `onSelect` was called from, `selectedPath` is still the old value — so
-    /// the clear fired on *accepted* selections too and broke the arrow walk it
-    /// was meant to protect (measured: two rows on one press, none on the next).
-    /// What is left after a refused click is the open file tinted and the cursor
-    /// resting on the row that was declined, which the next keypress or click
-    /// resolves.
+    /// It **is** cleared when the owner refuses a file, by the `.onChange(of:
+    /// cursor)` below — so the tree cannot show a selection the editor does not
+    /// have. That clear rests on a coupling worth stating, because nothing at
+    /// either site declares it: `EditorView.navigateToFile` sets
+    /// `currentFilePath` **synchronously**, so by the time the change handler
+    /// runs, an *accepted* selection has already moved `selectedPath` and the
+    /// `newCursor != selectedPath` guard leaves it alone. A refusal
+    /// (`handleFileSelection` putting up the save alert) moves nothing, so the
+    /// guard passes and the cursor drops back to the open file. Make that
+    /// assignment asynchronous — a `Task`, a debounce, an animation — and the
+    /// clear starts firing on accepted selections too, which breaks the arrow
+    /// walk it exists to protect: two rows on one press, none on the next.
     @State private var cursor: String?
 
     var body: some View {
@@ -59,6 +65,17 @@ struct FileTreeView: View {
                 // rest, never something to hand to the editor: `onSelect` reaches
                 // `navigateToFile`, which would report a directory as a file that
                 // could not be read.
+                //
+                // This fires for *every* way the selection moves, the arrow keys
+                // included — so walking the list opens each file it passes over,
+                // rather than only the one the user settles on. That is what a
+                // `List(selection:)` gives, and it is stated here rather than
+                // worked around: opening is cheap (a read plus a Monaco model
+                // swap), and the alternative — a commit gesture, so the arrows
+                // move a cursor that Return then opens — is a different
+                // interaction than the one this tree shipped with. A dirty file
+                // is the case that bites, and it is already handled: the owner
+                // refuses, the save alert goes up, and the cursor drops back.
                 if let newValue, !isDirectory(newValue) {
                     onSelect(newValue)
                 }
@@ -94,8 +111,10 @@ struct FileTreeView: View {
             // `selectedPath` never moved. Dropping the cursor puts it back on the
             // file that is actually open, so the tree cannot show a selection the
             // editor does not have. An *accepted* selection has already updated
-            // `selectedPath` by the time this runs, so it is left alone — verified
-            // by clicking a file with the owner refusing and then accepting.
+            // `selectedPath` by the time this runs, so it is left alone — which
+            // holds only because `navigateToFile` writes it synchronously. See
+            // `cursor`'s own comment; verified by clicking a file with the owner
+            // refusing and then accepting.
             guard let newCursor, newCursor != selectedPath, !isDirectory(newCursor) else { return }
             cursor = nil
         }
