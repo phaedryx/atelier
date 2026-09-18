@@ -698,13 +698,15 @@ final class IPCServerTests: XCTestCase {
             #"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_peers","arguments":{}}}"#,
             #"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"check_verification","arguments":{"run_id":"v7f3a11c"}}}"#,
             #"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"list_verification_checks","arguments":{}}}"#,
+            #"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"add_task","arguments":{"path":"p","name":"n","content":"c"}}}"#,
+            #"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"get_pending_tasks","arguments":{}}}"#,
         ]
         input.fileHandleForWriting.write(Data((requests.joined(separator: "\n") + "\n").utf8))
 
         var replies: [[String: Any]] = []
         var buffer = Data()
         let deadline = Date().addingTimeInterval(10)
-        while replies.count < 5, Date() < deadline {
+        while replies.count < 7, Date() < deadline {
             buffer.append(output.fileHandleForReading.availableData)
             let (lines, remainder) = IPC.Framing.lines(from: buffer)
             buffer = remainder
@@ -714,7 +716,7 @@ final class IPCServerTests: XCTestCase {
                 }
             }
         }
-        XCTAssertEqual(replies.count, 5, "helper did not answer all five requests")
+        XCTAssertEqual(replies.count, 7, "helper did not answer all seven requests")
 
         let initialize = try XCTUnwrap(replies.first?["result"] as? [String: Any])
         XCTAssertEqual(initialize["protocolVersion"] as? String, "2025-06-18")
@@ -728,6 +730,7 @@ final class IPCServerTests: XCTestCase {
                 "list_tabs", "read_review_comments", "open_editor", "open_tab", "open_agent_tab", "request_attention",
                 "create_workstream", "start_verification", "check_verification",
                 "list_verification_checks",
+                "add_task", "get_pending_tasks", "list_tasks", "claim_task", "complete_task", "fail_task",
             ]
         )
         // Every advertised name must be a real `IPC.Tool`. `toolDefinitions` and
@@ -745,8 +748,8 @@ final class IPCServerTests: XCTestCase {
         let undefined = IPC.Tool.allCases.map(\.rawValue).filter { !advertised.contains($0) }
         XCTAssertEqual(
             undefined.sorted(),
-            ["add_task", "claim_task", "complete_task", "fail_task", "get_pending_tasks", "list_tasks"],
-            "task queue tools are not yet implemented; they are declared but not advertised until their handlers land"
+            [],
+            "every IPC.Tool case should now be advertised"
         )
 
         let call = try XCTUnwrap(replies[2]["result"] as? [String: Any])
@@ -790,6 +793,13 @@ final class IPCServerTests: XCTestCase {
         XCTAssertTrue(listed.contains("rspec: bundle exec rspec"), listed)
         // The list is only useful if it says what to do with it.
         XCTAssertTrue(listed.contains("start_verification"), listed)
+
+        let addTaskResult = try XCTUnwrap((replies[5]["result"] as? [String: Any])?["content"] as? [[String: Any]])
+        XCTAssertFalse((replies[5]["result"] as? [String: Any])?["isError"] as? Bool ?? true, "add_task should not error")
+        XCTAssertNotNil(addTaskResult.first?["text"])
+
+        let pendingText = try XCTUnwrap(((replies[6]["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String)
+        XCTAssertTrue(pendingText.contains("p"), "get_pending_tasks should list the task just added, got: \(pendingText)")
     }
 }
 

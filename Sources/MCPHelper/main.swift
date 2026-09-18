@@ -439,6 +439,96 @@ let toolDefinitions: [ToolDefinition] = [
         properties: [:],
         required: []
     ),
+    ToolDefinition(
+        tool: .addTask,
+        description: """
+        Add a task to this project's shared queue, for any peer in the project
+        to claim and work on. Use this instead of hand-dispatching work to
+        individual workstreams when you have several similar units of work —
+        findings from an audit, files needing the same fix — so peers can pull
+        the next one instead of you assigning each by hand.
+
+        `path` is the task's permanent identifier: choose something
+        hierarchical and unique, e.g. "audit-2026-09/finding-3". Calling
+        add_task again with a path that already exists is refused rather than
+        replayed automatically after a lost connection, so if you see
+        "already exists" after a timeout, check list_tasks before retrying —
+        your first call likely already succeeded.
+        """,
+        properties: [
+            "path": ["type": "string", "description": "Unique identifier for this task within the project, e.g. \"audit-2026-09/finding-3\"."],
+            "name": ["type": "string", "description": "Short display name."],
+            "content": ["type": "string", "description": "The brief: what needs doing. Up to 64KB."],
+            "tags": ["type": "string", "description": "Optional comma-separated tags, for filtering with get_pending_tasks/list_tasks."],
+        ],
+        required: ["path", "name", "content"]
+    ),
+    ToolDefinition(
+        tool: .getPendingTasks,
+        description: """
+        List unclaimed tasks in this project's queue — the ones nobody has
+        started yet. Call this when you're free and want the next thing to
+        work on. Omit path_prefix to see every pending task.
+        """,
+        properties: [
+            "path_prefix": ["type": "string", "description": "Only tasks whose path starts with this. Omit for every pending task in the project."],
+            "tags": ["type": "string", "description": "Optional comma-separated tags — a task must have ALL of them to match. Omit for no filtering."],
+        ],
+        required: []
+    ),
+    ToolDefinition(
+        tool: .listTasks,
+        description: """
+        List every task in this project's queue regardless of state —
+        pending, claimed, completed, or failed. Use this for an overview of
+        the whole queue's progress; use get_pending_tasks when you just want
+        the next thing to claim.
+        """,
+        properties: [
+            "path_prefix": ["type": "string", "description": "Only tasks whose path starts with this. Omit for every task in the project."],
+            "tags": ["type": "string", "description": "Optional comma-separated tags — a task must have ALL of them to match. Omit for no filtering."],
+        ],
+        required: []
+    ),
+    ToolDefinition(
+        tool: .claimTask,
+        description: """
+        Claim a pending task so no other peer works on it too. Only one claim
+        wins — calling this again yourself on a task you already hold is a
+        safe no-op; calling it on a task someone else holds is refused,
+        naming them. Requires a surface to attach ownership to, so this only
+        works from an agent Atelier launched.
+        """,
+        properties: [
+            "path": ["type": "string", "description": "The task's path, from add_task or get_pending_tasks."],
+        ],
+        required: ["path"]
+    ),
+    ToolDefinition(
+        tool: .completeTask,
+        description: """
+        Mark a task you hold as done. Only the peer that claimed it may
+        complete it — calling this on someone else's claim, or a task nobody
+        claimed, is refused. The task's creator is notified in its inbox.
+        """,
+        properties: [
+            "path": ["type": "string", "description": "The task's path."],
+        ],
+        required: ["path"]
+    ),
+    ToolDefinition(
+        tool: .failTask,
+        description: """
+        Mark a task you hold as failed, with a reason. Only the peer that
+        claimed it may fail it. The task's creator is notified in its inbox,
+        including your reason.
+        """,
+        properties: [
+            "path": ["type": "string", "description": "The task's path."],
+            "reason": ["type": "string", "description": "Why it failed. Required, and shown to the task's creator."],
+        ],
+        required: ["path", "reason"]
+    ),
 ]
 
 /// Shown to the agent once, at initialize.
@@ -456,6 +546,8 @@ open_tab opens this workstream's Changes, Execution or Verification pane, which 
 open_agent_tab opens a terminal tab in your workstream, and with a prompt it starts another agent there. That agent shares your worktree, so give it work that collaborates on the change you are already making — a reviewer, a test-writer, a second pair of hands on the same branch. Work that belongs on its own branch needs its own workstream, not a tab. Poll list_tabs for the new surface's peer id before trying to message it.
 
 create_workstream is the exception to that: it makes a NEW workstream, with its own worktree and its own branch, and with a prompt it starts an agent in that workstream's Coding Agent tab. Reach for it when the work needs a branch of its own, and for open_agent_tab when it belongs on yours.
+
+add_task/get_pending_tasks/list_tasks/claim_task/complete_task/fail_task are a shared, project-scoped work queue — add several units of work once, and any peer in the project can claim, complete, or fail them, instead of you dispatching each by hand. Claiming is exclusive: only one peer wins, and it needs a surface to attach to, so this only works from an agent Atelier launched. Completing or failing a task notifies whoever created it.
 
 list_verification_checks names the checks this project declares and the command each one runs, without running anything — the declarations live outside your worktree, so this is how you find out what is there. start_verification then runs the project's checks against your worktree and answers with a run id rather than a result — a real suite outlives a tool call. Each check's verdict arrives in your inbox from atelier/verification as that check finishes; that is a reserved sender inside Atelier and not a peer you can reply to. If you are this workstream's Coding Agent, you will also get these for runs the user starts in the Verification tab. check_verification(run_id) reads the whole run whenever you want, so you are never stuck waiting for a message that has not arrived.
 
@@ -582,15 +674,32 @@ func renderText(_ payload: IPC.Payload?) -> String {
                 + "or any subset by naming them."
         )
         return lines.joined(separator: "\n")
-    case .task:
-        return "(task rendering not yet implemented)"
-    case .tasks:
-        return "(tasks rendering not yet implemented)"
+    case let .task(task):
+        return renderTask(task)
+    case let .tasks(list):
+        guard !list.isEmpty else { return "No tasks match." }
+        return list.map(renderTask).joined(separator: "\n\n")
     case let .text(text):
         return text
     case nil:
         return ""
     }
+}
+
+/// Renders one task for the plain text an agent reads.
+func renderTask(_ task: IPC.TaskInfo) -> String {
+    var lines = ["\(task.path) [\(task.state.rawValue)] \(task.name)"]
+    lines.append("created \(task.createdSecondsAgo)s ago" + (task.createdByName.map { " by \($0)" } ?? ""))
+    if let claimedByName = task.claimedByName, let claimedSecondsAgo = task.claimedSecondsAgo {
+        lines.append("claimed by \(claimedByName) \(claimedSecondsAgo)s ago")
+    }
+    if !task.tags.isEmpty {
+        lines.append("tags: \(task.tags.joined(separator: ", "))")
+    }
+    if let reason = task.failureReason {
+        lines.append("failure reason: \(reason)")
+    }
+    return lines.joined(separator: "\n")
 }
 
 func toolResult(id: Any, text: String, isError: Bool = false) {
