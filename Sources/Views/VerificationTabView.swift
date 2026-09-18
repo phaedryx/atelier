@@ -266,17 +266,54 @@ struct VerificationTabView: View {
         )
     }
 
+    /// Why nothing can run yet, as the platform's own empty state.
+    ///
+    /// **The reason reaches the screen verbatim.** `Text(reason)` binds the
+    /// `StringProtocol` overload rather than the `LocalizedStringKey` one, so
+    /// `Verification.Config.Load.unavailableReason`'s own wording is *shown*
+    /// rather than looked up a second time under itself as a key. That is the
+    /// rule `IPC.VerificationCheckInfo` keeps at the other end of this feature —
+    /// an agent and its human are told the same thing about the same file — and
+    /// it is why nothing here reformats the string, appends to it, or wraps it
+    /// in a sentence of its own. The title is a literal, so it still resolves
+    /// through `Localizable.strings` as it always did.
+    ///
+    /// **Centred, where this was `.topLeading`, and deliberately so.** All three
+    /// reasons that reach this view are facts about one file — missing,
+    /// unreadable, declaring nothing — which is exactly the situation
+    /// `ExecutionTabView.scriptInstructions` already draws for
+    /// `execution.process-compose.yaml`: a glyph over a title over a smaller
+    /// explanation, centred in the pane. The two config panes now read the same
+    /// way round, where before only one of them did.
+    ///
+    /// **`doc.text`, and not a checklist glyph.** A checklist would claim the
+    /// file has checks in it, which is the one thing none of these three states
+    /// is true of. It is also the glyph the sibling pane uses for the same
+    /// this-file-is-not-usable situation.
+    ///
+    /// **The `label:`/`description:` form, to keep the app's type scale.**
+    /// `ContentUnavailableView`'s convenience initializer sizes itself for a
+    /// full window — a ~28pt title — and this is a tab pane in an app whose
+    /// body text is 11–13pt, so the native scale reads as a different app's
+    /// empty state dropped into the strip. The builder form keeps the
+    /// component's layout, spacing and accessibility while taking the 28/13/11
+    /// scale `scriptInstructions` already uses. `reason` is left to wrap on its
+    /// own: the `.invalid` case interpolates a parser error carrying a path, and
+    /// a ~250-character one wraps to four lines here with nothing truncated,
+    /// which is what the `.fixedSize` this replaced was for.
     private func unavailableView(reason: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Nothing to verify")
-                .font(.system(size: 13, weight: .medium))
+        ContentUnavailableView {
+            Label {
+                Text("Nothing to verify")
+                    .font(.system(size: 13))
+            } icon: {
+                Image(systemName: "doc.text")
+                    .font(.system(size: 28))
+            }
+        } description: {
             Text(reason)
                 .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     // MARK: - Actions
