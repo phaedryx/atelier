@@ -451,6 +451,59 @@ final class WorkspaceActions {
         )
     }
 
+    /// What the execution bridge needs to resolve and start a run headlessly.
+    ///
+    /// Its own type rather than `VerificationTarget`, which is named for what it
+    /// is for and carries none of the run-specific facts. Resolved through
+    /// `resolve` rather than `context(workstreamID:)` for the reason
+    /// `verificationTarget` gives: a run has nothing to do with a workstream's
+    /// tabs, and demanding them would make a read fail wherever the workspace is
+    /// not up.
+    struct ExecutionTarget: Sendable {
+        let workstreamID: UUID
+        let workstreamName: String
+        let projectName: String
+        /// `Project.directory` — the repository's home, never its checkout, which
+        /// is what `ProcessCompose.Config.locate` and `ports.yaml` depend on.
+        let projectDirectory: String
+        let worktreePath: String
+        let defaultBranch: String
+        /// The user's per-workstream dev-command override, which
+        /// `ProcessCompose.ResolutionModel.resolve` needs and cannot read itself.
+        /// The same value `TerminalContainerView.init` seeds its own state with,
+        /// so a headless resolution sees exactly what the pane does.
+        let devCommandOverride: String?
+        /// Nil when tmux mode is off or tmux is not installed, in which case the
+        /// run is not wrapped — and the session records that, which is what lets
+        /// `stop()` kill the right session later.
+        let tmuxPath: String?
+        let launcherPath: String?
+        let shell: String
+    }
+
+    func executionTarget(workstreamID: UUID) throws -> ExecutionTarget {
+        guard let projectList else { throw Failure.appNotReady }
+        guard let found = Self.resolve(workstreamID: workstreamID, in: projectList.items) else {
+            throw Failure.unknownWorkstream
+        }
+        // The same expression `agentTabPlan`'s neighbours already use for this
+        // pair; keeping one spelling is what stops an agent-started run being
+        // unwrapped while the user's own is in tmux.
+        let tmuxMode = UserDefaults.standard.bool(forKey: "atelier.tmuxMode")
+        return ExecutionTarget(
+            workstreamID: workstreamID,
+            workstreamName: found.workstream.name,
+            projectName: found.project.name,
+            projectDirectory: found.project.directory,
+            worktreePath: found.workstream.workingDirectory(checkout: found.project.checkout),
+            defaultBranch: Git.Operations.defaultBranch(at: found.project.checkout),
+            devCommandOverride: DevCommand.Resolver.savedOverride(for: workstreamID),
+            tmuxPath: tmuxMode ? appEnvironment?.toolStatus.tmux.path : nil,
+            launcherPath: RunLauncher.executableURL()?.path,
+            shell: CommandBuilder.userShell
+        )
+    }
+
     func agentTabPlan(workstreamID: UUID) throws -> AgentTabPlan {
         let context = try context(workstreamID: workstreamID)
         return AgentTabPlan(
