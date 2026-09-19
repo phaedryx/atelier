@@ -382,7 +382,6 @@
 "Push" = "Push";
 "Create PR" = "Create PR";
 "Close PR" = "Close PR";
-"Open #%d" = "Open #%d";
 "This branch has been merged." = "This branch has been merged.";
 "gh CLI is not installed." = "gh CLI is not installed.";
 "Claude Code is not installed." = "Claude Code is not installed.";
