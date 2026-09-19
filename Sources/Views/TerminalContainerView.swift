@@ -759,32 +759,6 @@ struct TerminalContainerView: View {
                 )
             }
             .fixedSize()
-
-            if let pr = branchPR, let url = URL(string: pr.url) {
-                let prColor = pr.status.color
-                Button(action: { NSWorkspace.shared.open(url) }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: pr.status.symbolName)
-                            .font(.system(size: 11))
-                        if pr.checks != .none {
-                            Image(systemName: pr.checks.symbolName)
-                                .font(.system(size: 9))
-                                .foregroundStyle(pr.checks.color)
-                        }
-                        Text(verbatim: "#\(pr.number)")
-                            .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(prColor.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
-                    .foregroundStyle(prColor)
-                }
-                .buttonStyle(.borderless)
-                .help(pr.title)
-                .accessibilityLabel(Text(verbatim: "Pull request #\(pr.number)"))
-                .accessibilityHint(pr.title)
-            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
@@ -1378,6 +1352,19 @@ struct TerminalContainerView: View {
                                     .labelStyle(.iconOnly)
                             }
                             .help("Open on GitHub")
+                        }
+
+                        // A sibling of the repo button above, never nested
+                        // inside it: that `if let` is keyed on
+                        // `githubURL(for:)`, which is filled only by
+                        // `refreshGitHubInfo` and keyed by the project's
+                        // *checkout*, so gating anything on it hides it
+                        // outright for every container-layout project. The
+                        // branch button in the sidebar shipped invisible that
+                        // way once. `branchPR` is keyed `"dir|branch"` and has
+                        // no such dependency.
+                        if let pr = branchPR {
+                            PRStatusBadge(pr: pr)
                         }
 
                         GitHubActionMenu(
@@ -2050,6 +2037,50 @@ private struct WorkspaceTabDropDelegate: DropDelegate {
     }
 }
 
+/// The pull request's state, at a glance, and a click that opens it.
+///
+/// Deliberately separate from `GitHubActionMenu` beside it: the menu answers
+/// "what is the next thing to do", which is a fact about the *worktree*, and
+/// this answers "what state is the PR in", which is a fact about the *branch*.
+/// That is also why this is the only surface for a merged PR — `primaryAction`
+/// returns nil once there is nothing left to do, so the menu disappears and
+/// this badge is what is left.
+///
+/// Not unified with `ProjectSidebar`'s `PRBadge`: the shared part is the colour
+/// and glyph lookup in `GitHubPRStatusStyle.swift`, and each surface draws for
+/// its own row height.
+private struct PRStatusBadge: View {
+    let pr: GitHub.PR
+
+    var body: some View {
+        if let url = URL(string: pr.url) {
+            let prColor = pr.status.color
+            Button(action: { NSWorkspace.shared.open(url) }) {
+                HStack(spacing: 4) {
+                    Image(systemName: pr.status.symbolName)
+                        .font(.system(size: 11))
+                    if pr.checks != .none {
+                        Image(systemName: pr.checks.symbolName)
+                            .font(.system(size: 9))
+                            .foregroundStyle(pr.checks.color)
+                    }
+                    Text(verbatim: "#\(pr.number)")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(prColor.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .foregroundStyle(prColor)
+            }
+            .buttonStyle(.borderless)
+            .help(pr.title)
+            .accessibilityLabel(Text(verbatim: "Pull request #\(pr.number)"))
+            .accessibilityHint(pr.title)
+        }
+    }
+}
+
 private struct GitHubActionMenu: View {
     @ObservedObject var runner: QuickAction.Runner
     let claudePath: String?
@@ -2074,50 +2105,54 @@ private struct GitHubActionMenu: View {
     }
 
     /// The most relevant next action to move the workflow forward.
-    private var primaryAction: PrimaryAction? {
+    ///
+    /// Opening the PR is deliberately not one of them: `PRStatusBadge` sits two
+    /// points away in the same toolbar group and is the affordance for that, so
+    /// offering it here as well would put `#3306` beside `Open #3306`. The
+    /// consequence is that an open PR over a clean tree leaves nothing here at
+    /// all — the badge is the whole surface, and Close PR is reached from the
+    /// command palette, which carries every `QuickAction` regardless of repo
+    /// state for exactly this reason.
+    private var primaryAction: QuickAction? {
         if isMerged {
             return nil
         }
         if hasOpenPR {
             if worktreeState.hasUncommittedChanges {
-                return .quickAction(.commit)
+                return .commit
             }
             if worktreeState.hasUnpushedCommits, worktreeState.hasRemote {
-                return .quickAction(.push)
-            }
-            if let pr = branchPR {
-                return .openPR(pr)
+                return .push
             }
         }
         if prState == nil, hasGitHubRemote, worktreeState.hasBranchCommits {
-            return .quickAction(.createPR)
+            return .createPR
         }
         if worktreeState.hasUncommittedChanges {
-            return .quickAction(.commit)
+            return .commit
         }
         if worktreeState.hasUnpushedCommits, worktreeState.hasRemote {
-            return .quickAction(.push)
+            return .push
         }
         return nil
     }
 
     /// Secondary actions shown in the dropdown, excluding the primary.
-    private var secondaryActions: [PrimaryAction] {
+    private var secondaryActions: [QuickAction] {
         guard let primary = primaryAction else { return [] }
-        var actions: [PrimaryAction] = []
+        var actions: [QuickAction] = []
 
         if worktreeState.hasUncommittedChanges {
-            actions.append(.quickAction(.commit))
+            actions.append(.commit)
         }
         if worktreeState.hasUnpushedCommits, worktreeState.hasRemote {
-            actions.append(.quickAction(.push))
+            actions.append(.push)
         }
         if prState == nil, hasGitHubRemote, worktreeState.hasBranchCommits {
-            actions.append(.quickAction(.createPR))
+            actions.append(.createPR)
         }
-        if let pr = branchPR, hasOpenPR {
-            actions.append(.openPR(pr))
-            actions.append(.quickAction(.closePR))
+        if hasOpenPR {
+            actions.append(.closePR)
         }
 
         return actions.filter { $0 != primary }
@@ -2165,43 +2200,22 @@ private struct GitHubActionMenu: View {
         )
     }
 
-    private func executePrimary(_ action: PrimaryAction) {
-        guard !isRunning else { return }
-        switch action {
-        case let .quickAction(qa):
-            runAction(qa)
-        case let .openPR(pr):
-            if let url = URL(string: pr.url) {
-                NSWorkspace.shared.open(url)
-            }
-        }
-    }
-
     @ViewBuilder
-    private func label(for action: PrimaryAction) -> some View {
-        switch action {
-        case let .quickAction(qa):
-            if isRunningAction(qa) {
-                ProgressView()
-                    .controlSize(.mini)
-            } else if case .succeeded = resultState(for: qa) {
-                Label(qa.label, systemImage: "checkmark.circle.fill")
-                    .labelStyle(.titleAndIcon)
-                    .foregroundStyle(.green)
-            } else if case .failed = resultState(for: qa) {
-                Label(qa.label, systemImage: "xmark.circle.fill")
-                    .labelStyle(.titleAndIcon)
-                    .foregroundStyle(.red)
-            } else {
-                Label(qa.label, systemImage: qa.icon)
-                    .labelStyle(.titleAndIcon)
-            }
-        case let .openPR(pr):
-            Label(
-                String(format: NSLocalizedString("Open #%d", comment: ""), pr.number),
-                systemImage: "arrow.up.forward"
-            )
-            .labelStyle(.titleAndIcon)
+    private func label(for action: QuickAction) -> some View {
+        if isRunningAction(action) {
+            ProgressView()
+                .controlSize(.mini)
+        } else if case .succeeded = resultState(for: action) {
+            Label(action.label, systemImage: "checkmark.circle.fill")
+                .labelStyle(.titleAndIcon)
+                .foregroundStyle(.green)
+        } else if case .failed = resultState(for: action) {
+            Label(action.label, systemImage: "xmark.circle.fill")
+                .labelStyle(.titleAndIcon)
+                .foregroundStyle(.red)
+        } else {
+            Label(action.label, systemImage: action.icon)
+                .labelStyle(.titleAndIcon)
         }
     }
 
@@ -2209,35 +2223,21 @@ private struct GitHubActionMenu: View {
         if let primary = primaryAction {
             let secondary = secondaryActions
             if secondary.isEmpty {
-                Button { executePrimary(primary) } label: { label(for: primary) }
-                    .disabled(isRunning || primaryDisabled(primary))
+                Button { runAction(primary) } label: { label(for: primary) }
+                    .disabled(isRunning || disabledReason(for: primary) != nil)
                     .help(primaryHelp(primary))
             } else {
                 Menu {
                     ForEach(secondary) { action in
-                        switch action {
-                        case let .quickAction(qa):
-                            Button { runAction(qa) } label: {
-                                Label(qa.label, systemImage: qa.icon)
-                            }
-                            .disabled(isRunning || disabledReason(for: qa) != nil)
-                        case let .openPR(pr):
-                            Button {
-                                if let url = URL(string: pr.url) {
-                                    NSWorkspace.shared.open(url)
-                                }
-                            } label: {
-                                Label(
-                                    String(format: NSLocalizedString("Open #%d", comment: ""), pr.number),
-                                    systemImage: "arrow.up.forward"
-                                )
-                            }
+                        Button { runAction(action) } label: {
+                            Label(action.label, systemImage: action.icon)
                         }
+                        .disabled(isRunning || disabledReason(for: action) != nil)
                     }
                 } label: {
                     label(for: primary)
                 } primaryAction: {
-                    executePrimary(primary)
+                    runAction(primary)
                 }
                 .disabled(isRunning)
                 .menuIndicator(.hidden)
@@ -2246,34 +2246,8 @@ private struct GitHubActionMenu: View {
         }
     }
 
-    private func primaryDisabled(_ action: PrimaryAction) -> Bool {
-        if case let .quickAction(qa) = action {
-            return disabledReason(for: qa) != nil
-        }
-        return false
-    }
-
-    private func primaryHelp(_ action: PrimaryAction) -> String {
-        if case let .quickAction(qa) = action {
-            return disabledReason(for: qa) ?? qa.label
-        }
-        if case let .openPR(pr) = action {
-            return pr.title
-        }
-        return ""
-    }
-}
-
-/// Represents either a quick action or opening a PR in the browser.
-private enum PrimaryAction: Equatable, Identifiable {
-    case quickAction(QuickAction)
-    case openPR(GitHub.PR)
-
-    var id: String {
-        switch self {
-        case let .quickAction(qa): qa.id
-        case let .openPR(pr): "openPR-\(pr.number)"
-        }
+    private func primaryHelp(_ action: QuickAction) -> String {
+        disabledReason(for: action) ?? action.label
     }
 }
 
