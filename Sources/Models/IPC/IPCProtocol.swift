@@ -124,6 +124,22 @@ extension IPC {
         /// `verification.yaml` declares — in the caller's own workstream, and
         /// answers with a run id rather than the result.
         case startVerification = "start_verification"
+        /// The dev stack's state and live process table, in the caller's own
+        /// workstream. Also how an agent learns the process names at all: they
+        /// are declared in a config outside its worktree.
+        case listProcesses = "list_processes"
+        /// One process's log tail. Output crosses IPC here and deliberately not
+        /// for verification — process-compose keeps logs and serves them, while
+        /// a check's output exists only in a surface Atelier keeps no copy of.
+        case readProcessLogs = "read_process_logs"
+        case startProcess = "start_process"
+        case stopProcess = "stop_process"
+        case restartProcess = "restart_process"
+        /// Starts the dev stack — the Execution tab's Start button — and answers
+        /// immediately rather than waiting for anything to come up.
+        case startExecution = "start_execution"
+        /// Stops it.
+        case stopExecution = "stop_execution"
         /// Overwrites the caller's workstream's checkpoint with free text.
         ///
         /// Shared per workstream, not per agent: two agents in one workstream
