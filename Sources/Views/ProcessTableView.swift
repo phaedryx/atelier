@@ -270,33 +270,6 @@ func processSelectionOnLoad(stored: ProcessSelection, declared: [String]) -> Pro
     }
 }
 
-/// The names to hand `ProcessCompose.PhaseRunner` for an `execute` run, or nil
-/// when the checklist has nothing selected and there is nothing to run.
-///
-/// The run's own copy of the checklist's reconciliation, so the runner is
-/// self-sufficient: `ProcessSelectionView.onAppear` writes a cleaned selection
-/// back to the store, but Start is reachable from the command palette and
-/// Cmd+Shift+Return without that view ever having appeared, so a stored name the
-/// config no longer offers would otherwise go straight to the shell.
-///
-/// It filters `declared` itself rather than trusting a caller to have done it,
-/// for the reason `Verification.Runner.resolveChecks` gives for the same move:
-/// the guarantee must not depend on every call site remembering. That is what
-/// closes the inversion — a stored selection whose only members are flag-shaped
-/// resolves to `.all` here, which is what the checklist renders too, instead of
-/// surviving as a non-empty selection that `PhaseRunner.command` then filters
-/// down to nothing and runs the whole namespace for.
-///
-/// The nil is the other half of that: `.all` and `.nothing` both name no
-/// processes, and only the type keeps them apart on the way to a runner that
-/// reads no names as *everything*.
-func processesToStart(stored: ProcessSelection, declared: [String]) -> [String]? {
-    processSelectionOnLoad(
-        stored: stored,
-        declared: ProcessCompose.PhaseRunner.runnableProcesses(declared)
-    ).namesToRun
-}
-
 /// Where a checklist's selection is stored.
 ///
 /// Injected rather than reached for, which is what makes `ProcessSelectionView`
