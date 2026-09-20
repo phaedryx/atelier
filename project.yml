@@ -150,12 +150,15 @@ targets:
           - $(PROJECT_DIR)/editor/src/main.js
           - $(PROJECT_DIR)/editor/src/diff.js
           - $(PROJECT_DIR)/editor/src/shared-init.js
+          - $(PROJECT_DIR)/editor/src/whiteboard.jsx
           - $(PROJECT_DIR)/editor/index.html
           - $(PROJECT_DIR)/editor/diff.html
+          - $(PROJECT_DIR)/editor/whiteboard.html
           - $(PROJECT_DIR)/editor/vite.config.js
         outputFiles:
           - $(PROJECT_DIR)/Resources/MonacoEditor/index.html
           - $(PROJECT_DIR)/Resources/MonacoEditor/diff.html
+          - $(PROJECT_DIR)/Resources/MonacoEditor/whiteboard.html
     postBuildScripts:
       - script: |
           set -e
