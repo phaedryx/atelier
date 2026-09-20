@@ -395,6 +395,17 @@ extension Whiteboard {
             // The file's name IS the fileId — `Store.writeAsset` refuses any id
             // it would have had to rewrite, and a SHA-1 hex string can never be
             // one of those.
+            //
+            // **Written before it is placed, and deliberately not cleaned up if
+            // the placement then fails.** The bytes have to be on disk before
+            // the page can fetch them over the asset scheme, so this order is
+            // forced; what is a choice is leaving the file behind. Deleting it
+            // would be the more dangerous half: the name is content-addressed,
+            // so an identical capture taken earlier is the *same* file, and an
+            // element already on the board may be pointing at it — a tidy-up
+            // would blank that image out. An orphan costs a file in a cache
+            // directory that is swept with the workstream, and the next capture
+            // of the same region reuses it rather than writing a second.
             let fileID = Capture.fileID(for: png)
             do {
                 try Store.writeAsset(png, id: fileID, ext: "png", for: workstreamID)
