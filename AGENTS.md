@@ -2356,6 +2356,21 @@ the read path exist to corroborate each other:
   page, and that is not a split of convenience: an arrow may name an endpoint already on the board,
   whose position Swift has no way to know.
 
+**`update` and `delete` maintain the same binding invariants `add` does**, and neither did at
+first — both were caught by the same harness, and both are the same silent shape as the two
+Excalidraw behaviours above:
+
+- **Moving a bound element drags its arrows.** Excalidraw binds but never moves, so a moved box
+  left its arrow where it was — still bound, so the digest went on reporting `n1 → n2` quite
+  correctly, while the picture showed an arrow pointing at empty space. `reflowArrowsTouching`
+  re-runs `edgePoints` for every arrow attached to what moved.
+- **Deleting an element unbinds the arrows that named it.** Otherwise an arrow survives holding
+  `startBinding.elementId` for something that no longer exists, and the digest prints an endpoint
+  id that appears nowhere else on the board — the digest lying, which is the one thing this feature
+  is organized around not doing. Clearing the binding is Excalidraw's own semantics (the arrow
+  survives, unattached) and needs no digest change: an unbound arrow already renders as its
+  position rather than as an endpoint pair.
+
 **The host is created eagerly by `WorkspaceActions`, not by a view.** The Whiteboard tab renders
 only while the user is looking at that workstream, so relying on `ensureSingleton` to make a view
 build the host would mean an agent's write silently doing nothing whenever the user is elsewhere —

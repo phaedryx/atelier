@@ -218,7 +218,14 @@ extension Whiteboard {
         /// yet: the host is created on demand and has to load the bundle, mount
         /// React and initialize Excalidraw. That is the ordinary first write
         /// rather than an edge case, and it is why this exists at all.
-        /// Comfortably inside the tools' own 15s reply deadline.
+        ///
+        /// **Measured cold**, offscreen with no tab ever attached: 0.20s from
+        /// `load` to `whiteboardReady`. Ten seconds is fifty times that, which
+        /// is the headroom wanted here — the refusal on the other side of it
+        /// forbids a retry, so paying it wrongly costs an agent its first write
+        /// of the session with no way back. It still has to stay under the
+        /// tools' own 15s reply deadline, so there is not room to simply raise
+        /// it if it ever proves tight; the bundle is what would need to shrink.
         private static let readyTimeout: TimeInterval = 10
 
         enum WriteFailure: LocalizedError, Equatable {

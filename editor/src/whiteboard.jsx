@@ -322,6 +322,64 @@ const edgePoints = (a, b) => {
   return { start: { x: ca.x, y: sy }, end: { x: cb.x, y: ey } }
 }
 
+// Re-runs edgePoints for every arrow attached to something that just moved.
+//
+// Excalidraw binds an arrow but never MOVES it — the same measured behaviour
+// the add path works around. So moving a bound box leaves its arrow where it
+// was: still bound in the data model, so the digest goes on reporting
+// `n1 -> n2` quite correctly, while the picture shows an arrow pointing at
+// empty space. The two halves of the read path are supposed to corroborate
+// each other, so this is worse than either being wrong alone.
+const reflowArrowsTouching = (elements, movedIDs) => {
+  const byID = new Map(elements.map((el) => [el.id, el]))
+  return elements.map((el) => {
+    if (el.type !== 'arrow') return el
+    const from = el.startBinding?.elementId
+    const to = el.endBinding?.elementId
+    if (!from || !to) return el
+    if (!movedIDs.has(from) && !movedIDs.has(to)) return el
+    const a = byID.get(from)
+    const b = byID.get(to)
+    if (!a || !b) return el
+    const { start, end } = edgePoints(a, b)
+    return {
+      ...el,
+      x: start.x,
+      y: start.y,
+      points: [
+        [0, 0],
+        [end.x - start.x, end.y - start.y],
+      ],
+      version: (el.version || 1) + 1,
+      versionNonce: nonce(),
+    }
+  })
+}
+
+// Clears bindings that name an element being removed.
+//
+// Deleting a box leaves any arrow attached to it holding
+// startBinding.elementId for an element that no longer exists. The reader
+// takes that straight into the digest, which then prints an arrow whose
+// endpoint id appears nowhere else on the board — the digest lying, which is
+// the one thing this feature is organized around not doing. Clearing the
+// binding is also Excalidraw's own semantics: the arrow survives, unattached.
+// The digest then renders it as an unbound arrow, which is true.
+const unbindFrom = (elements, goneIDs) =>
+  elements.map((el) => {
+    if (el.type !== 'arrow') return el
+    const lostStart = goneIDs.has(el.startBinding?.elementId)
+    const lostEnd = goneIDs.has(el.endBinding?.elementId)
+    if (!lostStart && !lostEnd) return el
+    return {
+      ...el,
+      startBinding: lostStart ? null : el.startBinding,
+      endBinding: lostEnd ? null : el.endBinding,
+      version: (el.version || 1) + 1,
+      versionNonce: nonce(),
+    }
+  })
+
 const textTargetFor = (elements, element) => {
   if (element.type === 'text') return element
   const boundID = (element.boundElements || []).find((b) => b.type === 'text')?.id
@@ -468,7 +526,11 @@ window.__whiteboardApply = async (op) => {
           }
         }
       }
-      api.updateScene({ elements: next })
+      // A move drags every arrow attached to this element with it.
+      const moved = op.x !== undefined || op.y !== undefined
+      api.updateScene({
+        elements: moved ? reflowArrowsTouching(next, new Set([op.id])) : next,
+      })
       await saveNow()
       return { ok: true, ids: [op.id] }
     }
@@ -485,7 +547,8 @@ window.__whiteboardApply = async (op) => {
         if (el.containerId && doomed.has(el.containerId)) doomed.add(el.id)
       }
       if (removed.length) {
-        api.updateScene({ elements: existing.filter((el) => !doomed.has(el.id)) })
+        const survivors = existing.filter((el) => !doomed.has(el.id))
+        api.updateScene({ elements: unbindFrom(survivors, doomed) })
         await saveNow()
       }
       return { ok: true, ids: removed }
