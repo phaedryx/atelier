@@ -7,10 +7,19 @@ import XCTest
 final class WhiteboardWriteTests: XCTestCase {
     private typealias Write = Whiteboard.Write
 
-    private let empty = Write.Live(ids: [], layout: .fallback)
+    private let empty = Write.Live(ids: [], imageIDs: [], layout: .fallback)
 
     private func live(_ ids: String...) -> Write.Live {
-        Write.Live(ids: Set(ids), layout: Write.Layout(originX: 40, nextY: 500))
+        Write.Live(ids: Set(ids), imageIDs: [], layout: Write.Layout(originX: 40, nextY: 500))
+    }
+
+    /// A board carrying images, for the caption tests.
+    private func board(ids: [String], images: [String]) -> Write.Live {
+        Write.Live(
+            ids: Set(ids),
+            imageIDs: Set(images),
+            layout: Write.Layout(originX: 40, nextY: 500)
+        )
     }
 
     /// Deterministic ids, so a test can assert the answer rather than its shape.
@@ -441,6 +450,78 @@ final class WhiteboardWriteTests: XCTestCase {
         XCTAssertThrowsError(
             try Write.updatePlan(id: "e1", at: "nope", text: nil, color: nil, live: live("e1"))
         ) { XCTAssertEqual($0 as? Write.Failure, .invalidPosition("nope")) }
+    }
+
+    // MARK: - update: captions
+
+    func test_updateCarriesACaptionForAnImage() throws {
+        let op = try Write.updatePlan(
+            id: "i1", at: nil, text: nil, color: nil,
+            caption: "Settings pane, Environment tab, process-compose row red",
+            live: board(ids: ["i1"], images: ["i1"])
+        )
+        XCTAssertEqual(
+            op["caption"] as? String,
+            "Settings pane, Environment tab, process-compose row red"
+        )
+    }
+
+    func test_aCaptionAloneIsEnoughOfAChange() throws {
+        XCTAssertNoThrow(
+            try Write.updatePlan(
+                id: "i1", at: nil, text: nil, color: nil, caption: "a screenshot",
+                live: board(ids: ["i1"], images: ["i1"])
+            )
+        )
+    }
+
+    func test_aCaptionMayBeClearedWithTheEmptyString() throws {
+        // The same rule `text` follows, and for the same reason: clearing a
+        // transcription is a real edit, and "" is how it is asked for. Checked
+        // for nil rather than for emptiness.
+        let op = try Write.updatePlan(
+            id: "i1", at: nil, text: nil, color: nil, caption: "",
+            live: board(ids: ["i1"], images: ["i1"])
+        )
+        XCTAssertEqual(op["caption"] as? String, "")
+    }
+
+    func test_aCaptionOnSomethingThatIsNotAnImageIsRefused() {
+        // A caption is an agent's transcription of pixels nothing else can
+        // read. On a box it would be a second, invisible text channel: present
+        // in the digest and absent from the picture, which is the disagreement
+        // this whole feature is organized around not producing.
+        XCTAssertThrowsError(
+            try Write.updatePlan(
+                id: "n1", at: nil, text: nil, color: nil, caption: "x",
+                live: board(ids: ["n1", "i1"], images: ["i1"])
+            )
+        ) { XCTAssertEqual($0 as? Write.Failure, .captionNeedsImage("n1")) }
+    }
+
+    func test_theCaptionRefusalNamesTheAlternative() {
+        // Naming `text` is what stops an agent retrying the same call: the
+        // refusal is the whole of what it has to work from.
+        let message = Write.Failure.captionNeedsImage("n1").errorDescription ?? ""
+        XCTAssertTrue(message.contains("n1"), message)
+        XCTAssertTrue(message.contains("`text`"), message)
+    }
+
+    func test_aCaptionForAnIDThatIsNotOnTheBoardIsRefusedAsUnknown() {
+        // Unknown beats not-an-image: the id being absent is the more useful
+        // thing to be told, and `imageIDs` cannot contain it either.
+        XCTAssertThrowsError(
+            try Write.updatePlan(
+                id: "ghost", at: nil, text: nil, color: nil, caption: "x",
+                live: board(ids: ["i1"], images: ["i1"])
+            )
+        ) { XCTAssertEqual($0 as? Write.Failure, .unknownElement("ghost")) }
+    }
+
+    func test_nothingToUpdateNamesCaptionAsAField() {
+        // The refusal is the agent's only map of what this tool takes.
+        let message = Write.Failure.nothingToUpdate.errorDescription ?? ""
+        XCTAssertTrue(message.contains("caption"), message)
     }
 
     // MARK: - delete

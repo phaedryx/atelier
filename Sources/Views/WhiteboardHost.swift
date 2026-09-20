@@ -284,7 +284,15 @@ extension Whiteboard {
                 originX: (raw["originX"] as? NSNumber)?.doubleValue ?? Write.Layout.fallback.originX,
                 nextY: (raw["nextY"] as? NSNumber)?.doubleValue ?? Write.Layout.fallback.nextY
             )
-            return Write.Live(ids: Set(ids), layout: layout)
+            // **An absent `imageIDs` fails open to the page**, and that is a
+            // decision rather than a default. It can only happen against a page
+            // older than this build, and reading it as "no images" would refuse
+            // every legitimate caption with `captionNeedsImage` — a refusal
+            // naming the wrong cause, sending an agent to change an element
+            // that is already an image. Falling back to every id defers the
+            // question to the page, which refuses an id it cannot find.
+            let imageIDs = (raw["imageIDs"] as? [String]).map(Set.init) ?? Set(ids)
+            return Write.Live(ids: Set(ids), imageIDs: imageIDs, layout: layout)
         }
 
         /// Posts one operation into the page and answers with the ids it moved.
