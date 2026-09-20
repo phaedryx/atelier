@@ -76,6 +76,106 @@ extension Whiteboard {
             try json.write(to: sceneURL(for: workstreamID), atomically: true, encoding: .utf8)
         }
 
+        static func pngURL(for workstreamID: UUID) -> URL {
+            directory(for: workstreamID).appendingPathComponent("board.png")
+        }
+
+        static func digestURL(for workstreamID: UUID) -> URL {
+            directory(for: workstreamID).appendingPathComponent("board.md")
+        }
+
+        /// Says that `board.png` was rendered from the scene currently on disk.
+        ///
+        /// **Its presence is the whole signal, and that is the design rather
+        /// than a shortcut.** The obvious alternative, comparing modification
+        /// times, cannot work here: the scene is always written first and the
+        /// render always second, so the PNG is always the newer file whether it
+        /// matches the scene or not. A content hash would work and costs a hash
+        /// of the whole scene on every save and every read, to answer a question
+        /// one file's existence already answers — `invalidateRender` deletes
+        /// this the instant a new scene lands, and only a render that arrives
+        /// *for that scene* puts it back.
+        private static func stampURL(for workstreamID: UUID) -> URL {
+            directory(for: workstreamID).appendingPathComponent("board.png.json")
+        }
+
+        /// Writes the render and stamps it as matching the scene on disk.
+        static func writeRender(png: Data, width: Int, height: Int, for workstreamID: UUID) throws {
+            try FileManager.default.createDirectory(
+                at: directory(for: workstreamID),
+                withIntermediateDirectories: true
+            )
+            try png.write(to: pngURL(for: workstreamID), options: .atomic)
+            let stamp = try JSONSerialization.data(withJSONObject: ["width": width, "height": height])
+            try stamp.write(to: stampURL(for: workstreamID), options: .atomic)
+        }
+
+        /// Marks whatever render exists as no longer describing the scene.
+        ///
+        /// The PNG is deliberately **kept**. A picture of the board a moment ago
+        /// is nearly always still worth looking at; the thing that must never
+        /// happen is an agent reading it as current, and that is what the stamp
+        /// decides. Deleting instead would trade an accurate description of a
+        /// slightly old picture for no picture at all.
+        static func invalidateRender(for workstreamID: UUID) {
+            try? FileManager.default.removeItem(at: stampURL(for: workstreamID))
+        }
+
+        static func renderState(for workstreamID: UUID) -> Whiteboard.Digest.Render {
+            let png = pngURL(for: workstreamID)
+            guard FileManager.default.fileExists(atPath: png.path) else { return .none }
+            guard let data = try? Data(contentsOf: stampURL(for: workstreamID)),
+                  let stamp = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let width = stamp["width"] as? Int,
+                  let height = stamp["height"] as? Int
+            else {
+                return .stale(path: png.path)
+            }
+            return .current(width: width, height: height, path: png.path)
+        }
+
+        /// Regenerates `board.md`.
+        ///
+        /// Called from **both** arms of the save path — when the scene lands and
+        /// again when its render does — because the render line is part of the
+        /// digest and the second arm is what makes it true. Two calls to one
+        /// pure generator, rather than two generators that agree by convention.
+        static func refreshDigest(for workstreamID: UUID) {
+            let text = digestText(for: workstreamID, now: Date())
+            do {
+                try FileManager.default.createDirectory(
+                    at: directory(for: workstreamID),
+                    withIntermediateDirectories: true
+                )
+                try text.write(to: digestURL(for: workstreamID), atomically: true, encoding: .utf8)
+            } catch {
+                logger.error("Could not write board digest: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+
+        /// The digest as of **now**, generated from the scene rather than read
+        /// back from `board.md`.
+        ///
+        /// `read_whiteboard` calls this rather than reading the file, because
+        /// two things in a digest are answers to "right now" and a file cannot
+        /// hold either: how long ago the board was updated, and whether the
+        /// render still matches it. `board.md` is a convenience copy for anyone
+        /// reading the directory, not the source of the tool's answer.
+        static func digestText(for workstreamID: UUID, now: Date) -> String {
+            Whiteboard.Digest.text(
+                load: Whiteboard.SceneLoad.load(for: workstreamID),
+                render: renderState(for: workstreamID),
+                updated: updatedText(for: workstreamID, now: now)
+            )
+        }
+
+        private static func updatedText(for workstreamID: UUID, now: Date) -> String {
+            guard let modified = try? FileManager.default
+                .attributesOfItem(atPath: sceneURL(for: workstreamID).path)[.modificationDate] as? Date
+            else { return "at an unknown time" }
+            return IPC.durationText(max(0, now.timeIntervalSince(modified))) + " ago"
+        }
+
         /// Writes one image into `assets/` and returns where it landed.
         ///
         /// Image bytes never go in the scene file — the same separation
