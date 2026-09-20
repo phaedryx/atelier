@@ -681,3 +681,85 @@ final class WorkspaceActions {
         return candidate.pathComponents.dropFirst(rootParts.count).joined(separator: "/")
     }
 }
+
+// MARK: - Whiteboard writes
+
+extension WorkspaceActions {
+    /// The host for this workstream's board, created if this is the first write.
+    ///
+    /// **Created here, eagerly, and never left to a view.** The Whiteboard tab
+    /// renders only while the user is looking at this workstream, so relying on
+    /// `ensureSingleton` to make a view build the host would mean an agent's
+    /// write silently doing nothing whenever the user is elsewhere — which is
+    /// most of the time, and is the case the whole offscreen design exists for.
+    /// Surfaces are created outside a render pass for the same reason
+    /// `open_agent_tab` creates its own.
+    ///
+    /// `ensureSingleton` and never `activateSingleton`: a write makes something
+    /// available, it does not decide what the user should be looking at.
+    private func whiteboardTarget(
+        workstreamID: UUID
+    ) throws -> (host: Whiteboard.Host, wasAlreadyOpen: Bool) {
+        guard let surfaceCache else { throw Failure.appNotReady }
+        let context = try context(workstreamID: workstreamID)
+        let wasAlreadyOpen = context.model.tabs.contains(.whiteboard)
+        context.model.ensureSingleton(.whiteboard)
+        return (surfaceCache.whiteboardHost(for: workstreamID), wasAlreadyOpen)
+    }
+
+    /// Adds elements to the caller's board and answers with their real ids.
+    ///
+    /// Takes the JSON as given rather than a parsed array: the value has to
+    /// cross an actor hop to reach this `@MainActor` type, and `[Any]` is not
+    /// `Sendable`. `Whiteboard.Write` owns the parse, so a malformed array is
+    /// refused in the same voice as every other bad argument.
+    func whiteboardAdd(
+        workstreamID: UUID,
+        elementsJSON: String
+    ) async throws -> (ids: [String], tabWasAlreadyOpen: Bool) {
+        let target = try whiteboardTarget(workstreamID: workstreamID)
+        // The live page, not the scene on disk — see `Host.liveState`.
+        let live = try await target.host.liveState()
+        let plan = try Whiteboard.Write.addPlan(fromJSON: elementsJSON, live: live)
+        let ids = try await target.host.apply([
+            "kind": "add",
+            "elements": plan.skeletons.map(\.json),
+        ])
+        logger.detailed("whiteboard_add: \(ids.count) elements")
+        return (ids, target.wasAlreadyOpen)
+    }
+
+    /// Moves, retexts or recolours one element of the caller's board.
+    func whiteboardUpdate(
+        workstreamID: UUID,
+        id: String,
+        at: String?,
+        text: String?,
+        color: String?
+    ) async throws -> (id: String, tabWasAlreadyOpen: Bool) {
+        let target = try whiteboardTarget(workstreamID: workstreamID)
+        let live = try await target.host.liveState()
+        let op = try Whiteboard.Write.updatePlan(
+            id: id, at: at, text: text, color: color, live: live
+        )
+        _ = try await target.host.apply(op)
+        logger.detailed("whiteboard_update: \(id)")
+        return (id, target.wasAlreadyOpen)
+    }
+
+    /// Removes elements from the caller's board.
+    ///
+    /// No liveness read: an id that is already gone is success, which is what
+    /// makes this tool safe to replay. The page reports which ids were really
+    /// there so the answer can say what it actually removed.
+    func whiteboardDelete(
+        workstreamID: UUID,
+        ids: [String]
+    ) async throws -> (removed: [String], tabWasAlreadyOpen: Bool) {
+        let target = try whiteboardTarget(workstreamID: workstreamID)
+        let op = try Whiteboard.Write.deletePlan(ids: ids)
+        let removed = try await target.host.apply(op)
+        logger.detailed("whiteboard_delete: \(removed.count) removed")
+        return (removed, target.wasAlreadyOpen)
+    }
+}

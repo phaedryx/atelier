@@ -209,6 +209,9 @@ extension IPC {
             .stopProcess,
             .restartProcess,
             .readWhiteboard,
+            .whiteboardAdd,
+            .whiteboardUpdate,
+            .whiteboardDelete,
             .addTask,
             .getPendingTasks,
             .listTasks,
@@ -870,6 +873,118 @@ extension IPC.Tool {
                 request_attention when you need them to actually look.
                 """,
                 arguments: []
+            )
+        case .whiteboardAdd:
+            IPC.ToolSpec(
+                tool: .whiteboardAdd,
+                surface: .workspaceAction,
+                replyDeadline: IPC.ToolSpec.Deadline.immediate,
+                isSafeToReplay: false,
+                description: """
+                Add elements to this workstream's whiteboard and get back their ids.
+
+                `elements` is a JSON array; each entry is {"kind": ..., "text": ...,
+                "at": "x,y", "from": ..., "to": ..., "color": ...}. `kind` is one of
+                box, note, text, arrow. A box is a diagram node; a note is an
+                annotation, and read_whiteboard reports it back as a note, so your own
+                commentary stays distinguishable from the structure you drew. `at` is
+                optional — anything you do not place is stacked below what is already
+                on the board. `color` is a hex value like "#e03131" or a name like red.
+
+                An arrow needs `from` and `to`, each an element id: either one already
+                on the board — call read_whiteboard for those — or one added EARLIER in
+                this same call, using the id you are about to be handed back. So a
+                whole diagram is one call: the boxes first, then the arrows between
+                them. Naming an element added later in the same call is refused.
+
+                The ids returned are the board's real element ids. Pass them straight
+                to whiteboard_update and whiteboard_delete; read_whiteboard reports the
+                same ones.
+
+                This opens the Whiteboard tab but DOES NOT take the selection — the
+                user is still looking at whatever they had in front of them. Use
+                request_attention when you want their eyes on it.
+
+                This call is NOT replayed automatically after a lost connection. If it
+                fails or times out, do not retry it: it may already have been applied,
+                and a second attempt would draw the diagram twice. Call read_whiteboard
+                to see what is there.
+                """,
+                arguments: [
+                    IPC.ArgumentSpec(
+                        name: "elements",
+                        kind: .string,
+                        isRequired: true,
+                        description: "A JSON array of elements to add. Each is an object with `kind` (box, note, text or arrow) and optionally `text`, `at` (\"x,y\"), `from`, `to`, `color`. For example [{\"kind\": \"box\", \"text\": \"Auth service\", \"at\": \"120,80\"}]."
+                    ),
+                ]
+            )
+        case .whiteboardUpdate:
+            IPC.ToolSpec(
+                tool: .whiteboardUpdate,
+                surface: .workspaceAction,
+                replyDeadline: IPC.ToolSpec.Deadline.immediate,
+                isSafeToReplay: true,
+                description: """
+                Move, retext or recolour one element of this workstream's whiteboard.
+
+                `id` is an element id as read_whiteboard reports it. Name at least one
+                of `at`, `text` or `color`. An id that is not on the board is refused,
+                and the refusal names it.
+
+                This opens the Whiteboard tab but does not take the selection.
+                """,
+                arguments: [
+                    IPC.ArgumentSpec(
+                        name: "id",
+                        kind: .string,
+                        isRequired: true,
+                        description: "The element to change, as read_whiteboard reports it."
+                    ),
+                    IPC.ArgumentSpec(
+                        name: "at",
+                        kind: .string,
+                        isRequired: false,
+                        description: "New position as \"x,y\", for example \"120,80\"."
+                    ),
+                    IPC.ArgumentSpec(
+                        name: "text",
+                        kind: .string,
+                        isRequired: false,
+                        description: "New text or label. Pass an empty string to clear it."
+                    ),
+                    IPC.ArgumentSpec(
+                        name: "color",
+                        kind: .string,
+                        isRequired: false,
+                        description: "A hex value like \"#e03131\", or a name like red."
+                    ),
+                ]
+            )
+        case .whiteboardDelete:
+            IPC.ToolSpec(
+                tool: .whiteboardDelete,
+                surface: .workspaceAction,
+                replyDeadline: IPC.ToolSpec.Deadline.immediate,
+                isSafeToReplay: true,
+                description: """
+                Remove elements from this workstream's whiteboard.
+
+                `ids` is a comma-separated list of element ids as read_whiteboard
+                reports them. An id that is already gone is success rather than an
+                error, so this is safe to call again. Deleting a shape takes its label
+                with it.
+
+                This opens the Whiteboard tab but does not take the selection.
+                """,
+                arguments: [
+                    IPC.ArgumentSpec(
+                        name: "ids",
+                        kind: .list,
+                        isRequired: true,
+                        description: "Element ids to remove, comma-separated."
+                    ),
+                ]
             )
         case .addTask:
             IPC.ToolSpec(

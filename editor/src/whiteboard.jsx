@@ -2,7 +2,13 @@
 // ABOUTME: Sole writer of board.excalidraw; Swift persists what this hands over.
 import React from 'react'
 import { createRoot } from 'react-dom/client'
-import { Excalidraw, restore, serializeAsJSON, exportToBlob } from '@excalidraw/excalidraw'
+import {
+  Excalidraw,
+  restore,
+  serializeAsJSON,
+  exportToBlob,
+  convertToExcalidrawElements,
+} from '@excalidraw/excalidraw'
 import '@excalidraw/excalidraw/index.css'
 
 // Excalidraw fetches its fonts at runtime by URL, resolved against this. They
@@ -243,3 +249,314 @@ function Board() {
 }
 
 createRoot(document.getElementById('board')).render(React.createElement(Board))
+
+// ---------------------------------------------------------------------------
+// The agent write path.
+//
+// Swift validates and normalizes the vocabulary (box / note / text / arrow,
+// positions, colours, ids); this half EXPANDS, by calling Excalidraw's own
+// `convertToExcalidrawElements`. Nothing here hand-writes `seed`,
+// `versionNonce`, `groupIds` or `boundElements` — that is the whole reason the
+// split falls here.
+//
+// Reached with `callAsyncJavaScript`, NOT `evaluateJavaScript`: the latter does
+// not await a returned promise, it hands back the promise object itself, which
+// reads as success the instant it is called. Arguments arrive as real JS values
+// through that call's own marshalling, so there is no interpolation and no
+// base64 — the quoting problem `Whiteboard.Host.initialSceneScript` solves for a
+// document-start script does not arise here.
+
+// The live element ids, and where the next unpositioned element should go.
+//
+// Read from the PAGE and never from board.excalidraw, because the file lags the
+// page by the 800ms save debounce: an agent that adds a box and then updates it
+// would otherwise be refused for naming an id that is plainly on the board.
+//
+// The layout travels with the ids because Swift cannot compute it — a board's
+// extent is live state — and because both are answers to the same instant.
+window.__whiteboardState = () => {
+  if (!api) return null
+  const els = api.getSceneElements()
+  if (!els.length) return { ids: [], originX: 100, nextY: 100 }
+  return {
+    ids: els.map((el) => el.id),
+    originX: Math.min(...els.map((el) => el.x)),
+    nextY: Math.max(...els.map((el) => el.y + (el.height || 0))) + 60,
+  }
+}
+
+// Excalidraw stores a container's label as a SEPARATE text element carrying
+// `containerId`, not as a field on the shape — the same join
+// Whiteboard.SceneLoad.labels makes when reading. So updating a box's text
+// means finding that child, and updating a bare text element means changing the
+// element itself.
+const nonce = () => Math.floor(Math.random() * 2 ** 31)
+
+// Where an arrow between two shapes actually starts and ends.
+//
+// Excalidraw binds an arrow to its endpoints but DOES NOT move it to them.
+// MEASURED against 0.18.1: an arrow handed (0,0) with both bindings resolved
+// stays at (0,0) with a stub 100px segment — correctly bound in the data model
+// and visibly pointing nowhere near the two shapes it claims to connect. The
+// digest would report `n1 -> n2` and the picture would disagree, which is the
+// worst shape a board can be in, since the two halves of the read path are
+// supposed to corroborate each other.
+//
+// So geometry is computed here rather than in Swift, and that is not a split of
+// convenience: an arrow may name an endpoint already on the board, whose
+// position Swift has no way to know. The page does.
+const edgePoints = (a, b) => {
+  const ca = { x: a.x + (a.width || 0) / 2, y: a.y + (a.height || 0) / 2 }
+  const cb = { x: b.x + (b.width || 0) / 2, y: b.y + (b.height || 0) / 2 }
+  const dx = cb.x - ca.x
+  const dy = cb.y - ca.y
+  // The dominant axis decides which pair of faces to join, which is what makes
+  // a left-to-right row of boxes join side-to-side rather than corner-to-corner.
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    const sx = dx >= 0 ? a.x + (a.width || 0) : a.x
+    const ex = dx >= 0 ? b.x : b.x + (b.width || 0)
+    return { start: { x: sx, y: ca.y }, end: { x: ex, y: cb.y } }
+  }
+  const sy = dy >= 0 ? a.y + (a.height || 0) : a.y
+  const ey = dy >= 0 ? b.y : b.y + (b.height || 0)
+  return { start: { x: ca.x, y: sy }, end: { x: cb.x, y: ey } }
+}
+
+// Re-runs edgePoints for every arrow attached to something that just moved.
+//
+// Excalidraw binds an arrow but never MOVES it — the same measured behaviour
+// the add path works around. So moving a bound box leaves its arrow where it
+// was: still bound in the data model, so the digest goes on reporting
+// `n1 -> n2` quite correctly, while the picture shows an arrow pointing at
+// empty space. The two halves of the read path are supposed to corroborate
+// each other, so this is worse than either being wrong alone.
+const reflowArrowsTouching = (elements, movedIDs) => {
+  const byID = new Map(elements.map((el) => [el.id, el]))
+  return elements.map((el) => {
+    if (el.type !== 'arrow') return el
+    const from = el.startBinding?.elementId
+    const to = el.endBinding?.elementId
+    if (!from || !to) return el
+    if (!movedIDs.has(from) && !movedIDs.has(to)) return el
+    const a = byID.get(from)
+    const b = byID.get(to)
+    if (!a || !b) return el
+    const { start, end } = edgePoints(a, b)
+    return {
+      ...el,
+      x: start.x,
+      y: start.y,
+      points: [
+        [0, 0],
+        [end.x - start.x, end.y - start.y],
+      ],
+      version: (el.version || 1) + 1,
+      versionNonce: nonce(),
+    }
+  })
+}
+
+// Clears bindings that name an element being removed.
+//
+// Deleting a box leaves any arrow attached to it holding
+// startBinding.elementId for an element that no longer exists. The reader
+// takes that straight into the digest, which then prints an arrow whose
+// endpoint id appears nowhere else on the board — the digest lying, which is
+// the one thing this feature is organized around not doing. Clearing the
+// binding is also Excalidraw's own semantics: the arrow survives, unattached.
+// The digest then renders it as an unbound arrow, which is true.
+const unbindFrom = (elements, goneIDs) =>
+  elements.map((el) => {
+    if (el.type !== 'arrow') return el
+    const lostStart = goneIDs.has(el.startBinding?.elementId)
+    const lostEnd = goneIDs.has(el.endBinding?.elementId)
+    if (!lostStart && !lostEnd) return el
+    return {
+      ...el,
+      startBinding: lostStart ? null : el.startBinding,
+      endBinding: lostEnd ? null : el.endBinding,
+      version: (el.version || 1) + 1,
+      versionNonce: nonce(),
+    }
+  })
+
+const textTargetFor = (elements, element) => {
+  if (element.type === 'text') return element
+  const boundID = (element.boundElements || []).find((b) => b.type === 'text')?.id
+  return boundID ? elements.find((el) => el.id === boundID) : null
+}
+
+// A write has landed, so save NOW rather than waiting for onChange.
+//
+// `onChange` is Excalidraw's, and whether it fires for a programmatic
+// `updateScene` in an OCCLUDED window is not a promise this feature may rest
+// on — an occluded window loses requestAnimationFrame, and a save that silently
+// stops happening whenever the tab is closed is precisely the failure this whole
+// design is built around. Calling save() directly depends on nothing.
+//
+// The setTimeout(0) hop is for the other half of the same worry: `updateScene`
+// is not documented to commit its scene store synchronously, and a save() called
+// in the same tick could serialize the scene as it was BEFORE the write —
+// answering the agent with real ids that never reach disk. setTimeout fires
+// occluded (measured); rAF does not, and must never appear on this path.
+//
+// The pending debounced save is cleared first, so one write costs one save and
+// one export rather than a second redundant render 800ms later.
+const saveNow = () =>
+  new Promise((resolve) => {
+    if (saveTimer) clearTimeout(saveTimer)
+    setTimeout(() => {
+      save()
+      resolve()
+    }, 0)
+  })
+
+window.__whiteboardApply = async (op) => {
+  if (!api) return { ok: false, reason: 'the whiteboard page has not finished mounting' }
+  try {
+    const existing = api.getSceneElements()
+
+    if (op.kind === 'add') {
+      const byID = new Map(existing.map((el) => [el.id, el]))
+      const batchIDs = new Set(op.elements.map((el) => el.id))
+
+      // An arrow may name an endpoint that is ALREADY on the board rather than
+      // one created beside it — "connect the two boxes you can see" is the
+      // obvious agent move. convertToExcalidrawElements binds only within the
+      // array it is handed, so such an arrow arrives with startBinding and
+      // endBinding both null: drawn, floating, and attached to nothing.
+      // MEASURED against 0.18.1, and silent — the call succeeds and the arrow
+      // is really on the board, just not connected to anything.
+      //
+      // So the referenced elements are carried INTO the array, and Excalidraw
+      // computes the binding itself. Nothing here hand-writes a binding.
+      const carried = []
+      for (const el of op.elements) {
+        for (const ref of [el.start?.id, el.end?.id]) {
+          if (ref && !batchIDs.has(ref) && byID.has(ref) && !carried.some((c) => c.id === ref)) {
+            carried.push(byID.get(ref))
+          }
+        }
+      }
+
+      // Arrow geometry, resolved against whatever the endpoints really are —
+      // in this batch or already on the board. See edgePoints.
+      const positioned = op.elements.map((el) => {
+        if (el.type !== 'arrow' || !el.start?.id || !el.end?.id) return el
+        const resolve = (id) =>
+          byID.get(id) || op.elements.find((c) => c.id === id) || null
+        const a = resolve(el.start.id)
+        const b = resolve(el.end.id)
+        if (!a || !b) return el
+        const { start, end } = edgePoints(a, b)
+        return {
+          ...el,
+          x: start.x,
+          y: start.y,
+          points: [
+            [0, 0],
+            [end.x - start.x, end.y - start.y],
+          ],
+        }
+      })
+
+      const converted = convertToExcalidrawElements([...carried, ...positioned], {
+        regenerateIds: false,
+      })
+      const convertedByID = new Map(converted.map((el) => [el.id, el]))
+      // Only the batch's own elements are new. A carried element is already on
+      // the board and must not be added a second time.
+      const fresh = converted.filter(
+        (el) => batchIDs.has(el.id) || (el.containerId && batchIDs.has(el.containerId))
+      )
+      // A carried element keeps its own identity and geometry and takes only
+      // the binding metadata the conversion computed for it. UNIONED, never
+      // assigned: a carried box already carries a boundElements entry for its
+      // own text label, and overwriting the list would unbind the label —
+      // leaving its caption on the canvas attached to nothing.
+      const merged = existing.map((el) => {
+        const c = convertedByID.get(el.id)
+        if (!c || batchIDs.has(el.id)) return el
+        const seen = new Set()
+        const bound = [...(el.boundElements || []), ...(c.boundElements || [])].filter((b) => {
+          if (!b || seen.has(b.id)) return false
+          seen.add(b.id)
+          return true
+        })
+        return { ...el, boundElements: bound, version: (el.version || 1) + 1, versionNonce: nonce() }
+      })
+
+      api.updateScene({ elements: [...merged, ...fresh] })
+      await saveNow()
+      // The ids actually stored, not the ids asked for. If Excalidraw ever
+      // stops honouring a supplied id, the answer names what really landed
+      // rather than handing back ids that point at nothing.
+      return { ok: true, ids: fresh.filter((el) => !el.containerId).map((el) => el.id) }
+    }
+
+    if (op.kind === 'update') {
+      const target = existing.find((el) => el.id === op.id)
+      if (!target) return { ok: false, unknown: [op.id] }
+      const next = existing.map((el) => {
+        let out = el
+        if (el.id === op.id) {
+          out = { ...out }
+          if (op.x !== undefined) out.x = op.x
+          if (op.y !== undefined) out.y = op.y
+          if (op.strokeColor !== undefined) out.strokeColor = op.strokeColor
+          if (op.backgroundColor !== undefined) out.backgroundColor = op.backgroundColor
+          out.version = (out.version || 1) + 1
+          out.versionNonce = nonce()
+        }
+        return out
+      })
+      if (op.text !== undefined) {
+        const textEl = textTargetFor(next, next.find((el) => el.id === op.id))
+        if (textEl) {
+          const i = next.indexOf(textEl)
+          // Both fields: `originalText` is the source the editor reopens with,
+          // `text` is what is drawn. Setting only one leaves the board showing
+          // a different string from the one the digest reports.
+          next[i] = {
+            ...textEl,
+            text: op.text,
+            originalText: op.text,
+            version: (textEl.version || 1) + 1,
+            versionNonce: nonce(),
+          }
+        }
+      }
+      // A move drags every arrow attached to this element with it.
+      const moved = op.x !== undefined || op.y !== undefined
+      api.updateScene({
+        elements: moved ? reflowArrowsTouching(next, new Set([op.id])) : next,
+      })
+      await saveNow()
+      return { ok: true, ids: [op.id] }
+    }
+
+    if (op.kind === 'delete') {
+      const present = new Set(existing.map((el) => el.id))
+      // An id that is already gone is SUCCESS, not a refusal — that is what
+      // makes whiteboard_delete safe to replay after a lost connection.
+      const removed = op.ids.filter((id) => present.has(id))
+      const doomed = new Set(removed)
+      // A container's bound label is a separate element; leaving it behind
+      // would strand a text element with a containerId pointing at nothing.
+      for (const el of existing) {
+        if (el.containerId && doomed.has(el.containerId)) doomed.add(el.id)
+      }
+      if (removed.length) {
+        const survivors = existing.filter((el) => !doomed.has(el.id))
+        api.updateScene({ elements: unbindFrom(survivors, doomed) })
+        await saveNow()
+      }
+      return { ok: true, ids: removed }
+    }
+
+    return { ok: false, reason: `unknown operation ${op.kind}` }
+  } catch (e) {
+    console.error('whiteboard: apply failed', e)
+    return { ok: false, reason: String(e) }
+  }
+}

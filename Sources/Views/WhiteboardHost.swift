@@ -210,6 +210,142 @@ extension Whiteboard {
             offscreenWindow.setFrameOrigin(Self.parkingSpot)
         }
 
+        // MARK: - The agent write path
+
+        /// How long to wait for the page to mount before giving up on a write.
+        ///
+        /// A board whose tab has never been opened in this launch has no page
+        /// yet: the host is created on demand and has to load the bundle, mount
+        /// React and initialize Excalidraw. That is the ordinary first write
+        /// rather than an edge case, and it is why this exists at all.
+        ///
+        /// **Measured cold**, offscreen with no tab ever attached: 0.20s from
+        /// `load` to `whiteboardReady`. Ten seconds is fifty times that, which
+        /// is the headroom wanted here — the refusal on the other side of it
+        /// forbids a retry, so paying it wrongly costs an agent its first write
+        /// of the session with no way back. It still has to stay under the
+        /// tools' own 15s reply deadline, so there is not room to simply raise
+        /// it if it ever proves tight; the bundle is what would need to shrink.
+        private static let readyTimeout: TimeInterval = 10
+
+        enum WriteFailure: LocalizedError, Equatable {
+            case notReady
+            case refused(String)
+            case unknownElements([String])
+
+            var errorDescription: String? {
+                switch self {
+                case .notReady:
+                    // Forbids a retry rather than inviting one, the rule
+                    // `create_workstream`'s timeout message states: the page may
+                    // have applied the write after the deadline, and a caller
+                    // cannot tell a genuine failure from one its own retry
+                    // caused.
+                    "The whiteboard page did not respond in time. Do not retry this call — it may "
+                        + "have been applied after the deadline, and repeating it could duplicate "
+                        + "what it drew. Call read_whiteboard to see what is on the board."
+                case let .refused(reason):
+                    "The whiteboard page refused the write: \(reason)"
+                case let .unknownElements(ids):
+                    "No element on this board has the id "
+                        + ids.map { "\"\($0)\"" }.joined(separator: ", ")
+                        + ". Call read_whiteboard for the current ids."
+                }
+            }
+        }
+
+        /// Blocks until the page reports itself mounted, or gives up.
+        private func waitUntilReady() async throws {
+            let deadline = Date().addingTimeInterval(Self.readyTimeout)
+            while Date() < deadline {
+                if await (try? callJS("return JSON.stringify(!!window.whiteboardReady)")) == "true" {
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            throw WriteFailure.notReady
+        }
+
+        /// What is on the board right now, from the page rather than from disk.
+        ///
+        /// `board.excalidraw` lags the page by the save debounce, so an agent
+        /// that adds a box and then updates it would be refused for naming an id
+        /// that is plainly on the board. The layout rides along because
+        /// `Whiteboard.Write` cannot compute it and because both are answers to
+        /// the same instant.
+        func liveState() async throws -> Write.Live {
+            try await waitUntilReady()
+            guard let json = try await callJS("return JSON.stringify(window.__whiteboardState())"),
+                  let data = json.data(using: .utf8),
+                  let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let ids = raw["ids"] as? [String]
+            else { throw WriteFailure.notReady }
+            let layout = Write.Layout(
+                originX: (raw["originX"] as? NSNumber)?.doubleValue ?? Write.Layout.fallback.originX,
+                nextY: (raw["nextY"] as? NSNumber)?.doubleValue ?? Write.Layout.fallback.nextY
+            )
+            return Write.Live(ids: Set(ids), layout: layout)
+        }
+
+        /// Posts one operation into the page and answers with the ids it moved.
+        ///
+        /// The page applies it and saves through the same debounced `save()` a
+        /// user edit takes — one save path, which is what keeps exactly one
+        /// place regenerating the digest and re-rendering the PNG.
+        func apply(_ op: [String: Any]) async throws -> [String] {
+            try await waitUntilReady()
+            guard let payload = (try? JSONSerialization.data(withJSONObject: op))
+                .flatMap({ String(data: $0, encoding: .utf8) })
+            else { throw WriteFailure.refused("the operation could not be encoded") }
+
+            guard let json = try await callJS(
+                "return JSON.stringify(await window.__whiteboardApply(JSON.parse(op)))",
+                ["op": payload]
+            ),
+                let data = json.data(using: .utf8),
+                let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { throw WriteFailure.refused("it returned nothing") }
+
+            if let unknown = result["unknown"] as? [String], !unknown.isEmpty {
+                throw WriteFailure.unknownElements(unknown)
+            }
+            guard result["ok"] as? Bool == true else {
+                throw WriteFailure.refused(result["reason"] as? String ?? "no reason given")
+            }
+            // The ids that really landed, not the ids that were asked for.
+            return result["ids"] as? [String] ?? []
+        }
+
+        /// **`callAsyncJavaScript`, never `evaluateJavaScript`.**
+        ///
+        /// `evaluateJavaScript` does not await a returned promise — it hands
+        /// back the promise object itself, so an async page function would
+        /// report success the instant it was called, before anything had been
+        /// applied. With the tab closed there would be nothing to notice it by.
+        /// This one awaits it.
+        ///
+        /// **Everything crosses as a JSON string, in both directions.** The
+        /// argument is marshalled by `callAsyncJavaScript` rather than
+        /// interpolated, so the two-nested-languages problem
+        /// `initialSceneScript` solves with base64 does not arise; encoding it
+        /// as one string on top of that keeps the boundary `Sendable` and keeps
+        /// the reply out of `NSNumber`-versus-`Double` guesswork, which is a
+        /// real hazard here because every coordinate an agent sends may be
+        /// integral.
+        private func callJS(
+            _ source: String,
+            _ arguments: [String: String] = [:]
+        ) async throws -> String? {
+            try await withCheckedThrowingContinuation { continuation in
+                webView.callAsyncJavaScript(source, arguments: arguments, in: nil, in: .page) {
+                    switch $0 {
+                    case let .success(value): continuation.resume(returning: value as? String)
+                    case let .failure(error): continuation.resume(throwing: error)
+                    }
+                }
+            }
+        }
+
         /// Ends this board's life. Called from both archive paths.
         ///
         /// The message handler goes first: it holds the bridge, which holds the

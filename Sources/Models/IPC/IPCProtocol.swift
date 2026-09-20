@@ -132,6 +132,20 @@ extension IPC {
         /// `verification.yaml` declares — in the caller's own workstream, and
         /// answers with a run id rather than the result.
         case startVerification = "start_verification"
+        /// Adds elements to the caller's own workstream's whiteboard, in the
+        /// narrow vocabulary box / note / text / arrow, and answers with their
+        /// real Excalidraw ids.
+        ///
+        /// A **list**, because a diagram is eight boxes and six arrows, and one
+        /// call per element at this tier makes agent-produced visuals
+        /// miserable. An arrow may name a box created earlier in the same call,
+        /// so a whole diagram is one round trip.
+        case whiteboardAdd = "whiteboard_add"
+        /// Moves, retexts or recolours one element of the caller's board.
+        case whiteboardUpdate = "whiteboard_update"
+        /// Removes elements from the caller's board. An id that is already gone
+        /// is success, which is what makes this safe to replay.
+        case whiteboardDelete = "whiteboard_delete"
         /// The dev stack's state and live process table, in the caller's own
         /// workstream. Also how an agent learns the process names at all: they
         /// are declared in a config outside its worktree.

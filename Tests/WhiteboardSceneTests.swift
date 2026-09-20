@@ -167,4 +167,47 @@ final class WhiteboardSceneTests: XCTestCase {
             return XCTFail("a board that was never opened is empty")
         }
     }
+
+    // MARK: - the note kind
+
+    func test_aRectangleCarryingTheNoteMarker_parsesAsANote() {
+        // The design's vocabulary is box / note / text / arrow and Excalidraw
+        // has no `note`. Without this half a note round-trips as a box and the
+        // vocabulary silently has three kinds instead of four.
+        guard case let .loaded(scene) = Whiteboard.SceneLoad.parse("""
+        {"elements":[{"id":"n1","type":"rectangle","x":10,"y":20,"width":200,"height":80,
+          "customData":{"atelierKind":"note","atelierAuthor":"agent"}}]}
+        """) else { return XCTFail("expected a loaded scene") }
+        XCTAssertEqual(scene.elements.first?.kind, .note)
+        XCTAssertEqual(scene.elements.first?.isAgentAuthored, true)
+    }
+
+    func test_aRectangleWithoutTheMarker_isStillABox() {
+        guard case let .loaded(scene) = Whiteboard.SceneLoad.parse("""
+        {"elements":[{"id":"b1","type":"rectangle","x":0,"y":0,"width":10,"height":10}]}
+        """) else { return XCTFail("expected a loaded scene") }
+        XCTAssertEqual(scene.elements.first?.kind, .box)
+    }
+
+    func test_theNoteMarkerOnANonRectangle_isIgnored() {
+        // The marker says how a RECTANGLE was authored. It is not a way to
+        // relabel any element as something else.
+        guard case let .loaded(scene) = Whiteboard.SceneLoad.parse("""
+        {"elements":[{"id":"e1","type":"ellipse","x":0,"y":0,"width":10,"height":10,
+          "customData":{"atelierKind":"note"}}]}
+        """) else { return XCTFail("expected a loaded scene") }
+        XCTAssertEqual(scene.elements.first?.kind, .ellipse)
+    }
+
+    func test_aNoteKeepsItsBoundLabel() {
+        guard case let .loaded(scene) = Whiteboard.SceneLoad.parse("""
+        {"elements":[
+          {"id":"n1","type":"rectangle","x":0,"y":0,"width":200,"height":80,
+           "customData":{"atelierKind":"note"}},
+          {"id":"t1","type":"text","containerId":"n1","text":"check the TTL"}]}
+        """) else { return XCTFail("expected a loaded scene") }
+        XCTAssertEqual(scene.elements.count, 1)
+        XCTAssertEqual(scene.elements.first?.kind, .note)
+        XCTAssertEqual(scene.elements.first?.text, "check the TTL")
+    }
 }

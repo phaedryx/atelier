@@ -123,6 +123,12 @@ extension IPC {
                 return await stopExecution(for: request)
             case .readWhiteboard:
                 return readWhiteboard(for: request)
+            case .whiteboardAdd:
+                return await whiteboardAdd(for: request)
+            case .whiteboardUpdate:
+                return await whiteboardUpdate(for: request)
+            case .whiteboardDelete:
+                return await whiteboardDelete(for: request)
             case .addTask:
                 return await addTask(for: request)
             case .getPendingTasks:
@@ -1263,6 +1269,95 @@ extension IPC {
                 id: request.id,
                 .text(Whiteboard.Store.digestText(for: workstreamID, now: Date()))
             )
+        }
+
+        /// The sentence every write ends with.
+        ///
+        /// An agent that reads "opened" as "they are looking at it" waits for a
+        /// reaction nobody had — the same thing `open_tab` says, for the same
+        /// reason, and the reason `request_attention` is named in it.
+        private static let whiteboardTabNote =
+            " The Whiteboard tab is open, but this did not take the selection, so the user is "
+                + "still looking at whatever they had in front of them — use request_attention if "
+                + "you need them to come and look."
+
+        private func whiteboardAdd(for request: Request) async -> Response {
+            guard let workstreamID = callerWorkstreamID(request) else {
+                return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
+            }
+            let elements: String
+            do {
+                elements = try ToolArguments(request).required("elements")
+            } catch {
+                return .failure(id: request.id, error.localizedDescription)
+            }
+            do {
+                let result = try await WorkspaceActions.shared.whiteboardAdd(
+                    workstreamID: workstreamID,
+                    elementsJSON: elements
+                )
+                let count = result.ids.count
+                return .success(id: request.id, .text(
+                    "Added \(count) element\(count == 1 ? "" : "s"): "
+                        + result.ids.joined(separator: ", ") + "."
+                        + Self.whiteboardTabNote
+                ))
+            } catch {
+                return .failure(id: request.id, error.localizedDescription)
+            }
+        }
+
+        private func whiteboardUpdate(for request: Request) async -> Response {
+            guard let workstreamID = callerWorkstreamID(request) else {
+                return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
+            }
+            let arguments = ToolArguments(request)
+            let id: String
+            do {
+                id = try arguments.required("id")
+            } catch {
+                return .failure(id: request.id, error.localizedDescription)
+            }
+            do {
+                let result = try await WorkspaceActions.shared.whiteboardUpdate(
+                    workstreamID: workstreamID,
+                    id: id,
+                    at: arguments.optional("at"),
+                    // `raw`, not `optional`: an empty string is how a label is
+                    // cleared, and `optional` reads empty as absent.
+                    text: arguments.raw["text"],
+                    color: arguments.optional("color")
+                )
+                return .success(
+                    id: request.id,
+                    .text("Updated \(result.id)." + Self.whiteboardTabNote)
+                )
+            } catch {
+                return .failure(id: request.id, error.localizedDescription)
+            }
+        }
+
+        private func whiteboardDelete(for request: Request) async -> Response {
+            guard let workstreamID = callerWorkstreamID(request) else {
+                return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
+            }
+            let ids = ToolArguments(request).list("ids")
+            do {
+                let result = try await WorkspaceActions.shared.whiteboardDelete(
+                    workstreamID: workstreamID,
+                    ids: ids
+                )
+                // What was really there. An id already gone is success and is
+                // simply not listed, which is what makes this replayable.
+                let count = result.removed.count
+                let what = result.removed.isEmpty
+                    ? "Nothing to remove — none of those ids are on the board."
+                    : "Removed \(count) element\(count == 1 ? "" : "s"): "
+                    + result.removed.joined(separator: ", ") + "."
+                return .success(id: request.id, .text(what + Self.whiteboardTabNote))
+            } catch {
+                return .failure(id: request.id, error.localizedDescription)
+            }
         }
 
         /// Starts a verification run in the caller's own workstream and answers
