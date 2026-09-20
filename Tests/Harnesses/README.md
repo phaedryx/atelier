@@ -48,6 +48,37 @@ committed so that does not happen again.
 `board.png` — and never the value a JavaScript call handed back. Two of the nine
 bugs were found only because something looked at the file instead of the reply.
 
+### What a clean run does *not* prove
+
+**These harnesses play both ends**, so they cannot prove the two ends agree on a
+name. The harness sends the ops Swift would send and then reads the scene with
+its own expectations, and both halves are written here — so anything that is a
+*shared vocabulary* between Swift and the page is spelled twice in this file and
+matches itself by construction.
+
+That is not hypothetical. The caption arm shipped into review writing
+`atelierCaption` as a bare literal in `whiteboard.jsx`, breaking the rule that
+`customData` keys live only in `Whiteboard.Element`. Renaming the Swift constant
+would have left the page writing the old key — the caption reaching the board
+and vanishing from the digest — and this harness would have reported **35/35**
+throughout, because it hardcodes the same literal on the read side. The fix was
+to stop the page spelling the key at all (Swift sends it with the value), and to
+pin the agreement in `WhiteboardWriteTests`, which is where an assertion about
+*Swift's* constant belongs.
+
+So: a shared name goes in XCTest. This file is for what the page *does* with
+what it is handed.
+
+### It has been caught lying once
+
+The reflow check in section 5 once reported PASS for an arrow that was not on the
+board at all: `number(nil)` is `NaN`, and `NaN != NaN` is **true**, so a
+"something changed" comparison succeeded against an element that did not exist.
+It asserts presence first now. Recorded rather than quietly fixed, because a
+harness whose failure modes are known is worth more than one reporting a clean
+number nobody has examined — and because the next comparison written in here can
+make the same mistake.
+
 ## `whiteboard-harness.swift`
 
 Builds the same offscreen host `Whiteboard.Host` builds — a `.borderless`
