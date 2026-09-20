@@ -55,11 +55,20 @@ final class WorkspaceActionsResolveTests: XCTestCase {
 /// the whole behavioural claim this tool makes.
 @MainActor
 final class WorkspaceActionsOpenTabTests: XCTestCase {
-    /// The three on-demand singletons, and nothing else.
+    /// The four on-demand singletons, and nothing else.
+    ///
+    /// Whiteboard joined with the read path. It was held out of PR 1 because
+    /// that PR's rule was "no agent involvement whatsoever"; an agent that can
+    /// read the board has to be able to put it in front of the user.
     func testOpensExactlyTheSingletonTabs() {
         XCTAssertEqual(
             WorkspaceActions.openableTabs,
-            ["changes": .changes, "execution": .execution, "verification": .verification]
+            [
+                "changes": .changes,
+                "execution": .execution,
+                "verification": .verification,
+                "whiteboard": .whiteboard,
+            ]
         )
     }
 

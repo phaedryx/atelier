@@ -79,4 +79,26 @@ final class WhiteboardTabKindTests: XCTestCase {
         model.ensureSingleton(.whiteboard)
         XCTAssertEqual(model.activeTab, .agent)
     }
+
+    // MARK: - The agent's handle on the tab
+
+    func test_openTabAndCloseTabBothOfferTheWhiteboard() {
+        // PR 1 left the board out of `openableTabs` because its rule was "no
+        // agent involvement whatsoever". That rule ends with the read path: an
+        // agent that can read the board has to be able to put it in front of
+        // the user. One entry hands both tools the kind, because
+        // `closeableSingletonKinds` is derived from the same table.
+        XCTAssertEqual(
+            WorkspaceActions.openableTabs[IPC.Vocabulary.TabKind.whiteboard.rawValue],
+            .whiteboard
+        )
+        // The two spellings must be one: `list_tabs` reports the second and
+        // `open_tab` accepts the first.
+        XCTAssertEqual(IPC.Vocabulary.TabKind.whiteboard.rawValue, WorkspaceTabKind.whiteboard.id)
+    }
+
+    func test_openTabsSchemaOffersTheWhiteboard() {
+        let description = IPC.Tool.openTab.spec.arguments.first { $0.name == "kind" }?.description
+        XCTAssertEqual(description?.contains("\"whiteboard\""), true, description ?? "")
+    }
 }

@@ -1,0 +1,199 @@
+// ABOUTME: Parses board.excalidraw into the element model the digest renders.
+// ABOUTME: Pure and Foundation-only — no webview, no libghostty, no main actor.
+
+import Foundation
+
+extension Whiteboard {
+    /// One element of a board, as the digest reads it.
+    ///
+    /// **A projection, not Excalidraw's model.** Swift never writes a scene —
+    /// the web app is the sole writer, which is the rule that keeps this feature
+    /// from becoming a sync engine — so this carries only what a digest line
+    /// needs and deliberately cannot round-trip. Anything richer would be a
+    /// second model of the scene, and a second model is the thing to avoid.
+    struct Element: Equatable {
+        /// What the digest calls this element.
+        ///
+        /// Excalidraw's `rectangle` is the design's `box`; everything else that
+        /// has a name keeps it. `.other` keeps `rawType` rather than guessing: a
+        /// board carrying a kind this build has never heard of has to say so,
+        /// not be rendered as the nearest thing it does know.
+        enum Kind: Equatable {
+            case box, ellipse, diamond, line, arrow, text, stroke, image, other
+        }
+
+        /// The `customData` keys. Fixed here, in the **reader**, so that PR 3's
+        /// author marker and PR 4's image transcription each have exactly one
+        /// spelling to write to — the same reason `IPC.Vocabulary` exists for the
+        /// strings two processes share. `customData` is Excalidraw's own
+        /// sanctioned extension point (`customData?: Record<string, any>` on
+        /// every element).
+        static let authorKey = "atelierAuthor"
+        static let agentAuthorValue = "agent"
+        static let captionKey = "atelierCaption"
+
+        let id: String
+        let kind: Kind
+        /// Excalidraw's own `type`, kept so an unknown kind can name itself.
+        let rawType: String
+        /// The element's own text, or the bound label of the container it sits
+        /// on. **Always nil for a stroke and an image**, by construction: those
+        /// two are opaque and nothing here may speak for them.
+        let text: String?
+        let x: Double
+        let y: Double
+        let width: Double
+        let height: Double
+        /// An arrow's endpoints, by element id.
+        let from: String?
+        let to: String?
+        /// An image's `fileId`, which **is** its file's name in `assets/`.
+        /// `Store.writeAsset` refuses any id it would have had to rewrite, so
+        /// there is no mapping table here and no normalisation step.
+        let fileID: String?
+        /// A stroke's point count — the one honest thing to say about a shape
+        /// nothing may transcribe.
+        let pointCount: Int?
+        /// An agent's transcription of an image, when one has been written.
+        let caption: String?
+        let isAgentAuthored: Bool
+    }
+
+    struct Scene: Equatable {
+        let elements: [Element]
+    }
+
+    /// What reading `board.excalidraw` produced.
+    ///
+    /// **Three cases and never two.** A file Atelier cannot read must never
+    /// render as "nothing has been drawn here", which is the same sentence an
+    /// untouched board gets — the distinction `Verification.Config.Load` draws
+    /// between "declares no checks" and "could not be read". It exists because
+    /// the two send a reader to completely different places: one to draw
+    /// something, the other to a file that is right there and broken.
+    ///
+    /// Deliberately separate from `Store.loadScene`, which stays two-valued and
+    /// must. That one feeds the *page*, where an unreadable scene has to mount
+    /// an empty canvas rather than refuse — an empty canvas the user can draw on
+    /// beats a blank pane, and the next save replaces it. Here the difference
+    /// between the two is the whole answer.
+    enum SceneLoad {
+        case empty
+        case unreadable(reason: String)
+        case loaded(Scene)
+
+        static func load(for workstreamID: UUID) -> SceneLoad {
+            let url = Store.sceneURL(for: workstreamID)
+            guard FileManager.default.fileExists(atPath: url.path) else { return .empty }
+            do {
+                return try parse(String(contentsOf: url, encoding: .utf8))
+            } catch {
+                return .unreadable(reason: error.localizedDescription)
+            }
+        }
+
+        static func parse(_ json: String) -> SceneLoad {
+            guard let data = json.data(using: .utf8) else {
+                return .unreadable(reason: "the scene file is not valid UTF-8")
+            }
+            let root: Any
+            do {
+                root = try JSONSerialization.jsonObject(with: data)
+            } catch {
+                return .unreadable(reason: error.localizedDescription)
+            }
+            guard let object = root as? [String: Any] else {
+                return .unreadable(reason: "the scene file is not a JSON object")
+            }
+            guard let raw = object["elements"] as? [[String: Any]] else {
+                return .unreadable(reason: "the scene file has no `elements` list")
+            }
+
+            let live = raw.filter { ($0["isDeleted"] as? Bool) != true }
+            // Built once, not per element: a board is unbounded and this is the
+            // one place the whole list is walked twice.
+            let bound = labels(in: live)
+            let elements = live.compactMap { element(from: $0, labels: bound) }
+            return elements.isEmpty ? .empty : .loaded(Scene(elements: elements))
+        }
+
+        /// Container id → the text bound to it.
+        ///
+        /// A shape's label is **not** a field on the shape. It is a separate
+        /// `text` element carrying `containerId`, and it sits *after* its
+        /// container in file order — measured against 0.18.1, on a scene built
+        /// through Excalidraw's own `convertToExcalidrawElements`. Folding it in
+        /// here is what stops a labelled box rendering as an empty box plus a
+        /// floating caption that does not exist anywhere on the user's screen.
+        private static func labels(in live: [[String: Any]]) -> [String: String] {
+            var labels: [String: String] = [:]
+            for element in live {
+                guard element["type"] as? String == "text",
+                      let container = element["containerId"] as? String,
+                      let text = element["text"] as? String
+                else { continue }
+                labels[container] = text
+            }
+            return labels
+        }
+
+        private static func element(
+            from raw: [String: Any],
+            labels: [String: String]
+        ) -> Element? {
+            guard let id = raw["id"] as? String,
+                  let rawType = raw["type"] as? String
+            else { return nil }
+            // A bound label has already been folded into its container; listing
+            // it again is the double-rendering this join exists to prevent.
+            if rawType == "text", raw["containerId"] is String {
+                return nil
+            }
+
+            let kind: Element.Kind = switch rawType {
+            case "rectangle": .box
+            case "ellipse": .ellipse
+            case "diamond": .diamond
+            case "line": .line
+            case "arrow": .arrow
+            case "text": .text
+            case "freedraw": .stroke
+            case "image": .image
+            default: .other
+            }
+
+            let customData = raw["customData"] as? [String: Any]
+            // Strokes and images stay opaque: a bounding box and nothing more.
+            // A caption is an agent's own transcription and is reported as one,
+            // never as the element's text.
+            let text: String? = switch kind {
+            case .stroke, .image: nil
+            default: labels[id] ?? raw["text"] as? String
+            }
+
+            return Element(
+                id: id,
+                kind: kind,
+                rawType: rawType,
+                text: text,
+                x: number(raw["x"]),
+                y: number(raw["y"]),
+                width: number(raw["width"]),
+                height: number(raw["height"]),
+                from: (raw["startBinding"] as? [String: Any])?["elementId"] as? String,
+                to: (raw["endBinding"] as? [String: Any])?["elementId"] as? String,
+                fileID: raw["fileId"] as? String,
+                pointCount: (raw["points"] as? [Any])?.count,
+                caption: customData?[Element.captionKey] as? String,
+                isAgentAuthored: customData?[Element.authorKey] as? String == Element.agentAuthorValue
+            )
+        }
+
+        /// `as? Double` alone is not enough: `JSONSerialization` hands back an
+        /// integral coordinate as an `Int`-backed `NSNumber`, and a board drawn
+        /// on a pixel boundary would then read as being at the origin.
+        private static func number(_ raw: Any?) -> Double {
+            (raw as? NSNumber)?.doubleValue ?? 0
+        }
+    }
+}

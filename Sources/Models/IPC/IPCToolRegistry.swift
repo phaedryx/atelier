@@ -208,6 +208,7 @@ extension IPC {
             .startProcess,
             .stopProcess,
             .restartProcess,
+            .readWhiteboard,
             .addTask,
             .getPendingTasks,
             .listTasks,
@@ -837,6 +838,39 @@ extension IPC.Tool {
                 """,
                 arguments: []
             )
+        case .readWhiteboard:
+            IPC.ToolSpec(
+                tool: .readWhiteboard,
+                surface: .workspaceRead,
+                replyDeadline: IPC.ToolSpec.Deadline.immediate,
+                isSafeToReplay: true,
+                description: """
+                Read this workstream's whiteboard — a canvas you and the user both draw
+                on.
+
+                You get a text digest of every element, in the order they appear in the
+                scene, each with its real id, position and size. Boxes, arrows and text
+                are given in full. Freehand strokes and pasted images are NOT
+                transcribed: they appear as a bounding box, so you know that they exist
+                and where, and nothing more.
+
+                So ALWAYS open board.png as well. The answer gives you its absolute path
+                — read that file the same way you would read any image. It is the only
+                way you can see the user's handwriting, a rough sketch, or a pasted
+                screenshot, and it is frequently where the point of the board is. If the
+                render is behind the digest, the answer says so rather than letting you
+                read an old picture as current.
+
+                An empty board is answered as empty — the ordinary first state for a
+                workstream, not a fault. A board whose file cannot be read is answered
+                differently and says which; those are two different problems.
+
+                The Whiteboard tab starts closed and reading does not open it. Use
+                open_tab(kind: "whiteboard") to put it in front of the user, and
+                request_attention when you need them to actually look.
+                """,
+                arguments: []
+            )
         case .addTask:
             IPC.ToolSpec(
                 tool: .addTask,
@@ -1268,6 +1302,11 @@ extension IPC {
             case changes
             case execution
             case verification
+            /// Added with the read path. PR 1 held the board back while it had
+            /// no agent-facing anything at all; an agent that can *read* the
+            /// board has to be able to put it in front of the user, and
+            /// `read_whiteboard`'s own description points here to do it.
+            case whiteboard
         }
 
         /// The openable kinds as the schema spells them: `"changes",

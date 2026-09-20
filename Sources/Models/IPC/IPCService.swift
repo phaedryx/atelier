@@ -121,6 +121,8 @@ extension IPC {
                 return await startExecution(for: request)
             case .stopExecution:
                 return await stopExecution(for: request)
+            case .readWhiteboard:
+                return readWhiteboard(for: request)
             case .addTask:
                 return await addTask(for: request)
             case .getPendingTasks:
@@ -1231,6 +1233,36 @@ extension IPC {
             } catch {
                 return .failure(id: request.id, error.localizedDescription)
             }
+        }
+
+        // MARK: - Whiteboard
+
+        /// The caller's own board, as text plus a path to its picture.
+        ///
+        /// **Nothing here can fail with an error, and that is the point.** Every
+        /// state a board can be in — never drawn on, drawn on and rendered,
+        /// drawn on with a render that is behind, a scene file that will not
+        /// parse — is a sentence rather than a refusal. An empty board is the
+        /// first state every workstream is in, and answering it with an error
+        /// would send an agent looking for a fault that is not there; the one
+        /// state that *is* a fault says so in different words, the distinction
+        /// `Verification.Config.Load` draws and for the same reason.
+        ///
+        /// Generated fresh rather than read back from `board.md`: the age and
+        /// the staleness verdict are both answers to "right now", and a file
+        /// cannot hold either.
+        ///
+        /// **No main-actor hop and no webview.** `Whiteboard.Store` is plain
+        /// file IO, so a board whose tab has never been opened in this launch
+        /// still reads, from whatever the last one saved.
+        private func readWhiteboard(for request: Request) -> Response {
+            guard let workstreamID = callerWorkstreamID(request) else {
+                return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
+            }
+            return .success(
+                id: request.id,
+                .text(Whiteboard.Store.digestText(for: workstreamID, now: Date()))
+            )
         }
 
         /// Starts a verification run in the caller's own workstream and answers

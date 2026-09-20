@@ -278,4 +278,60 @@ final class WorkspaceActionsCloseTabTests: XCTestCase {
         XCTAssertFalse(m.tabs.contains(.terminal(first)))
         XCTAssertTrue(m.tabs.contains(.terminal(second)))
     }
+
+    // MARK: - The whiteboard
+
+    func testTheWhiteboardOpensAndClosesByKind() throws {
+        let opened = try WorkspaceActions.shared.openTab(
+            workstreamID: workstreamID,
+            kind: IPC.Vocabulary.TabKind.whiteboard.rawValue
+        )
+        XCTAssertEqual(opened.kind, WorkspaceTabKind.whiteboard.id)
+        XCTAssertFalse(opened.wasAlreadyOpen)
+        XCTAssertTrue(try model().tabs.contains(.whiteboard))
+
+        let closed = try WorkspaceActions.shared.closeTab(
+            workstreamID: workstreamID,
+            kind: IPC.Vocabulary.TabKind.whiteboard.rawValue,
+            surfaceID: nil
+        )
+        XCTAssertEqual(closed.kind, WorkspaceTabKind.whiteboard.id)
+        XCTAssertTrue(closed.wasOpen)
+        XCTAssertFalse(try model().tabs.contains(.whiteboard))
+    }
+
+    func testClosingTheWhiteboardTabDoesNotEndTheBoard() throws {
+        // The one new way this surface could destroy the user's work. A pane is
+        // not a board: the host owns a live webview with a save possibly still
+        // sitting on its debounce, and only the two archive paths may call
+        // `removeWhiteboardHost`. Closing the tab must leave it completely
+        // alone.
+        let host = surfaceCache.whiteboardHost(for: workstreamID)
+        try WorkspaceActions.shared.openTab(
+            workstreamID: workstreamID,
+            kind: IPC.Vocabulary.TabKind.whiteboard.rawValue
+        )
+        _ = try WorkspaceActions.shared.closeTab(
+            workstreamID: workstreamID,
+            kind: IPC.Vocabulary.TabKind.whiteboard.rawValue,
+            surfaceID: nil
+        )
+        XCTAssertTrue(
+            surfaceCache.existingWhiteboardHost(for: workstreamID) === host,
+            "closing the pane must not take the board with it"
+        )
+    }
+
+    func testClosingAWhiteboardThatIsNotOpenIsSuccess() throws {
+        // `close_tab` is replayable, so a replay landing after the first close
+        // already succeeded has to answer the same way rather than erroring on
+        // a fact that is merely no longer true.
+        let closed = try WorkspaceActions.shared.closeTab(
+            workstreamID: workstreamID,
+            kind: IPC.Vocabulary.TabKind.whiteboard.rawValue,
+            surfaceID: nil
+        )
+        XCTAssertEqual(closed.kind, WorkspaceTabKind.whiteboard.id)
+        XCTAssertFalse(closed.wasOpen)
+    }
 }

@@ -152,10 +152,12 @@ final class WorkspaceActions {
         switch tab {
         case .agent: workstreamID
         case let .terminal(id): id
-        // The whiteboard has no shell, so nil. It is deliberately absent from
-        // `openableTabs` as well: that table is an explicit opt-in list rather
-        // than something derived from `WorkspaceTabKind`, and handing an agent
-        // the board belongs with the whiteboard IPC tools, not ahead of them.
+        // The whiteboard has no shell, so nil — the same as Changes, Execution
+        // and Verification. It *is* in `openableTabs` now, unlike when this
+        // comment was first written: `open_tab` and `close_tab` reach it by
+        // kind, which is the vocabulary a tab with no surface id is addressed
+        // in. Closing it removes the pane and leaves the board alone; only the
+        // two archive paths may reach `removeWhiteboardHost`.
         case .info, .changes, .execution, .verification, .whiteboard, .browser, .editor: nil
         }
     }
@@ -239,6 +241,7 @@ final class WorkspaceActions {
         IPC.Vocabulary.TabKind.changes.rawValue: .changes,
         IPC.Vocabulary.TabKind.execution.rawValue: .execution,
         IPC.Vocabulary.TabKind.verification.rawValue: .verification,
+        IPC.Vocabulary.TabKind.whiteboard.rawValue: .whiteboard,
     ]
 
     /// Opens one of the singleton tabs, **without taking the selection**.
