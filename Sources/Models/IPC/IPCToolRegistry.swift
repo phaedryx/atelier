@@ -1302,6 +1302,11 @@ extension IPC {
             case changes
             case execution
             case verification
+            /// Added with the read path. PR 1 held the board back while it had
+            /// no agent-facing anything at all; an agent that can *read* the
+            /// board has to be able to put it in front of the user, and
+            /// `read_whiteboard`'s own description points here to do it.
+            case whiteboard
         }
 
         /// The openable kinds as the schema spells them: `"changes",

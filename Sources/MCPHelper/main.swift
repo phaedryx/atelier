@@ -170,7 +170,7 @@ You can also act on the workstream you are running in. list_tabs shows its tabs 
 
 open_editor puts a file on screen in front of the user, and request_attention raises a desktop notification asking them to come and look. Both change what the user sees, so use them when you have something for them rather than to narrate progress. request_attention does not block: it notifies and returns, and one workstream can raise it only every \(IPC.Vocabulary.attentionCooldownSeconds) seconds.
 
-open_tab opens this workstream's Changes, Execution or Verification pane, which all start closed. It does not switch the user's view — pair it with request_attention when you need their eyes, rather than assuming a tab you opened is a tab they saw.
+open_tab opens this workstream's Changes, Execution, Verification or Whiteboard pane, which all start closed. It does not switch the user's view — pair it with request_attention when you need their eyes, rather than assuming a tab you opened is a tab they saw.
 
 open_agent_tab opens a terminal tab in your workstream, and with a prompt it starts another agent there. That agent shares your worktree, so give it work that collaborates on the change you are already making — a reviewer, a test-writer, a second pair of hands on the same branch. Work that belongs on its own branch needs its own workstream, not a tab. Poll list_tabs for the new surface's peer id before trying to message it.
 
