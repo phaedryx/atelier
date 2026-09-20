@@ -51,6 +51,22 @@ extension Whiteboard {
                 headerFields: [
                     "Content-Type": Self.mimeType(for: fileURL.pathExtension),
                     "Content-Length": "\(data.count)",
+                    // The PNG export reads each asset back with `fetch` and
+                    // re-inlines it as a data URL, because an asset-scheme image
+                    // **taints the export canvas**: Excalidraw builds its
+                    // `Image` with no `crossOrigin`, so the whole `exportToBlob`
+                    // fails with `SecurityError` — not just the image. Measured
+                    // against 0.18.1, and only reachable after a relaunch, since
+                    // a freshly pasted image is already a `data:` URL. Without
+                    // this header the `fetch` itself fails first (`TypeError:
+                    // Load failed`), so both halves are needed and neither is
+                    // sufficient alone.
+                    //
+                    // This widens what may *read* a response and nothing else.
+                    // What may be served at all is `resolve`'s decision, and
+                    // `isCanonicallyInside` is untouched — the origin being
+                    // allowed here is the board's own page.
+                    "Access-Control-Allow-Origin": "*",
                 ]
             )!
             urlSchemeTask.didReceive(response)

@@ -236,6 +236,16 @@ extension Whiteboard {
 
         private let workstreamID: UUID
 
+        /// The revision of the most recently saved scene.
+        ///
+        /// A render is accepted only for *this* revision. Exports are not
+        /// ordered against each other — a big board's export can outlast the
+        /// save that follows it — so without this a slow render would land on
+        /// top of a newer scene and be stamped as matching it, which is the one
+        /// thing the stamp exists to prevent. The page guards on it too; this is
+        /// the copy that matters, because it is the one holding the file.
+        private var latestRevision: String?
+
         init(workstreamID: UUID) {
             self.workstreamID = workstreamID
         }
@@ -256,8 +266,38 @@ extension Whiteboard {
                 guard let json = body["scene"] as? String else { return }
                 do {
                     try Store.saveScene(json, for: workstreamID)
+                    latestRevision = body["rev"] as? String
+                    // The picture on disk is now of an earlier board. It stays —
+                    // a moment-old picture is still worth looking at — but
+                    // nothing may read it as current until its render arrives.
+                    Store.invalidateRender(for: workstreamID)
+                    Store.refreshDigest(for: workstreamID)
                 } catch {
                     logger.error("Could not save board: \(error.localizedDescription, privacy: .public)")
+                }
+            case "render":
+                guard let rev = body["rev"] as? String, rev == latestRevision else { return }
+                guard body["ok"] as? String == "true" else {
+                    // Left stale on purpose: the digest reports that in words,
+                    // which is the specified behaviour. Logged because the cause
+                    // is otherwise invisible — on disk, a render that failed and
+                    // a render that simply never arrived look identical.
+                    let reason = body["reason"] as? String ?? "no reason given"
+                    logger.error("Board render failed: \(reason, privacy: .public)")
+                    return
+                }
+                guard let base64 = body["data"] as? String,
+                      let data = Data(base64Encoded: base64),
+                      let width = (body["width"] as? String).flatMap(Int.init),
+                      let height = (body["height"] as? String).flatMap(Int.init)
+                else { return }
+                do {
+                    try Store.writeRender(png: data, width: width, height: height, for: workstreamID)
+                    // Again, because the render line is part of the digest and
+                    // this is the arm that makes it true.
+                    Store.refreshDigest(for: workstreamID)
+                } catch {
+                    logger.error("Could not save board render: \(error.localizedDescription, privacy: .public)")
                 }
             case "saveAsset":
                 guard let id = body["id"] as? String,
