@@ -266,14 +266,23 @@ createRoot(document.getElementById('board')).render(React.createElement(Board))
 // base64 — the quoting problem `Whiteboard.Host.initialSceneScript` solves for a
 // document-start script does not arise here.
 
-// The live element ids, for Swift's validator.
+// The live element ids, and where the next unpositioned element should go.
 //
 // Read from the PAGE and never from board.excalidraw, because the file lags the
 // page by the 800ms save debounce: an agent that adds a box and then updates it
 // would otherwise be refused for naming an id that is plainly on the board.
-window.__whiteboardElementIDs = () => {
+//
+// The layout travels with the ids because Swift cannot compute it — a board's
+// extent is live state — and because both are answers to the same instant.
+window.__whiteboardState = () => {
   if (!api) return null
-  return api.getSceneElements().map((el) => el.id)
+  const els = api.getSceneElements()
+  if (!els.length) return { ids: [], originX: 100, nextY: 100 }
+  return {
+    ids: els.map((el) => el.id),
+    originX: Math.min(...els.map((el) => el.x)),
+    nextY: Math.max(...els.map((el) => el.y + (el.height || 0))) + 60,
+  }
 }
 
 // Excalidraw stores a container's label as a SEPARATE text element carrying
