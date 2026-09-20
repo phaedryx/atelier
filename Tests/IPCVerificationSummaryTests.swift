@@ -213,6 +213,37 @@ final class IPCVerificationSummaryTests: XCTestCase {
         )
     }
 
+    /// Cutting a name to fit must not manufacture a replacement character.
+    ///
+    /// The cut lands wherever the trailer's length leaves it, so a multi-byte scalar
+    /// straddling that point is the ordinary case rather than an exotic one. Four
+    /// ASCII offsets against a 4-byte scalar put the boundary at every position
+    /// inside a sequence, so no single arithmetic coincidence can make this pass.
+    /// `U+FFFD` is three bytes where the scalar it replaces may have been one to
+    /// four, so the budget is asserted alongside it — the same overshoot the
+    /// truncation exists to prevent.
+    func test_checkMessage_cutsANameOnAScalarBoundary() {
+        for pad in 0 ... 3 {
+            let name = String(repeating: "x", count: pad) + String(repeating: "😀", count: 2_000)
+            let long = IPC.VerificationCheckNotice(
+                runID: "abcd1234", workstreamID: UUID().uuidString, requesterSurfaceID: nil,
+                check: IPC.VerificationCheckInfo(
+                    name: name, state: .failed, exitCode: 1, durationSeconds: 1
+                )
+            )
+            let message = IPC.VerificationSummary.checkMessage(for: long)
+
+            XCTAssertFalse(
+                message.contains("\u{FFFD}"),
+                "pad \(pad): the cut landed mid-scalar and produced U+FFFD"
+            )
+            XCTAssertLessThanOrEqual(
+                message.utf8.count, IPC.VerificationSummary.maxCheckMessageBytes,
+                "pad \(pad): the notice overshot its budget"
+            )
+        }
+    }
+
     /// Nothing may read as though the output could be fetched. It lives in the
     /// check's terminal surface and Atelier keeps no copy at all, so the tab and a
     /// re-run are the only two honest pointers.
