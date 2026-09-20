@@ -351,4 +351,26 @@ final class IPCToolRegistryTests: XCTestCase {
             XCTAssertEqual(tool.spec.surface, .workspaceAction, "\(tool.rawValue)")
         }
     }
+
+    /// The write tools group with the read, so an agent that has found one has
+    /// found all four.
+    func test_theWhiteboardWriteTools_areAdvertisedBesideTheRead() throws {
+        let advertised = IPC.ToolSpec.advertised.map(\.tool)
+        let read = try XCTUnwrap(advertised.firstIndex(of: .readWhiteboard))
+        XCTAssertEqual(
+            Array(advertised[read ... (read + 3)]),
+            [.readWhiteboard, .whiteboardAdd, .whiteboardUpdate, .whiteboardDelete]
+        )
+    }
+
+    /// A caller cannot tell a genuine failure from one its own retry caused, so
+    /// the wording has to forbid a retry rather than invite one — the rule
+    /// `create_workstream`'s timeout message states.
+    func test_whiteboardAddsDescription_forbidsARetryRatherThanInvitingOne() {
+        let description = IPC.Tool.whiteboardAdd.spec.description.lowercased()
+        XCTAssertTrue(
+            description.contains("do not retry") || description.contains("not replayed"),
+            description
+        )
+    }
 }

@@ -429,4 +429,41 @@ final class WhiteboardWriteTests: XCTestCase {
             XCTAssertEqual($0 as? Write.Failure, .emptyBatch)
         }
     }
+
+    // MARK: - The JSON the tool argument carries
+
+    func test_aJSONArrayIsParsedIntoAPlan() throws {
+        let plan = try Write.addPlan(
+            fromJSON: #"[{"kind": "box", "text": "Auth service", "at": "120,80"}]"#,
+            live: empty,
+            mint: minter()
+        )
+        XCTAssertEqual(plan.ids, ["id-1"])
+        XCTAssertEqual(plan.skeletons.first?.label, "Auth service")
+        XCTAssertEqual(plan.skeletons.first?.x, 120)
+    }
+
+    func test_malformedJSONIsRefusedWithAWorkedExample() {
+        // The argument crosses IPC as a string, so a model writing the array by
+        // hand is the ordinary case and the refusal has to show the shape.
+        for bad in ["not json", "{\"kind\":\"box\"}", "", "[", "42"] {
+            XCTAssertThrowsError(
+                try Write.addPlan(fromJSON: bad, live: empty, mint: minter()),
+                "expected \(bad) to be refused"
+            ) { error in
+                XCTAssertEqual(error as? Write.Failure, .malformedJSON)
+                XCTAssertTrue(
+                    (error as? Write.Failure)?.errorDescription?.contains("\"kind\"") == true
+                )
+            }
+        }
+    }
+
+    func test_anEmptyJSONArrayIsTheEmptyBatchRefusal_notAParseFailure() {
+        // Different mistakes, different sentences: one is a malformed argument,
+        // the other is a well-formed call that asks for nothing.
+        XCTAssertThrowsError(try Write.addPlan(fromJSON: "[]", live: empty, mint: minter())) {
+            XCTAssertEqual($0 as? Write.Failure, .emptyBatch)
+        }
+    }
 }

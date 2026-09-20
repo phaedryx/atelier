@@ -157,6 +157,7 @@ extension Whiteboard {
         /// what it has to work from.
         enum Failure: LocalizedError, Equatable {
             case emptyBatch
+            case malformedJSON
             case batchTooLarge(Int)
             case malformedEntry(Int)
             case unknownKind(String)
@@ -171,6 +172,9 @@ extension Whiteboard {
                 switch self {
                 case .emptyBatch:
                     "No elements were given. Name at least one."
+                case .malformedJSON:
+                    "`elements` is not a JSON array. It looks like "
+                        + "[{\"kind\": \"box\", \"text\": \"Auth service\", \"at\": \"120,80\"}]."
                 case let .batchTooLarge(count):
                     "\(count) elements is more than one call may take; the limit is \(maxBatch). "
                         + "Split it across calls."
@@ -210,6 +214,24 @@ extension Whiteboard {
         }
 
         // MARK: - add
+
+        /// The same plan, from the JSON array the tool argument carries.
+        ///
+        /// Arguments cross IPC as `[String: String]` — every tool on this
+        /// surface takes only strings — so a list of objects has to arrive
+        /// encoded. Parsed here rather than at the handler so that a malformed
+        /// array is refused in the same voice as everything else this file
+        /// refuses, and so the parse is covered by the same pure tests.
+        static func addPlan(
+            fromJSON json: String,
+            live: Live,
+            mint: () -> String = mintID
+        ) throws -> (ids: [String], skeletons: [Skeleton]) {
+            guard let data = json.data(using: .utf8),
+                  let raw = try? JSONSerialization.jsonObject(with: data) as? [Any]
+            else { throw Failure.malformedJSON }
+            return try addPlan(from: raw, live: live, mint: mint)
+        }
 
         static func addPlan(
             from raw: [Any],

@@ -169,4 +169,35 @@ final class IPCProtocolTests: XCTestCase {
     func test_startExecution_isTheOnlyExecutionToolThatIsNotReplayed() {
         XCTAssertFalse(IPC.Tool.startExecution.isSafeToReplay)
     }
+
+    // MARK: - The whiteboard write tools
+
+    /// A create. The helper mints a fresh request id on every replay, so there
+    /// is no id the service could use to recognise "I already did this one",
+    /// and a replayed create draws the diagram twice. The same rule `add_task`
+    /// and `create_workstream` follow.
+    func test_whiteboardAdd_isNotReplayed_becauseItIsACreate() {
+        XCTAssertFalse(IPC.Tool.whiteboardAdd.isSafeToReplay)
+    }
+
+    /// `update` lands the same values twice; an id already gone is success for
+    /// `delete`, which is the whole reason it can be replayed at all.
+    func test_whiteboardUpdateAndDelete_areReplayable() {
+        XCTAssertTrue(IPC.Tool.whiteboardUpdate.isSafeToReplay)
+        XCTAssertTrue(IPC.Tool.whiteboardDelete.isSafeToReplay)
+    }
+
+    func test_whiteboardWriteTools_areWorkspaceActionsOnTheFifteenSecondTier() {
+        for tool in [IPC.Tool.whiteboardAdd, .whiteboardUpdate, .whiteboardDelete] {
+            XCTAssertEqual(tool.surface, .workspaceAction, tool.rawValue)
+            XCTAssertEqual(tool.replyDeadline, 15, tool.rawValue)
+        }
+    }
+
+    /// They act on the caller's own workstream, which `.workspaceAction`'s
+    /// charter already covers. A fifth `Surface` case would need a trust
+    /// argument distinct from the four that exist, and this has none.
+    func test_theWhiteboardWriteTools_addNoNewSurface() {
+        XCTAssertEqual(IPC.Surface.allCases.count, 4)
+    }
 }

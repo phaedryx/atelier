@@ -708,14 +708,19 @@ extension WorkspaceActions {
     }
 
     /// Adds elements to the caller's board and answers with their real ids.
+    ///
+    /// Takes the JSON as given rather than a parsed array: the value has to
+    /// cross an actor hop to reach this `@MainActor` type, and `[Any]` is not
+    /// `Sendable`. `Whiteboard.Write` owns the parse, so a malformed array is
+    /// refused in the same voice as every other bad argument.
     func whiteboardAdd(
         workstreamID: UUID,
-        elements: [Any]
+        elementsJSON: String
     ) async throws -> (ids: [String], tabWasAlreadyOpen: Bool) {
         let target = try whiteboardTarget(workstreamID: workstreamID)
         // The live page, not the scene on disk — see `Host.liveState`.
         let live = try await target.host.liveState()
-        let plan = try Whiteboard.Write.addPlan(from: elements, live: live)
+        let plan = try Whiteboard.Write.addPlan(fromJSON: elementsJSON, live: live)
         let ids = try await target.host.apply([
             "kind": "add",
             "elements": plan.skeletons.map(\.json),
