@@ -239,4 +239,20 @@ final class WhiteboardDigestTests: XCTestCase {
         XCTAssertTrue(text.contains("6 elements"), text)
         XCTAssertTrue(text.contains("updated 14s ago"), text)
     }
+
+    // MARK: - the note kind
+
+    func test_aNoteRendersAsNote_andNotAsBox() {
+        // An annotation and a diagram node are different things, and the digest
+        // reporting them differently is what lets an agent re-read its own
+        // board and tell its commentary apart from the structure it drew.
+        let text = digest("""
+        {"type":"excalidraw","elements":[
+          {"id":"n1","type":"rectangle","x":640,"y":200,"width":200,"height":80,
+           "text":"check the TTL","customData":{"atelierKind":"note","atelierAuthor":"agent"}}]}
+        """)
+        XCTAssertTrue(text.contains("n1  note"), text)
+        XCTAssertFalse(text.contains("n1  box"), text)
+        XCTAssertTrue(text.contains("(agent)"), text)
+    }
 }

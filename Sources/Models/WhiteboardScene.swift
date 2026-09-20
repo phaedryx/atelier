@@ -19,7 +19,7 @@ extension Whiteboard {
         /// board carrying a kind this build has never heard of has to say so,
         /// not be rendered as the nearest thing it does know.
         enum Kind: Equatable {
-            case box, ellipse, diamond, line, arrow, text, stroke, image, other
+            case box, note, ellipse, diamond, line, arrow, text, stroke, image, other
         }
 
         /// The `customData` keys. Fixed here, in the **reader**, so that PR 3's
@@ -31,6 +31,18 @@ extension Whiteboard {
         static let authorKey = "atelierAuthor"
         static let agentAuthorValue = "agent"
         static let captionKey = "atelierCaption"
+        /// How an element was authored, where Excalidraw has no type for it.
+        ///
+        /// The write vocabulary is box / note / text / arrow, and Excalidraw has
+        /// no `note`: one is a rectangle with a distinct background and this
+        /// marker. The reader half is not optional — without it a note
+        /// round-trips as a box and the vocabulary silently has three kinds
+        /// instead of four. An annotation and a diagram node are different
+        /// things, and reporting them differently is what lets an agent re-read
+        /// its own board and tell its commentary apart from the structure it
+        /// drew.
+        static let kindKey = "atelierKind"
+        static let noteKindValue = "note"
 
         let id: String
         let kind: Kind
@@ -150,7 +162,7 @@ extension Whiteboard {
                 return nil
             }
 
-            let kind: Element.Kind = switch rawType {
+            let rawKind: Element.Kind = switch rawType {
             case "rectangle": .box
             case "ellipse": .ellipse
             case "diamond": .diamond
@@ -163,6 +175,13 @@ extension Whiteboard {
             }
 
             let customData = raw["customData"] as? [String: Any]
+            // Only a rectangle is promoted. The marker names how a rectangle
+            // was authored; it is not a way to relabel any element as something
+            // else, and honouring it anywhere would let a board rename its own
+            // shapes out from under the reader.
+            let kind: Element.Kind =
+                rawKind == .box && customData?[Element.kindKey] as? String == Element.noteKindValue
+                    ? .note : rawKind
             // Strokes and images stay opaque: a bounding box and nothing more.
             // A caption is an agent's own transcription and is reported as one,
             // never as the element's text.

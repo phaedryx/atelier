@@ -204,6 +204,7 @@ extension Whiteboard {
         private static func name(of element: Element) -> String {
             switch element.kind {
             case .box: "box"
+            case .note: "note"
             case .ellipse: "ellipse"
             case .diamond: "diamond"
             case .line: "line"
