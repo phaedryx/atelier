@@ -1706,7 +1706,7 @@ checks rather than a comment:
 |---|---|---|
 | Messaging | `register_peer`, `list_peers`, `send_message`, `receive_messages`, `broadcast`, `get_peer_status` | none needed — text between agents, nothing a user can see |
 | Workspace reads | `list_tabs`, `read_review_comments`, `check_verification`, `list_verification_checks`, `list_processes`, `read_process_logs`, `read_whiteboard`, `get_session_checkpoint` | none needed — answers about the caller's own workstream |
-| Workspace actions | `open_agent_tab`, `open_editor`, `open_tab`, `close_tab`, `request_attention`, `create_workstream`, `start_verification`, `start_execution`, `stop_execution`, `start_process`, `stop_process`, `restart_process`, `update_session_checkpoint` | see below |
+| Workspace actions | `open_agent_tab`, `open_editor`, `open_tab`, `close_tab`, `request_attention`, `create_workstream`, `start_verification`, `start_execution`, `stop_execution`, `start_process`, `stop_process`, `restart_process`, `whiteboard_add`, `whiteboard_update`, `whiteboard_delete`, `update_session_checkpoint` | see below |
 | Project tasks | `add_task`, `get_pending_tasks`, `list_tasks`, `claim_task`, `complete_task`, `fail_task` | see "The project task queue" below — project-scoped, and ungated for a third reason distinct from the two above |
 
 The messaging six were once the whole enum. Calix's IPC core is the same six, and everything it
@@ -2287,6 +2287,96 @@ is bounded twice — a line count (100 default, 1000 ceiling, clamped rather tha
 64KB byte budget trimmed oldest-first, which says when it cut. The store's 64KB message cap is
 **not** what binds: a tool response is not an inbox message. `IPC.Server.maxFrameBytes` and the
 agent's own context are.
+
+### The whiteboard write tools
+
+Three tools give an agent the board's write half, as `read_whiteboard` gave it the read half:
+`whiteboard_add`, `whiteboard_update`, `whiteboard_delete`. They sit immediately after
+`read_whiteboard` in `advertisedOrder`, so an agent that has found one has found all four.
+
+**`.workspaceAction`, 15s, and no new `Surface` case.** They act on the caller's own workstream,
+which that surface's charter already covers; a fifth case needs a trust argument distinct from the
+four that exist, and this has none. There is no approval gate either, and here the question the
+other configs answer does not even arise: a board is Atelier's own cache directory, not a file a
+repository can ship.
+
+**Swift validates and normalizes; the page expands.** `Whiteboard.Write`
+(`Sources/Models/WhiteboardWrite.swift`) turns `{kind, text, at, from, to, color}` into an
+Excalidraw *skeleton* and refuses everything outside the vocabulary; `convertToExcalidrawElements`
+in `editor/src/whiteboard.jsx` turns a skeleton into a real element. The split falls there because
+this half is where the mistakes live — an unknown kind, an arrow pointing at nothing, a colour that
+is not a colour — and none of them need a webview to pin, while the expansion needs Excalidraw's
+own `seed`, `versionNonce`, `groupIds` and `boundElements` and must never be hand-written.
+It lives in `Sources/Models/` and **not** `Sources/Models/IPC/`: `project.yml` compiles
+`IPCProtocol.swift` and `IPCToolRegistry.swift` out of that directory into the `AtelierMCP` helper,
+which cannot see `Whiteboard` and would stop compiling.
+
+**Swift mints the ids and Excalidraw keeps them**, because the page converts with
+`regenerateIds: false` — measured against 0.18.1, a supplied id survives byte-identical. So
+`whiteboard_add` answers with ids that *are* the real element ids, the same ones the digest reports
+and `whiteboard_update` takes: no mapping table, and no display-id vocabulary for the two ends to
+drift apart on. It is also what lets an arrow name a box created beside it, which is why `add`
+takes a **list** — a whole diagram is one call rather than fourteen at the 15s tier. A *forward*
+reference is refused rather than resolved, because resolving it would make a batch's meaning depend
+on a reading order nothing states.
+
+**What is on the board is read from the page, never from `board.excalidraw`.** The file lags by the
+800ms save debounce, so an agent that adds a box and then updates it would be refused for naming an
+id that is plainly there. `Host.liveState` reads `window.__whiteboardState()`, which also carries
+the board's extent — Swift cannot compute that, and both are answers to the same instant. Passing
+it in as a parameter is what keeps the validator pure and testable with no board on disk.
+
+**`callAsyncJavaScript`, never `evaluateJavaScript`.** The latter does not await a returned promise;
+it hands back the promise object, so an async page function reports success the instant it is
+called, before anything has been applied. With the tab closed nothing would notice. Everything
+crosses as a JSON string in both directions, which keeps the boundary `Sendable` and keeps the
+reply out of `NSNumber`-versus-`Double` guesswork — a real hazard here, because every coordinate an
+agent sends may be integral, the same trap `SceneLoad.number` documents on the read side.
+
+**`whiteboard_add` is not replayable**, with `add_task` and `create_workstream`: it is a create, the
+helper mints a fresh request id on every replay, and a replayed create draws the diagram twice. Its
+refusals — the readiness timeout included — **forbid** a retry rather than inviting one, because a
+caller cannot tell a genuine failure from one its own retry caused. `update` and `delete` are
+replayable, and `delete` is replayable *because* an id already gone is success; the answer reports
+what was really removed rather than echoing back what it was asked for.
+
+**Two Excalidraw behaviours this had to be built around.** Both were measured against the real
+built bundle in an occluded offscreen window, and both *succeed* while leaving the board's picture
+and its digest disagreeing — which is the worst state a board can be in, since the two halves of
+the read path exist to corroborate each other:
+
+- **An arrow does not bind to an endpoint outside its own batch.** `convertToExcalidrawElements`
+  binds only within the array it is handed, so "connect the two boxes you can see" produced
+  `startBinding` and `endBinding` both null. The referenced elements are therefore carried *into*
+  that array and Excalidraw computes the binding itself. A carried element's `boundElements` is
+  **unioned, never assigned**: a box already carries an entry for its own text label, and
+  overwriting the list leaves that caption on the canvas attached to nothing.
+- **Binding does not move an arrow to its endpoints.** One handed `(0,0)` with both bindings
+  resolved stays at `(0,0)` with a stub 100px segment. So `edgePoints` computes the geometry in the
+  page, and that is not a split of convenience: an arrow may name an endpoint already on the board,
+  whose position Swift has no way to know.
+
+**The host is created eagerly by `WorkspaceActions`, not by a view.** The Whiteboard tab renders
+only while the user is looking at that workstream, so relying on `ensureSingleton` to make a view
+build the host would mean an agent's write silently doing nothing whenever the user is elsewhere —
+most of the time, and the case the offscreen design exists for. `ensureSingleton` and never
+`activateSingleton`, and every answer says the tab was opened **without taking the selection** and
+names `request_attention`, the rule `open_tab` states.
+
+**The `note` kind is a rectangle**, since Excalidraw has none: a distinct background plus
+`Whiteboard.Element.kindKey` (`"atelierKind"`) in `customData`, declared beside `authorKey` and
+`captionKey` in `WhiteboardScene.swift`. **Both halves or neither** — the digest is taught to report
+it as `note`, and without that a note round-trips as a box and the vocabulary silently has three
+kinds instead of four. An annotation and a diagram node are different things, and reporting them
+differently is what lets an agent re-read its own board and tell its commentary apart from the
+structure it drew. Only a *rectangle* is promoted: the marker says how a rectangle was authored, not
+a way to relabel any element.
+
+**An unplaced element clears what its own batch placed.** `at` is optional and anything unplaced is
+stacked in a column, whose floor is the lower of the board's own extent and the bottom of anything
+this batch places by hand — scanned up front, so the answer does not depend on batch order. Without
+it an agent that placed two boxes and added an unplaced note got the note dropped on top of them:
+invisible in the digest, since the coordinates read exactly as asked, and wrong only in the picture.
 
 ### The project task queue
 
