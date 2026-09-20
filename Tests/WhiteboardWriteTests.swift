@@ -538,6 +538,52 @@ final class WhiteboardWriteTests: XCTestCase {
         ) { XCTAssertEqual($0 as? Write.Failure, .unknownElement("ghost")) }
     }
 
+    func test_textOnAnImageIsRefusedAndNamesCaption() {
+        // The most likely wrong first move an agent makes, and it used to be
+        // answered with a lie: an image carries no text on the canvas, so
+        // `textTargetFor` found nothing to change and the call still reported
+        // "Updated i1." A silent success teaches an agent the caption landed.
+        XCTAssertThrowsError(
+            try Write.updatePlan(
+                id: "i1", at: nil, text: "Settings pane", color: nil,
+                live: board(ids: ["i1"], images: ["i1"])
+            )
+        ) { error in
+            XCTAssertEqual(error as? Write.Failure, .textNeedsCanvasText("i1"))
+            let message = (error as? Write.Failure)?.errorDescription ?? ""
+            XCTAssertTrue(message.contains("i1"), message)
+            XCTAssertTrue(message.contains("`caption`"), message)
+        }
+    }
+
+    func test_clearingTextOnAnImageIsRefusedTheSameWay() {
+        // "" is a real edit for anything that carries words, so it cannot be
+        // waved through here either — there is still nothing to clear.
+        XCTAssertThrowsError(
+            try Write.updatePlan(
+                id: "i1", at: nil, text: "", color: nil,
+                live: board(ids: ["i1"], images: ["i1"])
+            )
+        ) { XCTAssertEqual($0 as? Write.Failure, .textNeedsCanvasText("i1")) }
+    }
+
+    func test_movingAnImageWithoutTextIsStillFine() throws {
+        XCTAssertNoThrow(
+            try Write.updatePlan(
+                id: "i1", at: "10,20", text: nil, color: nil,
+                live: board(ids: ["i1"], images: ["i1"])
+            )
+        )
+    }
+
+    func test_textOnSomethingThatIsNotAnImageIsUntouched() throws {
+        let op = try Write.updatePlan(
+            id: "n1", at: nil, text: "still fine", color: nil,
+            live: board(ids: ["n1", "i1"], images: ["i1"])
+        )
+        XCTAssertEqual(op["text"] as? String, "still fine")
+    }
+
     func test_nothingToUpdateNamesCaptionAsAField() {
         // The refusal is the agent's only map of what this tool takes.
         let message = Write.Failure.nothingToUpdate.errorDescription ?? ""

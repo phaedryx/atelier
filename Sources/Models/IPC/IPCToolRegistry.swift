@@ -940,7 +940,8 @@ extension IPC.Tool {
                 image, so a later read — by you or by another agent — does not have to
                 look at the picture again. A caption is only for an image; use `text`
                 for anything that carries words on the canvas. Pass an empty string to
-                clear one.
+                clear one. `text` on an image is refused rather than ignored — an image
+                carries no words on the canvas, so there would be nothing to change.
 
                 A caption is not drawn on the board, so Excalidraw's own canvas search
                 will not find it. That is deliberate: materializing it would put a block

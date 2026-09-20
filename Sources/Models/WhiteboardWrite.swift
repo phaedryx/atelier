@@ -177,6 +177,7 @@ extension Whiteboard {
             case invalidPosition(String)
             case invalidColor(String)
             case captionNeedsImage(String)
+            case textNeedsCanvasText(String)
             case nothingToUpdate
 
             var errorDescription: String? {
@@ -214,6 +215,14 @@ extension Whiteboard {
                     "\"\(id)\" is not an image, and a caption is a transcription of one. "
                         + "Use `text` to change what a box, note, text or arrow says. "
                         + "read_whiteboard lists each image on this board."
+                case let .textNeedsCanvasText(id):
+                    // The mirror of `captionNeedsImage`, and the more valuable
+                    // of the two: reaching for `text` to describe a screenshot
+                    // is the obvious first move, and it used to succeed while
+                    // changing nothing.
+                    "\"\(id)\" is an image, and an image carries no text on the canvas. "
+                        + "Use `caption` to record what it shows — read_whiteboard reports that "
+                        + "under the image."
                 case .nothingToUpdate:
                     "Nothing to change — name at least one of `at`, `text`, `color` or `caption`."
                 }
@@ -389,6 +398,16 @@ extension Whiteboard {
             // optional argument on this surface: clearing a label is a real
             // edit, and `""` is how it is asked for.
             if let text {
+                // **An image is refused here**, and this is the mirror of
+                // `captionNeedsImage` below. An image carries no text on the
+                // canvas, so the page's `textTargetFor` finds nothing to change
+                // — and the call still reported "Updated i1.", which is a silent
+                // success teaching an agent that its transcription landed.
+                // Reaching for `text` to describe a screenshot is the obvious
+                // first move, so it is the one that most needs answering.
+                guard !live.imageIDs.contains(id) else {
+                    throw Failure.textNeedsCanvasText(id)
+                }
                 op["text"] = text
             }
             if let color {

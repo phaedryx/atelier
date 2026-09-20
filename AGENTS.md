@@ -2425,6 +2425,13 @@ answer that at all, since it never reads the scene and the page is the only thin
 **absent** `imageIDs` fails *open* to the page rather than reading as "no images", which would refuse
 every legitimate caption while naming the wrong cause.
 
+**And the mirror of that refusal was the point of adding it.** `text` on an **image** is refused
+too. An image carries no words on the canvas, so the page's `textTargetFor` found nothing to change
+and the call still answered "Updated i1." — a silent success teaching an agent that its
+transcription had landed. Reaching for `text` to describe a screenshot is the obvious first move,
+which is exactly why it is the one that had to be answered; the refusal names `caption`. The two
+refusals are symmetric and each names the other's field.
+
 **It is deliberately not materialized as a real text element.** That would make ⌘F find it, at the
 cost of a block of text under every screenshot on a board the user is sketching on. Canvas search
 over screenshots is the accepted gap, stated in the design.
