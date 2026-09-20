@@ -152,14 +152,26 @@ extension IPC {
                 - ellipsis.utf8.count
             var name = notice.check.name
             if name.utf8.count > room, room > 0 {
-                // Cut on a UTF-8 boundary: `String(decoding:)` would replace a
-                // half-scalar with U+FFFD, which is 3 bytes where the truncated
-                // scalar may have been 2 — an overshoot in the other direction.
-                var bytes = Array(name.utf8.prefix(room))
-                while let last = bytes.last, last & 0xC0 == 0x80 {
-                    bytes.removeLast()
+                // Accumulated by `Character`, never cut out of a byte array. The
+                // obvious byte version — `prefix(room)`, then walk back off any
+                // trailing continuation byte — stops on the *lead* byte it
+                // orphaned, which is not a continuation byte: `String(decoding:)`
+                // then renders that half-scalar as U+FFFD, three bytes where the
+                // scalar may have been two, producing both the replacement
+                // character the cut exists to avoid and an overshoot. Graphemes
+                // rather than scalars, for `IPC.Names.sanitized`'s reason —
+                // breaking between a base and its combining mark strands the mark
+                // on the ellipsis. The loop stops at the budget, so it costs
+                // `room` steps rather than the length of the name.
+                var kept = ""
+                var spent = 0
+                for character in name {
+                    let width = String(character).utf8.count
+                    guard spent + width <= room else { break }
+                    kept.append(character)
+                    spent += width
                 }
-                name = String(decoding: bytes, as: UTF8.self) + ellipsis
+                name = kept + ellipsis
             }
             return "Verification check \(name) \(trailer)"
         }
