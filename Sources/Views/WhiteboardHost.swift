@@ -1,0 +1,233 @@
+// ABOUTME: Owns one workstream's whiteboard webview and the offscreen window it parks in.
+// ABOUTME: Cache-owned, never view-owned — the board must survive navigating away.
+
+import AppKit
+import Foundation
+import OSLog
+import WebKit
+
+private let logger = Logger(subsystem: AppConstants.appID, category: "whiteboard")
+
+extension Whiteboard {
+    /// One workstream's whiteboard: the `WKWebView`, and the offscreen window it
+    /// lives in whenever no tab is showing it.
+    ///
+    /// **Owned by `TerminalSurfaceCache`, never by a view.** `ContentView` keys
+    /// `TerminalContainerView` `.id(workstreamID)`, so the view is destroyed on
+    /// navigation — and a board the user drew on before switching workstreams
+    /// has to still be there when they come back, with anything still saving
+    /// still saving. This codebase has shipped that exact bug twice
+    /// (`runGeneration` as view `@State`, then `browserStartPending`), and
+    /// `ProcessCompose.RunSession` exists because of it. Retention like this is
+    /// already precedented: the cache holds `[UUID: WKWebView]` for browser tabs.
+    ///
+    /// **The offscreen window does much less than it looks like it does, and the
+    /// difference is load-bearing.** A window parked off every screen is
+    /// `NSWindowOcclusionState`-occluded, and the one thing an occluded window
+    /// loses is `requestAnimationFrame`. That was measured rather than reasoned
+    /// about, along with the other half: `setTimeout`, `MessageChannel`,
+    /// `document.fonts.ready`, `canvas.toBlob`, `OffscreenCanvas`,
+    /// `img.decode()` and `createImageBitmap` all keep working there. So the
+    /// board goes on saving with no tab open because Excalidraw's save and
+    /// export paths never await a frame — **not** because this window grants it
+    /// a render surface, which is the intuitive reading and is wrong.
+    ///
+    /// The consequence to keep: **nothing on the save or export path may await
+    /// rAF.** A rAF-driven debounce is a very ordinary thing to reach for, and
+    /// it would fail only when the tab is closed, with no error, no timeout and
+    /// a promise that simply never settles.
+    ///
+    /// Two details that look like tidying and are not:
+    ///
+    /// - **`.borderless`.** AppKit's `constrainFrameRect` drags a *titled*
+    ///   window back onto the screen, so a titled "offscreen" window is not
+    ///   offscreen at all — it is sitting in the corner of the user's display.
+    /// - **Never `orderFront`.** A window that is never ordered in behaves
+    ///   identically for this purpose (verified), so there is no reason to put
+    ///   one into the window list for the user to trip over.
+    @MainActor
+    final class Host {
+        private(set) var webView: WKWebView!
+        private let offscreenWindow: NSWindow
+        private let bridge: Bridge
+
+        /// Far outside any plausible screen arrangement.
+        private static let parkingSpot = NSPoint(x: -20000, y: -20000)
+        /// The size the page lays out at while parked. Any reasonable canvas
+        /// size does; the tab resizes it on attach.
+        private static let parkedSize = NSSize(width: 1200, height: 800)
+
+        init(workstreamID: UUID) {
+            offscreenWindow = NSWindow(
+                contentRect: NSRect(origin: Self.parkingSpot, size: Self.parkedSize),
+                styleMask: [.borderless],
+                backing: .buffered,
+                defer: false
+            )
+            offscreenWindow.isExcludedFromWindowsMenu = true
+
+            let config = WKWebViewConfiguration()
+            config.setURLSchemeHandler(
+                AssetSchemeHandler(baseURL: Store.assetsDirectory(for: workstreamID)),
+                forURLScheme: AssetSchemeHandler.scheme
+            )
+            // The same bundle scheme the editor uses, and for the same reason
+            // stated there: `loadFileURL` breaks `fetch()`, because WebKit's
+            // fetch supports only http/https/blob/data.
+            if let bundleURL = Bundle.main.url(forResource: "MonacoEditor", withExtension: nil) {
+                config.setURLSchemeHandler(
+                    MonacoResourceSchemeHandler(baseURL: bundleURL),
+                    forURLScheme: "atelier-resource"
+                )
+            }
+
+            bridge = Bridge(workstreamID: workstreamID)
+            config.userContentController.add(bridge, name: Bridge.name)
+
+            if let script = Self.initialSceneScript(for: workstreamID) {
+                config.userContentController.addUserScript(script)
+            }
+
+            let wv = WKWebView(
+                frame: NSRect(origin: .zero, size: Self.parkedSize),
+                configuration: config
+            )
+            #if DEBUG
+                wv.isInspectable = true
+            #endif
+            webView = wv
+            park()
+
+            if let url = URL(string: "atelier-resource://monaco/whiteboard.html") {
+                wv.load(URLRequest(url: url))
+            }
+        }
+
+        /// Hands the saved scene to the page before it mounts.
+        ///
+        /// **Base64, never interpolated.** A scene is arbitrary user text —
+        /// every label the user typed on the board — and dropping it into a
+        /// JavaScript source string is the two-nested-languages bug
+        /// `AppleScriptRunner` exists to stop: a quote in a shape's label would
+        /// close the literal, and the rest would either fail to parse or
+        /// execute. Encoding sidesteps the quoting question rather than trying
+        /// to win it.
+        ///
+        /// Returns nil for a board nobody has drawn on, which is the ordinary
+        /// first state — the page then mounts empty.
+        private static func initialSceneScript(for workstreamID: UUID) -> WKUserScript? {
+            guard let saved = Store.loadScene(for: workstreamID),
+                  let encoded = saved.data(using: .utf8)?.base64EncodedString()
+            else { return nil }
+            return WKUserScript(
+                source: """
+                window.__whiteboardInitialScene = new TextDecoder().decode(
+                    Uint8Array.from(atob('\(encoded)'), function (c) { return c.charCodeAt(0); })
+                );
+                """,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            )
+        }
+
+        /// Moves the webview into a visible container. Called by the tab when it
+        /// appears, and idempotent so a re-render is free.
+        func attach(to container: NSView) {
+            guard webView.superview !== container else { return }
+            webView.removeFromSuperview()
+            container.subviews.forEach { $0.removeFromSuperview() }
+            container.addSubview(webView)
+            webView.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                webView.topAnchor.constraint(equalTo: container.topAnchor),
+                webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+                webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            ])
+        }
+
+        /// Hands the webview back to the offscreen window.
+        ///
+        /// Deliberately **not** a teardown: the page keeps running, which is the
+        /// whole point of the offscreen window and the reason an agent will be
+        /// able to write to a board whose tab is closed.
+        func detach() {
+            park()
+        }
+
+        private func park() {
+            webView.removeFromSuperview()
+            webView.translatesAutoresizingMaskIntoConstraints = true
+            webView.frame = NSRect(origin: .zero, size: Self.parkedSize)
+            offscreenWindow.contentView?.addSubview(webView)
+            // Re-asserted on every park: AppKit may have moved the window, and a
+            // window that drifted back onto the screen is one the user can see.
+            offscreenWindow.setFrameOrigin(Self.parkingSpot)
+        }
+
+        /// Ends this board's life. Called from both archive paths.
+        ///
+        /// The message handler goes first: it holds the bridge, which holds the
+        /// workstream id, and a save arriving after the board's directory has
+        /// been swept would recreate it.
+        func teardown() {
+            webView.configuration.userContentController
+                .removeScriptMessageHandler(forName: Bridge.name)
+            webView.stopLoading()
+            webView.removeFromSuperview()
+            offscreenWindow.contentView?.subviews.forEach { $0.removeFromSuperview() }
+            offscreenWindow.close()
+        }
+    }
+
+    /// Receives the page's saves.
+    ///
+    /// The web app is the sole writer of the scene; this persists what it is
+    /// handed and never edits one. Every field is validated before use because
+    /// the body crosses a JavaScript boundary and arrives as `Any`.
+    @MainActor
+    final class Bridge: NSObject, WKScriptMessageHandler {
+        static let name = "atelierWhiteboard"
+
+        private let workstreamID: UUID
+
+        init(workstreamID: UUID) {
+            self.workstreamID = workstreamID
+        }
+
+        func userContentController(
+            _: WKUserContentController,
+            didReceive message: WKScriptMessage
+        ) {
+            guard let body = message.body as? [String: Any],
+                  let action = body["action"] as? String
+            else {
+                logger.error("Whiteboard message with no action")
+                return
+            }
+
+            switch action {
+            case "save":
+                guard let json = body["scene"] as? String else { return }
+                do {
+                    try Store.saveScene(json, for: workstreamID)
+                } catch {
+                    logger.error("Could not save board: \(error.localizedDescription, privacy: .public)")
+                }
+            case "saveAsset":
+                guard let id = body["id"] as? String,
+                      let ext = body["ext"] as? String,
+                      let base64 = body["data"] as? String,
+                      let data = Data(base64Encoded: base64)
+                else { return }
+                do {
+                    try Store.writeAsset(data, id: id, ext: ext, for: workstreamID)
+                } catch {
+                    logger.error("Could not save board asset: \(error.localizedDescription, privacy: .public)")
+                }
+            default:
+                logger.error("Unknown whiteboard action \(action, privacy: .public)")
+            }
+        }
+    }
+}
