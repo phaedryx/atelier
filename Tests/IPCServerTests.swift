@@ -732,6 +732,7 @@ final class IPCServerTests: XCTestCase {
                 "list_verification_checks",
                 "list_processes", "read_process_logs", "start_execution", "stop_execution",
                 "start_process", "stop_process", "restart_process",
+                "read_whiteboard",
                 "add_task", "get_pending_tasks", "list_tasks", "claim_task", "complete_task", "fail_task",
                 "get_session_checkpoint", "update_session_checkpoint",
             ]

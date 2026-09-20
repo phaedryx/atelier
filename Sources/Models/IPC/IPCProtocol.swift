@@ -98,6 +98,14 @@ extension IPC {
         /// The caller's workstream's saved checkpoint — where an agent said it
         /// left off — or nothing if none has been saved.
         case getSessionCheckpoint = "get_session_checkpoint"
+        /// Reads the caller's own workstream's whiteboard: a text digest of its
+        /// elements, plus the absolute path to the rendered PNG.
+        ///
+        /// Both halves, deliberately. An LLM reads text precisely and pixels
+        /// only impressionistically, so the digest is the part of the board that
+        /// can be reasoned about exactly and the picture is the part that
+        /// cannot — freehand and pasted screenshots reach an agent no other way.
+        case readWhiteboard = "read_whiteboard"
 
         /// Workspace actions.
         /// Opens a terminal tab in the caller's own workstream, optionally
