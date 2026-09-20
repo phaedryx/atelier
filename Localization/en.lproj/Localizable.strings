@@ -306,6 +306,7 @@
 "Changes" = "Changes";
 "Execution" = "Execution";
 "Verification" = "Verification";
+"Whiteboard" = "Whiteboard";
 
 /* Changes tab */
 "Uncommitted" = "Uncommitted";
@@ -462,6 +463,7 @@
 "Show Changes" = "Show Changes";
 "Show Execution" = "Show Execution";
 "Show Verification" = "Show Verification";
+"Show Whiteboard" = "Show Whiteboard";
 "New Editor" = "New Editor";
 "Close Tab" = "Close Tab";
 "Start/Rerun" = "Start/Rerun";

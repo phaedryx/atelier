@@ -16,6 +16,7 @@ SOURCE_FILES=(
   "$EDITOR_DIR/vite.config.js"
   "$EDITOR_DIR/index.html"
   "$EDITOR_DIR/diff.html"
+  "$EDITOR_DIR/whiteboard.html"
 )
 
 needs_rebuild() {

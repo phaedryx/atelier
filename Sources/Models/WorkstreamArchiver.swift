@@ -50,6 +50,24 @@ extension Workstream {
             // either. Optional only so the two call sites can adopt it without a
             // third having to invent a runner; both pass one.
             verificationRunner?.forget(workstreamID: workstreamID)
+            // The whiteboard goes on **both** archive paths, the way
+            // `verificationRunner?.forget` above is called from both — and
+            // deliberately *not* the way `clearWorkstreamState` is, which is
+            // purge-only because `remove` keeps the worktree and destroys
+            // nothing. A reviewer will pattern-match this to that rule, so:
+            //
+            // A board is keyed by the workstream's UUID, and `remove` drops the
+            // workstream from the project. Re-adopting the worktree mints a new
+            // id, so nothing can ever reach that board again — left behind it is
+            // unreachable bytes in a cache, not preserved work. That is the
+            // discriminator, and it is why this follows `forget` rather than
+            // `clearWorkstreamState`.
+            //
+            // Host first, then the directory: the host holds a live webview with
+            // a save still sitting on its debounce, and sweeping underneath it
+            // would let one last save recreate what was just removed.
+            surfaceCache.removeWhiteboardHost(for: workstreamID)
+            Whiteboard.Store.sweep(for: workstreamID)
             surfaceCache.removeWorkstreamSurfaces(for: workstreamID)
             // Fire-and-forget: reverting an in-memory dictionary entry back to
             // `.pending` carries none of the weight `verificationRunner?.forget`
@@ -358,6 +376,9 @@ extension Workstream {
                     clearWorkstreamState(for: workstreamID)
                 }
             }
+            // See the note in `remove`. Same two steps, same order, same reason.
+            surfaceCache.removeWhiteboardHost(for: workstreamID)
+            Whiteboard.Store.sweep(for: workstreamID)
             surfaceCache.removeWorkstreamSurfaces(for: workstreamID)
             Task { await IPC.Service.shared.releaseTaskClaims(inWorkstream: workstreamID) }
             LaunchLogger.removeLog(for: workstreamID)

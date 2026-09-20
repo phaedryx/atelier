@@ -341,4 +341,33 @@ final class WorkstreamArchiverPurgeTests: XCTestCase {
 
         XCTAssertNil(IPC.CheckpointStore.read(for: id))
     }
+
+    // MARK: - Whiteboard sweep
+
+    func test_theBoardSweepIsIdempotentAndLeavesNothingBehind() throws {
+        // Both archive paths call this, and a workstream whose board was never
+        // opened is the common case rather than an edge case — so it has to be
+        // safe to call twice and safe to call on nothing.
+        //
+        // On why this is on `remove` too, when `clearWorkstreamState` is
+        // purge-only: a board is keyed by the workstream's UUID, and `remove`
+        // drops the workstream from the project. Re-adopting the worktree mints
+        // a new id, so nothing can ever reach that board again — left behind it
+        // is unreachable bytes in a cache, not preserved work.
+        let id = UUID()
+        try Whiteboard.Store.saveScene("{}", for: id)
+        _ = try Whiteboard.Store.writeAsset(Data([0x89]), id: "img", ext: "png", for: id)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: Whiteboard.Store.directory(for: id).path
+        ))
+
+        Whiteboard.Store.sweep(for: id)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: Whiteboard.Store.directory(for: id).path
+        ))
+
+        // Second sweep, and a sweep of a board that never existed.
+        Whiteboard.Store.sweep(for: id)
+        Whiteboard.Store.sweep(for: UUID())
+    }
 }

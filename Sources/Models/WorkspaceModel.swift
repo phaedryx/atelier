@@ -167,7 +167,8 @@ final class WorkspaceModel: ObservableObject {
         editorInitialLines.removeValue(forKey: id)
     }
 
-    /// Shows one of the singleton tabs (Changes, Execution, Verification), reopening it at
+    /// Shows one of the singleton tabs (Changes, Execution, Verification,
+    /// Whiteboard), reopening it at
     /// the end of the strip if the user closed it. Instanced kinds have no
     /// business here — there can be many of each, so "the" tab is meaningless.
     func activateSingleton(_ tab: WorkspaceTab) {
@@ -224,7 +225,7 @@ final class WorkspaceModel: ObservableObject {
         case let .editor(id):
             editorFilePaths.removeValue(forKey: id)
             editorDirtyState.removeValue(forKey: id)
-        case .info, .agent, .changes, .execution, .verification:
+        case .info, .agent, .changes, .execution, .verification, .whiteboard:
             break
         }
 

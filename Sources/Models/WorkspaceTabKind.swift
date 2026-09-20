@@ -9,8 +9,8 @@ import Foundation
 /// `tabContent`; the remaining per-kind switches (restore mapping, occlusion,
 /// seeding, removal) are exhaustive, so the compiler walks you to each one.
 ///
-/// Only Info and Agent are permanent. Changes, Execution and Verification are
-/// singletons — there is exactly one of each — but they close and reopen like
+/// Only Info and Agent are permanent. Changes, Execution, Verification and
+/// Whiteboard are singletons — there is exactly one of each — but they close and reopen like
 /// any terminal or browser, and they sit in the same draggable strip. The tab
 /// bar's quick-add buttons take that split as data in `SingletonQuickAdd.all`,
 /// so a new singleton kind needs an entry there too.
@@ -55,6 +55,14 @@ struct WorkspaceTabKind: Equatable, Hashable {
     static let verification = WorkspaceTabKind(
         id: "verification", isCloseable: true, icon: "checkmark.circle",
         staticLabel: NSLocalizedString("Verification", comment: ""), shortcutBadge: nil
+    )
+    /// No `shortcutBadge`, the same as the other closeable singletons: ⌘N
+    /// reaches it positionally through the badge the tab bar derives from the
+    /// live tab order, and giving it a named binding would pull in the
+    /// five-file shortcut checklist for a tab nobody reaches by muscle memory.
+    static let whiteboard = WorkspaceTabKind(
+        id: "whiteboard", isCloseable: true, icon: "scribble.variable",
+        staticLabel: NSLocalizedString("Whiteboard", comment: ""), shortcutBadge: nil
     )
     static let terminal = WorkspaceTabKind(
         id: "terminal", isCloseable: true, icon: "terminal",

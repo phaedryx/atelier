@@ -152,7 +152,11 @@ final class WorkspaceActions {
         switch tab {
         case .agent: workstreamID
         case let .terminal(id): id
-        case .info, .changes, .execution, .verification, .browser, .editor: nil
+        // The whiteboard has no shell, so nil. It is deliberately absent from
+        // `openableTabs` as well: that table is an explicit opt-in list rather
+        // than something derived from `WorkspaceTabKind`, and handing an agent
+        // the board belongs with the whiteboard IPC tools, not ahead of them.
+        case .info, .changes, .execution, .verification, .whiteboard, .browser, .editor: nil
         }
     }
 
@@ -161,7 +165,7 @@ final class WorkspaceActions {
         case let .terminal(id): model.terminalTitles[id]
         case let .browser(id): model.browserTitles[id]
         case let .editor(id): model.editorFilePaths[id]
-        case .info, .agent, .changes, .execution, .verification: nil
+        case .info, .agent, .changes, .execution, .verification, .whiteboard: nil
         }
     }
 

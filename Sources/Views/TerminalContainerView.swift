@@ -47,6 +47,7 @@ enum RestorableWorkspaceTab: String, Codable {
     case execution
     case changes
     case verification
+    case whiteboard
 
     init(activeTab: WorkspaceTab) {
         switch activeTab {
@@ -58,6 +59,8 @@ enum RestorableWorkspaceTab: String, Codable {
             self = .execution
         case .verification:
             self = .verification
+        case .whiteboard:
+            self = .whiteboard
         case .info, .terminal, .browser, .editor:
             self = .info
         }
@@ -75,6 +78,8 @@ enum RestorableWorkspaceTab: String, Codable {
             .execution
         case .verification:
             .verification
+        case .whiteboard:
+            .whiteboard
         }
     }
 }
@@ -131,6 +136,7 @@ enum WorkspaceTab: Hashable {
     case changes
     case execution
     case verification
+    case whiteboard
     case terminal(UUID)
     case browser(UUID)
     case editor(UUID)
@@ -148,6 +154,7 @@ extension WorkspaceTab {
         case .changes: .changes
         case .execution: .execution
         case .verification: .verification
+        case .whiteboard: .whiteboard
         case .terminal: .terminal
         case .browser: .browser
         case .editor: .editor
@@ -407,7 +414,11 @@ struct TerminalContainerView: View {
         case .agent:
             [claudeID]
         case let .terminal(id): [id]
-        case .info, .changes, .execution, .verification, .browser, .editor: []
+        // The whiteboard joins the empty arm: it has no Ghostty surface, and
+        // it deliberately needs no occlusion path of its own. Its webview works
+        // fully occluded — that is the whole point of `Whiteboard.Host`'s
+        // offscreen window — so there is nothing here to mark visible or hide.
+        case .info, .changes, .execution, .verification, .whiteboard, .browser, .editor: []
         }
     }
 
@@ -870,6 +881,10 @@ struct TerminalContainerView: View {
                 unavailableReason: resolved.verifyUnavailableReason,
                 runner: verificationRunner
             )
+        case .whiteboard:
+            // Attaches the host the cache owns; it never creates one. The board
+            // outlives this view, which `ContentView` destroys on navigation.
+            WhiteboardView(host: surfaceCache.whiteboardHost(for: workstreamID))
         case .agent:
             if sessionMode == .waitingForTools || appEnv.isDetecting {
                 terminalLoadingView(message: "Checking terminal tools...")
@@ -1998,6 +2013,7 @@ private struct SingletonQuickAdd {
         SingletonQuickAdd(tab: .changes, tooltip: NSLocalizedString("Show Changes", comment: "Tab bar button tooltip")),
         SingletonQuickAdd(tab: .execution, tooltip: NSLocalizedString("Show Execution", comment: "Tab bar button tooltip")),
         SingletonQuickAdd(tab: .verification, tooltip: NSLocalizedString("Show Verification", comment: "Tab bar button tooltip")),
+        SingletonQuickAdd(tab: .whiteboard, tooltip: NSLocalizedString("Show Whiteboard", comment: "Tab bar button tooltip")),
     ]
 }
 
@@ -2496,6 +2512,10 @@ final class TerminalSurfaceCache: ObservableObject {
     private var surfaces: [UUID: TerminalView] = [:]
     private var surfaceParams: [UUID: SurfaceParams] = [:]
     private var webViews: [UUID: WKWebView] = [:]
+    /// One whiteboard host per workstream, beside its `WorkspaceModel` and
+    /// `RunSession` and for the same reason: the board, and anything still
+    /// saving, has to survive the view that shows it going away.
+    private var whiteboardHosts: [UUID: Whiteboard.Host] = [:]
     private var quickActionRunners: [UUID: QuickAction.Runner] = [:]
     private var workspaceModels: [UUID: WorkspaceModel] = [:]
     /// One run session per workstream, beside its `WorkspaceModel` and for the
@@ -2697,6 +2717,34 @@ final class TerminalSurfaceCache: ObservableObject {
         let view = BrowserWebView()
         webViews[id] = view
         return view
+    }
+
+    /// The workstream's whiteboard, created on first access.
+    func whiteboardHost(for workstreamID: UUID) -> Whiteboard.Host {
+        if let existing = whiteboardHosts[workstreamID] {
+            return existing
+        }
+        let host = Whiteboard.Host(workstreamID: workstreamID)
+        whiteboardHosts[workstreamID] = host
+        return host
+    }
+
+    /// The workstream's whiteboard if one has been made, without making one.
+    func existingWhiteboardHost(for workstreamID: UUID) -> Whiteboard.Host? {
+        whiteboardHosts[workstreamID]
+    }
+
+    /// Ends a workstream's whiteboard, and a no-op for one whose board was never
+    /// opened — which is why it must not go through `whiteboardHost(for:)`,
+    /// where asking would create the very host it is trying to destroy.
+    ///
+    /// Called from both archive paths. Deliberately not folded into
+    /// `removeWorkstreamSurfaces`'s `derivedSurfaceIDs` sweep: that helper
+    /// enumerates ids derived from `WorkspaceModel`'s per-kind counters, and the
+    /// whiteboard is a singleton with no counter, so it is keyed by the
+    /// workstream id directly.
+    func removeWhiteboardHost(for workstreamID: UUID) {
+        whiteboardHosts.removeValue(forKey: workstreamID)?.teardown()
     }
 
     func quickActionRunner(for workstreamID: UUID) -> QuickAction.Runner {
