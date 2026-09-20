@@ -133,4 +133,32 @@ final class WhiteboardRenderTests: XCTestCase {
         )
         XCTAssertEqual(Whiteboard.Store.renderState(for: workstreamID), .none)
     }
+
+    func test_assetPathsAreKeyedByTheFileIDTheSceneReferences() throws {
+        try Whiteboard.Store.writeAsset(
+            Data([0x89]), id: "abc123", ext: "png", for: workstreamID
+        )
+        let paths = Whiteboard.Store.assetPaths(for: workstreamID)
+        // The stem IS the fileId — writeAsset refuses any id it would have had
+        // to rewrite, so this is an equality, not a lookup table.
+        XCTAssertEqual(paths["abc123"], Whiteboard.Store.assetsDirectory(for: workstreamID)
+            .appendingPathComponent("abc123.png").path)
+    }
+
+    func test_anImageOnTheBoardIsPointedAtByItsRealPathOnDisk() throws {
+        try Whiteboard.Store.writeAsset(
+            Data([0x89]), id: "abc123", ext: "png", for: workstreamID
+        )
+        try Whiteboard.Store.saveScene("""
+        {"type":"excalidraw","elements":[
+        {"id":"i","type":"image","x":0,"y":0,"width":10,"height":10,
+         "isDeleted":false,"fileId":"abc123"}]}
+        """, for: workstreamID)
+        let text = Whiteboard.Store.digestText(for: workstreamID, now: Date())
+        let expected = Whiteboard.Store.assetsDirectory(for: workstreamID)
+            .appendingPathComponent("abc123.png").path
+        XCTAssertTrue(text.contains(expected), text)
+        // And it is genuinely openable, which is the whole claim.
+        XCTAssertTrue(FileManager.default.fileExists(atPath: expected))
+    }
 }

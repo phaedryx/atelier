@@ -76,8 +76,16 @@ const inlineFiles = async (files) => {
       out[id] = file
       continue
     }
-    const blob = await (await fetch(file.dataURL)).blob()
-    out[id] = { ...file, dataURL: await toDataURL(blob) }
+    // Per file, so one unreadable asset costs its own image and not the whole
+    // render. Without this a single failed fetch throws out of the export, and
+    // because every later save re-fetches the same file the board would report
+    // "stale" for the rest of the session with nothing naming the cause.
+    try {
+      const blob = await (await fetch(file.dataURL)).blob()
+      out[id] = { ...file, dataURL: await toDataURL(blob) }
+    } catch (e) {
+      console.error('whiteboard: could not inline asset', id, String(e))
+    }
   }
   return out
 }

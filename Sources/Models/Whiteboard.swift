@@ -165,8 +165,28 @@ extension Whiteboard {
             Whiteboard.Digest.text(
                 load: Whiteboard.SceneLoad.load(for: workstreamID),
                 render: renderState(for: workstreamID),
-                updated: updatedText(for: workstreamID, now: now)
+                updated: updatedText(for: workstreamID, now: now),
+                assets: assetPaths(for: workstreamID)
             )
+        }
+
+        /// fileID → the absolute path of that image, for every file in `assets/`.
+        ///
+        /// Keyed on the name's **stem**, with no normalisation, because the stem
+        /// *is* the `fileId` — `writeAsset` refuses any id it would have had to
+        /// rewrite, so the join is an equality rather than a lookup table. The
+        /// same rule `Host.assetManifestScript` relies on to rebuild the page's
+        /// files map.
+        static func assetPaths(for workstreamID: UUID) -> [String: String] {
+            let dir = assetsDirectory(for: workstreamID)
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+            var paths: [String: String] = [:]
+            for name in names where !name.hasPrefix(".") {
+                let stem = (name as NSString).deletingPathExtension
+                guard !stem.isEmpty else { continue }
+                paths[stem] = dir.appendingPathComponent(name).path
+            }
+            return paths
         }
 
         private static func updatedText(for workstreamID: UUID, now: Date) -> String {

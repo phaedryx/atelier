@@ -111,4 +111,46 @@ final class WhiteboardReadToolTests: XCTestCase {
         XCTAssertTrue(text.lowercased().contains("earlier version"), text)
         XCTAssertTrue(text.lowercased().contains("digest below is current"), text)
     }
+
+    // MARK: - Through the real dispatch
+
+    func test_theToolAnswersWithTheDigestAsText() async throws {
+        // Everything above goes through `Store.digestText`. This is the only
+        // test that reaches the tool the way a helper does, so it is what pins
+        // that the handler is wired to the case at all.
+        try Whiteboard.Store.saveScene(Self.scene, for: workstreamID)
+        let service = IPC.Service()
+        let response = await service.handle(IPC.Request(
+            token: "t",
+            tool: .readWhiteboard,
+            client: IPC.ClientIdentity(
+                workstreamID: workstreamID.uuidString,
+                workstreamName: "ws",
+                projectDirectory: "/repos/app",
+                surfaceID: UUID().uuidString,
+                peerID: nil
+            )
+        ))
+        XCTAssertNil(response.error)
+        guard case let .text(text) = response.payload else {
+            return XCTFail("expected a text payload, got \(String(describing: response.payload))")
+        }
+        XCTAssertTrue(text.contains("box"), text)
+    }
+
+    func test_aCallerOutsideAWorkstreamIsRefused() async {
+        // The one refusal this tool has: there is no board without a workstream
+        // to key it by.
+        let service = IPC.Service()
+        let response = await service.handle(IPC.Request(
+            token: "t",
+            tool: .readWhiteboard,
+            client: IPC.ClientIdentity(
+                workstreamID: nil, workstreamName: nil,
+                projectDirectory: nil, surfaceID: nil, peerID: nil
+            )
+        ))
+        XCTAssertNil(response.payload)
+        XCTAssertNotNil(response.error)
+    }
 }

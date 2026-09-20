@@ -51,10 +51,15 @@ extension Whiteboard {
             case stale(path: String)
         }
 
+        /// - Parameter assets: fileID → the absolute path of that image in
+        ///   `assets/`. Passed in rather than listed here so this stays pure,
+        ///   the same way `render` is. An id missing from it is reported as
+        ///   having no file rather than rendered as a path that would not open.
         static func text(
             load: SceneLoad,
             render: Render,
             updated: String,
+            assets: [String: String] = [:],
             budget: Int = maxBytes
         ) -> String {
             switch load {
@@ -77,7 +82,7 @@ extension Whiteboard {
                 it; it is this text view of it that is unavailable.
                 """
             case let .loaded(scene):
-                loadedText(scene, render: render, updated: updated, budget: budget)
+                loadedText(scene, render: render, updated: updated, assets: assets, budget: budget)
             }
         }
 
@@ -85,6 +90,7 @@ extension Whiteboard {
             _ scene: Scene,
             render: Render,
             updated: String,
+            assets: [String: String],
             budget: Int
         ) -> String {
             let header = "# Whiteboard — \(scene.elements.count) elements, updated \(updated)"
@@ -106,7 +112,7 @@ extension Whiteboard {
             var spent = 0
             var omitted = 0
             for element in scene.elements {
-                let rendered = entry(for: element)
+                let rendered = entry(for: element, assets: assets)
                 let cost = rendered.utf8.count + 1
                 // `continue`, not `break`: the count has to be the number
                 // actually left out, and a later element may still be small
@@ -150,7 +156,7 @@ extension Whiteboard {
 
         /// One element's line, plus its caption indented under it when it has
         /// one.
-        private static func entry(for element: Element) -> String {
+        private static func entry(for element: Element, assets: [String: String]) -> String {
             let id = element.id
             let kind = name(of: element)
             let at = "at \(rounded(element.x)),\(rounded(element.y))"
@@ -165,8 +171,19 @@ extension Whiteboard {
                     + "\(rounded(element.x + element.width)),\(rounded(element.y + element.height))"
                 line = "\(id)  \(kind)  \(points)\(bbox)"
             case .image:
-                // The file name IS the fileId; see `Element.fileID`.
-                let file = element.fileID.map { "assets/\($0)" } ?? "(no file)"
+                // An ABSOLUTE path, or nothing that looks like one.
+                //
+                // The board lives in the cache directory and the agent's cwd is
+                // its worktree, so a relative `assets/<id>` is unopenable from
+                // where the agent stands — and it is shaped exactly like a path,
+                // so an agent wanting a closer look at one screenshot would try
+                // it and get nothing. That is the "sends a reader somewhere
+                // completely different" failure this format exists to avoid, in
+                // the one line where an image gets any handle at all. An id with
+                // no file on disk says so in words instead.
+                let file = element.fileID.flatMap { assets[$0] }
+                    ?? element.fileID.map { "fileId=\($0) (no file in assets/)" }
+                    ?? "(no file)"
                 line = "\(id)  \(kind)  \(file)  \(at)  \(size)"
             case .arrow:
                 let bound = element.from != nil || element.to != nil

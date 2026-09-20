@@ -9,12 +9,14 @@ final class WhiteboardDigestTests: XCTestCase {
         _ json: String,
         render: Whiteboard.Digest.Render = .current(width: 1360, height: 1520, path: "/tmp/b/board.png"),
         updated: String = "14s ago",
+        assets: [String: String] = [:],
         budget: Int = Whiteboard.Digest.maxBytes
     ) -> String {
         Whiteboard.Digest.text(
             load: Whiteboard.SceneLoad.parse(json),
             render: render,
             updated: updated,
+            assets: assets,
             budget: budget
         )
     }
@@ -90,11 +92,24 @@ final class WhiteboardDigestTests: XCTestCase {
         XCTAssertTrue(line.contains("bbox 100,400 → 380,560"), line)
     }
 
-    func test_anImageNamesItsAssetFileByItsFileID() {
+    func test_anImageIsPointedAtByAnAbsolutePath() {
+        // The board lives in the cache directory and the agent's cwd is its
+        // worktree, so a relative `assets/<id>` is unopenable from where the
+        // agent stands — and it is shaped like a path, so an agent wanting a
+        // closer look would try it and get nothing.
+        let text = digest(
+            WhiteboardSceneTests.fixture,
+            assets: ["spikeasset0001": "/tmp/b/assets/spikeasset0001.png"]
+        )
+        XCTAssertTrue(text.contains("/tmp/b/assets/spikeasset0001.png"), text)
+    }
+
+    func test_anImageWithNoFileOnDiskSaysSo_ratherThanNamingAPathThatWouldNotOpen() {
         let text = digest(WhiteboardSceneTests.fixture)
-        // The asset's file name IS the fileId — no mapping table and no
-        // normalisation step, because `writeAsset` refused anything else.
-        XCTAssertTrue(text.contains("assets/spikeasset0001"), text)
+        XCTAssertTrue(text.contains("fileId=spikeasset0001"), text)
+        XCTAssertTrue(text.contains("no file in assets/"), text)
+        // Nothing that reads as an openable path.
+        XCTAssertFalse(text.contains("assets/spikeasset0001.png"), text)
     }
 
     func test_anAgentAuthoredElementIsMarked() {
