@@ -40,6 +40,9 @@ extension Whiteboard {
         static let boxSize = (width: 220.0, height: 90.0)
         /// The vertical step between elements that were given no position.
         static let rowStep = 120.0
+        /// Clearance left under the lowest thing already on the board, and
+        /// under anything this batch places explicitly.
+        static let layoutGap = 60.0
         /// What makes a note look like a note rather than a box. The marker in
         /// `customData` is what makes it *read* as one.
         static let noteBackground = "#fff3bf"
@@ -248,7 +251,26 @@ extension Whiteboard {
             // reference is refused rather than resolved: resolving it would make
             // a batch's meaning depend on a reading order nothing states.
             var known = live.ids
+            // The column starts below everything already on the board AND
+            // below anything this batch places by hand.
+            //
+            // Scanned up front rather than as the batch is walked, so the
+            // answer does not depend on whether the placed element came first:
+            // an agent that draws two boxes at chosen coordinates and adds an
+            // unplaced note would otherwise have the note dropped on top of
+            // them, which is invisible in the digest — the coordinates read
+            // fine — and ruins the picture, the half of the read path that
+            // exists to corroborate the other.
             var nextRow = live.layout.nextY
+            for entry in raw {
+                guard let entry = entry as? [String: Any],
+                      let at = entry["at"] as? String,
+                      let placed = try? parsePosition(at)
+                else { continue }
+                let kind = Kind(rawValue: (entry["kind"] as? String)?.lowercased() ?? "")
+                let bottom = placed.y + (kind == .box || kind == .note ? boxSize.height : 0)
+                nextRow = max(nextRow, bottom + layoutGap)
+            }
 
             for (index, entry) in raw.enumerated() {
                 guard let entry = entry as? [String: Any] else {

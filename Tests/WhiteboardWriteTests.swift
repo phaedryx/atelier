@@ -221,6 +221,38 @@ final class WhiteboardWriteTests: XCTestCase {
         XCTAssertEqual(plan.skeletons[1].y, 500 + Write.rowStep)
     }
 
+    func test_theColumnStartsBelowWhatTheSameBatchPlacesByHand() throws {
+        // Otherwise an agent that places two boxes and adds an unplaced note
+        // gets the note dropped on top of them. Invisible in the digest — the
+        // coordinates read fine — and it ruins the picture, which is the half
+        // of the read path that exists to corroborate the other.
+        let plan = try Write.addPlan(from: [
+            ["kind": "box", "text": "placed", "at": "120,80"],
+            ["kind": "note", "text": "stacked"],
+        ], live: empty, mint: minter())
+        XCTAssertEqual(plan.skeletons[0].y, 80)
+        XCTAssertEqual(plan.skeletons[1].y, 80 + Write.boxSize.height + Write.layoutGap)
+    }
+
+    func test_theColumnIsScannedUpFront_soOrderInTheBatchDoesNotChangeIt() throws {
+        // The unplaced element comes FIRST here and must still clear the box
+        // placed after it.
+        let plan = try Write.addPlan(from: [
+            ["kind": "note", "text": "stacked"],
+            ["kind": "box", "text": "placed", "at": "120,80"],
+        ], live: empty, mint: minter())
+        XCTAssertEqual(plan.skeletons[0].y, 80 + Write.boxSize.height + Write.layoutGap)
+    }
+
+    func test_theBoardsOwnExtentStillWinsWhenItIsLower() throws {
+        let plan = try Write.addPlan(from: [
+            ["kind": "box", "text": "placed", "at": "0,0"],
+            ["kind": "box", "text": "stacked"],
+        ], live: live("old-1"), mint: minter())
+        // live()'s layout says 500, which is below the placed box's bottom.
+        XCTAssertEqual(plan.skeletons[1].y, 500)
+    }
+
     func test_anExplicitPositionDoesNotConsumeAColumnSlot() throws {
         // Otherwise two placed elements would leave a gap in the stack of the
         // ones that were not placed.
@@ -230,7 +262,9 @@ final class WhiteboardWriteTests: XCTestCase {
         ], live: empty, mint: minter())
         XCTAssertEqual(plan.skeletons[0].x, 900)
         XCTAssertEqual(plan.skeletons[0].y, 900)
-        XCTAssertEqual(plan.skeletons[1].y, Write.Layout.fallback.nextY)
+        // One column slot, not two: the placed element took none of them. Its
+        // own extent still raises the floor, which is a different rule.
+        XCTAssertEqual(plan.skeletons[1].y, 900 + Write.boxSize.height + Write.layoutGap)
     }
 
     func test_aMalformedPositionIsRefusedRatherThanReadAsTheOrigin() {
