@@ -79,7 +79,10 @@ final class IPCProtocolTests: XCTestCase {
     /// messaging and drains an inbox, `open_editor` is a workspace action and
     /// puts the same file on screen twice.
     func test_toolsThatChangeSomething_areNotReplayed() {
-        for tool in [IPC.Tool.createWorkstream, .openAgentTab, .startVerification, .sendMessage, .broadcast, .receiveMessages] {
+        for tool in [
+            IPC.Tool.createWorkstream, .openAgentTab, .startVerification, .sendMessage,
+            .broadcast, .receiveMessages, .startExecution,
+        ] {
             XCTAssertFalse(tool.isSafeToReplay, "\(tool.rawValue) does something different the second time")
         }
     }
@@ -91,6 +94,8 @@ final class IPCProtocolTests: XCTestCase {
             IPC.Tool.listPeers, .getPeerStatus, .listTabs, .readReviewComments,
             .checkVerification, .listVerificationChecks, .getSessionCheckpoint,
             .openEditor, .openTab, .requestAttention, .closeTab,
+            .listProcesses, .readProcessLogs, .stopExecution,
+            .startProcess, .stopProcess, .restartProcess,
         ] {
             XCTAssertTrue(tool.isSafeToReplay, "\(tool.rawValue) changes nothing by running twice")
         }
@@ -138,5 +143,30 @@ final class IPCProtocolTests: XCTestCase {
             IPC.Tool.updateSessionCheckpoint.isSafeToReplay,
             "an overwrite with no history writes the same bytes twice"
         )
+    }
+
+    // MARK: - Execution deadlines
+
+    /// Every execution tool goes through `ProcessCompose.Client`, whose own
+    /// request timeout is 15 seconds — which is exactly what the `.immediate`
+    /// tier is. A tool on that tier would have the helper abandon a call that
+    /// was about to answer, so all seven must outlast it.
+    func test_executionTools_outlastTheControlSocketsOwnTimeout() {
+        for tool in [
+            IPC.Tool.listProcesses, .readProcessLogs, .startProcess, .stopProcess,
+            .restartProcess, .startExecution, .stopExecution,
+        ] {
+            XCTAssertGreaterThan(
+                tool.replyDeadline, 15,
+                "\(tool.rawValue) would be abandoned while the control socket was still answering"
+            )
+        }
+    }
+
+    /// start_execution is the one non-replayable tool in this group. A replay
+    /// during `RunSession`'s socket reclaim runs a second `down` and a second
+    /// `beginRun`, and the later one replaces the surface the first built.
+    func test_startExecution_isTheOnlyExecutionToolThatIsNotReplayed() {
+        XCTAssertFalse(IPC.Tool.startExecution.isSafeToReplay)
     }
 }

@@ -476,7 +476,7 @@ struct TerminalContainerView: View {
     /// everything*.
     ///
     /// One expression with two consumers, the Start button's enabled state and
-    /// `resolvedRunCommand`'s guard, which is the `canRun`/`start` rule
+    /// `StartContextResolver.command`'s guard, which is the `canRun`/`start` rule
     /// applied to the other half of the decision: the plan says whether a
     /// command can be built, this says whether there is anything to build one
     /// for. Both halves have to be asked once and read twice, never asked
@@ -506,34 +506,6 @@ struct TerminalContainerView: View {
             stored: ProcessCompose.TableModel.selection(for: workstreamID),
             declared: declared
         )
-    }
-
-    /// Reads the stored resolution's plan rather than re-deriving one, so this is nil
-    /// for exactly the plans whose `canRun` is false — which is what the Start
-    /// button's enablement is drawn from. Deriving a second plan here is how
-    /// the button and this guard came to disagree.
-    private var resolvedRunCommand: String? {
-        switch resolved.plan {
-        case let .literal(command):
-            return command
-        case let .phaseScoped(config, binary):
-            // Nil is the checklist saying nothing is selected, and the refusal
-            // is the point: an empty name list would start the whole namespace.
-            guard let selected = runnableExecuteSelection(
-                declared: resolved.declaredExecuteProcesses
-            ) else {
-                return nil
-            }
-            ProcessCompose.PhaseRunner.ensureSocketDirectory()
-            return ProcessCompose.PhaseRunner.startCommand(
-                config: config,
-                binary: binary,
-                workstreamID: workstreamID,
-                selectedProcesses: selected
-            )
-        case .nothing:
-            return nil
-        }
     }
 
     /// Env vars for the run/dev-server surface. Adds the var that silences
@@ -1072,7 +1044,7 @@ struct TerminalContainerView: View {
         commandRebuildingContent
             .onReceive(NotificationCenter.default.publisher(for: .rerunScript)) { _ in
                 guard isActive else { return }
-                guard resolvedRunCommand != nil else { return }
+                guard runStartContext != nil else { return }
                 if session.runStarted {
                     restartRun()
                 } else {
@@ -1478,7 +1450,7 @@ struct TerminalContainerView: View {
     }
 
     /// The cheap half of `restore`'s preconditions, asked before the expensive
-    /// one. `runStartContext` resolves `resolvedRunCommand`, which on the
+    /// one. `runStartContext` goes through `StartContextResolver`, which on the
     /// process-compose branch parses the config's YAML, reads the selection
     /// store and calls `ensureSocketDirectory` — and both callers here fire on
     /// every `.onAppear` and every tool-detection change, most often with a run
@@ -1492,7 +1464,7 @@ struct TerminalContainerView: View {
     /// Everything the run session needs that only this view can resolve.
     ///
     /// **Nil is the whole of "there is nothing to run", and it is resolved
-    /// exactly once here.** The command comes from `resolvedRunCommand`, which
+    /// exactly once here.** The command comes from `StartContextResolver`, which
     /// reads the stored `RunCommandPlan` and the execute checklist — the two
     /// halves of the one decision the Start button is enabled on. Handing the
     /// session a non-optional command is what makes `restart`'s old hazard
@@ -1505,7 +1477,6 @@ struct TerminalContainerView: View {
     /// kill the right session with no view mounted and no live tmux read — the
     /// path `close_tab(kind: "execution")` takes.
     private var runStartContext: ProcessCompose.RunSession.StartContext? {
-        guard let command = resolvedRunCommand else { return nil }
         let tmux: ProcessCompose.RunSession.TmuxContext? = if useTmux, let tmuxPath = appEnv.toolStatus.tmux.path {
             ProcessCompose.RunSession.TmuxContext(
                 path: tmuxPath,
@@ -1518,13 +1489,19 @@ struct TerminalContainerView: View {
         } else {
             nil
         }
-        return ProcessCompose.RunSession.StartContext(
-            command: command,
-            workingDirectory: workingDirectory,
-            environment: runEnvironmentVars,
-            launcherPath: RunLauncher.executableURL()?.path,
-            tmux: tmux,
-            shell: CommandBuilder.userShell
+        return ProcessCompose.StartContextResolver.context(
+            resolution: resolved,
+            inputs: ProcessCompose.StartContextResolver.Inputs(
+                workstreamID: workstreamID,
+                workingDirectory: workingDirectory,
+                environment: runEnvironmentVars,
+                launcherPath: RunLauncher.executableURL()?.path,
+                tmux: tmux,
+                shell: CommandBuilder.userShell
+            ),
+            // The view always honours the user's checklist. Only IPC scopes a
+            // run per call.
+            processes: nil
         )
     }
 
@@ -1555,11 +1532,11 @@ struct TerminalContainerView: View {
     /// rather than re-locating the config, because this is read per render (via
     /// `tabContent`'s `.execution` case) and locating stats the filesystem.
     ///
-    /// `resolvedRunCommand`'s process-compose branch requires this to be true
+    /// `StartContextResolver.command`'s process-compose branch requires this to be true
     /// first, so the two cannot disagree about whether process-compose is in
     /// play. This can still be true while `resolveBinary()` fails — a config
     /// was detected, there is just nothing to run it with — and in that state
-    /// `resolvedRunCommand` is now **nil**, so Start reports that no command is
+    /// the resolver now returns **nil**, so Start reports that no command is
     /// available and this table simply never gets a run to poll.
     ///
     /// A previous version of this comment reasoned about that state and
@@ -1568,7 +1545,7 @@ struct TerminalContainerView: View {
     /// **That was wrong, and the error was in what it measured.** The invariant
     /// that matters is not about the table: it is that the un-`-n`'d
     /// `process-compose up -U -f <files>` string is never executed. Back then
-    /// `resolvedRunCommand` did fall through to exactly that string when the
+    /// the resolution did fall through to exactly that string when the
     /// binary was unresolvable, which ran `dispose` with no
     /// approval — and `scriptCommand` wrapped it in `$SHELL -lic`, so PATH
     /// resolved the very binary `resolveBinary` had just failed to find.

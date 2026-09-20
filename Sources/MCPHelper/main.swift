@@ -316,6 +316,39 @@ func renderText(_ payload: IPC.Payload?) -> String {
                 + "or any subset by naming them."
         )
         return lines.joined(separator: "\n")
+    case let .execution(info):
+        // The state is rendered first and always, because three of its four
+        // cases are reasons rather than results — an agent that reads only the
+        // process list would see an empty one and conclude the stack is idle.
+        var lines = ["state=\(info.state.rawValue)"]
+        if let reason = info.unavailableReason {
+            lines.append(reason)
+        }
+        if let command = info.command {
+            lines.append("runs=\(command)")
+        }
+        lines.append(
+            info.declaredProcesses.isEmpty
+                ? "declared: none"
+                : "declared: \(info.declaredProcesses.joined(separator: ", "))"
+        )
+        if info.processes.isEmpty {
+            lines.append("No processes are running.")
+        } else {
+            lines += info.processes.map { process in
+                "\(process.name) [\(process.namespace)] status=\(process.status)"
+                    + " ready=\(process.isReady) running=\(process.isRunning)"
+                    + " restarts=\(process.restarts) exit=\(process.exitCode) pid=\(process.pid)"
+                    + (process.port.map { " port=\($0)" } ?? "")
+            }
+        }
+        return lines.joined(separator: "\n")
+    case let .executionLogs(logs):
+        guard !logs.lines.isEmpty else { return "\(logs.process) has logged nothing." }
+        let header = logs.wasTrimmed
+            ? "\(logs.process) (older lines dropped to fit):"
+            : "\(logs.process):"
+        return ([header] + logs.lines).joined(separator: "\n")
     case let .task(task):
         return renderTask(task)
     case let .tasks(list):

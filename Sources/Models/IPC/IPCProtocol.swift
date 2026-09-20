@@ -124,6 +124,22 @@ extension IPC {
         /// `verification.yaml` declares — in the caller's own workstream, and
         /// answers with a run id rather than the result.
         case startVerification = "start_verification"
+        /// The dev stack's state and live process table, in the caller's own
+        /// workstream. Also how an agent learns the process names at all: they
+        /// are declared in a config outside its worktree.
+        case listProcesses = "list_processes"
+        /// One process's log tail. Output crosses IPC here and deliberately not
+        /// for verification — process-compose keeps logs and serves them, while
+        /// a check's output exists only in a surface Atelier keeps no copy of.
+        case readProcessLogs = "read_process_logs"
+        case startProcess = "start_process"
+        case stopProcess = "stop_process"
+        case restartProcess = "restart_process"
+        /// Starts the dev stack — the Execution tab's Start button — and answers
+        /// immediately rather than waiting for anything to come up.
+        case startExecution = "start_execution"
+        /// Stops it.
+        case stopExecution = "stop_execution"
         /// Overwrites the caller's workstream's checkpoint with free text.
         ///
         /// Shared per workstream, not per agent: two agents in one workstream
@@ -454,6 +470,132 @@ extension IPC {
         case stopped
     }
 
+    /// Whether a workstream's dev stack can run, is running, and whether there
+    /// is a process table to read.
+    ///
+    /// **Four cases, not two, for the reason `Verification.Config.Load` has
+    /// three.** `ProcessCompose.Client.ClientError.notRunning` collapses "no
+    /// config", "not started", "started but there is no control socket" and
+    /// "running" into one silence, and an agent told "nothing is running" is
+    /// misled in three of them.
+    enum ExecutionRunState: String, Codable, CaseIterable {
+        /// No `execution.process-compose.yaml`, no process-compose binary, or
+        /// nothing declares an `execute` namespace. `unavailableReason` says
+        /// which, in `ProcessCompose.Resolution`'s own words.
+        case unavailable
+        /// A command exists and nothing is running. `start_execution` is the next
+        /// move.
+        case idle
+        /// The run is up and `processes` is the live table.
+        case running
+        /// The run is the user's own per-workstream dev-command override, so
+        /// there is no control socket and never will be. The socket-backed tools
+        /// refuse rather than report an empty stack as a fact.
+        case runningWithoutProcessTable = "running_without_process_table"
+    }
+
+    /// One process as an agent sees it.
+    ///
+    /// Named `ExecutionProcessInfo` and not `ProcessInfo`: `Foundation.ProcessInfo`
+    /// is exactly the collision CLAUDE.md cites for keeping `ProcessRunner`
+    /// top-level.
+    struct ExecutionProcessInfo: Codable, Equatable {
+        let name: String
+        let namespace: String
+        let status: String
+        let isReady: String
+        let hasReadyProbe: Bool
+        let restarts: Int
+        let exitCode: Int
+        let pid: Int
+        let isRunning: Bool
+        /// The port this process owns, correlated by name through
+        /// `ProcessCompose.TableModel.port(for:in:)`. Nil when nothing matches,
+        /// which is cosmetic rather than wrong — process-compose reports pids and
+        /// the port plan holds variable names, and nothing joins the two but the
+        /// name.
+        let port: String?
+    }
+
+    /// What `list_processes` answers.
+    ///
+    /// `declaredProcesses` rides along in **every** state, because this is also
+    /// how an agent learns the names at all: `execution.process-compose.yaml`
+    /// lives in the project directory, outside the worktree, and the "Restrict to
+    /// worktree" system prompt is on by default. Already filtered through
+    /// `PhaseRunner.runnableProcesses`, so it cannot offer a name the command
+    /// would drop.
+    struct ExecutionInfo: Codable, Equatable {
+        let state: ExecutionRunState
+        /// `ProcessCompose.Resolution.startUnavailableReason`, verbatim and never
+        /// paraphrased, so an agent and `ExecutionTabView.scriptInstructions` say
+        /// the same thing about the same file. Non-nil exactly when the state is
+        /// `.unavailable`.
+        let unavailableReason: String?
+        let declaredProcesses: [String]
+        let processes: [ExecutionProcessInfo]
+        /// What will be loaded or run, for display only. For a process-compose
+        /// source this is the config's files — never the un-`-n`'d
+        /// `process-compose up` string, which must never reach anything that
+        /// could execute it.
+        let command: String?
+    }
+
+    /// A process's log tail.
+    struct ExecutionLogs: Codable, Equatable {
+        let process: String
+        /// Newest last. stderr is interleaved, as process-compose captures both
+        /// streams into one log.
+        let lines: [String]
+        /// Whether older lines were dropped to fit the budget. Reported rather
+        /// than silent, the way `VerificationSummary` reports a cut list.
+        let wasTrimmed: Bool
+
+        /// Default byte budget for a tail.
+        ///
+        /// A tool response is **not** an `IPC.Store` message, so the store's 64KB
+        /// cap does not bind here — but `IPC.Server.maxFrameBytes` (1MB) and the
+        /// agent's own context both do, and one unbounded line is enough to reach
+        /// either.
+        static let defaultBudgetBytes = 65_536
+
+        /// Trim a tail to a byte budget, dropping **oldest first** — a tail is
+        /// about what happened most recently.
+        ///
+        /// The newest line is always kept, even when it alone exceeds the budget:
+        /// an empty list would read as "this process printed nothing", which is a
+        /// different and wrong answer.
+        static func trimmed(
+            lines: [String],
+            budgetBytes: Int = defaultBudgetBytes
+        ) -> (lines: [String], wasTrimmed: Bool) {
+            guard !lines.isEmpty else { return ([], false) }
+            var kept: [String] = []
+            var used = 0
+            for line in lines.reversed() {
+                // +1 for the newline a reader will put back between them.
+                let cost = line.utf8.count + 1
+                if !kept.isEmpty, used + cost > budgetBytes {
+                    break
+                }
+                kept.append(line)
+                used += cost
+            }
+            kept.reverse()
+            return (kept, kept.count != lines.count)
+        }
+    }
+
+    /// What `start_execution` answers with.
+    struct ExecutionStart: Codable, Equatable {
+        /// The processes this run was scoped to. Empty means the whole `execute`
+        /// namespace, which is what an unscoped run starts.
+        let started: [String]
+        /// Whether a socket reclaim is in flight, so the stack comes up a moment
+        /// after this answer rather than immediately.
+        let isReclaimingSocket: Bool
+    }
+
     /// Seconds as an agent should read them.
     ///
     /// Minutes appear because a real suite runs for tens of them and `1503.2s`
@@ -510,6 +652,8 @@ extension IPC {
         case reviewComments([ReviewCommentInfo])
         case verificationRun(VerificationRunInfo)
         case verificationChecks(VerificationChecksInfo)
+        case execution(ExecutionInfo)
+        case executionLogs(ExecutionLogs)
         case task(TaskInfo)
         case tasks([TaskInfo])
         case text(String)

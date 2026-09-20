@@ -557,9 +557,25 @@ struct ContentView: View {
             // `observeCheckCompletions` replaces its handler rather than adding one, so a
             // second call here would silently take over from the first — the same
             // single-slot rule `Runner.onFinish` carries.
+            // The execution tools act through the same `RunSession` the Execution
+            // tab's Start button does, for the same one-enforcement-point reason,
+            // and through a `ProcessCompose.Client` on the workstream's own control
+            // socket. It needs no `onFinish` slot because this surface posts no
+            // completion notices at all — agents poll `list_processes`. See
+            // `IPC.ExecutionControlling` for why that asymmetry with verification
+            // is deliberate.
+            let executionBridge = IPC.ExecutionBridge(
+                // Captured strongly, as the verification bridge captures its
+                // runner: the cache owns every workstream's run session for the
+                // app's life, and a weak capture would need a fallback session
+                // that silently swallowed starts.
+                runSession: { id in surfaceCache.runSession(for: id) },
+                target: { id in try WorkspaceActions.shared.executionTarget(workstreamID: id) }
+            )
             Task {
                 await IPC.Service.shared.setVerificationRunner(verificationBridge)
                 await IPC.Service.shared.observeVerificationChecks()
+                await IPC.Service.shared.setExecutionController(executionBridge)
             }
             // Creating a workstream needs the same list, and stays out of
             // `WorkspaceActions` on purpose: it is a workstream-lifecycle

@@ -201,6 +201,13 @@ extension IPC {
             .startVerification,
             .checkVerification,
             .listVerificationChecks,
+            .listProcesses,
+            .readProcessLogs,
+            .startExecution,
+            .stopExecution,
+            .startProcess,
+            .stopProcess,
+            .restartProcess,
             .addTask,
             .getPendingTasks,
             .listTasks,
@@ -658,6 +665,175 @@ extension IPC.Tool {
                 Verification tab. If the project declares nothing, or its
                 verification.yaml is missing or unreadable, you are told which — those
                 are three different problems.
+                """,
+                arguments: []
+            )
+        case .listProcesses:
+            IPC.ToolSpec(
+                tool: .listProcesses,
+                surface: .workspaceRead,
+                replyDeadline: IPC.ToolSpec.Deadline.mainActorWork,
+                isSafeToReplay: true,
+                description: """
+                Read your workstream's dev stack: whether it can run, whether it is
+                running, what processes the project declares, and for a running stack
+                each process's status, readiness, restart count, exit code, pid and
+                port.
+
+                This is also how you learn the process NAMES. They are declared in an
+                execution.process-compose.yaml in the project directory, which is
+                OUTSIDE your worktree, so you almost certainly cannot read it yourself.
+
+                The state is one of four, and they are different problems rather than
+                degrees of one: "unavailable" (no config, no process-compose binary, or
+                nothing declares an execute namespace — the reason says which), "idle"
+                (there is something to run and nothing is running; call
+                start_execution), "running", and "running_without_process_table" (the
+                user set their own dev command for this workstream, so there is no
+                process manager to query and the per-process tools will refuse).
+
+                There are NO notifications on this surface. Nothing will tell you when a
+                process dies or comes up — poll this.
+                """,
+                arguments: []
+            )
+        case .readProcessLogs:
+            IPC.ToolSpec(
+                tool: .readProcessLogs,
+                surface: .workspaceRead,
+                replyDeadline: IPC.ToolSpec.Deadline.mainActorWork,
+                isSafeToReplay: true,
+                description: """
+                Read the tail of one process's log, newest last, with stderr
+                interleaved — process-compose captures both streams into one log. This
+                is how you find out WHY a process is crash-looping rather than only
+                that it is.
+
+                Names come from list_processes. A long tail is trimmed from the oldest
+                end to fit, and you are told when that happened.
+                """,
+                arguments: [
+                    IPC.ArgumentSpec(
+                        name: "process",
+                        kind: .string,
+                        isRequired: true,
+                        description: "The process name, as list_processes reports it."
+                    ),
+                    IPC.ArgumentSpec(
+                        name: "tail",
+                        kind: .integer,
+                        isRequired: false,
+                        description: "How many lines back to read. Defaults to 100, capped at 1000."
+                    ),
+                ]
+            )
+        case .startProcess:
+            IPC.ToolSpec(
+                tool: .startProcess,
+                surface: .workspaceAction,
+                replyDeadline: IPC.ToolSpec.Deadline.mainActorWork,
+                isSafeToReplay: true,
+                description: """
+                Start one process in your workstream's already-running dev stack.
+                Starting one that is already running succeeds and changes nothing.
+
+                This drives a process manager that is already up. If nothing is running
+                at all, call start_execution instead.
+                """,
+                arguments: [
+                    IPC.ArgumentSpec(
+                        name: "process",
+                        kind: .string,
+                        isRequired: true,
+                        description: "The process name, as list_processes reports it."
+                    ),
+                ]
+            )
+        case .stopProcess:
+            IPC.ToolSpec(
+                tool: .stopProcess,
+                surface: .workspaceAction,
+                replyDeadline: IPC.ToolSpec.Deadline.mainActorWork,
+                isSafeToReplay: true,
+                description: """
+                Stop one process in your workstream's running dev stack. Stopping one
+                that is already stopped succeeds and changes nothing.
+
+                Stopping the LAST running process ends the whole stack: process-compose
+                exits and takes its control socket with it, so list_processes will then
+                report the run as no longer up.
+                """,
+                arguments: [
+                    IPC.ArgumentSpec(
+                        name: "process",
+                        kind: .string,
+                        isRequired: true,
+                        description: "The process name, as list_processes reports it."
+                    ),
+                ]
+            )
+        case .restartProcess:
+            IPC.ToolSpec(
+                tool: .restartProcess,
+                surface: .workspaceAction,
+                replyDeadline: IPC.ToolSpec.Deadline.mainActorWork,
+                isSafeToReplay: true,
+                description: """
+                Restart one process in your workstream's running dev stack — the usual
+                move after changing code a server does not hot-reload.
+                """,
+                arguments: [
+                    IPC.ArgumentSpec(
+                        name: "process",
+                        kind: .string,
+                        isRequired: true,
+                        description: "The process name, as list_processes reports it."
+                    ),
+                ]
+            )
+        case .startExecution:
+            IPC.ToolSpec(
+                tool: .startExecution,
+                surface: .workspaceAction,
+                replyDeadline: IPC.ToolSpec.Deadline.mainActorWork,
+                isSafeToReplay: false,
+                description: """
+                Start your workstream's dev stack — the same thing the Execution tab's
+                Start button does. It returns IMMEDIATELY and does NOT wait for anything
+                to come up: poll list_processes to watch it start, and read_process_logs
+                when something fails. Nothing will notify you.
+
+                Omit `processes` to run exactly what the user's Execution checklist
+                says, which is what their own Start button would run. Naming processes
+                scopes THIS run only and never changes their checklist.
+
+                It opens the Execution tab so the output has somewhere to land, but it
+                does NOT switch the user's view — pair it with request_attention when
+                you need their eyes. Refused if a run is already up: read it with
+                list_processes, or stop_execution first.
+
+                If this call times out, do NOT retry it — the run may well have started.
+                Call list_processes instead.
+                """,
+                arguments: [
+                    IPC.ArgumentSpec(
+                        name: "processes",
+                        kind: .list,
+                        isRequired: false,
+                        description: "Comma-separated process names to scope this run to, e.g. \"web,api\". Omit to use the user's checklist."
+                    ),
+                ]
+            )
+        case .stopExecution:
+            IPC.ToolSpec(
+                tool: .stopExecution,
+                surface: .workspaceAction,
+                replyDeadline: IPC.ToolSpec.Deadline.mainActorWork,
+                isSafeToReplay: true,
+                description: """
+                Stop your workstream's dev stack, the same thing the Execution tab's
+                Stop button does. Stopping when nothing is running succeeds and changes
+                nothing.
                 """,
                 arguments: []
             )

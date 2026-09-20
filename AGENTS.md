@@ -538,9 +538,13 @@ so those notes were written and discarded.
 
 **The checklist's own gate is deliberately *not* in that plan**, and a reviewer will
 pattern-match it to the second copy this document forbids, so say so in any commit that touches
-it. `TerminalContainerView.runnableExecuteSelection` stays in the view, reading the selection
-store per render, and is one expression with two consumers — the
-Start button's `.disabled` and `resolvedRunCommand`'s guard — which is the same one-decision rule
+it. **The rule is that the selection never enters `RunCommandPlan`** — not that it lives in any
+particular file. `runnableExecuteSelection` reads the selection store per render in the view for
+the Start button's `.disabled`, and `ProcessCompose.StartContextResolver` reads the same store for
+the command itself, so the view and the IPC bridge share one assembler rather than two. (It used
+to say "stays in the view", which was that rule's implementation while the view was the only
+thing that could start a run; `start_execution` needed a second caller, and only the location of
+the read changed.) It is the same one-decision rule
 applied to the other half: the plan answers "is there a safe command for this source", and this
 answers "is there anything selected to run it for". Folding the selection into
 `RunCommandPlan.plan` was tried on paper and is worse in a way that is not obvious:
@@ -1155,9 +1159,11 @@ command reaches it as a **non-optional** `StartContext.command`, assembled by
 `TerminalContainerView.runStartContext` from the stored `Resolution`'s plan and the execute
 checklist. That is what makes the one-decision rule structural here rather than a guard somebody
 has to remember: `restart` cannot stop a run and then decline to start one, because there is no
-optional left to decline on. **`runnableExecuteSelection` deliberately stays in the view** —
-CLAUDE.md's process-compose section explains why the checklist's gate is not in the plan either,
-and a reviewer will pattern-match its absence from the session to the second copy this document
+optional left to decline on. **That command is assembled by
+`ProcessCompose.StartContextResolver`, which the view and `IPC.ExecutionBridge` both call** — one
+assembler, because a second one in the IPC layer is the drift this type exists to end. The
+checklist's gate is still not in the plan; the process-compose section above explains why, and a
+reviewer will pattern-match its absence from the session to the second copy this document
 forbids.
 
 **The tmux session a run is started in is recorded at `beginRun`, not read live at `stop`.**
@@ -1699,8 +1705,8 @@ checks rather than a comment:
 | Group | Tools | Trust story |
 |---|---|---|
 | Messaging | `register_peer`, `list_peers`, `send_message`, `receive_messages`, `broadcast`, `get_peer_status` | none needed — text between agents, nothing a user can see |
-| Workspace reads | `list_tabs`, `read_review_comments`, `check_verification`, `list_verification_checks`, `get_session_checkpoint` | none needed — answers about the caller's own workstream |
-| Workspace actions | `open_agent_tab`, `open_editor`, `open_tab`, `close_tab`, `request_attention`, `create_workstream`, `start_verification`, `update_session_checkpoint` | see below |
+| Workspace reads | `list_tabs`, `read_review_comments`, `check_verification`, `list_verification_checks`, `list_processes`, `read_process_logs`, `get_session_checkpoint` | none needed — answers about the caller's own workstream |
+| Workspace actions | `open_agent_tab`, `open_editor`, `open_tab`, `close_tab`, `request_attention`, `create_workstream`, `start_verification`, `start_execution`, `stop_execution`, `start_process`, `stop_process`, `restart_process`, `update_session_checkpoint` | see below |
 | Project tasks | `add_task`, `get_pending_tasks`, `list_tasks`, `claim_task`, `complete_task`, `fail_task` | see "The project task queue" below — project-scoped, and ungated for a third reason distinct from the two above |
 
 The messaging six were once the whole enum. Calix's IPC core is the same six, and everything it
@@ -2208,6 +2214,79 @@ the skipped nudge was meant to provoke. Contexts cannot outlive their peers for 
 case — a connected helper's peer is pinned past the TTL, and the context goes with it in
 `release`, in `touch`, or in `pruneContexts`. `releaseAll` clears unconditionally and stays
 that way: at shutdown every context goes at once, so there is no successor to reach past.
+
+### The execution tools, and the silence that is on purpose
+
+Seven tools give an agent the Execution tab's capabilities, as the verification tools give it the
+Verification tab's: `list_processes`, `read_process_logs`, `start_process`, `stop_process`,
+`restart_process`, `start_execution`, `stop_execution`.
+
+**No new `Surface` case, and that is a decision.** They act on the caller's own workstream and no
+other, which is exactly what `.workspaceRead` and `.workspaceAction` already mean — `close_tab`
+has stopped a run from `.workspaceAction` since it stopped being refused. A fifth surface needs a
+trust argument distinct from the four that exist, and this has none; the reads sit in
+`.workspaceRead` and the five mutators beside `start_verification` in `.workspaceAction`.
+
+**No approval gate**, on the rule `verification.yaml` and `initialization.yaml` already state:
+`execution.process-compose.yaml` lives in the project directory, outside every work tree, so it
+cannot have arrived with a clone. The known hole is the one all three accept — for an ordinary
+clone `Project.directory` *is* the checkout — and this does not reopen it.
+
+**`list_processes` answers four states, not two.** `ProcessCompose.Client.ClientError.notRunning`
+collapses "no config", "not started", "started but there is no control socket" and "running" into
+one silence, and an agent told "nothing is running" is misled in three of them — the trap
+`Verification.Config.Load`'s three cases exist to prevent. `IPC.ExecutionRunState` keeps them
+apart, and `unavailableReason` is `Resolution.startUnavailableReason` **verbatim**, so an agent
+and `ExecutionTabView.scriptInstructions` say the same thing about the same file.
+`.runningWithoutProcessTable` is the user's own per-workstream dev-command override: there is no
+control socket and never will be, so the five socket-backed tools refuse with that reason rather
+than reporting an empty stack as a fact. `declaredProcesses` rides along in **every** state,
+because this is also how an agent learns the names — the config is outside its worktree and the
+"Restrict to worktree" prompt is on by default.
+
+**There are no completion notices, and mirroring verification here is the mistake to avoid.**
+Verification posts one per check because `Verification.Runner` already runs completions through
+the app. The process table's polling (`TerminalContainerView.syncProcessPolling`) is view-owned by
+design, so notices would mean a second per-workstream polling lifecycle *plus* a definition of
+"finished" for a server that is meant to stay up. Agents poll `list_processes`, and
+`start_execution`'s answer says so in as many words — an agent that waits for a notice waits for
+the rest of the session.
+
+**`IPC.ExecutionBridge` carries two guards `ProcessCompose.RunSession` does not, and they must not
+move into it.** `RunSession.start` opens with `guard !isReclaimingSocket else { return }` and
+returns *silently*, so a start reported as success would be a press that did nothing;
+`RunSession.stop()` has no `runStarted` guard at all, because every caller today gates it
+externally — the view's Stop button renders only when a run is up, and `close_tab` goes through
+`stopIfTabOwnsRun`'s `closingTabStopsRun`. Called with nothing running it still sets
+`runStoppedManually = true`, which **suppresses the tmux restore on the next launch**, and still
+bumps `runGeneration`. Those two callers need `stop()` unconditional once their own question is
+answered, so the guard belongs at the third caller.
+
+**Every tool is on the `mainActorWork` (60s) tier, never `immediate`.**
+`ProcessCompose.Client.requestTimeout` is 15 seconds, which is exactly what `immediate` is, so a
+tool on that tier would have the helper abandon a call that was about to answer. The control
+socket is behind all seven.
+
+**`start_execution` is the one non-replayable tool here**, alongside `create_workstream` and
+`add_task`. A replay during the socket reclaim runs a second `down` and a second `beginRun`, and
+the later one bumps `runGeneration` and replaces the surface the first built —
+`RunSession.isReclaimingSocket` documents that bug already. Its refusal **forbids** a retry rather
+than inviting one, for the reason `create_workstream`'s timeout message does: the caller cannot
+tell a genuine "already running" from one its own retry caused. The other six are replayable, and
+that is load-bearing rather than incidental — stopping a run that is not up, and controlling a
+process already in the asked-for state, are **success**, not refusals.
+
+**`processes` scopes one run and never writes `atelier.processSelection.<id>`.** An agent
+narrowing a run must not re-tick the user's checkboxes. Omitted, the stored selection is read
+exactly as the Start button reads it, three-state encoding included.
+
+**Output crosses IPC here and deliberately not for verification.** That is not an inconsistency:
+a check's output exists only in a Ghostty surface Atelier keeps no copy of, so there is nothing to
+send, while process-compose keeps its logs and serves them over the same control socket. The tail
+is bounded twice — a line count (100 default, 1000 ceiling, clamped rather than refused) and a
+64KB byte budget trimmed oldest-first, which says when it cut. The store's 64KB message cap is
+**not** what binds: a tool response is not an inbox message. `IPC.Server.maxFrameBytes` and the
+agent's own context are.
 
 ### The project task queue
 

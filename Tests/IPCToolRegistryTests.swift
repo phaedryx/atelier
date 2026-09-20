@@ -320,4 +320,35 @@ final class IPCToolRegistryTests: XCTestCase {
         )
         XCTAssertNil(plain.code, "a response with no code must still decode")
     }
+
+    // MARK: - Advertising
+
+    /// `advertised` is hand-written and decides order only — the one registry
+    /// site that does NOT fail to compile when a tool is left out, so a tool can
+    /// be dispatchable and undiscoverable.
+    func test_advertised_includesEveryExecutionTool() {
+        let advertised = Set(IPC.ToolSpec.advertised.map(\.tool))
+        for tool in [
+            IPC.Tool.listProcesses, .readProcessLogs, .startProcess, .stopProcess,
+            .restartProcess, .startExecution, .stopExecution,
+        ] {
+            XCTAssertTrue(advertised.contains(tool), "\(tool.rawValue) is not advertised")
+        }
+    }
+
+    /// The reads and the mutators land on the two surfaces that already mean
+    /// "the caller's own workstream and no other". There is deliberately no
+    /// fifth `Surface` case: one would need a trust argument distinct from the
+    /// four that exist, and this has none.
+    func test_executionTools_sitOnTheExistingWorkspaceSurfaces() {
+        for tool in [IPC.Tool.listProcesses, .readProcessLogs] {
+            XCTAssertEqual(tool.spec.surface, .workspaceRead, "\(tool.rawValue)")
+        }
+        for tool in [
+            IPC.Tool.startProcess, .stopProcess, .restartProcess,
+            .startExecution, .stopExecution,
+        ] {
+            XCTAssertEqual(tool.spec.surface, .workspaceAction, "\(tool.rawValue)")
+        }
+    }
 }

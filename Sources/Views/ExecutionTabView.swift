@@ -83,7 +83,7 @@ struct ExecutionTabView: View {
     ///
     /// **Passed in, never re-derived here**, for the same reason `canStart` is:
     /// this is `runnableExecuteSelection != nil` for the very selection
-    /// `resolvedRunCommand` will resolve, so Start's enabled state and the
+    /// `StartContextResolver` will resolve, so Start's enabled state and the
     /// run's own guard are one answer asked once.
     ///
     /// Separate from `canStart` rather than folded into it, because the two
@@ -288,7 +288,7 @@ struct ExecutionTabView: View {
                 .disabled(!startEnabled)
 
                 // The shortcut gives way to the reason, rather than sitting
-                // beside it: ⌘⇧⏎ goes through `resolvedRunCommand`, which
+                // beside it: ⌘⇧⏎ goes through `StartContextResolver`, which
                 // refuses the same empty selection, so advertising it next to a
                 // disabled button would name a second way to press it that is
                 // just as inert.
@@ -463,7 +463,7 @@ struct ExecutionTabView: View {
     /// `StartContext` the view could build, which is already impossible for an
     /// empty selection. So a run cannot currently be live over one.
     ///
-    /// It is gated anyway because `restartRun` guards on `resolvedRunCommand`,
+    /// It is gated anyway because `restartRun` guards on `runStartContext`,
     /// and a Rerun offered over an empty selection would stop the run and then
     /// decline to start one — a Stop wearing Rerun's label. That is the failure
     /// this button already had once, for the neighbouring reason, and a future
