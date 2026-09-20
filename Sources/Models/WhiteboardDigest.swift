@@ -236,9 +236,11 @@ extension Whiteboard {
         /// *lead* byte orphaned, which `String(decoding:)` renders as U+FFFD,
         /// three bytes where the scalar was two. So it produces both the
         /// replacement character it was meant to avoid and the overshoot.
-        /// (`VerificationSummary.checkMessage` has that shape today. Leaving it
-        /// alone here deliberately: it is another surface with its own tests,
-        /// and quietly changing it under this PR is how a fix ships unreviewed.)
+        /// (`VerificationSummary.checkMessage` had exactly that shape when this
+        /// was written, and was left alone here on purpose — quietly changing
+        /// another surface under this PR is how a fix ships unreviewed. It was
+        /// fixed on its own in #198 and now accumulates by `Character` too, so
+        /// the two agree rather than one being the cautionary tale.)
         ///
         /// Counting graphemes rather than scalars is `IPC.Names.sanitized`'s
         /// rule and the same one applies: breaking between a base and its

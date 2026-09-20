@@ -464,6 +464,8 @@
 "Show Execution" = "Show Execution";
 "Show Verification" = "Show Verification";
 "Show Whiteboard" = "Show Whiteboard";
+"Capture Screen" = "Capture Screen";
+"Capture a region of the screen onto this board" = "Capture a region of the screen onto this board";
 "New Editor" = "New Editor";
 "Close Tab" = "Close Tab";
 "Start/Rerun" = "Start/Rerun";
