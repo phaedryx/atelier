@@ -13,11 +13,29 @@ import SwiftUI
 /// away — while the board, and a save still sitting on its debounce, must not
 /// be.
 ///
-/// There is deliberately no `dismantleNSView` parking. `Host.attach` re-parents
-/// and the host parks itself when nothing else has claimed the webview, so
-/// parking from here would fight a tab switch that is already in flight.
+/// Teardown hands the webview back to the host's offscreen window, which is
+/// what keeps it in a window at all: left in a container SwiftUI is releasing,
+/// it ends up with no superview and no window. The park is **conditional on the
+/// webview still being in this container**, which is what makes it safe to do
+/// from teardown at all — SwiftUI does not order dismantling the outgoing view
+/// against creating the incoming one, so an unconditional park could steal the
+/// webview back out of a container that had just claimed it.
 struct WhiteboardView: NSViewRepresentable {
     let host: Whiteboard.Host
+
+    /// Carries the host into `dismantleNSView`, which is static and has no other
+    /// way to reach it.
+    final class Coordinator {
+        let host: Whiteboard.Host
+
+        init(host: Whiteboard.Host) {
+            self.host = host
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(host: host)
+    }
 
     func makeNSView(context _: Context) -> NSView {
         let container = NSView()
@@ -27,5 +45,9 @@ struct WhiteboardView: NSViewRepresentable {
 
     func updateNSView(_ container: NSView, context _: Context) {
         host.attach(to: container)
+    }
+
+    static func dismantleNSView(_ container: NSView, coordinator: Coordinator) {
+        coordinator.host.detachIfAttached(to: container)
     }
 }

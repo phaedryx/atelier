@@ -146,9 +146,15 @@ extension Whiteboard {
         private static func assetManifestScript(for workstreamID: UUID) -> WKUserScript {
             let dir = Store.assetsDirectory(for: workstreamID)
             let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
-            // Only the file names cross, and they are the sanitized ones
-            // `writeAsset` produced. JSON-encoded rather than interpolated, for
-            // the reason `initialSceneScript` states.
+            // Only file names cross, and `writeAsset` refused any that were not
+            // already safe, so each name's stem is byte-identical to the
+            // `fileId` on its image element — which is what the page relies on.
+            //
+            // The two interpolations below are the deliberate exceptions to the
+            // never-interpolate-into-JS rule `initialSceneScript` states: the
+            // scheme is a compile-time constant, and the payload is
+            // `JSONSerialization` output, which is already valid JS literal
+            // syntax. Anything carrying user text still goes through base64.
             let payload = (try? JSONSerialization.data(withJSONObject: names.filter { !$0.hasPrefix(".") }))
                 .flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
             return WKUserScript(
@@ -177,12 +183,20 @@ extension Whiteboard {
             ])
         }
 
-        /// Hands the webview back to the offscreen window.
+        /// Hands the webview back to the offscreen window, but only if it is
+        /// still in `container`.
         ///
         /// Deliberately **not** a teardown: the page keeps running, which is the
         /// whole point of the offscreen window and the reason an agent will be
         /// able to write to a board whose tab is closed.
-        func detach() {
+        ///
+        /// The condition is what makes this safe to call from a view's teardown.
+        /// SwiftUI does not order dismantling an outgoing view against creating
+        /// the incoming one, so an unconditional park could take the webview
+        /// back out of a container that had already claimed it — leaving the tab
+        /// showing nothing.
+        func detachIfAttached(to container: NSView) {
+            guard webView.superview === container else { return }
             park()
         }
 

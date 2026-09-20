@@ -82,9 +82,21 @@ extension Whiteboard {
         /// Excalidraw's own `files` map makes, and the thing that keeps a later
         /// text digest from silently blowing an agent's context.
         ///
-        /// `id` and `ext` come from the page, so they are reduced to a single
-        /// safe path component here rather than trusted: a file id carrying
-        /// `../` would otherwise write outside the board entirely.
+        /// `id` and `ext` come from the page, so they are checked rather than
+        /// trusted: a file id carrying `../` would otherwise write outside the
+        /// board entirely.
+        ///
+        /// **Refused rather than sanitized, and that is the whole point.** The
+        /// file name *is* the identity — `Host` lists this directory into a
+        /// manifest and the page rebuilds `files[id]` from each name's stem, so
+        /// the stem has to equal the `fileId` on the image element. Silently
+        /// rewriting an unsafe id into a safe one would break that equality and
+        /// the image would come back missing, with nothing logged and nothing to
+        /// look at: the exact failure shape this feature has already produced
+        /// twice. A refusal loses the same image and says so.
+        ///
+        /// Nothing Excalidraw generates can hit it: a `fileId` is a SHA-1 digest
+        /// rendered as lowercase hex.
         @discardableResult
         static func writeAsset(
             _ data: Data,
@@ -92,9 +104,13 @@ extension Whiteboard {
             ext: String,
             for workstreamID: UUID
         ) throws -> URL {
+            guard isSafeComponent(id), isSafeComponent(ext) else {
+                logger.error("Refusing a board asset whose name would not round-trip: \(id, privacy: .public).\(ext, privacy: .public)")
+                throw AssetError.unsafeName
+            }
             let dir = assetsDirectory(for: workstreamID)
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let url = dir.appendingPathComponent("\(safeComponent(id)).\(safeComponent(ext))")
+            let url = dir.appendingPathComponent("\(id).\(ext)")
             try data.write(to: url, options: .atomic)
             return url
         }
@@ -114,14 +130,22 @@ extension Whiteboard {
             }
         }
 
-        /// One path component, with everything that could escape it removed.
+        enum AssetError: Error {
+            case unsafeName
+        }
+
+        /// Whether a string is usable as one path component, unchanged.
         ///
         /// A whitelist rather than a blocklist: the input is a file id chosen by
         /// the page, and enumerating what to strip is how a traversal eventually
-        /// gets through.
-        private static func safeComponent(_ raw: String) -> String {
-            let allowed = raw.filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
-            return allowed.isEmpty ? UUID().uuidString.lowercased() : String(allowed.prefix(128))
+        /// gets through. ASCII-only, because `isLetter` is true for characters
+        /// that are not safe in a file name.
+        static func isSafeComponent(_ raw: String) -> Bool {
+            !raw.isEmpty
+                && raw.count <= 128
+                && raw.allSatisfy { c in
+                    c.isASCII && (c.isLetter || c.isNumber || c == "-" || c == "_")
+                }
         }
     }
 }

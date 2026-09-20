@@ -51,15 +51,15 @@ final class WhiteboardStoreTests: XCTestCase {
         ))
     }
 
-    func test_writeAsset_cannotEscapeViaACraftedFileID() throws {
-        // The id is the page's, so it is sanitized rather than trusted: an id
+    func test_writeAsset_cannotEscapeViaACraftedFileID() {
+        // The id is the page's, so it is checked rather than trusted: an id
         // carrying `../` would otherwise write outside the board entirely.
-        let url = try Whiteboard.Store.writeAsset(
-            Data([0x00]), id: "../../evil", ext: "png", for: workstreamID
+        // Refused rather than rewritten — see the round-trip tests below.
+        XCTAssertThrowsError(
+            try Whiteboard.Store.writeAsset(
+                Data([0x00]), id: "../../evil", ext: "png", for: workstreamID
+            )
         )
-        XCTAssertTrue(url.path.isCanonicallyInside(
-            Whiteboard.Store.assetsDirectory(for: workstreamID).path
-        ))
     }
 
     func test_sweep_removesTheWholeBoardDirectory() throws {
@@ -75,5 +75,48 @@ final class WhiteboardStoreTests: XCTestCase {
         // Both archive paths call this unconditionally, and a workstream nobody
         // opened the board on is the common case rather than an edge case.
         Whiteboard.Store.sweep(for: UUID())
+    }
+
+    // MARK: - The asset name IS the file id
+
+    /// `Host` lists `assets/` into a manifest and the page rebuilds `files[id]`
+    /// from each name's stem, so the stem has to equal the `fileId` on the image
+    /// element. A real Excalidraw file id is a SHA-1 digest as lowercase hex.
+    func test_aRealExcalidrawFileIDRoundTripsUnchanged() throws {
+        let fileID = "9f3c1b7e2a4d5c6f8091a2b3c4d5e6f708192a3b"
+        let url = try Whiteboard.Store.writeAsset(
+            Data([0x89]), id: fileID, ext: "png", for: workstreamID
+        )
+        XCTAssertEqual(url.deletingPathExtension().lastPathComponent, fileID)
+
+        // And it is what the directory listing hands the page.
+        let names = try FileManager.default.contentsOfDirectory(
+            atPath: Whiteboard.Store.assetsDirectory(for: workstreamID).path
+        )
+        XCTAssertEqual(names, ["\(fileID).png"])
+    }
+
+    /// Refused, never rewritten. A silently sanitized name stops matching the
+    /// element's `fileId` and the image comes back missing with nothing logged —
+    /// the same silent shape as the two persistence bugs this feature already
+    /// had. Losing the image loudly is strictly better.
+    func test_anIDThatWouldNotRoundTripIsRefusedRatherThanRewritten() {
+        for unsafe in ["../../evil", "has space", "dot.dot", "", String(repeating: "a", count: 129)] {
+            XCTAssertThrowsError(
+                try Whiteboard.Store.writeAsset(Data([0x00]), id: unsafe, ext: "png", for: workstreamID),
+                "\(unsafe) cannot round-trip and must be refused"
+            )
+        }
+        XCTAssertThrowsError(
+            try Whiteboard.Store.writeAsset(Data([0x00]), id: "ok", ext: "p/g", for: workstreamID)
+        )
+    }
+
+    func test_nothingIsWrittenForARefusedName() {
+        try? Whiteboard.Store.writeAsset(Data([0x00]), id: "../escape", ext: "png", for: workstreamID)
+        let contents = try? FileManager.default.contentsOfDirectory(
+            atPath: Whiteboard.Store.assetsDirectory(for: workstreamID).path
+        )
+        XCTAssertTrue(contents?.isEmpty ?? true)
     }
 }
