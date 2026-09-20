@@ -926,11 +926,25 @@ extension IPC.Tool {
                 replyDeadline: IPC.ToolSpec.Deadline.immediate,
                 isSafeToReplay: true,
                 description: """
-                Move, retext or recolour one element of this workstream's whiteboard.
+                Move, retext, recolour or caption one element of this workstream's
+                whiteboard.
 
                 `id` is an element id as read_whiteboard reports it. Name at least one
-                of `at`, `text` or `color`. An id that is not on the board is refused,
-                and the refusal names it.
+                of `at`, `text`, `color` or `caption`. An id that is not on the board is
+                refused, and the refusal names it.
+
+                `caption` is how you transcribe an image. The board carries pasted and
+                captured screenshots, and nothing but you can read them: open the
+                board.png that read_whiteboard names, read the image, and write what it
+                says here. read_whiteboard then reports your transcription under that
+                image, so a later read — by you or by another agent — does not have to
+                look at the picture again. A caption is only for an image; use `text`
+                for anything that carries words on the canvas. Pass an empty string to
+                clear one.
+
+                A caption is not drawn on the board, so Excalidraw's own canvas search
+                will not find it. That is deliberate: materializing it would put a block
+                of text under every screenshot on a board the user is sketching on.
 
                 This opens the Whiteboard tab but does not take the selection.
                 """,
@@ -958,6 +972,13 @@ extension IPC.Tool {
                         kind: .string,
                         isRequired: false,
                         description: "A hex value like \"#e03131\", or a name like red."
+                    ),
+                    IPC.ArgumentSpec(
+                        name: "caption",
+                        kind: .string,
+                        isRequired: false,
+                        description: "Your transcription of an image element. "
+                            + "Images only. Pass an empty string to clear it."
                     ),
                 ]
             )

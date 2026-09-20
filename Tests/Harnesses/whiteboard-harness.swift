@@ -10,6 +10,7 @@
 // them.
 
 import AppKit
+import CryptoKit
 import WebKit
 
 // MARK: - Reporting
@@ -591,6 +592,273 @@ check(
     "board.png and its stamp are on disk",
     FileManager.default.fileExists(atPath: files.png.path)
         && FileManager.default.fileExists(atPath: files.stamp.path)
+)
+
+// ---------------------------------------------------------------------------
+section("4. The capture arm — an image placed on the board")
+// A capture is a MUTATION ARM, so it owes the two standing questions an answer,
+// and it is checked here rather than asserted in a PR body.
+
+/// A real PNG, standing in for what `screencapture -i` hands back. The harness
+/// cannot raise a capture overlay, so this is the half after it: the bytes exist,
+/// and everything from naming them onwards is the code under test.
+let capturedPNG: Data = {
+    let rep = NSBitmapImageRep(
+        bitmapDataPlanes: nil, pixelsWide: 320, pixelsHigh: 200,
+        bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+    )!
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+    NSColor.systemTeal.setFill()
+    NSRect(x: 0, y: 0, width: 320, height: 200).fill()
+    NSGraphicsContext.restoreGraphicsState()
+    return rep.representation(using: .png, properties: [:])!
+}()
+
+/// Named the way `Whiteboard.Capture.fileID` names it — SHA-1 hex, Excalidraw's
+/// own fileId convention — and written where `Store.writeAsset` would put it.
+let capturedID = Insecure.SHA1.hash(data: capturedPNG)
+    .map { String(format: "%02x", $0) }.joined()
+try! capturedPNG.write(
+    to: files.assets.appendingPathComponent("\(capturedID).png"), options: .atomic
+)
+
+/// Where the board ends right now, which is where a capture must land.
+let extentBefore: Double = {
+    let answer = host.callJS("return JSON.stringify(window.__whiteboardState())")
+    guard let data = answer?.data(using: .utf8),
+          let state = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { return .nan }
+    return number(state["nextY"])
+}()
+
+let placed = host.apply([
+    "kind": "image", "id": "h-shot", "fileId": capturedID,
+    "name": "\(capturedID).png", "mimeType": "image/png",
+    "x": 100, "y": extentBefore, "width": 320, "height": 200,
+])
+check(
+    "the page accepts an image op",
+    placed["ok"] as? Bool == true,
+    "\(placed)"
+)
+
+scene = files.elements()
+check(
+    "the image element reaches board.excalidraw",
+    scene["h-shot"]?["type"] as? String == "image",
+    "type=\(scene["h-shot"]?["type"] as? String ?? "nil")"
+)
+check(
+    "its fileId is the assets/ filename's stem",
+    scene["h-shot"]?["fileId"] as? String == capturedID,
+    "fileId=\(scene["h-shot"]?["fileId"] as? String ?? "nil") stem=\(capturedID)"
+)
+check(
+    "assets/ holds that file",
+    files.assetNames().contains("\(capturedID).png"),
+    "\(files.assetNames())"
+)
+
+// Rule 5, and the bug PR 1 shipped: serializeAsJSON inlines every referenced
+// file as base64 unless it is handed an empty files map.
+check(
+    "board.excalidraw carries no image bytes",
+    !files.sceneText().contains("data:image"),
+    "the scene file contains a data: URL"
+)
+
+check(
+    "the capture landed below what was already on the board",
+    number(scene["h-shot"]?["y"]) >= extentBefore - 1,
+    "y=\(number(scene["h-shot"]?["y"])) extent=\(extentBefore)"
+)
+
+// The standing rule, both halves. A capture moves nothing and removes nothing,
+// so the answer to each should be "nothing changed" — which is worth checking
+// rather than assuming, since the add arm reaches every element to merge
+// boundElements.
+check(
+    "placing an image leaves the surviving arrow's binding alone",
+    binding(scene["h-arrow"], "startBinding") == "h-a",
+    "start=\(binding(scene["h-arrow"], "startBinding") ?? "nil")"
+)
+check(
+    "placing an image leaves nothing bound to a dead id",
+    scene.values.allSatisfy { element in
+        guard element["type"] as? String == "arrow" else { return true }
+        for key in ["startBinding", "endBinding"] {
+            if let target = binding(element, key), scene[target] == nil {
+                return false
+            }
+        }
+        return true
+    }
+)
+
+// The half that CANNOT be inherited from PR 2. A captured image is an
+// asset-scheme URL from the moment it lands, unlike a pasted one, so it taints
+// the export canvas in its own session rather than after a relaunch — and the
+// whole export fails with SecurityError, not just the image.
+host.waitForRender()
+check(
+    "the PNG export still succeeds with an asset-scheme image on the board",
+    files.lastRenderFailure == nil,
+    files.lastRenderFailure ?? ""
+)
+
+// ---------------------------------------------------------------------------
+section("5. The caption arm")
+
+let captioned = host.apply([
+    "kind": "update", "id": "h-shot",
+    "caption": "Settings pane, Environment tab, process-compose row red",
+])
+check("the page accepts a caption", captioned["ok"] as? Bool == true, "\(captioned)")
+check(
+    "the caption reaches board.excalidraw",
+    customData("h-shot")["atelierCaption"] as? String
+        == "Settings pane, Environment tab, process-compose row red",
+    "\(customData("h-shot"))"
+)
+
+// The merge, and the reason it is a merge. A note carries atelierKind in the
+// same dictionary, so an assignment here would demote it to a box in the digest
+// — silently, and only visible on a read.
+_ = host.apply(["kind": "update", "id": "h-note", "caption": ""])
+check(
+    "a caption write on a note leaves atelierKind intact",
+    customData("h-note")["atelierKind"] as? String == "note",
+    "\(customData("h-note"))"
+)
+check(
+    "and leaves atelierAuthor intact",
+    customData("h-note")["atelierAuthor"] as? String == "agent",
+    "\(customData("h-note"))"
+)
+check(
+    "an empty caption removes the key rather than storing an empty string",
+    customData("h-note")["atelierCaption"] == nil,
+    "\(customData("h-note"))"
+)
+
+// The standing rule's first question, for the caption arm: a caption sent
+// together with a move must still drag the arrows bound to what moved, rather
+// than taking a path around the reflow.
+//
+// A fully bound arrow, drawn fresh, and pointing at the IMAGE — which is the
+// real shape of this call, since `whiteboard_update` takes `at` and `caption`
+// together and a caption only ever goes on an image. The arrow left over from
+// section 1 is no use here: it lost its endBinding when h-b was deleted, and a
+// half-bound arrow is never reflowed at all (`if (!from || !to) return el`), so
+// it would report this arm broken whatever the arm did.
+_ = host.apply([
+    "kind": "add",
+    "elements": [
+        box("h-c", "the screenshot shows", x: 100, y: 1900),
+        box("h-d", "the fix", x: 700, y: 1900),
+        arrow("h-arrow2", from: "h-c", to: "h-d"),
+    ],
+])
+scene = files.elements()
+check(
+    "a fresh arrow binds both ends",
+    binding(scene["h-arrow2"], "startBinding") == "h-c"
+        && binding(scene["h-arrow2"], "endBinding") == "h-d"
+)
+
+let arrowBeforeCaption = (
+    x: number(scene["h-arrow2"]?["x"]), y: number(scene["h-arrow2"]?["y"])
+)
+_ = host.apply([
+    "kind": "update", "id": "h-c", "x": 100, "y": 2600, "caption": "",
+])
+scene = files.elements()
+check(
+    "a caption sent with a move still reflows the arrows bound to what moved",
+    // The element's presence is asserted first, deliberately: `number(nil)` is
+    // NaN and `NaN != NaN` is TRUE, so a comparison alone reports a PASS for an
+    // arrow that is not on the board at all. This check did exactly that once.
+    scene["h-arrow2"] != nil
+        && (number(scene["h-arrow2"]?["x"]) != arrowBeforeCaption.x
+            || number(scene["h-arrow2"]?["y"]) != arrowBeforeCaption.y),
+    scene["h-arrow2"] == nil
+        ? "the arrow is not on the board"
+        : "before=\(arrowBeforeCaption) "
+        + "after=(\(number(scene["h-arrow2"]?["x"])), \(number(scene["h-arrow2"]?["y"])))"
+)
+
+_ = host.apply([
+    "kind": "update", "id": "h-shot",
+    "caption": "Settings pane, Environment tab, process-compose row red",
+])
+check(
+    "the image still carries its caption after all of that",
+    customData("h-shot")["atelierCaption"] as? String
+        == "Settings pane, Environment tab, process-compose row red",
+    "\(customData("h-shot"))"
+)
+
+check(
+    "captioning removes nothing, so nothing is left bound to a dead id",
+    scene.values.allSatisfy { element in
+        guard element["type"] as? String == "arrow" else { return true }
+        for key in ["startBinding", "endBinding"] {
+            if let target = binding(element, key), scene[target] == nil {
+                return false
+            }
+        }
+        return true
+    }
+)
+
+// And it survives a reload, the same way the planted keys did — this time
+// through the real caption arm rather than a hand-built element.
+host.teardown()
+pump(0.5)
+host = HarnessHost(files: files, bundle: bundleDir)
+if host.waitUntilReady() {
+    // One save from the RELOADED page, so what is on disk is what that page
+    // believes rather than the file the previous one left behind.
+    _ = host.apply(["kind": "update", "id": "h-shot", "x": 120, "y": 2000])
+    check(
+        "a real caption survives a reload",
+        customData("h-shot")["atelierCaption"] as? String
+            == "Settings pane, Environment tab, process-compose row red",
+        "\(customData("h-shot"))"
+    )
+} else {
+    check("the board reloads after a caption", false, "never became ready")
+}
+
+// ---------------------------------------------------------------------------
+section("6. Known limitation, pinned so it cannot go quiet")
+// An arrow CANNOT bind to an image: convertToExcalidrawElements throws
+// `TypeError: undefined is not an object (evaluating 't.id')` for one, measured
+// against 0.18.1. That is Excalidraw's own skeleton converter and it predates
+// PR 4 — a board has been able to hold pasted images since PR 1 — but PR 4 is
+// what makes images something an agent deliberately reaches for.
+//
+// What is pinned here is that it stays a REFUSAL. The refusal is honest: the
+// board is left alone and the agent is told. The failure to guard against is it
+// becoming a partial apply or a silent success, which is what would put an
+// arrow on the board bound to nothing while the digest reported an endpoint.
+
+let boardBefore = files.elements().count
+let refused = host.apply([
+    "kind": "add",
+    "elements": [arrow("h-arrow-img", from: "h-c", to: "h-shot")],
+])
+check(
+    "an arrow naming an image is refused rather than half-applied",
+    refused["ok"] as? Bool != true,
+    "\(refused)"
+)
+check(
+    "and the refusal leaves the board exactly as it was",
+    files.elements().count == boardBefore && files.elements()["h-arrow-img"] == nil,
+    "before=\(boardBefore) after=\(files.elements().count)"
 )
 
 // ---------------------------------------------------------------------------

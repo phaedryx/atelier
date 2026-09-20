@@ -50,6 +50,15 @@ extension Whiteboard {
         private(set) var webView: WKWebView!
         private let offscreenWindow: NSWindow
         private let bridge: Bridge
+        private let workstreamID: UUID
+        /// Whether a capture overlay is already up.
+        ///
+        /// `screencapture -i` takes over the screen, so a second press while one
+        /// is waiting would stack two overlays over each other. Cleared in a
+        /// `defer`, so a capture, an Escape and a refusal for want of Screen
+        /// Recording permission all release it — a flag that only a success
+        /// cleared would disable the button for the rest of the session.
+        private(set) var isCapturing = false
 
         /// Far outside any plausible screen arrangement.
         private static let parkingSpot = NSPoint(x: -20000, y: -20000)
@@ -58,6 +67,7 @@ extension Whiteboard {
         private static let parkedSize = NSSize(width: 1200, height: 800)
 
         init(workstreamID: UUID) {
+            self.workstreamID = workstreamID
             offscreenWindow = NSWindow(
                 contentRect: NSRect(origin: Self.parkingSpot, size: Self.parkedSize),
                 styleMask: [.borderless],
@@ -352,6 +362,65 @@ extension Whiteboard {
                     }
                 }
             }
+        }
+
+        // MARK: - Screen capture
+
+        /// Captures a screen region and puts it on this board.
+        ///
+        /// The whole flow, in one place rather than assembled in the view: the
+        /// view holds nothing a second caller could not reach, and the board's
+        /// life belongs here anyway. Answers false when there was nothing to
+        /// place — the user cancelled, or the capture could not be written —
+        /// which the button reports by doing nothing.
+        ///
+        /// **Placed below everything already on the board**, from the same
+        /// `Layout` an unpositioned agent element uses. A capture dropped at a
+        /// fixed origin lands on top of whatever the user has drawn, and that is
+        /// invisible in the digest — the coordinates read perfectly well — while
+        /// ruining the picture, which is the half of the read path that exists
+        /// to corroborate the other.
+        @discardableResult
+        func captureToBoard() async -> Bool {
+            guard !isCapturing else { return false }
+            isCapturing = true
+            defer { isCapturing = false }
+
+            guard let png = await Capture.run() else { return false }
+            guard let size = Capture.onBoardSize(of: png) else {
+                logger.error("Captured bytes were not a readable image")
+                return false
+            }
+
+            // The file's name IS the fileId — `Store.writeAsset` refuses any id
+            // it would have had to rewrite, and a SHA-1 hex string can never be
+            // one of those.
+            let fileID = Capture.fileID(for: png)
+            do {
+                try Store.writeAsset(png, id: fileID, ext: "png", for: workstreamID)
+            } catch {
+                logger.error("Could not write the capture: \(error.localizedDescription, privacy: .public)")
+                return false
+            }
+
+            let layout = await (try? liveState())?.layout ?? Write.Layout.fallback
+            do {
+                _ = try await apply([
+                    "kind": "image",
+                    "id": Write.mintID(),
+                    "fileId": fileID,
+                    "name": "\(fileID).png",
+                    "mimeType": "image/png",
+                    "x": layout.originX,
+                    "y": layout.nextY,
+                    "width": size.width,
+                    "height": size.height,
+                ])
+            } catch {
+                logger.error("Could not place the capture: \(error.localizedDescription, privacy: .public)")
+                return false
+            }
+            return true
         }
 
         /// Ends this board's life. Called from both archive paths.

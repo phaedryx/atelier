@@ -729,18 +729,22 @@ extension WorkspaceActions {
         return (ids, target.wasAlreadyOpen)
     }
 
-    /// Moves, retexts or recolours one element of the caller's board.
+    /// Moves, retexts, recolours or captions one element of the caller's board.
+    ///
+    /// A caption is the agent's transcription of an image, and is refused for
+    /// anything else — `Whiteboard.Write.updatePlan` states why.
     func whiteboardUpdate(
         workstreamID: UUID,
         id: String,
         at: String?,
         text: String?,
-        color: String?
+        color: String?,
+        caption: String? = nil
     ) async throws -> (id: String, tabWasAlreadyOpen: Bool) {
         let target = try whiteboardTarget(workstreamID: workstreamID)
         let live = try await target.host.liveState()
         let op = try Whiteboard.Write.updatePlan(
-            id: id, at: at, text: text, color: color, live: live
+            id: id, at: at, text: text, color: color, caption: caption, live: live
         )
         _ = try await target.host.apply(op)
         logger.detailed("whiteboard_update: \(id)")
