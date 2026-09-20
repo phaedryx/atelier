@@ -254,7 +254,21 @@ extension Whiteboard {
             _: WKUserContentController,
             didReceive message: WKScriptMessage
         ) {
-            guard let body = message.body as? [String: Any],
+            handle(message.body)
+        }
+
+        /// The half of the handler a test can reach.
+        ///
+        /// Split out because `WKScriptMessage` has no init a test can call, and
+        /// the `render` arm below is not the pass-through the `save` arm is: it
+        /// decides which renders to accept by revision, which is the rule that
+        /// stops a slow export being stamped as matching a scene it never came
+        /// from. A rule with no test is one the next change quietly drops.
+        ///
+        /// Every field is checked rather than trusted — the body crosses a
+        /// JavaScript boundary and arrives as `Any`.
+        func handle(_ rawBody: Any) {
+            guard let body = rawBody as? [String: Any],
                   let action = body["action"] as? String
             else {
                 logger.error("Whiteboard message with no action")
