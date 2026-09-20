@@ -466,6 +466,26 @@ final class WhiteboardWriteTests: XCTestCase {
         )
     }
 
+    func test_theCaptionKeyTravelsWithTheCaption() throws {
+        // The page must never spell a customData key. It cannot import
+        // `Element`, so a literal there could not be tied back to the one place
+        // these keys live — and a rename in Swift would leave the page writing
+        // the old key, putting the caption on the board and out of the digest.
+        let op = try Write.updatePlan(
+            id: "i1", at: nil, text: nil, color: nil, caption: "x",
+            live: board(ids: ["i1"], images: ["i1"])
+        )
+        XCTAssertEqual(op["captionKey"] as? String, Whiteboard.Element.captionKey)
+    }
+
+    func test_anUpdateThatIsNotACaptionCarriesNoCaptionKey() throws {
+        let op = try Write.updatePlan(
+            id: "i1", at: "1,2", text: nil, color: nil,
+            live: board(ids: ["i1"], images: ["i1"])
+        )
+        XCTAssertNil(op["captionKey"])
+    }
+
     func test_aCaptionAloneIsEnoughOfAChange() throws {
         XCTAssertNoThrow(
             try Write.updatePlan(

@@ -2429,6 +2429,13 @@ every legitimate caption while naming the wrong cause.
 cost of a block of text under every screenshot on a board the user is sketching on. Canvas search
 over screenshots is the accepted gap, stated in the design.
 
+**The page spells no `customData` key: the key travels with the value.** `updatePlan` puts
+`Element.captionKey` on the op and the page writes `data[op.captionKey]`. This is the first write of
+one of these keys from the JavaScript side, which cannot import `Element` — so a literal there would
+be a second spelling that nothing keeps in step, and a rename in Swift would leave the page writing
+the old key: the caption would reach the board and vanish from the digest, written and invisible.
+Same reasoning as `IPC.Vocabulary`, for a boundary that cannot import Swift.
+
 **The page SPREADS `customData` rather than assigning it**, and this is the one line in the arm that
 matters. A note carries `atelierKind` and an agent-drawn element carries `atelierAuthor` in that same
 dictionary, so a fresh object would demote a note to a box in the digest and disown an agent's own

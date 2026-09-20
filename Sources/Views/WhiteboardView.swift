@@ -15,6 +15,17 @@ import SwiftUI
 struct WhiteboardTabView: View {
     let host: Whiteboard.Host
 
+    /// Drives the button's `.disabled` only. `Host.isCapturing` is the real
+    /// re-entry guard, and the two are deliberately not one.
+    ///
+    /// This looks like the view-owned run state this codebase has shipped twice
+    /// (`runGeneration`, then `browserStartPending`), so it is worth saying why
+    /// it is not. `Host` is not an `ObservableObject`, so SwiftUI cannot watch
+    /// its flag; and the state that would matter if this view were destroyed
+    /// mid-capture — whether a capture is in flight, and whether the image
+    /// landed — lives on the host, which outlives the view. All this copy can
+    /// lose is a button's disabled look, and only while the capture overlay
+    /// owns the screen, which is exactly when the user cannot navigate away.
     @State private var isCapturing = false
 
     var body: some View {

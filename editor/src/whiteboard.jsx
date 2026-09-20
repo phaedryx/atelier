@@ -511,18 +511,25 @@ window.__whiteboardApply = async (op) => {
           if (op.y !== undefined) out.y = op.y
           if (op.strokeColor !== undefined) out.strokeColor = op.strokeColor
           if (op.backgroundColor !== undefined) out.backgroundColor = op.backgroundColor
-          if (op.caption !== undefined) {
+          if (op.caption !== undefined && op.captionKey) {
             // SPREAD, never assign. This same dictionary carries atelierKind
             // for a note and atelierAuthor for anything an agent drew, so a
             // fresh object would silently demote a note to a box in the digest
             // and disown an agent's own element — the shape of PR 3's
             // boundElements overwrite, and invisible in exactly the same way.
             const data = { ...(out.customData || {}) }
+            // The KEY is not spelled here. customData keys live in exactly one
+            // place, Whiteboard.Element, and this page cannot import it — so
+            // Swift sends the key with the value rather than both ends carrying
+            // a literal that nothing keeps in step. A rename on that side would
+            // otherwise leave this writing the old key, and the caption would
+            // reach the board while vanishing from the digest.
+            //
             // Cleared by REMOVING the key rather than storing "": the digest
             // renders a caption line for any caption it finds, so an empty
             // string would leave a blank one under the image forever.
-            if (op.caption === '') delete data.atelierCaption
-            else data.atelierCaption = op.caption
+            if (op.caption === '') delete data[op.captionKey]
+            else data[op.captionKey] = op.caption
             out.customData = data
           }
           out.version = (out.version || 1) + 1

@@ -407,6 +407,14 @@ extension Whiteboard {
             do {
                 _ = try await apply([
                     "kind": "image",
+                    // `mintID`'s own comment reads the `atl-` prefix as "an
+                    // agent put this here", which is not true of a capture: the
+                    // user pressed the button, and this element deliberately
+                    // carries no `atelierAuthor` so the digest does not claim
+                    // otherwise. Here the prefix means only "minted by
+                    // Atelier". Reused rather than given its own spelling, so
+                    // the board keeps one id shape instead of growing a second
+                    // for a single caller.
                     "id": Write.mintID(),
                     "fileId": fileID,
                     "name": "\(fileID).png",

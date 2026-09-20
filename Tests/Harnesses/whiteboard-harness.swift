@@ -711,9 +711,13 @@ check(
 // ---------------------------------------------------------------------------
 section("5. The caption arm")
 
+/// The key travels WITH the value, the way `Write.updatePlan` sends it — the
+/// page spells no customData key. The literal here is the harness playing
+/// Swift's part; `WhiteboardWriteTests` is what pins it to `Element.captionKey`.
 let captioned = host.apply([
     "kind": "update", "id": "h-shot",
     "caption": "Settings pane, Environment tab, process-compose row red",
+    "captionKey": "atelierCaption",
 ])
 check("the page accepts a caption", captioned["ok"] as? Bool == true, "\(captioned)")
 check(
@@ -726,7 +730,7 @@ check(
 // The merge, and the reason it is a merge. A note carries atelierKind in the
 // same dictionary, so an assignment here would demote it to a box in the digest
 // — silently, and only visible on a read.
-_ = host.apply(["kind": "update", "id": "h-note", "caption": ""])
+_ = host.apply(["kind": "update", "id": "h-note", "caption": "", "captionKey": "atelierCaption"])
 check(
     "a caption write on a note leaves atelierKind intact",
     customData("h-note")["atelierKind"] as? String == "note",
@@ -772,7 +776,8 @@ let arrowBeforeCaption = (
     x: number(scene["h-arrow2"]?["x"]), y: number(scene["h-arrow2"]?["y"])
 )
 _ = host.apply([
-    "kind": "update", "id": "h-c", "x": 100, "y": 2600, "caption": "",
+    "kind": "update", "id": "h-c", "x": 100, "y": 2600,
+    "caption": "", "captionKey": "atelierCaption",
 ])
 scene = files.elements()
 check(
@@ -792,6 +797,7 @@ check(
 _ = host.apply([
     "kind": "update", "id": "h-shot",
     "caption": "Settings pane, Environment tab, process-compose row red",
+    "captionKey": "atelierCaption",
 ])
 check(
     "the image still carries its caption after all of that",

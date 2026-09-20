@@ -402,6 +402,16 @@ extension Whiteboard {
             if let caption {
                 guard live.imageIDs.contains(id) else { throw Failure.captionNeedsImage(id) }
                 op["caption"] = caption
+                // **The key travels with the value**, so the page never spells
+                // it. `customData` keys live in exactly one place — `Element`,
+                // the reader — and this is the first write of one from the
+                // JavaScript side, where a literal could not be tied back to
+                // that constant. A rename in Swift would have left the page
+                // writing the old key: the caption would reach the board and
+                // vanish from the digest, which is written and invisible, the
+                // shape this feature is organized around. Same reasoning as
+                // `IPC.Vocabulary`, for a boundary that cannot import Swift.
+                op["captionKey"] = Element.captionKey
             }
             // Refused rather than treated as a no-op: an update naming no field
             // is an agent that meant something, and succeeding silently teaches
