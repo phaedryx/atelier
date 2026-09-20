@@ -218,7 +218,13 @@ targets:
     type: bundle.unit-test
     platform: macOS
     sources:
-      - Tests
+      # `Tests` is a directory glob, so a harness under it would be compiled
+      # into this bundle — and the harnesses are standalone scripts with
+      # top-level statements, which do not belong in an XCTest target and do
+      # not build there. They are run by hand; see Tests/Harnesses/README.md.
+      - path: Tests
+        excludes:
+          - "Harnesses/**"
     dependencies:
       - target: Atelier
     settings:
