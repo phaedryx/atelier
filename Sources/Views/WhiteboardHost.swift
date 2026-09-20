@@ -87,6 +87,7 @@ extension Whiteboard {
             if let script = Self.initialSceneScript(for: workstreamID) {
                 config.userContentController.addUserScript(script)
             }
+            config.userContentController.addUserScript(Self.assetManifestScript(for: workstreamID))
 
             let wv = WKWebView(
                 frame: NSRect(origin: .zero, size: Self.parkedSize),
@@ -124,6 +125,36 @@ extension Whiteboard {
                 window.__whiteboardInitialScene = new TextDecoder().decode(
                     Uint8Array.from(atob('\(encoded)'), function (c) { return c.charCodeAt(0); })
                 );
+                """,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            )
+        }
+
+        /// Tells the page which images this board has, and where to fetch them.
+        ///
+        /// The page is handed **URLs on the asset scheme, not data URLs**, and
+        /// that is what `AssetSchemeHandler` is for. Inlining would mean
+        /// base64-ing every pasted screenshot into a document-start user script
+        /// — a 10 MB image becomes 13 MB of JavaScript source parsed before the
+        /// page runs — and it would put the bytes straight back into the scene
+        /// file the externalisation exists to keep them out of.
+        ///
+        /// Always injected, even when there are no assets: the page needs the
+        /// base URL to build any image it is handed, and an absent global would
+        /// make "no images yet" indistinguishable from "the manifest failed".
+        private static func assetManifestScript(for workstreamID: UUID) -> WKUserScript {
+            let dir = Store.assetsDirectory(for: workstreamID)
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+            // Only the file names cross, and they are the sanitized ones
+            // `writeAsset` produced. JSON-encoded rather than interpolated, for
+            // the reason `initialSceneScript` states.
+            let payload = (try? JSONSerialization.data(withJSONObject: names.filter { !$0.hasPrefix(".") }))
+                .flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+            return WKUserScript(
+                source: """
+                window.__whiteboardAssetBase = '\(AssetSchemeHandler.scheme)://board/';
+                window.__whiteboardAssets = \(payload);
                 """,
                 injectionTime: .atDocumentStart,
                 forMainFrameOnly: true

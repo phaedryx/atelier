@@ -2,7 +2,7 @@
 // ABOUTME: Sole writer of board.excalidraw; Swift persists what this hands over.
 import React from 'react'
 import { createRoot } from 'react-dom/client'
-import { Excalidraw, serializeAsJSON } from '@excalidraw/excalidraw'
+import { Excalidraw, restore, serializeAsJSON } from '@excalidraw/excalidraw'
 import '@excalidraw/excalidraw/index.css'
 
 // Excalidraw fetches its fonts at runtime by URL, resolved against this. They
@@ -48,35 +48,80 @@ const save = () => {
     post({ action: 'saveAsset', id, ext, data: file.dataURL.slice(comma + 1) })
   }
 
+  // An EMPTY files map, deliberately. serializeAsJSON inlines every file an
+  // image element references as a base64 data URL, so passing `files` here puts
+  // the bytes straight into board.excalidraw — which is the thing assets/ exists
+  // to prevent, and what would later blow an agent's context when the digest is
+  // generated from this file. The bytes were just written to assets/ above, and
+  // Whiteboard.Host hands them back as asset-scheme URLs on the next load.
   post({
     action: 'save',
-    scene: serializeAsJSON(api.getSceneElements(), api.getAppState(), files, 'local'),
+    scene: serializeAsJSON(api.getSceneElements(), api.getAppState(), {}, 'local'),
   })
 }
 
+// The saved scene reaches Excalidraw as `initialData`, which is the prop it is
+// for — NOT as an updateScene call from the excalidrawAPI callback.
+//
+// That callback fires while the component is still mounting, and a scene pushed
+// in from there is discarded by Excalidraw's own initialization a moment later:
+// the board comes up empty, with no error anywhere. Verified against 0.18.1.
+//
+// `restore` normalizes what was parsed — filling defaults and migrating older
+// shapes — so a board saved by one Excalidraw version still opens under the
+// next. A scene that will not parse must not stop the board mounting: an empty
+// canvas the user can draw on beats a blank pane.
+function savedScene() {
+  if (!window.__whiteboardInitialScene) return null
+  try {
+    return restore(JSON.parse(window.__whiteboardInitialScene), null, null)
+  } catch (e) {
+    console.error('whiteboard: unreadable saved scene', e)
+    return null
+  }
+}
+
+// Rebuilds the files map from what Whiteboard.Host found in assets/.
+//
+// Excalidraw takes each file's bytes through `dataURL`, but it uses the value
+// as an image source — so an asset-scheme URL serves the same purpose without
+// any of the bytes travelling through JavaScript. That is what keeps a board
+// with a dozen screenshots from injecting tens of megabytes of base64 at
+// document start.
+function savedFiles() {
+  const base = window.__whiteboardAssetBase
+  const names = window.__whiteboardAssets || []
+  if (!base || !names.length) return {}
+  const files = {}
+  for (const name of names) {
+    const dot = name.lastIndexOf('.')
+    if (dot <= 0) continue
+    const id = name.slice(0, dot)
+    const ext = name.slice(dot + 1).toLowerCase()
+    files[id] = {
+      id,
+      mimeType: ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : `image/${ext}`,
+      dataURL: base + name,
+      created: Date.now(),
+    }
+  }
+  return files
+}
+
+const restored = savedScene()
+const initialData = restored
+  ? { ...restored, files: { ...savedFiles(), ...(restored.files || {}) } }
+  : null
+
 function Board() {
   return React.createElement(Excalidraw, {
+    initialData,
     excalidrawAPI: (instance) => {
       api = instance
-      restoreSavedScene()
       window.whiteboardReady = true
     },
     onChange: scheduleSave,
   })
-}
-
-// The saved scene is injected by Whiteboard.Host as a document-start user
-// script. A scene that will not parse must not stop the board mounting: an
-// empty canvas the user can draw on beats a blank pane with nothing on it.
-function restoreSavedScene() {
-  if (!window.__whiteboardInitialScene) return
-  try {
-    const scene = JSON.parse(window.__whiteboardInitialScene)
-    api.updateScene({ elements: scene.elements || [] })
-    if (scene.files) api.addFiles(Object.values(scene.files))
-  } catch (e) {
-    console.error('whiteboard: unreadable saved scene', e)
-  }
 }
 
 createRoot(document.getElementById('board')).render(React.createElement(Board))
