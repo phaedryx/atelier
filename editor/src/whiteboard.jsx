@@ -238,6 +238,12 @@ function savedScene() {
 // any of the bytes travelling through JavaScript. That is what keeps a board
 // with a dozen screenshots from injecting tens of megabytes of base64 at
 // document start.
+const assetMimeTypes = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  svg: 'image/svg+xml',
+}
+
 function savedFiles() {
   const base = window.__whiteboardAssetBase
   const names = window.__whiteboardAssets || []
@@ -250,7 +256,10 @@ function savedFiles() {
     const ext = name.slice(dot + 1).toLowerCase()
     files[id] = {
       id,
-      mimeType: ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : `image/${ext}`,
+      // `image/svg` is not a media type and Excalidraw does not accept one:
+      // an SVG asset has to come back as `image/svg+xml` or the image is lost
+      // on reload. jpg/jpeg is the same class of mapping, already here.
+      mimeType: assetMimeTypes[ext] || `image/${ext}`,
       dataURL: base + name,
       created: Date.now(),
     }
