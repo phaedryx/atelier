@@ -132,6 +132,33 @@ from PR 2 — the PNG export still succeeds afterwards. A captured image is an
 asset-scheme URL from the moment it lands, unlike a pasted one, so it exercises
 the export-canvas taint path in its own session rather than after a relaunch.
 
+**6. The one known limitation, pinned so it cannot go quiet.** An arrow cannot
+bind to an image — `convertToExcalidrawElements` throws for one, measured
+against 0.18.1 — and what is checked is that it stays a **refusal** with the
+board untouched, rather than becoming a partial apply.
+
+**7. The update arm.** A moved labelled box drags its label with it, at the same
+offset; a move and a retext in one call land both; and `text` on an element the
+user drew without a label is refused with the board untouched, rather than
+answering `ok` having changed nothing.
+
+The label check asserts the **offset**, not the position, and that is the point
+of it rather than a convenience. Excalidraw positions a bound label when it
+creates it and never again — measured, moving four labelled containers left all
+four labels at their original absolute coordinates — so the fix shifts the label
+by the move's delta. It deliberately does *not* recompute the label's place from
+the container, because that place is Excalidraw's own per-shape maths and is not
+plain centring: an ellipse insets its label (offset 90.218 where centring gives
+90.0) and a diamond constrains the label's wrap width instead (99.4px of a 240px
+diamond against 229px of a 240px rectangle). Asserting the offset is what makes
+the check fail if anyone ever swaps the delta for a recomputation.
+
+`text`'s refusal lives in the page rather than in `Whiteboard.Write` because
+whether an element carries a bound label is a fact about the live scene, which
+only the page holds — so unlike the `text`-on-an-image and `caption`-on-a-non-
+image refusals, this one cannot be pinned in XCTest. That is the shape this file
+exists for.
+
 ### If you change the page
 
 `./scripts/build-editor.sh` first. The harness runs the **built** bundle in
@@ -141,5 +168,15 @@ it — and it will pass, which is the one failure mode to watch for.
 ### Checking that the harness still has teeth
 
 Break something on purpose, rebuild, and confirm the matching check fails.
-Removing the `reflowArrowsTouching` call from `whiteboard.jsx`'s update arm
-reintroduces PR 3's third bug and should fail exactly two checks and no others.
+Three that have been run:
+
+- Removing the `reflowArrowsTouching` call from `whiteboard.jsx`'s update arm
+  reintroduces PR 3's third bug and should fail exactly two checks and no others.
+- Forcing the update arm's `label` to `null` reintroduces the left-behind label
+  and fails exactly two: the offset check and the move-with-retext one.
+- Skipping the update arm's missing-label refusal reintroduces the silent
+  success and fails exactly two: the refusal itself and the whole-op one. The
+  other two checks in that group — that no label is created and that
+  `boundElements` is untouched — **still pass**, correctly: the old behaviour
+  also created nothing. They pin that the refusal does not half-apply, which is
+  a different claim from the refusal happening at all.

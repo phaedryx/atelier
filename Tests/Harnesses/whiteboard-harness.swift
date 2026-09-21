@@ -868,6 +868,138 @@ check(
 )
 
 // ---------------------------------------------------------------------------
+section("7. The update arm — a label follows its box, and `text` refuses where there is none")
+// Both of these SUCCEEDED before this change, which is what makes them worth
+// pinning: the call returned `ok`, and the board's picture and its digest
+// disagreed afterwards.
+
+/// The text element bound to a container, found by scanning.
+///
+/// Its id is minted by Excalidraw rather than supplied, so it cannot be looked
+/// up by name the way every other element in this file is.
+func labelOf(_ container: String) -> [String: Any]? {
+    files.elements().values.first { $0["containerId"] as? String == container }
+}
+
+_ = host.apply([
+    "kind": "add",
+    "elements": [box("h-moved", "Session store", x: 200, y: 2000)],
+])
+
+// Presence FIRST, and the harness has been caught by exactly this before:
+// number(nil) is NaN and NaN != NaN is true, so a "something changed"
+// comparison passes against an element that is not on the board at all.
+guard let labelBefore = labelOf("h-moved") else {
+    check("the labelled box's label reaches the board", false, "no element carries containerId h-moved")
+    print("\nWithout a label there is nothing to move; the rest of section 7 would be meaningless.")
+    exit(1)
+}
+
+check("the labelled box's label reaches the board", true)
+
+let offsetBefore = (
+    x: number(labelBefore["x"]) - 200,
+    y: number(labelBefore["y"]) - 2000
+)
+
+_ = host.apply(["kind": "update", "id": "h-moved", "x": 900, "y": 2600])
+
+/// The container really moved — without this, a page that moved nothing at all
+/// would satisfy the offset comparison below perfectly.
+let movedBox = files.elements()["h-moved"]
+check(
+    "the moved box lands where it was sent",
+    number(movedBox?["x"]) == 900 && number(movedBox?["y"]) == 2600,
+    "(\(number(movedBox?["x"])), \(number(movedBox?["y"])))"
+)
+
+guard let labelAfter = labelOf("h-moved") else {
+    check("the label survives the move", false, "no element carries containerId h-moved")
+    print("\nThe label did not survive the move.")
+    exit(1)
+}
+
+check("the label survives the move", true)
+
+/// The offset is asserted rather than the position, because the offset is the
+/// thing the fix preserves: Excalidraw insets an ellipse's label and constrains
+/// a diamond's wrap width, so the label's place inside its container is
+/// Excalidraw's own maths and not plain centring. Shifting by the delta keeps
+/// whatever it decided; recomputing would have to reproduce it.
+let offsetAfter = (
+    x: number(labelAfter["x"]) - 900,
+    y: number(labelAfter["y"]) - 2600
+)
+check(
+    "moving a labelled box drags its label with it, at the same offset",
+    abs(offsetAfter.x - offsetBefore.x) < 0.001 && abs(offsetAfter.y - offsetBefore.y) < 0.001,
+    "before=(\(offsetBefore.x), \(offsetBefore.y)) after=(\(offsetAfter.x), \(offsetAfter.y)) "
+        + "label now at (\(number(labelAfter["x"])), \(number(labelAfter["y"])))"
+)
+
+// A move and a retext in one call. The label is rewritten by id rather than by
+// the object resolved before the move, so the shift must survive the text.
+_ = host.apply(["kind": "update", "id": "h-moved", "x": 900, "y": 3200, "text": "Token cache"])
+let labelBoth = labelOf("h-moved")
+check(
+    "a move and a retext in one call land both",
+    labelBoth?["text"] as? String == "Token cache"
+        && abs((number(labelBoth?["y"]) - 3200) - offsetBefore.y) < 0.001,
+    "text=\(labelBoth?["text"] as? String ?? "nil") "
+        + "offset y=\(number(labelBoth?["y"]) - 3200) expected \(offsetBefore.y)"
+)
+
+// --- `text` on an element that has no label ---------------------------------
+// textTargetFor returns null for any box, ellipse, diamond or arrow drawn
+// without one, and the arm used to answer `ok` having changed nothing — the
+// same silent success PR 4 closed for images, which Swift cannot close here
+// because `Live` does not carry which elements have labels.
+
+_ = host.apply([
+    "kind": "add",
+    "elements": [[
+        "id": "h-bare", "type": "rectangle",
+        "x": 200, "y": 3800, "width": 220, "height": 90,
+        "customData": ["atelierAuthor": "agent"],
+    ]],
+])
+check(
+    "a bare rectangle reaches the board carrying no label",
+    files.elements()["h-bare"] != nil && labelOf("h-bare") == nil,
+    "label=\(String(describing: labelOf("h-bare")?["id"]))"
+)
+
+let bareRefused = host.apply(["kind": "update", "id": "h-bare", "text": "Cache"])
+check(
+    "`text` on an element with no label is refused rather than succeeding silently",
+    bareRefused["ok"] as? Bool != true,
+    "\(bareRefused)"
+)
+check(
+    "and the refusal creates no label",
+    labelOf("h-bare") == nil,
+    "label=\(String(describing: labelOf("h-bare")?["id"]))"
+)
+check(
+    "and leaves the element's boundElements alone",
+    (files.elements()["h-bare"]?["boundElements"] as? [[String: Any]] ?? []).isEmpty,
+    "\(String(describing: files.elements()["h-bare"]?["boundElements"]))"
+)
+
+/// Refused WHOLE. A call carrying both a move and text must land neither, or the
+/// board ends in a state the answer does not describe — the rule the
+/// arrow-naming-an-image refusal above already follows.
+let bothRefused = host.apply(["kind": "update", "id": "h-bare", "x": 1500, "y": 4400, "text": "Cache"])
+check(
+    "a move sent with that text is refused with it, not applied on its own",
+    bothRefused["ok"] as? Bool != true
+        && number(files.elements()["h-bare"]?["x"]) == 200
+        && number(files.elements()["h-bare"]?["y"]) == 3800,
+    "\(bothRefused) position=(\(number(files.elements()["h-bare"]?["x"])), "
+        + "\(number(files.elements()["h-bare"]?["y"])))"
+)
+
+// ---------------------------------------------------------------------------
 print("\n\(checksRun - failures.count)/\(checksRun) checks passed")
 if failures.isEmpty {
     print("PASS")
