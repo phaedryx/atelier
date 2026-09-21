@@ -65,8 +65,15 @@ extension Whiteboard {
         }
 
         /// What the page says is on the board right now.
+        ///
+        /// `imageIDs` is a subset of `ids`, and it is here for exactly one
+        /// question: a caption is an agent's transcription of pixels, so it
+        /// belongs on an image and nowhere else. Swift can only refuse a
+        /// caption on a box if it is told which elements are images, and the
+        /// page is the only thing that knows.
         struct Live: Equatable {
             let ids: Set<String>
+            let imageIDs: Set<String>
             let layout: Layout
         }
 
@@ -169,6 +176,8 @@ extension Whiteboard {
             case unknownElement(String)
             case invalidPosition(String)
             case invalidColor(String)
+            case captionNeedsImage(String)
+            case textNeedsCanvasText(String)
             case nothingToUpdate
 
             var errorDescription: String? {
@@ -200,8 +209,22 @@ extension Whiteboard {
                 case let .invalidColor(raw):
                     "\"\(raw)\" is not a colour. Use a hex value like \"#e03131\", or one of: "
                         + palette.keys.sorted().joined(separator: ", ") + "."
+                case let .captionNeedsImage(id):
+                    // Names the alternative, because a refusal that does not is
+                    // one an agent retries verbatim.
+                    "\"\(id)\" is not an image, and a caption is a transcription of one. "
+                        + "Use `text` to change what a box, note, text or arrow says. "
+                        + "read_whiteboard lists each image on this board."
+                case let .textNeedsCanvasText(id):
+                    // The mirror of `captionNeedsImage`, and the more valuable
+                    // of the two: reaching for `text` to describe a screenshot
+                    // is the obvious first move, and it used to succeed while
+                    // changing nothing.
+                    "\"\(id)\" is an image, and an image carries no text on the canvas. "
+                        + "Use `caption` to record what it shows — read_whiteboard reports that "
+                        + "under the image."
                 case .nothingToUpdate:
-                    "Nothing to change — name at least one of `at`, `text` or `color`."
+                    "Nothing to change — name at least one of `at`, `text`, `color` or `caption`."
                 }
             }
         }
@@ -342,11 +365,26 @@ extension Whiteboard {
 
         // MARK: - update
 
+        /// **A caption is for an image and nothing else.**
+        ///
+        /// It is the agent's own transcription of pixels — the design's answer
+        /// to Excalidraw's canvas search matching text elements only, so a
+        /// pasted screenshot is otherwise opaque to everything. On a box it
+        /// would be a second, invisible text channel: present in the digest,
+        /// absent from the picture, which is the disagreement the read path's
+        /// two halves exist to make impossible. `text` is the channel for
+        /// everything that can carry words on the canvas.
+        ///
+        /// Deliberately **not** materialized as a real text element. That would
+        /// make ⌘F find it, at the cost of a block of text under every
+        /// screenshot on a board the user is sketching on; canvas search over
+        /// screenshots is the accepted gap the design states.
         static func updatePlan(
             id: String,
             at: String?,
             text: String?,
             color: String?,
+            caption: String? = nil,
             live: Live
         ) throws -> [String: Any] {
             guard live.ids.contains(id) else { throw Failure.unknownElement(id) }
@@ -360,10 +398,39 @@ extension Whiteboard {
             // optional argument on this surface: clearing a label is a real
             // edit, and `""` is how it is asked for.
             if let text {
+                // **An image is refused here**, and this is the mirror of
+                // `captionNeedsImage` below. An image carries no text on the
+                // canvas, so the page's `textTargetFor` finds nothing to change
+                // — and the call still reported "Updated i1.", which is a silent
+                // success teaching an agent that its transcription landed.
+                // Reaching for `text` to describe a screenshot is the obvious
+                // first move, so it is the one that most needs answering.
+                guard !live.imageIDs.contains(id) else {
+                    throw Failure.textNeedsCanvasText(id)
+                }
                 op["text"] = text
             }
             if let color {
                 op["strokeColor"] = try normalizedColor(color)
+            }
+            // Checked for nil rather than for emptiness, the rule `text` above
+            // follows: clearing a transcription is a real edit, and `""` is how
+            // it is asked for. The page removes the key rather than storing an
+            // empty string, or the digest would render a blank caption line
+            // under the image.
+            if let caption {
+                guard live.imageIDs.contains(id) else { throw Failure.captionNeedsImage(id) }
+                op["caption"] = caption
+                // **The key travels with the value**, so the page never spells
+                // it. `customData` keys live in exactly one place — `Element`,
+                // the reader — and this is the first write of one from the
+                // JavaScript side, where a literal could not be tied back to
+                // that constant. A rename in Swift would have left the page
+                // writing the old key: the caption would reach the board and
+                // vanish from the digest, which is written and invisible, the
+                // shape this feature is organized around. Same reasoning as
+                // `IPC.Vocabulary`, for a boundary that cannot import Swift.
+                op["captionKey"] = Element.captionKey
             }
             // Refused rather than treated as a no-op: an update naming no field
             // is an agent that meant something, and succeeding silently teaches

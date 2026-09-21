@@ -1326,7 +1326,11 @@ extension IPC {
                     // `raw`, not `optional`: an empty string is how a label is
                     // cleared, and `optional` reads empty as absent.
                     text: arguments.raw["text"],
-                    color: arguments.optional("color")
+                    color: arguments.optional("color"),
+                    // `raw` for the same reason `text` uses it: an empty string
+                    // is how a transcription is cleared, and `optional` reads
+                    // empty as absent.
+                    caption: arguments.raw["caption"]
                 )
                 return .success(
                     id: request.id,

@@ -274,12 +274,18 @@ createRoot(document.getElementById('board')).render(React.createElement(Board))
 //
 // The layout travels with the ids because Swift cannot compute it — a board's
 // extent is live state — and because both are answers to the same instant.
+// imageIDs rides along because a CAPTION belongs on an image and nowhere else,
+// and Swift cannot tell one element from another — it never reads the scene. It
+// is a subset of ids, not a replacement for it: Whiteboard.Write still checks
+// membership of ids first, so an id that is on neither list is reported as
+// unknown rather than as the wrong kind.
 window.__whiteboardState = () => {
   if (!api) return null
   const els = api.getSceneElements()
-  if (!els.length) return { ids: [], originX: 100, nextY: 100 }
+  if (!els.length) return { ids: [], imageIDs: [], originX: 100, nextY: 100 }
   return {
     ids: els.map((el) => el.id),
+    imageIDs: els.filter((el) => el.type === 'image').map((el) => el.id),
     originX: Math.min(...els.map((el) => el.x)),
     nextY: Math.max(...els.map((el) => el.y + (el.height || 0))) + 60,
   }
@@ -505,6 +511,27 @@ window.__whiteboardApply = async (op) => {
           if (op.y !== undefined) out.y = op.y
           if (op.strokeColor !== undefined) out.strokeColor = op.strokeColor
           if (op.backgroundColor !== undefined) out.backgroundColor = op.backgroundColor
+          if (op.caption !== undefined && op.captionKey) {
+            // SPREAD, never assign. This same dictionary carries atelierKind
+            // for a note and atelierAuthor for anything an agent drew, so a
+            // fresh object would silently demote a note to a box in the digest
+            // and disown an agent's own element — the shape of PR 3's
+            // boundElements overwrite, and invisible in exactly the same way.
+            const data = { ...(out.customData || {}) }
+            // The KEY is not spelled here. customData keys live in exactly one
+            // place, Whiteboard.Element, and this page cannot import it — so
+            // Swift sends the key with the value rather than both ends carrying
+            // a literal that nothing keeps in step. A rename on that side would
+            // otherwise leave this writing the old key, and the caption would
+            // reach the board while vanishing from the digest.
+            //
+            // Cleared by REMOVING the key rather than storing "": the digest
+            // renders a caption line for any caption it finds, so an empty
+            // string would leave a blank one under the image forever.
+            if (op.caption === '') delete data[op.captionKey]
+            else data[op.captionKey] = op.caption
+            out.customData = data
+          }
           out.version = (out.version || 1) + 1
           out.versionNonce = nonce()
         }
@@ -533,6 +560,44 @@ window.__whiteboardApply = async (op) => {
       })
       await saveNow()
       return { ok: true, ids: [op.id] }
+    }
+
+    // A captured screen region. Not part of the agent vocabulary — an agent
+    // cannot produce image bytes — but it goes through this same function, and
+    // therefore the same saveNow(), rather than growing a second write path.
+    if (op.kind === 'image') {
+      // The file reaches Excalidraw as an ASSET-SCHEME URL, never as bytes —
+      // the same rule savedFiles() follows on reload. That is what keeps
+      // board.excalidraw free of image data: save()'s saveAsset loop skips
+      // anything whose dataURL has no comma in it, so these bytes are never
+      // posted back, and serializeAsJSON is handed an empty files map anyway.
+      api.addFiles([
+        {
+          id: op.fileId,
+          mimeType: op.mimeType,
+          dataURL: window.__whiteboardAssetBase + op.name,
+          created: Date.now(),
+        },
+      ])
+      const converted = convertToExcalidrawElements(
+        [
+          {
+            type: 'image',
+            id: op.id,
+            fileId: op.fileId,
+            x: op.x,
+            y: op.y,
+            width: op.width,
+            height: op.height,
+          },
+        ],
+        { regenerateIds: false }
+      )
+      api.updateScene({ elements: [...existing, ...converted] })
+      await saveNow()
+      // Deliberately unmarked by atelierAuthor: the user pressed the button, so
+      // the digest must not report this as something an agent put there.
+      return { ok: true, ids: converted.map((el) => el.id) }
     }
 
     if (op.kind === 'delete') {

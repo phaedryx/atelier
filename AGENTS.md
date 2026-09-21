@@ -1299,10 +1299,23 @@ add` checks out a whole tree and goes through `Git.Operations.runOnWholeTree`. G
 a GUI app has no terminal on which to answer a credential prompt, so the prompt
 is itself a hang.
 
-Two sites are exempt and say so where they spawn: `BareRepoClone.run` and
-`QuickAction.Runner.runShellCommand`. Both run work with no honest deadline and
-both give the user a cancel instead. If you add a third, it needs the same two
-properties and the same comment.
+**Three** sites are exempt and say so where they spawn: `BareRepoClone.run`,
+`QuickAction.Runner.runShellCommand` and `Whiteboard.Capture.run`. All three run
+work with no honest deadline and all three give the user a cancel instead. If you
+add a fourth, it needs the same two properties and the same comment.
+
+The third is the one whose cancel is **in band**, and it is worth reading before
+concluding that any long-running child qualifies. `screencapture -i` blocks until
+the user drags a selection or presses Escape, which is unbounded human time — but
+the capture overlay owns the screen while it is up, so there is no Atelier button
+left to press. Escape, in the system's own UI, *is* the cancel, and it is the
+child's own rather than one this app had to provide. What makes the exemption
+cheap rather than a concession is that there is nothing to drain: `screencapture`
+writes to a file and prints nothing, so `ProcessRunner`'s pipe pump would buy none
+of its value while costing a blocked thread for the length of a human gesture —
+exactly the corollary stated above for callers. `terminationHandler` blocks
+nothing. A tier would have been defensible (`userCommand`, as a wedge-breaker)
+and was rejected for paying that thread to bound something no wedge can reach.
 
 ### AppleScript
 
@@ -2392,6 +2405,80 @@ stacked in a column, whose floor is the lower of the board's own extent and the 
 this batch places by hand — scanned up front, so the answer does not depend on batch order. Without
 it an agent that placed two boxes and added an unplaced note got the note dropped on top of them:
 invisible in the digest, since the coordinates read exactly as asked, and wrong only in the picture.
+
+### Image transcription, and the capture button
+
+Two arms were added last, and both are **mutations of the board**, so both answer the standing pair
+below.
+
+**A caption is an argument on `whiteboard_update`, not a fifth tool.** It writes
+`customData[Element.captionKey]`, which the digest has rendered since it was written — the write half
+was the only part missing, and `update` was already `.workspaceAction` / 15s / replayable, which is
+what a caption write is. The agent is the OCR: it opens the `board.png` that `read_whiteboard` names,
+reads the screenshot, and stores what it says.
+
+**Refused for anything that is not an image, and the refusal names `text`.** A caption is a
+transcription of pixels nothing else can read; on a box it would be a second, invisible text
+channel — present in the digest and absent from the picture, which is the disagreement the read
+path's two halves exist to make impossible. `Whiteboard.Write.Live` carries `imageIDs` so Swift can
+answer that at all, since it never reads the scene and the page is the only thing that knows. An
+**absent** `imageIDs` fails *open* to the page rather than reading as "no images", which would refuse
+every legitimate caption while naming the wrong cause.
+
+**And the mirror of that refusal was the point of adding it.** `text` on an **image** is refused
+too. An image carries no words on the canvas, so the page's `textTargetFor` found nothing to change
+and the call still answered "Updated i1." — a silent success teaching an agent that its
+transcription had landed. Reaching for `text` to describe a screenshot is the obvious first move,
+which is exactly why it is the one that had to be answered; the refusal names `caption`. The two
+refusals are symmetric and each names the other's field.
+
+**It is deliberately not materialized as a real text element.** That would make ⌘F find it, at the
+cost of a block of text under every screenshot on a board the user is sketching on. Canvas search
+over screenshots is the accepted gap, stated in the design.
+
+**The page spells no `customData` key: the key travels with the value.** `updatePlan` puts
+`Element.captionKey` on the op and the page writes `data[op.captionKey]`. This is the first write of
+one of these keys from the JavaScript side, which cannot import `Element` — so a literal there would
+be a second spelling that nothing keeps in step, and a rename in Swift would leave the page writing
+the old key: the caption would reach the board and vanish from the digest, written and invisible.
+Same reasoning as `IPC.Vocabulary`, for a boundary that cannot import Swift.
+
+**The page SPREADS `customData` rather than assigning it**, and this is the one line in the arm that
+matters. A note carries `atelierKind` and an agent-drawn element carries `atelierAuthor` in that same
+dictionary, so a fresh object would demote a note to a box in the digest and disown an agent's own
+element — the shape of the `boundElements` overwrite above, invisible in the same way. Clearing
+**removes the key** rather than storing `""`, which would leave a blank caption line under the image
+forever.
+
+**The capture button runs `screencapture -i`** and is the third `ProcessRunner` exemption — see
+**Child processes**, which carries the argument. Its file is named by the **lowercase hex SHA-1 of
+its bytes**, which is Excalidraw's own `fileId` convention: the stem of a file in `assets/` *is* the
+`fileId` on its image element, and a captured image and a pasted one have to be named by one rule or
+that join quietly has two. `Store.writeAsset` refuses a name it would have had to rewrite, and a
+SHA-1 hex string can never be one. Capturing the same region twice writes one file.
+
+It goes through the same `__whiteboardApply` and therefore the same `saveNow()` — one save path, one
+render site. The file reaches Excalidraw as an **asset-scheme URL and never as bytes**, so
+`board.excalidraw` stays free of image data, and `save()`'s `saveAsset` loop skips it for free
+(`indexOf(',')` is -1 on such a URL). It is **placed below the board's own extent**, from the same
+`Layout` an unpositioned agent element uses; a fixed origin would drop it on the user's diagram,
+which reads perfectly well in the digest and ruins the picture. It carries no `atelierAuthor`,
+because the user pressed the button. It is scaled to a long edge of `maxOnBoardEdge` on **placement
+only** — the file keeps every captured pixel, so the image stays sharp zoomed in and the agent reads
+the full-resolution original.
+
+**Both arms, against the standing pair.** *Does it keep arrows attached to what moved?* A caption
+moves nothing on its own, and a caption sent **together with `at`** still goes through the existing
+move branch and its `reflowArrowsTouching`; a capture places a new element and moves nothing. *Does
+it leave anything bound to what it removed?* Neither removes anything. Both are checked by the
+harness rather than asserted — see `Tests/Harnesses/README.md`.
+
+**Known limitation, measured and left alone: an arrow cannot bind to an image.**
+`convertToExcalidrawElements` throws `TypeError: undefined is not an object (evaluating 't.id')` for
+one, against 0.18.1. It predates these arms — a board has held pasted images since the tab shipped —
+and the behaviour is honest: the op is refused whole and the board is untouched. The harness pins
+that it stays a **refusal**, because what would be dangerous is it becoming a partial apply, which
+would put an arrow on the board bound to nothing while the digest reported an endpoint.
 
 ### The project task queue
 

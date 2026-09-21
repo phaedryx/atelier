@@ -50,6 +50,15 @@ extension Whiteboard {
         private(set) var webView: WKWebView!
         private let offscreenWindow: NSWindow
         private let bridge: Bridge
+        private let workstreamID: UUID
+        /// Whether a capture overlay is already up.
+        ///
+        /// `screencapture -i` takes over the screen, so a second press while one
+        /// is waiting would stack two overlays over each other. Cleared in a
+        /// `defer`, so a capture, an Escape and a refusal for want of Screen
+        /// Recording permission all release it — a flag that only a success
+        /// cleared would disable the button for the rest of the session.
+        private(set) var isCapturing = false
 
         /// Far outside any plausible screen arrangement.
         private static let parkingSpot = NSPoint(x: -20000, y: -20000)
@@ -58,6 +67,7 @@ extension Whiteboard {
         private static let parkedSize = NSSize(width: 1200, height: 800)
 
         init(workstreamID: UUID) {
+            self.workstreamID = workstreamID
             offscreenWindow = NSWindow(
                 contentRect: NSRect(origin: Self.parkingSpot, size: Self.parkedSize),
                 styleMask: [.borderless],
@@ -284,7 +294,15 @@ extension Whiteboard {
                 originX: (raw["originX"] as? NSNumber)?.doubleValue ?? Write.Layout.fallback.originX,
                 nextY: (raw["nextY"] as? NSNumber)?.doubleValue ?? Write.Layout.fallback.nextY
             )
-            return Write.Live(ids: Set(ids), layout: layout)
+            // **An absent `imageIDs` fails open to the page**, and that is a
+            // decision rather than a default. It can only happen against a page
+            // older than this build, and reading it as "no images" would refuse
+            // every legitimate caption with `captionNeedsImage` — a refusal
+            // naming the wrong cause, sending an agent to change an element
+            // that is already an image. Falling back to every id defers the
+            // question to the page, which refuses an id it cannot find.
+            let imageIDs = (raw["imageIDs"] as? [String]).map(Set.init) ?? Set(ids)
+            return Write.Live(ids: Set(ids), imageIDs: imageIDs, layout: layout)
         }
 
         /// Posts one operation into the page and answers with the ids it moved.
@@ -344,6 +362,84 @@ extension Whiteboard {
                     }
                 }
             }
+        }
+
+        // MARK: - Screen capture
+
+        /// Captures a screen region and puts it on this board.
+        ///
+        /// The whole flow, in one place rather than assembled in the view: the
+        /// view holds nothing a second caller could not reach, and the board's
+        /// life belongs here anyway. Answers false when there was nothing to
+        /// place — the user cancelled, or the capture could not be written —
+        /// which the button reports by doing nothing.
+        ///
+        /// **Placed below everything already on the board**, from the same
+        /// `Layout` an unpositioned agent element uses. A capture dropped at a
+        /// fixed origin lands on top of whatever the user has drawn, and that is
+        /// invisible in the digest — the coordinates read perfectly well — while
+        /// ruining the picture, which is the half of the read path that exists
+        /// to corroborate the other.
+        @discardableResult
+        func captureToBoard() async -> Bool {
+            guard !isCapturing else { return false }
+            isCapturing = true
+            defer { isCapturing = false }
+
+            guard let png = await Capture.run() else { return false }
+            guard let size = Capture.onBoardSize(of: png) else {
+                logger.error("Captured bytes were not a readable image")
+                return false
+            }
+
+            // The file's name IS the fileId — `Store.writeAsset` refuses any id
+            // it would have had to rewrite, and a SHA-1 hex string can never be
+            // one of those.
+            //
+            // **Written before it is placed, and deliberately not cleaned up if
+            // the placement then fails.** The bytes have to be on disk before
+            // the page can fetch them over the asset scheme, so this order is
+            // forced; what is a choice is leaving the file behind. Deleting it
+            // would be the more dangerous half: the name is content-addressed,
+            // so an identical capture taken earlier is the *same* file, and an
+            // element already on the board may be pointing at it — a tidy-up
+            // would blank that image out. An orphan costs a file in a cache
+            // directory that is swept with the workstream, and the next capture
+            // of the same region reuses it rather than writing a second.
+            let fileID = Capture.fileID(for: png)
+            do {
+                try Store.writeAsset(png, id: fileID, ext: "png", for: workstreamID)
+            } catch {
+                logger.error("Could not write the capture: \(error.localizedDescription, privacy: .public)")
+                return false
+            }
+
+            let layout = await (try? liveState())?.layout ?? Write.Layout.fallback
+            do {
+                _ = try await apply([
+                    "kind": "image",
+                    // `mintID`'s own comment reads the `atl-` prefix as "an
+                    // agent put this here", which is not true of a capture: the
+                    // user pressed the button, and this element deliberately
+                    // carries no `atelierAuthor` so the digest does not claim
+                    // otherwise. Here the prefix means only "minted by
+                    // Atelier". Reused rather than given its own spelling, so
+                    // the board keeps one id shape instead of growing a second
+                    // for a single caller.
+                    "id": Write.mintID(),
+                    "fileId": fileID,
+                    "name": "\(fileID).png",
+                    "mimeType": "image/png",
+                    "x": layout.originX,
+                    "y": layout.nextY,
+                    "width": size.width,
+                    "height": size.height,
+                ])
+            } catch {
+                logger.error("Could not place the capture: \(error.localizedDescription, privacy: .public)")
+                return false
+            }
+            return true
         }
 
         /// Ends this board's life. Called from both archive paths.

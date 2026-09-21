@@ -856,7 +856,7 @@ struct TerminalContainerView: View {
         case .whiteboard:
             // Attaches the host the cache owns; it never creates one. The board
             // outlives this view, which `ContentView` destroys on navigation.
-            WhiteboardView(host: surfaceCache.whiteboardHost(for: workstreamID))
+            WhiteboardTabView(host: surfaceCache.whiteboardHost(for: workstreamID))
         case .agent:
             if sessionMode == .waitingForTools || appEnv.isDetecting {
                 terminalLoadingView(message: "Checking terminal tools...")
