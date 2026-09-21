@@ -287,22 +287,57 @@ extension Whiteboard {
             try await waitUntilReady()
             guard let json = try await callJS("return JSON.stringify(window.__whiteboardState())"),
                   let data = json.data(using: .utf8),
-                  let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let ids = raw["ids"] as? [String]
+                  let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { throw WriteFailure.notReady }
-            let layout = Write.Layout(
-                originX: (raw["originX"] as? NSNumber)?.doubleValue ?? Write.Layout.fallback.originX,
-                nextY: (raw["nextY"] as? NSNumber)?.doubleValue ?? Write.Layout.fallback.nextY
+            return try Self.decodeLiveState(raw)
+        }
+
+        /// The page's four fields, or nothing.
+        ///
+        /// Split out from `liveState` so it is reachable with no webview — the
+        /// shape `Bridge.handle` already has in this file, and for the same
+        /// reason: the decode is where the mistakes live and a `WKWebView` buys
+        /// none of its coverage.
+        ///
+        /// **A field this cannot read is a protocol error, not a value to
+        /// guess.** `window.__whiteboardState` answers either `null` or one
+        /// object literal carrying all four keys, so a dictionary holding a
+        /// subset of them is not a page in a degraded state — it is a page that
+        /// does not exist, and there is nothing partial to make the best of.
+        /// `.notReady` is what the rest of this guard chain already says about
+        /// one of those.
+        ///
+        /// **`imageIDs` used to fail open to every id, and that is no longer
+        /// available.** The reasoning was sound while the set was read in one
+        /// direction: a caption belongs on an image, and reading an absent
+        /// field as "no images" would have refused every legitimate caption
+        /// with `captionNeedsImage`, a refusal naming the wrong cause. Falling
+        /// back to every id deferred the question to the page, which refuses an
+        /// id it cannot find. `Write.updatePlan` now reads the same set in the
+        /// **opposite** direction too — `textNeedsCanvasText`, which refuses
+        /// `text` *on* an image — so there is no longer a lenient value: every
+        /// id makes the page's own answer unreachable for `text`, and no id
+        /// makes it unreachable for `caption`. Whichever way it fell it would
+        /// refuse a whole arm of the tool while naming the wrong cause, so
+        /// neither is a defensible guess and the field is now required.
+        ///
+        /// The layout is required on the same footing rather than keeping its
+        /// per-field default. Guessing coordinates is the harm
+        /// `captureToBoard`'s placement comment describes — an element dropped
+        /// on top of the user's diagram, which reads perfectly well in the
+        /// digest and ruins the picture — so a half-read layout must not be
+        /// silently completed either.
+        static func decodeLiveState(_ raw: [String: Any]) throws -> Write.Live {
+            guard let ids = raw["ids"] as? [String],
+                  let imageIDs = raw["imageIDs"] as? [String],
+                  let originX = (raw["originX"] as? NSNumber)?.doubleValue,
+                  let nextY = (raw["nextY"] as? NSNumber)?.doubleValue
+            else { throw WriteFailure.notReady }
+            return Write.Live(
+                ids: Set(ids),
+                imageIDs: Set(imageIDs),
+                layout: Write.Layout(originX: originX, nextY: nextY)
             )
-            // **An absent `imageIDs` fails open to the page**, and that is a
-            // decision rather than a default. It can only happen against a page
-            // older than this build, and reading it as "no images" would refuse
-            // every legitimate caption with `captionNeedsImage` — a refusal
-            // naming the wrong cause, sending an agent to change an element
-            // that is already an image. Falling back to every id defers the
-            // question to the page, which refuses an id it cannot find.
-            let imageIDs = (raw["imageIDs"] as? [String]).map(Set.init) ?? Set(ids)
-            return Write.Live(ids: Set(ids), imageIDs: imageIDs, layout: layout)
         }
 
         /// Posts one operation into the page and answers with the ids it moved.
