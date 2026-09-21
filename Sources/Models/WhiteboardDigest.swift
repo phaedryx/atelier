@@ -196,7 +196,7 @@ extension Whiteboard {
             }
             line += author
             if let caption = element.caption {
-                line += "\n      caption: \(quoted(caption))"
+                line += "\n      caption: \(captionText(caption))"
             }
             return line
         }
@@ -227,7 +227,57 @@ extension Whiteboard {
         /// Nothing bounds a label — a 200KB one in a single shape is the
         /// whiteboard's version of the 200KB check name
         /// `VerificationSummary.checkMessage` cuts. Cut from the **end**,
-        /// because a label is read from the front.
+        /// because a label is read from the front, and marked with an ellipsis
+        /// and nothing more: a label is what the user typed into the shape, so
+        /// a reader seeing it cut can look at the shape.
+        ///
+        /// A **caption** is not this. It goes through `captionText`, which is
+        /// bounded far more generously and says in words when it cut.
+        private static func quoted(_ raw: String) -> String {
+            let (kept, cut) = clipped(flattened(raw), to: maxTextBytes)
+            return cut ? "\"\(kept)…\"" : "\"\(kept)\""
+        }
+
+        /// A transcription, bounded far more generously than a label — and
+        /// **told in words when it was cut**, which a label is not.
+        ///
+        /// A caption exists so a later agent need not open the picture at all.
+        /// A silently cut one therefore defeats the feature in a way a cut
+        /// label does not: the reader is handed part of a transcription with
+        /// nothing saying it is a part, and the digest's whole claim is that it
+        /// is the half of the board that can be reasoned about *exactly*.
+        ///
+        /// **The marker goes outside the quotes.** Inside, it is
+        /// indistinguishable from a transcription of a screenshot that was
+        /// itself clipped — an ordinary thing to capture, and the reading the
+        /// ellipsis alone invites. It deliberately does not name `board.png`,
+        /// because the render may be `.none` or `.stale` and this line has no
+        /// business deciding that; the entry's own first line already carries
+        /// the absolute path of the image in `assets/`, which is where the
+        /// pixels are whatever the render is doing.
+        private static func captionText(_ raw: String) -> String {
+            let (kept, cut) = clipped(flattened(raw), to: maxCaptionBytes)
+            guard cut else { return "\"\(kept)\"" }
+            return "\"\(kept)…\"  (cut at \(maxCaptionBytes) bytes — "
+                + "the rest is only in the image itself)"
+        }
+
+        /// One line, because one element is one line here and a reader counting
+        /// lines has to be right.
+        ///
+        /// A caption pays this too. It costs a multi-line transcription its
+        /// structure and not its words, which is the cheaper half — and the
+        /// alternative, a continuation prefix per line, would make the entry's
+        /// own line count depend on its content.
+        private static func flattened(_ raw: String) -> String {
+            raw
+                .replacingOccurrences(of: "\r\n", with: " ")
+                .replacingOccurrences(of: "\n", with: " ")
+                .replacingOccurrences(of: "\r", with: " ")
+        }
+
+        /// The budgeted cut both limits share, and **whether it cut** — which
+        /// is what lets a caption say so and a label not.
         ///
         /// **Accumulated by `Character`, not cut out of a byte array.** The
         /// obvious byte version — `prefix(n)`, then walk back off any trailing
@@ -245,31 +295,43 @@ extension Whiteboard {
         /// Counting graphemes rather than scalars is `IPC.Names.sanitized`'s
         /// rule and the same one applies: breaking between a base and its
         /// combining mark strands the mark on whatever the template puts next.
-        /// The loop stops at the budget, so it costs `maxTextBytes` steps rather
-        /// than the length of the label.
-        ///
-        /// Newlines are flattened because one element is one line here, and a
-        /// reader counting lines has to be right.
-        private static func quoted(_ raw: String) -> String {
-            let flat = raw
-                .replacingOccurrences(of: "\r\n", with: " ")
-                .replacingOccurrences(of: "\n", with: " ")
-                .replacingOccurrences(of: "\r", with: " ")
-            guard flat.utf8.count > maxTextBytes else { return "\"\(flat)\"" }
+        /// The loop stops at the budget, so it costs `limit` steps rather than
+        /// the length of the text.
+        private static func clipped(_ flat: String, to limit: Int) -> (text: String, cut: Bool) {
+            guard flat.utf8.count > limit else { return (flat, false) }
             var kept = ""
             var spent = 0
             for character in flat {
                 let width = String(character).utf8.count
-                guard spent + width <= maxTextBytes else { break }
+                guard spent + width <= limit else { break }
                 kept.append(character)
                 spent += width
             }
-            return "\"\(kept)…\""
+            return (kept, true)
         }
 
         /// Per-label cap, well under `maxBytes` so that one shape cannot spend
         /// the whole digest and leave every other element unlisted — which would
         /// be truthfully reported and useless.
         private static let maxTextBytes = 240
+
+        /// Per-caption cap, five times the label's, and the number is measured
+        /// rather than picked.
+        ///
+        /// Transcriptions of the screenshots this feature is for — a settings
+        /// pane, an error dialog, a failing test's output, a table of rows —
+        /// run 225 to 400 bytes, so `maxTextBytes` cut most of them: a
+        /// transcription written so the picture need not be opened, silently
+        /// truncated to a third of itself. 1200 is three times the top of that
+        /// band.
+        ///
+        /// **Erring large is safe because the assembly loop is honest about
+        /// omission.** An entry that does not fit is `continue`d and counted
+        /// into `overflowNote`, whose worst case is charged to `reserved`
+        /// before anything is assembled. So a long caption costs other elements
+        /// their lines and never their existence — which is exactly what
+        /// `maxTextBytes` is guarding against, and why that limit stays where
+        /// it is rather than being widened to cover both.
+        private static let maxCaptionBytes = 1200
     }
 }
