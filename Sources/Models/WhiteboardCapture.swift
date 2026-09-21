@@ -101,8 +101,15 @@ extension Whiteboard {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
             // `-i` interactive, `-o` to leave out a captured window's drop
-            // shadow, which is transparent margin nobody wants on a board.
-            process.arguments = ["-i", "-o", destination.path]
+            // shadow, which is transparent margin nobody wants on a board, and
+            // `-t png` because everything downstream asserts PNG and none of it
+            // looks at the bytes: the file is named `<sha>.png` and the image
+            // element is given `image/png`. png is screencapture's built-in
+            // default, but `com.apple.screencapture type` overrides it, so a
+            // user who set that to jpg would have had JPEG bytes stored and
+            // served under both of those claims. Asking for the format is a
+            // flag; inferring it afterwards would be a decoder.
+            process.arguments = ["-i", "-o", "-t", "png", destination.path]
 
             let exited: Bool = await withCheckedContinuation { continuation in
                 process.terminationHandler = { _ in continuation.resume(returning: true) }
