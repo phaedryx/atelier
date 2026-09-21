@@ -406,8 +406,9 @@ extension Whiteboard {
         /// The whole flow, in one place rather than assembled in the view: the
         /// view holds nothing a second caller could not reach, and the board's
         /// life belongs here anyway. Answers false when there was nothing to
-        /// place — the user cancelled, or the capture could not be written —
-        /// which the button reports by doing nothing.
+        /// place — the user cancelled, the capture could not be written, or the
+        /// page could not say where the board ends — which the button reports
+        /// by doing nothing.
         ///
         /// **Placed below everything already on the board**, from the same
         /// `Layout` an unpositioned agent element uses. A capture dropped at a
@@ -415,6 +416,13 @@ extension Whiteboard {
         /// invisible in the digest — the coordinates read perfectly well — while
         /// ruining the picture, which is the half of the read path that exists
         /// to corroborate the other.
+        ///
+        /// **So a page that cannot answer refuses the placement rather than
+        /// falling back to that fixed origin.** This read used to be a `try?`
+        /// onto `Layout.fallback`, which is `(100, 100)` — so the one failure
+        /// the paragraph above exists to prevent was the one thing that failure
+        /// did, and silently, with nothing logged. It now logs and returns
+        /// false like the two failures before it.
         @discardableResult
         func captureToBoard() async -> Bool {
             guard !isCapturing else { return false }
@@ -449,7 +457,19 @@ extension Whiteboard {
                 return false
             }
 
-            let layout = await (try? liveState())?.layout ?? Write.Layout.fallback
+            // The board's extent, and nothing to fall back on if it cannot be
+            // read — see the placement paragraph above. The already-written
+            // asset is deliberately left behind on this path too, on the
+            // reasoning the `writeAsset` comment gives: the name is
+            // content-addressed, so the next capture of the same region reuses
+            // this file rather than writing a second one.
+            let layout: Write.Layout
+            do {
+                layout = try await liveState().layout
+            } catch {
+                logger.error("Could not read where to place the capture: \(error.localizedDescription, privacy: .public)")
+                return false
+            }
             do {
                 _ = try await apply([
                     "kind": "image",
