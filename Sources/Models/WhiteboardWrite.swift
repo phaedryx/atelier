@@ -60,7 +60,15 @@ extension Whiteboard {
         struct Layout: Equatable {
             let originX: Double
             let nextY: Double
-            /// For an empty board, and for a page that could not answer.
+            /// An empty board — the same `(100, 100)` the page reports for one
+            /// itself, so this is its answer rather than a stand-in for one.
+            ///
+            /// It used to serve "a page that could not answer" as well, and
+            /// that reading is gone: `Host.decodeLiveState` refuses a page that
+            /// cannot answer instead of completing it from here, because the
+            /// coordinates this holds are exactly the ones that drop an element
+            /// on top of the user's diagram. `WhiteboardWriteTests`' empty
+            /// board is the only reader left.
             static let fallback = Layout(originX: 100, nextY: 100)
         }
 
