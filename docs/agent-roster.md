@@ -93,9 +93,33 @@ word (`WorkstreamRow.statusMeta`). One color drives both:
 | `.idle` (live session) | Secondary gray · "Idle" | No active turn, but ≥1 hook event seen since app launch |
 | `.idle` (dormant) | Not rendered | No active turn and no agent activity this launch |
 | `.working` | Blue · "Working" | `UserPromptSubmit`, tool activity after a permission grant |
-| `.stalled` | Yellow · "Stalled" | No hook events for 45s mid-turn (swept every 15s) |
+| `.stalled` | Yellow · "Stalled" | No hook events for 300s mid-turn (`wedgeThreshold`; swept every 15s) |
 | `.needsAttention(.permission)` | Orange · "Waiting for approval" | Notification hook reports a permission prompt |
 | `.needsAttention(.justFinished)` | Green · "Done" | `Stop` on an unselected workstream; cleared by `markSeen` when selected |
+| `channelDown` override | Grey · "No Signal" | The hook channel probe reports events are not arriving — masks `.working` and `.stalled` only |
+
+**The 45-second mark renders nothing.** `silenceThreshold` (45s) only asks
+`HookChannelProbe` whether hook events are still arriving: a build, a long
+response and a slow MCP call all pass 45 seconds routinely, and no amount of
+further silence answers the question that silence raises. `.stalled` is the
+`wedgeThreshold` (300s) tier, and three things exempt a run from it — a tool in
+flight, a compaction, and a permission prompt — the first two bounded by
+`longWorkGrace` (1800s), so a missing end-event cannot suppress the sweep for
+the rest of the session (`WorkstreamAgentStateTracker.swift:179-199`).
+
+**`channelDown` masks `.working` and `.stalled`, and nothing else**
+(`AgentStatusLabel.resolve`). Those two are held up by the *continued arrival*
+of events, so neither survives learning that the app has stopped hearing. The
+rest are positive facts a delivered hook established, and losing the channel
+afterwards does not unmake them — `.needsAttention(.permission)` least of all,
+since the agent is stopped until someone answers. Grey rather than yellow: the
+fault is Atelier's own plumbing and nothing is asked of the user.
+
+The app-wide `HookChannelBanner` in the sidebar's bottom bar is **not**
+redundant with this word. A row draws no status line until `hasLiveSession` is
+true, so a channel that was already broken when the app launched leaves every
+row silent and has nothing to speak through — which is the case the probe exists
+to catch.
 
 Whether an idle workstream counts as "live" comes from
 `Workstream.AgentStateTracker.liveSessionIDs` — an in-memory set of
@@ -118,31 +142,60 @@ space for it.
   (`WorkstreamRow`), so no information is duplicated.
 - Each live subagent renders as a two-line mini card: the agent name on the
   first line and its own status line on the second (blue while working,
-  yellow when stalled, then the current activity and elapsed time).
-- The trailing side of a card shows, in order of precedence: **"Stalled"**
-  (orange label) → **context-window meter** (when the harness reports per-run
-  usage) → **elapsed time** since the run started.
-- At most 4 cards render inline; extras collapse into "+N more".
+  yellow when stalled, grey "No Signal" while the channel is down — the cards
+  go through the same `AgentStatusLabel.resolve` — then the current activity
+  and elapsed time).
+- There is **no trailing region and no per-run context meter** on a card. The
+  whole card is the name over one inline meta line — dot, status word,
+  activity, elapsed — and Claude Code's hooks report no per-run token figures
+  for a subagent, so there is nothing for a card to meter (see
+  [Context window usage](#context-window-usage)). The status word is the
+  inline one and carries `AgentStatusLabel`'s own colour: yellow for
+  `.stalled`, never a separate orange label.
+- At most 3 cards render inline (`WorkstreamAgentRosterView.maxVisibleLines`);
+  extras
+  collapse into "+N more".
 - Clicking a card selects the workstream and focuses its Coding Agent tab.
 - Removing/archiving/purging a workstream calls `clear(workstreamID:)` so no
   stale state lingers.
 
 ## Context window usage
 
-How full the agent's context window is, shown as a small meter.
+How full the agent's context window is, shown as a small meter. There are two
+sources and they are not equal.
 
-Every Claude Code hook payload carries `transcript_path`. On main-agent
-events the tracker re-reads the transcript through `TranscriptContextReader`.
-Transcripts are append-only JSONL, so only the last 256KB is parsed; the
-reader takes the *last* assistant entry carrying `message.usage` and sums
-`input_tokens` + `cache_creation_input_tokens` + `cache_read_input_tokens`.
-Reads are throttled to one per 5 seconds per workstream — except at turn end
-(`Stop`), where the read is forced so the final totals always land. A failed
-read keeps the previously known value.
+**The status line is the first choice.** Hook payloads carry no token or
+context fields at all, so Claude Code hands the figures to exactly one
+interface: the status line command, which receives
+`context_window.total_input_tokens` and `context_window.context_window_size`
+already resolved — the second including whether the session is on a 1M window,
+so `ContextLimits` and the model-string inference below are not consulted on
+this path at all. `statusLine` is a **single command slot** in settings rather
+than a list like `hooks`, so Atelier never writes it: `StatusLine.Config.write`
+produces a per-session settings file naming `atelier-statusline`, passed as
+`--settings` when the agent is launched. That layer sits above user settings,
+merges per key, lasts one session and writes to no file, so a Claude session
+started anywhere else is untouched. A session with **no** status line
+configured is deliberately not registered — doing so would hand the user a
+status line they never asked for — and falls back to the transcript.
 
-Limits come from `ContextLimits`: 200k tokens by default, 1M for an
-extended-context session. Deciding which takes **two** signals, because
-neither is enough on its own:
+**The transcript is the fallback and stays one**, because Claude Code's own
+documentation calls that entry format internal and version-unstable. Every hook
+payload carries `transcript_path`, and on main-agent events the tracker re-reads
+it through `TranscriptContextReader` — but `refreshContextUsage` returns early
+for a workstream whose source is already `.statusLine`, **before** the throttle
+and before the read, since this is a channel that has been superseded rather
+than a failed attempt to be retried sooner. Transcripts are append-only JSONL,
+so only the last 256KB is parsed; the reader takes the *last* assistant entry
+carrying `message.usage` and sums `input_tokens` +
+`cache_creation_input_tokens` + `cache_read_input_tokens`. Reads are throttled
+to one per 5 seconds per workstream — except at turn end (`Stop`), where the
+read is forced so the final totals always land. A failed read keeps the
+previously known value.
+
+On the transcript path only, limits come from `ContextLimits`: 200k tokens by
+default, 1M for an extended-context session. Deciding which takes **two**
+signals, because neither is enough on its own:
 
 - `message.model` in the transcript is the *resolved* model. Claude Code
   writes `claude-opus-5` whether or not the 1M beta is on — the `[1m]` marker
@@ -167,9 +220,9 @@ invisible from outside the process; for those, usage past 200k is taken as
 proof the window is the larger one.
 
 The main session's meter shows on the workstream row itself (visible while
-the main agent is working or stalled), reading the transcript-derived figure
-(`Workstream.AgentStateTracker.mainContextUsage(for:)`). Subagent roster cards
-carry no meter — Claude Code hooks report no per-run token figures. The meter
+the main agent is working or stalled), reading whichever of the two sources
+above won (`Workstream.AgentStateTracker.mainContextUsage(for:)`). Subagent
+roster cards carry no meter — Claude Code hooks report no per-run token figures. The meter
 itself is a bar plus a "133k · 13%" label: gray below 60% of the window,
 orange below 85%, red at 85% or more — and orange/red regardless of the
 window past 200k/300k absolute tokens, where response quality decays even

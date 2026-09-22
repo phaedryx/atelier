@@ -574,7 +574,7 @@
 "The command could not be run, or exceeded its deadline." = "The command could not be run, or exceeded its deadline.";
 "exited %d with no output" = "exited %d with no output";
 "There was nothing to run." = "There was nothing to run.";
-"This project's process-compose.yaml still declares a bootstrap namespace, which is no longer run. Move those steps to an initialization.yaml in the project directory." = "This project's process-compose.yaml still declares a bootstrap namespace, which is no longer run. Move those steps to an initialization.yaml in the project directory.";
+"This project's execution.process-compose.yaml still declares a bootstrap namespace, which is no longer run. Move those steps to an initialization.yaml in the project directory." = "This project's execution.process-compose.yaml still declares a bootstrap namespace, which is no longer run. Move those steps to an initialization.yaml in the project directory.";
 
 /* initialization.yaml */
 "This project has no initialization.yaml, so no setup ran." = "This project has no initialization.yaml, so no setup ran.";
