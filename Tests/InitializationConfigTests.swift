@@ -213,4 +213,64 @@ final class InitializationConfigTests: XCTestCase {
             atPath: project.appendingPathComponent("initialization.yaml").path
         ))
     }
+
+    // MARK: - The config this project's own worktrees need
+
+    /// Atelier's own `initialization.yaml` cannot live in this repository — it
+    /// belongs in the project directory, outside every work tree, which is the
+    /// whole of why its commands may run unattended. So the content a user has to
+    /// place by hand is documented in `docs/worktree-setup.md`, and nothing but
+    /// this test stands between that document and a file the app cannot read.
+    ///
+    /// It parses the doc's own fenced block rather than a copy, because a copy
+    /// here would be a second spelling that drifts silently — the failure being
+    /// one nobody sees until the next worktree comes up empty.
+    func test_documentedProjectConfig_parsesIntoTheFourSetupSteps() throws {
+        let doc = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // Tests/
+            .deletingLastPathComponent() // repository root
+            .appendingPathComponent("docs/worktree-setup.md")
+
+        let markdown = try String(contentsOf: doc, encoding: .utf8)
+        guard let yaml = Self.fencedBlock(labelled: "yaml", in: markdown) else {
+            return XCTFail("docs/worktree-setup.md no longer carries a ```yaml block")
+        }
+
+        guard case let .loaded(config) = parse(yaml) else {
+            return XCTFail("the documented initialization.yaml does not parse: \(parse(yaml))")
+        }
+        XCTAssertEqual(config.stepNames, ["ghostty", "editor", "hooks", "build"])
+
+        // Order is run order and the build is the slowest and likeliest to fail,
+        // so it goes last: a failure there still leaves a worktree that links.
+        XCTAssertEqual(config.step(named: "build")?.command, "./scripts/setup.sh build")
+
+        // Every step invokes a script with its own shebang, so none of them names
+        // a shell — a `shell:` here would be a claim the commands do not make.
+        XCTAssertTrue(config.steps.allSatisfy { $0.shell == nil })
+
+        // Each command must be a real subcommand of the script the doc names,
+        // which is the half a YAML parser cannot check.
+        let script = doc
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("scripts/setup.sh")
+        let source = try String(contentsOf: script, encoding: .utf8)
+        for step in config.steps {
+            XCTAssertEqual(step.command, "./scripts/setup.sh \(step.name)")
+            XCTAssertTrue(
+                source.contains("    \(step.name))"),
+                "scripts/setup.sh has no `\(step.name))` case for the documented step"
+            )
+        }
+    }
+
+    /// The first fenced block carrying `label`, without its fences.
+    private static func fencedBlock(labelled label: String, in markdown: String) -> String? {
+        let lines = markdown.components(separatedBy: .newlines)
+        guard let start = lines.firstIndex(of: "```" + label) else { return nil }
+        let rest = lines[lines.index(after: start)...]
+        guard let end = rest.firstIndex(of: "```") else { return nil }
+        return rest[..<end].joined(separator: "\n")
+    }
 }

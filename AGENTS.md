@@ -161,13 +161,17 @@ it receives only the `X.Y.Z` core; the suffix naming the commit rides on
 - `Resources/MonacoEditor/` - Built Monaco editor bundle (gitignored, built by `scripts/build-editor.sh`)
 - `editor/` - Monaco editor Vite project (source for `Resources/MonacoEditor/`). Built with bun.
 - `ghostty/` - Git submodule (do not modify, pinned to stable release tag)
-- `scripts/` - Release and build automation
-- `.hooks/` - Claude Code hooks for this repository. `worktree-create.sh` runs on
-  worktree creation: it inits the ghostty submodule against the main checkout,
-  symlinks the build artifacts that are not in git (`zig-out`,
-  `GhosttyKit.xcframework`), and kicks off a background build so SourceKit can
-  resolve symbols. A worktree made without it will not build until you repeat
-  those steps by hand.
+- `scripts/` - Release and build automation. `setup.sh` is what a new worktree
+  needs — the ghostty submodule, the symlinks to the build artifacts that are not
+  in git (`zig-out`, `GhosttyKit.xcframework`), the Monaco bundle, prek, and a
+  build so SourceKit can resolve symbols. It takes **no environment variables**
+  and resolves the repository's home from git itself, and it takes a subcommand
+  (`ghostty`, `editor`, `hooks`, `build`; no argument runs all four in order) so
+  the project's `initialization.yaml` can name one step per phase. **Nothing runs
+  it automatically for you** — a worktree Atelier creates runs it only if this
+  project's `initialization.yaml` is in place, and a worktree made any other way
+  (`git worktree add`, or Adopt, which deliberately skips initialization) needs it
+  run by hand. See `docs/worktree-setup.md`.
 - `docs/` - Distribution guide and reference docs. Anything not describing the
   app as it is carries a status line saying so.
 
@@ -770,6 +774,12 @@ ordinary clone `Project.directory` *is* the checkout.
 **A newly created project starts with one**, all comments, via `Project.seedDefaultConfigs`
 (see **Seeded config templates** above) — it loads as "declares no steps", the benign
 Info-tab note, where an uncommented example would run behind every new worktree.
+
+**Atelier's own project needs one, and it is not in this repository** — by design,
+since the file lives in the project directory, outside every worktree, which is
+what lets it run unattended. `docs/worktree-setup.md` carries the exact content to
+place there and explains what happens without it: `ghostty/` stays empty and the
+build fails with `error: Ghostty resources not found at ghostty/zig-out/share/`.
 
 `Initialization.Config.load` returns **three** cases and never two — `.missing`,
 `.invalid(reason:)`, `.loaded` — because a file Atelier cannot read must never render as
