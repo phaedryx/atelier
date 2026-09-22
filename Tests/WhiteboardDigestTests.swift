@@ -266,6 +266,30 @@ final class WhiteboardDigestTests: XCTestCase {
         XCTAssertTrue(text.hasSuffix(Whiteboard.Digest.closingLine), text)
     }
 
+    func test_aNewlineInACaptionDoesNotBreakTheLineFormat() {
+        // The label sibling below covers `quoted`; a caption goes through
+        // `captionText`, which is a different function, so this path needs its
+        // own pin rather than inheriting one.
+        //
+        // It is also the more load-bearing of the two. A transcription of
+        // terminal output or a stack trace is FULL of newlines, where a label
+        // rarely has one — and an element's entry is one line plus at most one
+        // indented caption line, so a caption that kept its newlines would let
+        // a transcription forge entries for elements that are not on the board.
+        // That is the digest lying about the board, which is the one thing this
+        // feature is organised around not doing.
+        let text = digest(captioned("Failures:\\n  1) User#full_name\\n     expected: 'Ada'"))
+        let captionLines = text
+            .components(separatedBy: "\n")
+            .filter { $0.contains("caption:") }
+        XCTAssertEqual(captionLines.count, 1, text)
+        XCTAssertTrue(captionLines[0].contains("Failures:   1) User#full_name"), text)
+        // One element line and one caption line, and nothing else that could be
+        // mistaken for an entry.
+        let elementLines = text.components(separatedBy: "\n").filter { $0.hasPrefix("i  ") }
+        XCTAssertEqual(elementLines.count, 1, text)
+    }
+
     func test_aNewlineInALabelDoesNotBreakTheLineFormat() {
         // Each element is one line, and a reader counting lines has to be right.
         let text = digest("""
