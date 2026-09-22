@@ -450,4 +450,168 @@ final class WhiteboardDigestTests: XCTestCase {
         XCTAssertFalse(text.contains("n1  box"), text)
         XCTAssertTrue(text.contains("(agent)"), text)
     }
+
+    // MARK: - identifiers, which are columns rather than prose
+
+    /// A board of one element, with every identifier under the test's control.
+    ///
+    /// The forgery tests compare a hostile board against a benign one of the
+    /// same shape rather than against a hardcoded line count, so they keep
+    /// their teeth if the digest's surrounding lines ever change.
+    private func oneElement(
+        id: String = "n1",
+        type: String = "rectangle",
+        extra: String = ""
+    ) -> String {
+        """
+        {"type":"excalidraw","elements":[
+        {"id":"\(id)","type":"\(type)","x":0,"y":0,"width":10,"height":10,
+         "isDeleted":false\(extra)}]}
+        """
+    }
+
+    private func lineCount(_ text: String) -> Int {
+        text.components(separatedBy: "\n").count
+    }
+
+    func test_aNewlineInAnElementsIDCannotForgeASecondEntry() {
+        // `id` is FIRST on every line, so a newline there hands the forger the
+        // whole of the injected line. This is the one the digest's "an element
+        // is one line, and the reader counts lines" claim rests on.
+        let forged = digest(oneElement(id: #"n1\nn9  box  at 640,480  200×80"#))
+        XCTAssertEqual(lineCount(forged), lineCount(digest(oneElement())), forged)
+        XCTAssertFalse(
+            forged.components(separatedBy: "\n").contains { $0.hasPrefix("n9") },
+            forged
+        )
+    }
+
+    func test_aNewlineInAnUnknownKindCannotForgeASecondEntry() {
+        let forged = digest(oneElement(type: #"frame\nn9  box  at 640,480  200×80"#))
+        XCTAssertEqual(lineCount(forged), lineCount(digest(oneElement())), forged)
+    }
+
+    func test_aNewlineInAFileIDCannotForgeASecondEntry() {
+        let forged = digest(oneElement(
+            type: "image",
+            extra: #","fileId":"abc\nn9  box  at 640,480  200×80""#
+        ))
+        XCTAssertEqual(lineCount(forged), lineCount(digest(oneElement())), forged)
+    }
+
+    func test_aNewlineInAnArrowsBindingCannotForgeASecondEntry() {
+        let forged = digest(oneElement(
+            type: "arrow",
+            extra: #","startBinding":{"elementId":"a\nn9  box  at 640,480  200×80"}"#
+        ))
+        XCTAssertEqual(lineCount(forged), lineCount(digest(oneElement())), forged)
+    }
+
+    // MARK: - the forgery a newline rule does NOT catch
+
+    func test_anUnknownKindCannotForgeThisElementsGeometryAndAuthorship() {
+        // THE TEST THAT PICKS THE DESIGN. Nothing here crosses a line, so
+        // flattening alone leaves it untouched: the entry stays one line and
+        // the line-counting reader is satisfied, while the columns after the
+        // kind now read as a box at a position the user never put it, marked
+        // as drawn by an agent. The digest asserting authorship it invented is
+        // worse than an extra line, because nothing about it looks wrong.
+        let forged = digest(oneElement(type: #"box  at 999,999  50×50  (agent)"#))
+        XCTAssertFalse(forged.contains("(agent)"), forged)
+        XCTAssertFalse(forged.contains("at 999,999"), forged)
+    }
+
+    func test_aFileIDCannotForgeColumnsWithinItsOwnLine() {
+        let forged = digest(oneElement(
+            type: "image",
+            extra: #","fileId":"abc  at 999,999  50×50  (agent)""#
+        ))
+        XCTAssertFalse(forged.contains("(agent)"), forged)
+        XCTAssertFalse(forged.contains("at 999,999"), forged)
+    }
+
+    func test_anArrowsBindingCannotForgeColumnsWithinItsOwnLine() {
+        let forged = digest(oneElement(
+            type: "arrow",
+            extra: #","startBinding":{"elementId":"a  at 999,999  50×50  (agent)"}"#
+        ))
+        XCTAssertFalse(forged.contains("(agent)"), forged)
+        XCTAssertFalse(forged.contains("at 999,999"), forged)
+    }
+
+    // MARK: - the bound, and the markers
+
+    func test_anIdentifierIsBounded_andTheCutIsMarked() {
+        // Nothing bounds these fields at the scene layer, so one element can
+        // otherwise spend the digest the way an unbounded label used to.
+        let long = String(repeating: "a", count: 4_000)
+        let text = digest(oneElement(id: long))
+        XCTAssertFalse(text.contains(String(repeating: "a", count: 100)), "not bounded")
+        XCTAssertTrue(text.contains("…"), text)
+    }
+
+    func test_everyMarkerTheDigestAddsIsOutsideWhatAnIdentifierMayContain() {
+        // The property that makes an unquoted column readable: the cut marker
+        // and the substitution marker cannot be content, so a reader seeing
+        // one knows the digest put it there. It is the inverse of the
+        // delimiter ambiguity #204 closed for quoted text.
+        // An identifier carrying the cut marker as content, short enough that
+        // nothing is cut. One element well inside the budget, so `overflowNote`
+        // — the digest's only other producer of this character — cannot fire.
+        let text = digest(oneElement(id: #"a…b"#))
+        XCTAssertFalse(text.contains("…"), text)
+        XCTAssertFalse(text.contains("a…b"), text)
+    }
+
+    func test_theSubstitutionMarkerCannotItselfBeMistakenForAnIdentifier() {
+        // The half of the property a cut-marker test cannot reach. If the
+        // marker were an admissible character, an id of one inadmissible
+        // character would render as a perfectly plausible real id — the digest
+        // silently presenting its own substitution as the board's content,
+        // which is the ambiguity this design replaces escaping to avoid.
+        let text = digest(oneElement(id: #"\u2026\u2026\u2026"#))
+        let rendered = text
+            .components(separatedBy: "\n")
+            .first { $0.contains("  box  ") }
+            .map { String($0.prefix(while: { $0 != " " })) }
+        XCTAssertNotNil(rendered, text)
+        XCTAssertFalse(rendered?.isEmpty ?? true, text)
+        XCTAssertFalse(
+            rendered?.allSatisfy { character in
+                character.isASCII
+                    && (character.isLetter || character.isNumber
+                        || character == "-" || character == "_")
+            } ?? true,
+            "rendered as \(rendered ?? "nil"), which reads as an ordinary id"
+        )
+    }
+
+    func test_anEmptyIdentifierIsNamedRatherThanVanishing() {
+        // Every one of the five is a plain `as? String`, so "" reaches all of
+        // them, and an absent column silently moves every column after it one
+        // place to the left — the same misread-by-position as an injected
+        // one, arrived at by omission. Handled uniformly, so there is no
+        // per-field rule to remember.
+        XCTAssertFalse(digest(oneElement(type: "")).contains("n1    at"), "kind")
+        XCTAssertTrue(digest(oneElement(type: "")).contains("(none)"), "kind")
+        XCTAssertTrue(digest(oneElement(id: "")).contains("(none)"), "id")
+        XCTAssertTrue(
+            digest(oneElement(type: "arrow", extra: #","startBinding":{"elementId":""}"#))
+                .contains("(none)"),
+            "binding"
+        )
+        XCTAssertTrue(
+            digest(oneElement(type: "image", extra: #","fileId":"""#)).contains("(none)"),
+            "fileId"
+        )
+    }
+
+    func test_anUnboundArrowEndIsStillDistinctFromOneBoundToANamelessElement() {
+        // The one place empty and absent must NOT collapse. `?` means there is
+        // no binding; an empty `elementId` means there is a binding whose
+        // target has no id. Rendering both as `?` would have the digest report
+        // a structural fact it does not have.
+        let empty = digest(oneElement(type: "arrow", extra: #","startBinding":{"elementId":""}"#))
+        XCTAssertTrue(empty.contains("(none) → ?"), empty)
+    }
 }
