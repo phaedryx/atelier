@@ -2493,9 +2493,17 @@ reply out of `NSNumber`-versus-`Double` guesswork — a real hazard here, becaus
 agent sends may be integral, the same trap `SceneLoad.number` documents on the read side.
 
 **`whiteboard_add` is not replayable**, with `add_task` and `create_workstream`: it is a create, the
-helper mints a fresh request id on every replay, and a replayed create draws the diagram twice. Its
-refusals — the readiness timeout included — **forbid** a retry rather than inviting one, because a
-caller cannot tell a genuine failure from one its own retry caused. `update` and `delete` are
+helper mints a fresh request id on every replay, and a replayed create draws the diagram twice. A
+refusal whose **outcome is unknown** therefore forbids a retry rather than inviting one, because a
+caller cannot tell a genuine failure from one its own retry caused. **Which refusals those are is
+decided by whether the op was posted, not by how the failure looked**, and
+`Whiteboard.Host.WriteFailure` is where the line is drawn: `.outcomeUnknown` for a `__whiteboardApply`
+that was called and never answered for, `.notReady` — a readiness timeout, a page that would not
+report its state, a state that would not decode — for every failure *before* that call, all of which
+say they are safe to retry. The readiness timeout used to be on the forbidding side of that line, and
+it is the one an agent meets most: a cold board has to mount before the session's first write, so the
+first call of a session was the one most likely to be told, wrongly, that it might already have drawn
+something. `update` and `delete` are
 replayable, and `delete` is replayable *because* an id already gone is success; the answer reports
 what was really removed rather than echoing back what it was asked for.
 
@@ -2536,6 +2544,19 @@ build the host would mean an agent's write silently doing nothing whenever the u
 most of the time, and the case the offscreen design exists for. `ensureSingleton` and never
 `activateSingleton`, and every answer says the tab was opened **without taking the selection** and
 names `request_attention`, the rule `open_tab` states.
+
+**Building the host and opening the tab are two acts, and the order between them is
+load-bearing.** The host is built before the write, because the offscreen page is what applies it;
+the tab is opened only once `Host.apply` has returned. They were one act, in `whiteboardTarget`,
+and a refused write therefore put a pane in the user's workspace for a change that never
+happened — a typo'd `kind`, an id that is not on the board — while the refusal it answered with
+said nothing about the pane and every success said "The Whiteboard tab is open". `openBoardTab` is
+the call, and it is after `apply` in all three writes, `whiteboard_delete` included: a delete that
+matched nothing still ran, so the tab still opens and that note stays true. `Tests/WhiteboardWriteTabTests.swift`
+pins both directions, and it is the one XCTest file that drives a real `Whiteboard.Host` — which
+works because `TEST_HOST` is `Atelier.app`, so `Bundle.main` resolves the built bundle. That does
+not widen what belongs in XCTest: a claim about what the *page* does with what it is handed is
+still the harness's, per `Tests/Harnesses/README.md`.
 
 **The `note` kind is a rectangle**, since Excalidraw has none: a distinct background plus
 `Whiteboard.Element.kindKey` (`"atelierKind"`) in `customData`, declared beside `authorKey` and

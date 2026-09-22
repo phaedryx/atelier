@@ -174,6 +174,46 @@ const renderPng = async (rev) => {
 // either with unsafeName, which is deterministic and would fail identically
 // every 800ms forever, or because the disk write failed, which re-posting
 // megabytes on a timer does not fix. Both are logged.
+
+// The one place a board asset's MIME type and its file extension are related,
+// read in BOTH directions: save() turns a pasted file's mimeType into the
+// extension it lands under in assets/, and savedFiles() turns that extension
+// back into the mimeType Excalidraw is handed on the next mount.
+//
+// One table because it used to be two, and they disagreed. save() derived an
+// extension by taking the half of the MIME type after the slash, so
+// `image/svg+xml` became the extension `svg+xml` — a name
+// `Whiteboard.Store.isSafeComponent` refuses, so `writeAsset` threw `unsafeName`
+// and only logged, while `writtenAssets` had already marked the id written so no
+// later save retried it. A pasted SVG showed on the board for the session and was
+// gone after a relaunch, and the read half here had expected `svg` all along. Do
+// not derive an extension from a MIME type again: a media type is not a file name.
+//
+// The vocabulary is Excalidraw's own image table (`MIME_TYPES`, 0.18.1), so
+// anything it will accept as a paste has an extension here and the refusal below
+// is unreachable rather than merely unlikely.
+const assetExtensions = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/gif': 'gif',
+  'image/svg+xml': 'svg',
+  'image/webp': 'webp',
+  'image/bmp': 'bmp',
+  'image/x-icon': 'ico',
+  'image/avif': 'avif',
+  'image/jfif': 'jfif',
+}
+
+// The same table read the other way, plus `jpeg` — a second spelling of an entry
+// rather than an entry of its own, and already tolerated here before this table
+// existed.
+const assetMimeTypes = {
+  ...Object.fromEntries(
+    Object.entries(assetExtensions).map(([mime, ext]) => [ext, mime])
+  ),
+  jpeg: 'image/jpeg',
+}
+
 const writtenAssets = new Set()
 
 const save = () => {
@@ -192,7 +232,16 @@ const save = () => {
     // the two together, they refuse for different reasons.
     const comma = file.dataURL.indexOf(',')
     if (comma < 0) continue
-    const ext = (file.mimeType || 'image/png').split('/')[1] || 'png'
+    const ext = assetExtensions[file.mimeType || 'image/png']
+    if (!ext) {
+      // Nothing in the vocabulary names this, and guessing is what put an
+      // unwritable name on disk before. Marked written for the reason stated
+      // above: the refusal is deterministic, so retrying it every 800ms for the
+      // life of the session fixes nothing and says it a thousand times.
+      console.error('whiteboard: no file extension for asset type', file.mimeType)
+      writtenAssets.add(id)
+      continue
+    }
     post({ action: 'saveAsset', id, ext, data: file.dataURL.slice(comma + 1) })
     writtenAssets.add(id)
   }
@@ -247,12 +296,6 @@ function savedScene() {
 // any of the bytes travelling through JavaScript. That is what keeps a board
 // with a dozen screenshots from injecting tens of megabytes of base64 at
 // document start.
-const assetMimeTypes = {
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  svg: 'image/svg+xml',
-}
-
 function savedFiles() {
   const base = window.__whiteboardAssetBase
   const names = window.__whiteboardAssets || []
@@ -265,9 +308,11 @@ function savedFiles() {
     const ext = name.slice(dot + 1).toLowerCase()
     files[id] = {
       id,
-      // `image/svg` is not a media type and Excalidraw does not accept one:
-      // an SVG asset has to come back as `image/svg+xml` or the image is lost
-      // on reload. jpg/jpeg is the same class of mapping, already here.
+      // `assetExtensions` read back — `image/svg` is not a media type and
+      // Excalidraw does not accept one, so an SVG asset has to return as
+      // `image/svg+xml` or the image is lost on reload. The fallback is
+      // tolerance for a name already on disk that the table does not know, not
+      // a second derivation rule: nothing writes one any more.
       mimeType: assetMimeTypes[ext] || `image/${ext}`,
       dataURL: base + name,
       created: Date.now(),

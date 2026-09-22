@@ -190,6 +190,19 @@ routes hand Excalidraw an asset-scheme URL — and it is faithful, because the
 loop under test discriminates on exactly one thing: whether the `dataURL` has a
 comma in it.
 
+**9. A pasted SVG lands under an extension Swift will write.** `image/svg+xml`
+reached `assets/` as the extension `svg+xml`, because `save()` derived one by
+taking the half of the MIME type after the slash — a name
+`Whiteboard.Store.isSafeComponent` refuses, so the write threw and only logged
+while the page's `writtenAssets` set had already ruled out a retry. The board
+showed the image for the session and dropped it on relaunch.
+
+It checks the *write* half only, and that is the deliberate part: `savedFiles()`
+splits on the last dot, so a file misnamed `<sha1>.svg+xml` reads back as the
+same id with the same mimeType — the read side cannot tell the two apart, and
+this file's own `AssetScheme` copy serves everything but PNG as JPEG, so it could
+not be trusted to either. The name on disk is the whole of the bug.
+
 ### If you change the page
 
 `./scripts/build-editor.sh` first. The harness runs the **built** bundle in

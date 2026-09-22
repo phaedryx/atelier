@@ -27,12 +27,19 @@ final class WhiteboardLiveStateTests: XCTestCase {
         ]
     }
 
+    /// Matches the case rather than its sentence: the payload names which read
+    /// failed and is copy, while the case is the contract — a decode failure is
+    /// a page that was never written to, so it must not be the refusal that
+    /// forbids a retry.
     private func assertNotReady(_ raw: [String: Any], _ message: String) {
         do {
             _ = try Host.decodeLiveState(raw)
             XCTFail("Expected .notReady: \(message)")
         } catch {
-            XCTAssertEqual(error as? Host.WriteFailure, .notReady, message)
+            guard case .notReady? = error as? Host.WriteFailure else {
+                XCTFail("Expected .notReady, got \(error): \(message)")
+                return
+            }
         }
     }
 
@@ -132,5 +139,98 @@ final class WhiteboardLiveStateTests: XCTestCase {
         ) {
             XCTAssertEqual($0 as? Write.Failure, .captionNeedsImage("n1"))
         }
+    }
+
+    // MARK: - Which refusal a failed read is owed
+
+    /// The bug this split fixes: every `decodeLiveState` failure happens before
+    /// anything has been posted to the page, so the caller has drawn nothing
+    /// and a retry is the action that works. It used to share a case — and
+    /// therefore a sentence — with a write whose outcome is unknown, so an
+    /// agent whose first call of the session met a slow cold page was told it
+    /// might already have drawn something and must not try again.
+    func test_aReadThatFailedBeforeAnythingWasSentInvitesTheRetryItIsSafeToMake() throws {
+        let read = Host.WriteFailure.notReady("it answered with an incomplete state")
+        let description = try XCTUnwrap(read.errorDescription)
+        XCTAssertTrue(
+            description.contains("safe to retry"),
+            "a read that sent nothing must say so: \(description)"
+        )
+        XCTAssertFalse(
+            description.contains("Do not retry"),
+            "nothing was drawn, so nothing can be duplicated: \(description)"
+        )
+    }
+
+    /// And the other half, which is what keeps the split honest: an operation
+    /// that was posted and never answered for still forbids a retry, because a
+    /// caller cannot tell a genuine failure from one its own retry caused.
+    func test_aWriteWhoseOutcomeIsUnknownStillForbidsARetry() throws {
+        let sent = Host.WriteFailure.outcomeUnknown("the page went away")
+        let description = try XCTUnwrap(sent.errorDescription)
+        XCTAssertTrue(
+            description.contains("Do not retry"),
+            "the op may have landed: \(description)"
+        )
+    }
+
+    // MARK: - The log's audience is not the agent's
+
+    /// `captureToBoard` reaches these failures from a button press, and logs
+    /// them. The retry advice above is addressed to an agent holding an IPC
+    /// call it could make again; there is no such call behind the capture
+    /// button, so a log line telling a human to retry names an action they do
+    /// not have and points them at `read_whiteboard`, which is not a thing a
+    /// person can call.
+    func test_theDiagnosticCarriesWhatFailedAndNoAdviceAboutIt() {
+        for failure: Host.WriteFailure in [
+            .notReady("it did not finish loading in time"),
+            .outcomeUnknown("the page went away"),
+            .refused("no reason given"),
+            .unknownElements(["n1"]),
+        ] {
+            for advice in ["retry", "read_whiteboard"] {
+                XCTAssertFalse(
+                    failure.diagnostic.contains(advice),
+                    "\(failure) tells a log reader to \(advice): \(failure.diagnostic)"
+                )
+            }
+        }
+    }
+
+    /// And they are one string with advice appended, never two copies: a
+    /// wording fix to what failed cannot land in the agent's sentence and miss
+    /// the log's.
+    func test_theAgentsSentenceIsTheDiagnosticPlusItsAdvice() throws {
+        for failure: Host.WriteFailure in [
+            .notReady("it did not finish loading in time"),
+            .outcomeUnknown("the page went away"),
+            .refused("no reason given"),
+            .unknownElements(["n1"]),
+        ] {
+            let description = try XCTUnwrap(failure.errorDescription)
+            XCTAssertTrue(
+                description.hasPrefix(failure.diagnostic),
+                "\(failure) says what failed twice over: \(description)"
+            )
+        }
+    }
+
+    /// A `WKWebView` error never passed through `WriteFailure`, and the log
+    /// site cannot tell the two apart before it logs them.
+    func test_anErrorThatIsNotAWriteFailureStillLogsItsOwnDescription() {
+        struct Nothing: LocalizedError {
+            var errorDescription: String? {
+                "the webview went away"
+            }
+        }
+        XCTAssertEqual(
+            Host.WriteFailure.diagnostic(for: Nothing()),
+            "the webview went away"
+        )
+        XCTAssertEqual(
+            Host.WriteFailure.diagnostic(for: Host.WriteFailure.refused("no reason given")),
+            "The whiteboard page refused the write: no reason given"
+        )
     }
 }

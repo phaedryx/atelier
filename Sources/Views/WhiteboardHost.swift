@@ -231,40 +231,113 @@ extension Whiteboard {
         ///
         /// **Measured cold**, offscreen with no tab ever attached: 0.20s from
         /// `load` to `whiteboardReady`. Ten seconds is fifty times that, which
-        /// is the headroom wanted here — the refusal on the other side of it
-        /// forbids a retry, so paying it wrongly costs an agent its first write
-        /// of the session with no way back. It still has to stay under the
+        /// is the headroom wanted here: the refusal on the other side of it is
+        /// `.notReady`, so paying it wrongly costs an agent a round trip rather
+        /// than its first write of the session — nothing has been sent when it
+        /// fires, and the message says so. That is the reason to keep the
+        /// number where it is rather than a reason to trim it: a retry is only
+        /// cheap for an agent that has one to spend, and the cold-mount case
+        /// this exists for is the first write. It still has to stay under the
         /// tools' own 15s reply deadline, so there is not room to simply raise
         /// it if it ever proves tight; the bundle is what would need to shrink.
         private static let readyTimeout: TimeInterval = 10
 
         enum WriteFailure: LocalizedError, Equatable {
-            case notReady
+            /// The page could not be reached or could not answer, **before any
+            /// operation was posted to it**. Safe to retry, and the message
+            /// says so.
+            ///
+            /// This is the one the whole session's first write is most likely
+            /// to meet: a cold board has to load the bundle and mount React,
+            /// and `readyTimeout` is what bounds that. It used to share a case
+            /// with `outcomeUnknown` and therefore shared its sentence, so an
+            /// agent whose first call hit a slow cold page was told it might
+            /// already have drawn something and must not retry — forbidding the
+            /// one action that would have worked, over a board it had not
+            /// touched.
+            case notReady(String)
+            /// An operation was posted and the page's answer never arrived, so
+            /// whether it landed is unknown. **Forbids a retry**, which is the
+            /// distinction this case exists to keep: the two are told apart by
+            /// whether `__whiteboardApply` has been called, not by how the
+            /// failure looked.
+            case outcomeUnknown(String)
             case refused(String)
             case unknownElements([String])
 
-            var errorDescription: String? {
+            /// What failed, with nothing about what to do about it.
+            ///
+            /// **`errorDescription` is written for one audience and this is
+            /// for the other.** Every sentence that type adds on top of this
+            /// one is addressed to an agent that just made an IPC call — a
+            /// retry it may or may not make, and `read_whiteboard` to find out
+            /// what landed. `captureToBoard` has no such caller: the user
+            /// pressed a button, it answers by doing nothing, and its failures
+            /// go to a log. Telling whoever is reading Console that their call
+            /// is safe to retry names a call that does not exist and an action
+            /// they cannot take.
+            ///
+            /// So the two are not two copies: the half both audiences need —
+            /// which read failed, or what the page said — is written here once
+            /// and `errorDescription` appends its advice to it. A wording fix
+            /// to the failure itself cannot land in one and miss the other.
+            var diagnostic: String {
                 switch self {
-                case .notReady:
-                    // Forbids a retry rather than inviting one, the rule
-                    // `create_workstream`'s timeout message states: the page may
-                    // have applied the write after the deadline, and a caller
-                    // cannot tell a genuine failure from one its own retry
-                    // caused.
-                    "The whiteboard page did not respond in time. Do not retry this call — it may "
-                        + "have been applied after the deadline, and repeating it could duplicate "
-                        + "what it drew. Call read_whiteboard to see what is on the board."
+                case let .notReady(what):
+                    "The whiteboard page was not ready: \(what)."
+                case let .outcomeUnknown(what):
+                    "The whiteboard page stopped answering while applying the write: \(what)."
                 case let .refused(reason):
                     "The whiteboard page refused the write: \(reason)"
                 case let .unknownElements(ids):
                     "No element on this board has the id "
-                        + ids.map { "\"\($0)\"" }.joined(separator: ", ")
-                        + ". Call read_whiteboard for the current ids."
+                        + ids.map { "\"\($0)\"" }.joined(separator: ", ") + "."
                 }
+            }
+
+            var errorDescription: String? {
+                switch self {
+                case .notReady:
+                    // Invites the retry that `outcomeUnknown` forbids. Nothing
+                    // was posted to the page, so there is nothing a second
+                    // attempt could duplicate — and saying otherwise costs the
+                    // caller a write it could have had.
+                    diagnostic + " Nothing was sent to the board, so this call is safe to retry."
+                case .outcomeUnknown:
+                    // Forbids a retry rather than inviting one, the rule
+                    // `create_workstream`'s timeout message states: the page may
+                    // have applied the write before it stopped answering, and a
+                    // caller cannot tell a genuine failure from one its own
+                    // retry caused.
+                    diagnostic + " Do not retry this call — it may have been applied anyway, and "
+                        + "repeating it could duplicate what it drew. Call read_whiteboard to see "
+                        + "what is on the board."
+                case .refused:
+                    diagnostic
+                case .unknownElements:
+                    diagnostic + " Call read_whiteboard for the current ids."
+                }
+            }
+
+            /// The diagnostic half of any error a write path can throw.
+            ///
+            /// `liveState` and `apply` can also surface a `WKWebView` error
+            /// that never passed through this type, so a log site cannot simply
+            /// downcast and would otherwise have to choose between losing those
+            /// or carrying the agent's copy for the ones it has.
+            static func diagnostic(for error: Error) -> String {
+                (error as? WriteFailure)?.diagnostic ?? error.localizedDescription
             }
         }
 
         /// Blocks until the page reports itself mounted, or gives up.
+        ///
+        /// **Both callers reach this before they have posted anything**, so it
+        /// is `.notReady` for `apply(_:)` exactly as it is for `liveState()`:
+        /// a board that never mounted is a board `__whiteboardApply` was never
+        /// called on. The op having been *built* is not the op having been
+        /// *sent*, and it is the send that decides which sentence an agent is
+        /// owed.
         private func waitUntilReady() async throws {
             let deadline = Date().addingTimeInterval(Self.readyTimeout)
             while Date() < deadline {
@@ -273,7 +346,7 @@ extension Whiteboard {
                 }
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
-            throw WriteFailure.notReady
+            throw WriteFailure.notReady("it did not finish loading in time")
         }
 
         /// What is on the board right now, from the page rather than from disk.
@@ -288,7 +361,7 @@ extension Whiteboard {
             guard let json = try await callJS("return JSON.stringify(window.__whiteboardState())"),
                   let data = json.data(using: .utf8),
                   let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            else { throw WriteFailure.notReady }
+            else { throw WriteFailure.notReady("it did not answer with its state") }
             return try Self.decodeLiveState(raw)
         }
 
@@ -332,7 +405,7 @@ extension Whiteboard {
                   let imageIDs = raw["imageIDs"] as? [String],
                   let originX = (raw["originX"] as? NSNumber)?.doubleValue,
                   let nextY = (raw["nextY"] as? NSNumber)?.doubleValue
-            else { throw WriteFailure.notReady }
+            else { throw WriteFailure.notReady("it answered with an incomplete state") }
             return Write.Live(
                 ids: Set(ids),
                 imageIDs: Set(imageIDs),
@@ -351,12 +424,27 @@ extension Whiteboard {
                 .flatMap({ String(data: $0, encoding: .utf8) })
             else { throw WriteFailure.refused("the operation could not be encoded") }
 
-            guard let json = try await callJS(
-                "return JSON.stringify(await window.__whiteboardApply(JSON.parse(op)))",
-                ["op": payload]
-            ),
-                let data = json.data(using: .utf8),
-                let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            // **Past this call the outcome is no longer knowable from here**,
+            // which is the whole of the difference between the two readiness
+            // failures above and this one. `__whiteboardApply` applies and
+            // saves; a webview that throws on the way back may have thrown
+            // before it ran, during it, or after it had already saved. So the
+            // raw `WKError` that used to propagate — an agent-facing string
+            // nobody wrote, saying nothing about whether the board changed —
+            // becomes the one refusal that forbids a retry.
+            let json: String?
+            do {
+                json = try await callJS(
+                    "return JSON.stringify(await window.__whiteboardApply(JSON.parse(op)))",
+                    ["op": payload]
+                )
+            } catch {
+                throw WriteFailure.outcomeUnknown(error.localizedDescription)
+            }
+
+            guard let json,
+                  let data = json.data(using: .utf8),
+                  let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { throw WriteFailure.refused("it returned nothing") }
 
             if let unknown = result["unknown"] as? [String], !unknown.isEmpty {
@@ -467,7 +555,7 @@ extension Whiteboard {
             do {
                 layout = try await liveState().layout
             } catch {
-                logger.error("Could not read where to place the capture: \(error.localizedDescription, privacy: .public)")
+                logger.error("Could not read where to place the capture: \(WriteFailure.diagnostic(for: error), privacy: .public)")
                 return false
             }
             do {
@@ -491,7 +579,7 @@ extension Whiteboard {
                     "height": size.height,
                 ])
             } catch {
-                logger.error("Could not place the capture: \(error.localizedDescription, privacy: .public)")
+                logger.error("Could not place the capture: \(WriteFailure.diagnostic(for: error), privacy: .public)")
                 return false
             }
             return true

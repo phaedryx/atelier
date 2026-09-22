@@ -832,16 +832,29 @@ extension WorkspaceActions {
     /// Surfaces are created outside a render pass for the same reason
     /// `open_agent_tab` creates its own.
     ///
-    /// `ensureSingleton` and never `activateSingleton`: a write makes something
-    /// available, it does not decide what the user should be looking at.
+    /// **The host is all this hands back; it does not open the tab.** Opening it
+    /// here put a pane in the user's workspace for a write that was then
+    /// refused — a typo'd `kind`, an id that is not on the board — and the
+    /// refusal never mentioned the pane, while every success said "The
+    /// Whiteboard tab is open". The model rides along so each write can open the
+    /// tab once `apply` has returned; see `openBoardTab`.
     private func whiteboardTarget(
         workstreamID: UUID
-    ) throws -> (host: Whiteboard.Host, wasAlreadyOpen: Bool) {
+    ) throws -> (host: Whiteboard.Host, model: WorkspaceModel) {
         guard let surfaceCache else { throw Failure.appNotReady }
         let context = try context(workstreamID: workstreamID)
-        let wasAlreadyOpen = context.model.tabs.contains(.whiteboard)
-        context.model.ensureSingleton(.whiteboard)
-        return (surfaceCache.whiteboardHost(for: workstreamID), wasAlreadyOpen)
+        return (surfaceCache.whiteboardHost(for: workstreamID), context.model)
+    }
+
+    /// Puts the board on screen, once a write has really landed.
+    ///
+    /// Called after `Host.apply` returns and never before it: a refused write
+    /// must leave the workspace exactly as it found it.
+    ///
+    /// `ensureSingleton` and never `activateSingleton`: a write makes something
+    /// available, it does not decide what the user should be looking at.
+    private func openBoardTab(_ model: WorkspaceModel) {
+        model.ensureSingleton(.whiteboard)
     }
 
     /// Adds elements to the caller's board and answers with their real ids.
@@ -853,7 +866,7 @@ extension WorkspaceActions {
     func whiteboardAdd(
         workstreamID: UUID,
         elementsJSON: String
-    ) async throws -> (ids: [String], tabWasAlreadyOpen: Bool) {
+    ) async throws -> [String] {
         let target = try whiteboardTarget(workstreamID: workstreamID)
         // The live page, not the scene on disk — see `Host.liveState`.
         let live = try await target.host.liveState()
@@ -868,8 +881,9 @@ extension WorkspaceActions {
             mermaid.op
         }
         let ids = try await target.host.apply(op)
+        openBoardTab(target.model)
         logger.detailed("whiteboard_add: \(ids.count) elements")
-        return (ids, target.wasAlreadyOpen)
+        return ids
     }
 
     /// Moves, retexts, recolours or captions one element of the caller's board.
@@ -883,15 +897,16 @@ extension WorkspaceActions {
         text: String?,
         color: String?,
         caption: String? = nil
-    ) async throws -> (id: String, tabWasAlreadyOpen: Bool) {
+    ) async throws -> String {
         let target = try whiteboardTarget(workstreamID: workstreamID)
         let live = try await target.host.liveState()
         let op = try Whiteboard.Write.updatePlan(
             id: id, at: at, text: text, color: color, caption: caption, live: live
         )
         _ = try await target.host.apply(op)
+        openBoardTab(target.model)
         logger.detailed("whiteboard_update: \(id)")
-        return (id, target.wasAlreadyOpen)
+        return id
     }
 
     /// Removes elements from the caller's board.
@@ -902,11 +917,14 @@ extension WorkspaceActions {
     func whiteboardDelete(
         workstreamID: UUID,
         ids: [String]
-    ) async throws -> (removed: [String], tabWasAlreadyOpen: Bool) {
+    ) async throws -> [String] {
         let target = try whiteboardTarget(workstreamID: workstreamID)
         let op = try Whiteboard.Write.deletePlan(ids: ids)
         let removed = try await target.host.apply(op)
+        // After `apply`, like the other two. A delete that matched nothing still
+        // ran, so the tab still opens and the note that says so stays true.
+        openBoardTab(target.model)
         logger.detailed("whiteboard_delete: \(removed.count) removed")
-        return (removed, target.wasAlreadyOpen)
+        return removed
     }
 }
