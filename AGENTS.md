@@ -2545,6 +2545,19 @@ most of the time, and the case the offscreen design exists for. `ensureSingleton
 `activateSingleton`, and every answer says the tab was opened **without taking the selection** and
 names `request_attention`, the rule `open_tab` states.
 
+**Building the host and opening the tab are two acts, and the order between them is
+load-bearing.** The host is built before the write, because the offscreen page is what applies it;
+the tab is opened only once `Host.apply` has returned. They were one act, in `whiteboardTarget`,
+and a refused write therefore put a pane in the user's workspace for a change that never
+happened — a typo'd `kind`, an id that is not on the board — while the refusal it answered with
+said nothing about the pane and every success said "The Whiteboard tab is open". `openBoardTab` is
+the call, and it is after `apply` in all three writes, `whiteboard_delete` included: a delete that
+matched nothing still ran, so the tab still opens and that note stays true. `Tests/WhiteboardWriteTabTests.swift`
+pins both directions, and it is the one XCTest file that drives a real `Whiteboard.Host` — which
+works because `TEST_HOST` is `Atelier.app`, so `Bundle.main` resolves the built bundle. That does
+not widen what belongs in XCTest: a claim about what the *page* does with what it is handed is
+still the harness's, per `Tests/Harnesses/README.md`.
+
 **The `note` kind is a rectangle**, since Excalidraw has none: a distinct background plus
 `Whiteboard.Element.kindKey` (`"atelierKind"`) in `customData`, declared beside `authorKey` and
 `captionKey` in `WhiteboardScene.swift`. **Both halves or neither** — the digest is taught to report
