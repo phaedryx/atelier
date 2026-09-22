@@ -776,6 +776,64 @@ window.__whiteboardApply = async (op) => {
       return { ok: true, ids: converted.map((el) => el.id) }
     }
 
+    // A mermaid definition, expanded by Excalidraw's own converter.
+    //
+    // This is the one op Swift hands over WITHOUT having validated it: only
+    // `parseMermaidToExcalidraw` can say whether a definition parses, and only
+    // the page learns how big the result is. It is the same converter, and the
+    // same three calls, that Excalidraw runs when mermaid text is pasted onto
+    // the canvas — parse, convert with regenerated ids, add the files — so an
+    // agent's diagram and a user's paste are the same diagram.
+    //
+    // The library is a dependency of @excalidraw/excalidraw and already in the
+    // bundle for that paste path; the dynamic import shares its chunk rather
+    // than adding one. package.json pins the same version explicitly so the
+    // import cannot silently break when Excalidraw next changes what it pulls.
+    if (op.kind === 'mermaid') {
+      const { parseMermaidToExcalidraw } = await import('@excalidraw/mermaid-to-excalidraw')
+      // A parse error propagates to the catch below and is refused with
+      // mermaid's own message; nothing has touched the scene by then.
+      const { elements: skeletons, files: mermaidFiles = {} } = await parseMermaidToExcalidraw(
+        op.definition
+      )
+      if (!skeletons.length) return { ok: false, reason: 'the definition produced no elements' }
+
+      // Placed by translating the whole diagram so its top-left lands where
+      // Swift said. The converter lays out from its own origin, and a diagram
+      // left there lands on top of whatever the user has near (0,0) — which
+      // reads perfectly well in the digest, since the coordinates are real.
+      const minX = Math.min(...skeletons.map((el) => el.x || 0))
+      const minY = Math.min(...skeletons.map((el) => el.y || 0))
+      const dx = op.x - minX
+      const dy = op.y - minY
+      const placed = skeletons.map((el) => {
+        // SPREAD customData, never assign — the rule the update arm states.
+        // Nothing the converter emits carries any today, but the marker Swift
+        // sends must not be what erases a future key.
+        const data = { ...(el.customData || {}), ...(op.customData || {}) }
+        // A diagram type the converter cannot express arrives as one image.
+        // It carries no words on the canvas, so the definition is its caption;
+        // the key travels with the op because this page cannot spell it.
+        if (el.type === 'image' && op.captionKey) data[op.captionKey] = op.definition
+        return { ...el, x: (el.x || 0) + dx, y: (el.y || 0) + dy, customData: data }
+      })
+
+      // Regenerated ids, deliberately — the opposite of the add arm. Mermaid
+      // names its nodes `A`, `B`, and a second diagram keeping those ids would
+      // collide with the first; the converter remaps bindings and container
+      // ids along with them. That is also why Swift minted nothing: the ids
+      // an agent gets back are whatever really landed, read off `converted`.
+      const converted = convertToExcalidrawElements(placed, { regenerateIds: true })
+      const fileList = Object.values(mermaidFiles)
+      // Before the scene, so the image has bytes to draw the moment it lands.
+      // Each file's dataURL is a real `data:` URL, so save()'s loop posts it to
+      // assets/ the way a pasted image's bytes are posted.
+      if (fileList.length) api.addFiles(fileList)
+      api.updateScene({ elements: [...existing, ...converted] })
+      await saveNow()
+      return { ok: true, ids: converted.filter((el) => !el.containerId).map((el) => el.id) }
+    }
+
     if (op.kind === 'delete') {
       const present = new Set(existing.map((el) => el.id))
       // An id that is already gone is SUCCESS, not a refusal — that is what

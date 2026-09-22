@@ -2573,6 +2573,43 @@ this batch places by hand — scanned up front, so the answer does not depend on
 it an agent that placed two boxes and added an unplaced note got the note dropped on top of them:
 invisible in the digest, since the coordinates read exactly as asked, and wrong only in the picture.
 
+**`mermaid` is the fifth kind, and it inverts the split above: Swift routes, the page validates.**
+`Whiteboard.Write.plan` is the entry `WorkspaceActions.whiteboardAdd` calls, and it answers one of
+two shapes — `.elements`, the batch `addPlan` has fully validated, or `.mermaid`, a definition Swift
+cannot read. Only `parseMermaidToExcalidraw` can say whether a definition parses and only the page
+learns how big the result is, so the page owns the parse, the placement (it translates the whole
+diagram so its top-left lands on the origin Swift chose) and the refusal, which carries mermaid's own
+message with the scene untouched. It is the same converter and the same three calls Excalidraw runs
+when mermaid text is pasted onto the canvas, and the library is already in the bundle for that path;
+`package.json` pins `@excalidraw/mermaid-to-excalidraw` at the version Excalidraw itself depends on
+so the import shares the chunk rather than adding one. Four consequences, each pinned:
+
+- **A mermaid entry stands alone in its call** (`Failure.mermaidStandsAlone`). Its height is not known
+  until it is drawn, so the column layout for anything after it would be a guess, and a guess drops
+  the next element on top of the diagram — invisible in the digest. `addPlan` refuses a mermaid entry
+  on its own account too, so a direct caller cannot draw one as a box. `color`, `from` and `to` are
+  **refused, not ignored** (`mermaidFieldRefused`): an agent whose red diagram came out black has been
+  taught the field does nothing.
+- **Ids are regenerated for this arm, the opposite of `add`'s `regenerateIds: false`.** Mermaid names
+  its nodes `A` and `B`, and a second diagram keeping those ids would collide with the first; the
+  converter remaps bindings and container ids along with them. So Swift mints nothing here, and the ids
+  an agent gets back are whatever the page reports really landed — the return path `Host.apply`
+  already had.
+- **The author marker travels on the op**, the way `captionKey` does, because the page stamps every
+  node and edge the diagram expands to and cannot spell a `customData` key. Spread onto each skeleton,
+  never assigned. A bound label carries nothing, the same as on the `add` arm — the converter creates
+  it fresh from `label`, and the digest folds it into its container rather than reporting it.
+- **A diagram type the converter cannot express lands as one image** — flowcharts, sequence, class, ER
+  and state diagrams become elements; everything else is an SVG mermaid rendered itself, returned as
+  an image plus a file. That file is posted to `assets/` by the same `save()` loop a pasted image goes
+  through, which is why the SVG extension fix (`image/svg+xml` must land as `.svg`) is load-bearing
+  here and not a nicety. The image carries no words on the canvas, so its **caption is the
+  definition**: the digest is not blind to it, and a later agent can re-read what was drawn.
+
+`Tests/WhiteboardWriteTests.swift` pins the Swift half; section 10 of the harness pins what the page
+does with it, from disk — including that the same diagram added twice yields disjoint ids and that a
+definition that does not parse leaves `board.excalidraw` byte-identical.
+
 ### Image transcription, and the capture button
 
 Two arms were added last, and both are **mutations of the board**, so both answer the standing pair

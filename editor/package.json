@@ -17,6 +17,7 @@
     "@codingame/monaco-vscode-theme-defaults-default-extension": "33.0.9",
     "@codingame/monaco-vscode-theme-service-override": "33.0.9",
     "@excalidraw/excalidraw": "0.18.1",
+    "@excalidraw/mermaid-to-excalidraw": "2.2.2",
     "monaco-editor": "npm:@codingame/monaco-vscode-editor-api@33.0.9",
     "react": "^19",
     "react-dom": "^19"

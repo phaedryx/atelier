@@ -105,13 +105,13 @@ final class WhiteboardWriteTests: XCTestCase {
         XCTAssertNil(plan.skeletons.first?.json["text"])
     }
 
-    func test_anUnknownKindIsRefusedAndNamesTheLegalFour() {
+    func test_anUnknownKindIsRefusedAndNamesTheLegalKinds() {
         XCTAssertThrowsError(
             try Write.addPlan(from: [["kind": "cylinder"]], live: empty, mint: minter())
         ) { error in
             let message = (error as? Write.Failure)?.errorDescription ?? ""
             XCTAssertTrue(message.contains("cylinder"), message)
-            for kind in ["box", "note", "text", "arrow"] {
+            for kind in ["box", "note", "text", "arrow", "mermaid"] {
                 XCTAssertTrue(message.contains(kind), message)
             }
         }
@@ -643,14 +643,17 @@ final class WhiteboardWriteTests: XCTestCase {
     // MARK: - The JSON the tool argument carries
 
     func test_aJSONArrayIsParsedIntoAPlan() throws {
-        let plan = try Write.addPlan(
+        let plan = try Write.plan(
             fromJSON: #"[{"kind": "box", "text": "Auth service", "at": "120,80"}]"#,
             live: empty,
             mint: minter()
         )
-        XCTAssertEqual(plan.ids, ["id-1"])
-        XCTAssertEqual(plan.skeletons.first?.label, "Auth service")
-        XCTAssertEqual(plan.skeletons.first?.x, 120)
+        guard case let .elements(ids, skeletons) = plan else {
+            return XCTFail("expected an elements plan, got \(plan)")
+        }
+        XCTAssertEqual(ids, ["id-1"])
+        XCTAssertEqual(skeletons.first?.label, "Auth service")
+        XCTAssertEqual(skeletons.first?.x, 120)
     }
 
     func test_malformedJSONIsRefusedWithAWorkedExample() {
@@ -658,7 +661,7 @@ final class WhiteboardWriteTests: XCTestCase {
         // hand is the ordinary case and the refusal has to show the shape.
         for bad in ["not json", "{\"kind\":\"box\"}", "", "[", "42"] {
             XCTAssertThrowsError(
-                try Write.addPlan(fromJSON: bad, live: empty, mint: minter()),
+                try Write.plan(fromJSON: bad, live: empty, mint: minter()),
                 "expected \(bad) to be refused"
             ) { error in
                 XCTAssertEqual(error as? Write.Failure, .malformedJSON)
@@ -672,8 +675,129 @@ final class WhiteboardWriteTests: XCTestCase {
     func test_anEmptyJSONArrayIsTheEmptyBatchRefusal_notAParseFailure() {
         // Different mistakes, different sentences: one is a malformed argument,
         // the other is a well-formed call that asks for nothing.
-        XCTAssertThrowsError(try Write.addPlan(fromJSON: "[]", live: empty, mint: minter())) {
+        XCTAssertThrowsError(try Write.plan(fromJSON: "[]", live: empty, mint: minter())) {
             XCTAssertEqual($0 as? Write.Failure, .emptyBatch)
         }
+    }
+
+    // MARK: - Mermaid
+
+    //
+    // A mermaid diagram is the one kind Swift cannot expand or even validate:
+    // the page parses the definition with Excalidraw's own converter. Swift
+    // decides only the things it can — that the diagram stands alone in its
+    // call, where it goes, and that nothing was asked for that it cannot honour.
+
+    private let flowchart = "graph LR; A[Auth] --> B[Token store]"
+
+    func test_aMermaidDiagramAloneBecomesAMermaidPlanAtItsPosition() throws {
+        let plan = try Write.plan(
+            from: [["kind": "mermaid", "text": flowchart, "at": "100,100"]],
+            live: empty,
+            mint: minter()
+        )
+        XCTAssertEqual(plan, .mermaid(Write.Mermaid(definition: flowchart, x: 100, y: 100)))
+    }
+
+    func test_anUnplacedMermaidDiagramLandsAtTheColumn() throws {
+        let plan = try Write.plan(
+            from: [["kind": "mermaid", "text": flowchart]],
+            live: live("n1"),
+            mint: minter()
+        )
+        XCTAssertEqual(plan, .mermaid(Write.Mermaid(definition: flowchart, x: 40, y: 500)))
+    }
+
+    func test_ordinaryKindsStillPlanAsElements() throws {
+        let plan = try Write.plan(
+            from: [["kind": "box", "text": "Auth service", "at": "120,80"]],
+            live: empty,
+            mint: minter()
+        )
+        guard case let .elements(ids, skeletons) = plan else {
+            return XCTFail("expected an elements plan, got \(plan)")
+        }
+        XCTAssertEqual(ids, ["id-1"])
+        XCTAssertEqual(skeletons.first?.label, "Auth service")
+    }
+
+    func test_aMermaidDiagramIsParsedFromTheJSONArgument() throws {
+        let plan = try Write.plan(
+            fromJSON: #"[{"kind": "mermaid", "text": "graph TD; A --> B", "at": "10,20"}]"#,
+            live: empty,
+            mint: minter()
+        )
+        XCTAssertEqual(plan, .mermaid(Write.Mermaid(definition: "graph TD; A --> B", x: 10, y: 20)))
+    }
+
+    func test_aMermaidDiagramWithNoDefinitionIsRefused() {
+        for entry in [["kind": "mermaid"], ["kind": "mermaid", "text": ""]] {
+            XCTAssertThrowsError(try Write.plan(from: [entry], live: empty, mint: minter())) {
+                XCTAssertEqual($0 as? Write.Failure, .textRequired(kind: "mermaid"))
+            }
+        }
+    }
+
+    /// The page decides the diagram's height only after it has parsed it, so
+    /// the column layout for anything after it would be a guess — and a guess
+    /// drops the next element on top of the diagram, invisibly in the digest.
+    func test_aMermaidDiagramMayNotShareACallWithAnythingElse() {
+        let mermaid: [String: Any] = ["kind": "mermaid", "text": flowchart]
+        let box: [String: Any] = ["kind": "box", "text": "beside it"]
+        for batch in [[mermaid, box], [box, mermaid], [mermaid, mermaid]] {
+            XCTAssertThrowsError(try Write.plan(from: batch, live: empty, mint: minter())) {
+                XCTAssertEqual($0 as? Write.Failure, .mermaidStandsAlone)
+            }
+        }
+    }
+
+    /// Refused rather than ignored: an agent that asked for a red diagram and
+    /// got a black one has been taught that `color` does nothing.
+    func test_aMermaidDiagramRefusesTheFieldsItCannotHonour() {
+        for field in ["color", "from", "to"] {
+            var entry: [String: Any] = ["kind": "mermaid", "text": flowchart]
+            entry[field] = "red"
+            XCTAssertThrowsError(try Write.plan(from: [entry], live: empty, mint: minter())) {
+                XCTAssertEqual($0 as? Write.Failure, .mermaidFieldRefused(field))
+            }
+        }
+    }
+
+    func test_aMermaidDiagramWithAMalformedPositionIsRefused() {
+        XCTAssertThrowsError(
+            try Write.plan(
+                from: [["kind": "mermaid", "text": flowchart, "at": "here"]],
+                live: empty,
+                mint: minter()
+            )
+        ) { XCTAssertEqual($0 as? Write.Failure, .invalidPosition("here")) }
+    }
+
+    /// The page stamps every element the diagram expands to, and it cannot
+    /// spell a `customData` key — so the marker travels on the op, the way
+    /// `captionKey` travels with a caption. The caption key rides along for the
+    /// diagram types the converter renders as an image: that image's caption
+    /// is the definition, so the digest is not blind to it.
+    func test_theMermaidOpCarriesTheDefinitionTheOriginTheAuthorMarkerAndTheCaptionKey() {
+        let op = Write.Mermaid(definition: flowchart, x: 100, y: 200).op
+        XCTAssertEqual(op["kind"] as? String, "mermaid")
+        XCTAssertEqual(op["definition"] as? String, flowchart)
+        XCTAssertEqual(op["x"] as? Double, 100)
+        XCTAssertEqual(op["y"] as? Double, 200)
+        let customData = op["customData"] as? [String: Any]
+        XCTAssertEqual(
+            customData?[Whiteboard.Element.authorKey] as? String,
+            Whiteboard.Element.agentAuthorValue
+        )
+        XCTAssertNil(customData?[Whiteboard.Element.kindKey])
+        XCTAssertEqual(op["captionKey"] as? String, Whiteboard.Element.captionKey)
+    }
+
+    /// `addPlan` is the elements arm and must not quietly draw a mermaid entry
+    /// as something else if a caller reaches it directly.
+    func test_addPlanRefusesAMermaidEntryRatherThanDrawingIt() {
+        XCTAssertThrowsError(
+            try Write.addPlan(from: [["kind": "mermaid", "text": flowchart]], live: empty, mint: minter())
+        ) { XCTAssertEqual($0 as? Write.Failure, .mermaidStandsAlone) }
     }
 }

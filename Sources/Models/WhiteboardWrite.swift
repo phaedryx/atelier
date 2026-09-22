@@ -22,7 +22,9 @@ extension Whiteboard {
     /// are the *real* element ids, the same ones the digest reports and
     /// `whiteboard_update` takes. There is no mapping table because there is
     /// nothing to map, and no display-id vocabulary for the two ends to drift
-    /// apart on.
+    /// apart on. The one exception is a `mermaid` entry — see `Mermaid` — where
+    /// the page regenerates ids on purpose and the answer is read off what
+    /// really landed, which is the same source of truth reached the other way.
     ///
     /// **Nothing here reads `board.excalidraw`.** What is on the board arrives
     /// as a `Live` parameter, supplied from the *page*, because the file lags it
@@ -47,9 +49,16 @@ extension Whiteboard {
         /// `customData` is what makes it *read* as one.
         static let noteBackground = "#fff3bf"
 
-        /// The vocabulary. Four kinds and no more — the design's, unchanged.
+        /// The vocabulary. The design's four, plus `mermaid`.
+        ///
+        /// A mermaid diagram is the one kind Swift can neither expand nor
+        /// validate: only the page, through Excalidraw's own converter, can say
+        /// whether a definition parses and how big it comes out. It is in the
+        /// vocabulary rather than behind a fifth tool because an agent reaches
+        /// for `whiteboard_add` to put a diagram on the board, and a diagram it
+        /// already knows how to write is the most natural thing to hand it.
         enum Kind: String, CaseIterable {
-            case box, note, text, arrow
+            case box, note, text, arrow, mermaid
         }
 
         /// Where the next unpositioned element goes.
@@ -187,6 +196,8 @@ extension Whiteboard {
             case captionNeedsImage(String)
             case textNeedsCanvasText(String)
             case nothingToUpdate
+            case mermaidStandsAlone
+            case mermaidFieldRefused(String)
 
             var errorDescription: String? {
                 switch self {
@@ -239,6 +250,19 @@ extension Whiteboard {
                         + "under the image."
                 case .nothingToUpdate:
                     "Nothing to change — name at least one of `at`, `text`, `color` or `caption`."
+                case .mermaidStandsAlone:
+                    // The page learns the diagram's height only after it has
+                    // parsed it, so the column layout for anything after it
+                    // would be a guess — and a guess drops the next element on
+                    // top of the diagram, which reads fine in the digest.
+                    "A mermaid diagram must be the only entry in its call: its size is not "
+                        + "known until the page has drawn it, so nothing else can be placed "
+                        + "around it in the same call. Add the diagram on its own, then add "
+                        + "the rest in a second call."
+                case let .mermaidFieldRefused(field):
+                    "`\(field)` does nothing on a mermaid diagram. A mermaid entry takes `text` "
+                        + "(the definition) and optionally `at`; colour and connections belong "
+                        + "in the definition itself."
                 }
             }
         }
@@ -253,7 +277,48 @@ extension Whiteboard {
             "atl-" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
         }
 
-        // MARK: - add
+        // MARK: - plan
+
+        /// What one `whiteboard_add` call asked for.
+        ///
+        /// Two shapes rather than one, because the two arms answer different
+        /// questions: `elements` is a batch Swift has fully validated and the
+        /// page merely expands, while `mermaid` is a definition Swift cannot
+        /// read and the page has to parse, size and place.
+        enum Add: Equatable {
+            case elements(ids: [String], skeletons: [Skeleton])
+            case mermaid(Mermaid)
+        }
+
+        /// A mermaid diagram, as the page will draw it.
+        ///
+        /// Carries the definition and the origin its top-left goes to, and
+        /// nothing else: how many elements it becomes, and which, is the
+        /// converter's answer. So unlike an `elements` plan there are no ids to
+        /// mint here — the answer to the tool is whatever the page reports
+        /// really landed, which `Host.apply` already returns.
+        struct Mermaid: Equatable {
+            let definition: String
+            let x: Double
+            let y: Double
+
+            var op: [String: Any] {
+                [
+                    "kind": "mermaid",
+                    "definition": definition,
+                    "x": x,
+                    "y": y,
+                    // The page stamps every element the diagram expands to,
+                    // and it cannot spell a `customData` key — so the marker
+                    // travels on the op, the rule `captionKey` already follows.
+                    "customData": [Element.authorKey: Element.agentAuthorValue],
+                    // For the diagram types the converter renders as an image:
+                    // that image carries no words on the canvas, so its caption
+                    // is the definition, and the digest is not blind to it.
+                    "captionKey": Element.captionKey,
+                ]
+            }
+        }
 
         /// The same plan, from the JSON array the tool argument carries.
         ///
@@ -262,16 +327,66 @@ extension Whiteboard {
         /// encoded. Parsed here rather than at the handler so that a malformed
         /// array is refused in the same voice as everything else this file
         /// refuses, and so the parse is covered by the same pure tests.
-        static func addPlan(
+        static func plan(
             fromJSON json: String,
             live: Live,
             mint: () -> String = mintID
-        ) throws -> (ids: [String], skeletons: [Skeleton]) {
+        ) throws -> Add {
             guard let data = json.data(using: .utf8),
                   let raw = try? JSONSerialization.jsonObject(with: data) as? [Any]
             else { throw Failure.malformedJSON }
-            return try addPlan(from: raw, live: live, mint: mint)
+            return try plan(from: raw, live: live, mint: mint)
         }
+
+        /// Routes a batch to the arm that can draw it.
+        ///
+        /// A batch holding a mermaid entry must hold nothing else — see
+        /// `Failure.mermaidStandsAlone` — so the decision is made on the whole
+        /// batch before either arm reads an entry. `addPlan` refuses a mermaid
+        /// entry on its own account too, so a caller reaching it directly
+        /// cannot draw one as something else.
+        static func plan(
+            from raw: [Any],
+            live: Live,
+            mint: () -> String = mintID
+        ) throws -> Add {
+            let mermaidEntries = raw.filter { kind(of: $0) == .mermaid }
+            guard !mermaidEntries.isEmpty else {
+                let (ids, skeletons) = try addPlan(from: raw, live: live, mint: mint)
+                return .elements(ids: ids, skeletons: skeletons)
+            }
+            guard raw.count == 1, let entry = raw.first as? [String: Any] else {
+                throw Failure.mermaidStandsAlone
+            }
+            return try .mermaid(mermaidPlan(from: entry, live: live))
+        }
+
+        private static func mermaidPlan(from entry: [String: Any], live: Live) throws -> Mermaid {
+            for field in ["color", "from", "to"] where entry[field] != nil {
+                throw Failure.mermaidFieldRefused(field)
+            }
+            guard let definition = entry["text"] as? String, !definition.isEmpty else {
+                throw Failure.textRequired(kind: Kind.mermaid.rawValue)
+            }
+            let position: (x: Double, y: Double) = if let at = entry["at"] as? String {
+                try parsePosition(at)
+            } else {
+                (live.layout.originX, live.layout.nextY)
+            }
+            return Mermaid(definition: definition, x: position.x, y: position.y)
+        }
+
+        /// An entry's kind as written, or nil for one that names none it knows.
+        /// The same trimming and case rule `addPlan` applies before refusing.
+        private static func kind(of entry: Any) -> Kind? {
+            guard let entry = entry as? [String: Any] else { return nil }
+            let raw = (entry["kind"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased() ?? ""
+            return Kind(rawValue: raw)
+        }
+
+        // MARK: - add
 
         static func addPlan(
             from raw: [Any],
@@ -319,6 +434,10 @@ extension Whiteboard {
                 guard let kind = Kind(rawValue: rawKind) else {
                     throw Failure.unknownKind(entry["kind"] as? String ?? rawKind)
                 }
+                // This arm draws elements; a diagram is `plan`'s to route, and
+                // one reaching here is either mixed into a batch or a direct
+                // caller — refused either way rather than drawn as a box.
+                guard kind != .mermaid else { throw Failure.mermaidStandsAlone }
 
                 let text = (entry["text"] as? String).flatMap { $0.isEmpty ? nil : $0 }
                 if kind == .text, text == nil {
@@ -355,6 +474,7 @@ extension Whiteboard {
                 case .arrow: "arrow"
                 case .text: "text"
                 case .box, .note: "rectangle"
+                case .mermaid: preconditionFailure("refused above")
                 }
                 let id = mint()
                 skeletons.append(Skeleton(
