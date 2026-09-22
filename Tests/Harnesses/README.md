@@ -181,7 +181,10 @@ Three that have been run:
   others — section 1's two arrow checks and section 5's caption-sent-with-a-move
   reflow. It said two until this was re-run: the caption check was added after
   that recipe was written and nobody re-measured it, which is the failure mode
-  this whole file exists to catch, in the file itself.
+  this whole file exists to catch, in the file itself. Measured both ways — on
+  the tree that corrected it, and on the tree before it (35 checks, giving
+  32/35), so the stale number was the sentence's and not a consequence of the
+  change that found it.
 - Forcing the update arm's `label` to `null` reintroduces the left-behind label
   and fails exactly two: the offset check and the move-with-retext one.
 - Skipping the update arm's missing-label refusal reintroduces the silent
