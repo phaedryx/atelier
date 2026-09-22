@@ -98,6 +98,20 @@ extension IPC {
         /// The caller's workstream's saved checkpoint — where an agent said it
         /// left off — or nothing if none has been saved.
         case getSessionCheckpoint = "get_session_checkpoint"
+        /// What background initialization last reported for the caller's own
+        /// workstream — the Info tab's Setup row, over IPC.
+        ///
+        /// The Info tab is the one pane with no other IPC read, and this is the
+        /// one fact on it an agent cannot get another way: a branch is `git`, a
+        /// pull request is `gh`, and initialization state exists only in
+        /// `Initialization.Runner`'s memory.
+        case getInitializationState = "get_initialization_state"
+        /// The Shortcut story the caller's workstream was created for.
+        ///
+        /// Fetched rather than read out of the cache the Info tab fills — see
+        /// `WorkspaceActions.shortcutStory`. The point is that the answer does
+        /// not depend on which pane the user happened to open.
+        case getShortcutStory = "get_shortcut_story"
         /// Reads the caller's own workstream's whiteboard: a text digest of its
         /// elements, plus the absolute path to the rendered PNG.
         ///
@@ -677,6 +691,102 @@ extension IPC {
     }
 
     /// The result of a successful call.
+    /// What background initialization last reported for one workstream — the
+    /// Info tab's Setup row, projected for an agent.
+    ///
+    /// `state` and `detail` are deliberately both here. The key is what an agent
+    /// branches on and must stay stable; the sentence is the user's own copy,
+    /// taken from `Initialization.State.detail` rather than worded a second time,
+    /// so an agent and the person looking at the Setup row are told the same
+    /// thing about the same run.
+    struct InitializationInfo: Codable, Equatable {
+        /// "idle", "in_progress", "completed", "completed_with_note" or "failed".
+        let state: String
+        /// The Setup row's sentence for this state.
+        let detail: String
+        /// 0...1 while a step is running, nil otherwise.
+        let progress: Double?
+    }
+
+    /// The Shortcut story a workstream was created for, or why there is none.
+    ///
+    /// `unavailableReason` is non-nil exactly when `story` is nil, the pairing
+    /// `VerificationChecksInfo` uses — and for the same reason. There are four
+    /// ways to have no story (none linked, no token, a keychain that would not
+    /// hand one over, a fetch that failed) and the tab renders all four as an
+    /// absent section, which is fine for a section and useless for a tool.
+    struct ShortcutStoryInfo: Codable, Equatable {
+        let story: ShortcutStoryDetail?
+        let unavailableReason: String?
+    }
+
+    /// One Shortcut story, as an agent reads it.
+    struct ShortcutStoryDetail: Codable, Equatable {
+        let id: Int
+        let name: String
+        /// "feature", "bug" or "chore", when the story carries one.
+        let storyType: String?
+        /// The workflow state's name, e.g. "In Progress". Nil when the workflow
+        /// list could not be fetched — stories carry only a state id, so that is
+        /// a second round trip that can fail on its own.
+        let state: String?
+        /// Why `state` is nil, when it is. Reported rather than left out: the
+        /// state is one of the things this tool exists to answer, so an absent
+        /// field with no reason reads as a story that has no state.
+        let stateUnavailableReason: String?
+        let appURL: String
+        /// Shortcut's own suggested branch name.
+        let branchName: String
+        /// The story body. The field that actually replaces a round trip to the
+        /// Shortcut MCP server, and the only unbounded one here.
+        let description: String?
+        /// Whether `description` was cut to fit the budget. Reported rather than
+        /// silent, the way `ExecutionLogs` reports a trimmed tail.
+        let descriptionWasTrimmed: Bool
+        /// Whether this is a cached copy that could not be refreshed — the fetch
+        /// failed and Atelier answered with the last story it had.
+        ///
+        /// It exists because `AppEnvironment.refreshShortcutStory` deliberately
+        /// keeps a cached story when a fetch fails, and a story is cached at
+        /// creation by `registerShortcutStory` — so without this, a revoked token
+        /// or a deleted story hands an agent an old copy as a current answer.
+        /// `VerificationRunInfo.isStale` means the same kind of thing: this no
+        /// longer describes reality.
+        let isStale: Bool
+
+        /// Byte budget for a story body.
+        ///
+        /// Smaller than `ExecutionLogs.defaultBudgetBytes` on purpose: a log tail
+        /// is what an agent asked for, and a description rides along on a call
+        /// made for four short fields.
+        static let descriptionBudgetBytes = 8192
+
+        /// Trim a description to a byte budget, dropping the **end** — the
+        /// opposite of a log tail, because a story's first paragraph is the one
+        /// that says what the work is.
+        ///
+        /// Cuts on a UTF-8 boundary by trimming whole characters, so the result
+        /// is never mojibake.
+        static func trimmedDescription(
+            _ text: String?,
+            budgetBytes: Int = descriptionBudgetBytes
+        ) -> (text: String?, wasTrimmed: Bool) {
+            guard let text, !text.isEmpty else { return (text, false) }
+            guard text.utf8.count > budgetBytes else { return (text, false) }
+            var kept = ""
+            var used = 0
+            for character in text {
+                let size = String(character).utf8.count
+                if used + size > budgetBytes {
+                    break
+                }
+                kept.append(character)
+                used += size
+            }
+            return (kept, true)
+        }
+    }
+
     enum Payload: Codable {
         case peers([PeerInfo])
         case peer(PeerInfo)
@@ -689,6 +799,8 @@ extension IPC {
         case executionLogs(ExecutionLogs)
         case task(TaskInfo)
         case tasks([TaskInfo])
+        case initialization(InitializationInfo)
+        case shortcutStory(ShortcutStoryInfo)
         case text(String)
     }
 

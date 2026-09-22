@@ -221,6 +221,8 @@ extension IPC {
             .failTask,
             .getSessionCheckpoint,
             .updateSessionCheckpoint,
+            .getInitializationState,
+            .getShortcutStory,
         ]
     }
 }
@@ -1237,6 +1239,63 @@ extension IPC.Tool {
                 (opened via open_agent_tab), you are reading the same note it writes.
                 Tells you plainly if nothing has been saved yet, rather than answering
                 with nothing.
+                """,
+                arguments: []
+            )
+        case .getInitializationState:
+            IPC.ToolSpec(
+                tool: .getInitializationState,
+                surface: .workspaceRead,
+                replyDeadline: IPC.ToolSpec.Deadline.immediate,
+                isSafeToReplay: true,
+                description: """
+                Read what this project's background initialization last reported for your
+                worktree — the Setup row on the Info tab, which you cannot see.
+
+                Initialization is the steps a project declares in an initialization.yaml
+                in its project directory, run once behind a new worktree. It is the reason
+                a fresh worktree has its dependencies installed. Call this when a build or
+                a test run fails in a way that looks like setup never finished.
+
+                `state` is one of idle, in_progress, completed, completed_with_note or
+                failed, and `detail` is the sentence the user sees.
+
+                READ `idle` CAREFULLY. It means nothing has been reported in this session
+                of Atelier, and nothing more. Atelier keeps this state only in memory, so
+                every workstream reports idle after the app restarts — including ones whose
+                setup ran perfectly days ago. It is NOT evidence that setup never ran, and
+                it is NOT evidence that it succeeded. If you need to know whether the
+                worktree is actually set up, check the worktree.
+
+                `completed_with_note` is neither success nor failure: it means there was
+                nothing to run, and the detail says why — no initialization.yaml, a file
+                that could not be read, one declaring no steps, or a run an archive
+                stopped. The worktree is usable either way.
+                """,
+                arguments: []
+            )
+        case .getShortcutStory:
+            IPC.ToolSpec(
+                tool: .getShortcutStory,
+                surface: .workspaceRead,
+                replyDeadline: IPC.ToolSpec.Deadline.mainActorWork,
+                isSafeToReplay: true,
+                description: """
+                Read the Shortcut story this workstream was created for — its id, name,
+                type, workflow state, branch name, Shortcut URL and description.
+
+                Use this instead of a Shortcut API client or MCP server when you just want
+                to know what the story you are working on says. Atelier already knows which
+                story this workstream belongs to; you would otherwise have to guess the id
+                out of the branch name.
+
+                It fetches, so the answer is current rather than whatever the user's Info
+                tab last happened to load.
+
+                If there is no story you are told which of four things happened: this
+                workstream was not created from a story, no Shortcut API token is
+                configured, the keychain refused the token, or the fetch failed. They are
+                four different problems and only one of them is "there is no story".
                 """,
                 arguments: []
             )

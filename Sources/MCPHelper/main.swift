@@ -168,6 +168,8 @@ Delivery is pull-based: a message sits in the recipient's inbox until it calls r
 
 You can also act on the workstream you are running in. list_tabs shows its tabs and which agent is in each; read_review_comments returns the review comments the user has left on the Changes diff, anchored to file and line. Both are reads and neither changes anything.
 
+get_initialization_state and get_shortcut_story read the Info tab, which you cannot see: what this project's background setup last reported for your worktree, and the Shortcut story this workstream was created for. The Shortcut one saves you guessing a story id out of the branch name.
+
 open_editor puts a file on screen in front of the user, and request_attention raises a desktop notification asking them to come and look. Both change what the user sees, so use them when you have something for them rather than to narrate progress. request_attention does not block: it notifies and returns, and one workstream can raise it only every \(IPC.Vocabulary.attentionCooldownSeconds) seconds.
 
 open_tab opens this workstream's Changes, Execution, Verification or Whiteboard pane, which all start closed. It does not switch the user's view — pair it with request_attention when you need their eyes, rather than assuming a tab you opened is a tab they saw.
@@ -356,6 +358,44 @@ func renderText(_ payload: IPC.Payload?) -> String {
     case let .tasks(list):
         guard !list.isEmpty else { return "No tasks match." }
         return list.map { renderTask($0, contentPreviewLimit: 200) }.joined(separator: "\n\n")
+    case let .initialization(info):
+        // The key and the sentence both, and the key first: `idle` is the state
+        // an agent is most likely to misread, and its detail on its own —
+        // "Nothing reported this session." — does not name which state it is.
+        var lines = ["state=\(info.state)", info.detail]
+        if let progress = info.progress {
+            lines.append("progress=\(Int((progress * 100).rounded()))%")
+        }
+        return lines.joined(separator: "\n")
+    case let .shortcutStory(info):
+        // Four ways to have no story, each its own sentence. Rendering a bare
+        // "no story" here would put back the collapse the payload avoids.
+        guard let story = info.story else {
+            return info.unavailableReason ?? "No Shortcut story."
+        }
+        var lines = ["sc-\(story.id): \(story.name)"]
+        if story.isStale {
+            lines.append(
+                "STALE: fetching this story from Shortcut failed, so this is the last copy Atelier had. "
+                    + "It may have moved state, been renamed, or been deleted since."
+            )
+        }
+        if let type = story.storyType {
+            lines.append("type=\(type)")
+        }
+        if let state = story.state {
+            lines.append("state=\(state)")
+        } else if let reason = story.stateUnavailableReason {
+            lines.append(reason)
+        }
+        lines.append("branch=\(story.branchName)")
+        lines.append("url=\(story.appURL)")
+        if let description = story.description, !description.isEmpty {
+            lines.append(story.descriptionWasTrimmed
+                ? "\ndescription (cut to fit):\n\(description)"
+                : "\ndescription:\n\(description)")
+        }
+        return lines.joined(separator: "\n")
     case let .text(text):
         return text
     case nil:

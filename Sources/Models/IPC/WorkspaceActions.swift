@@ -194,6 +194,143 @@ final class WorkspaceActions {
         }
     }
 
+    /// What initialization last reported for this workstream.
+    ///
+    /// The workstream is resolved first and the state read second, so an id
+    /// naming nothing gets `.unknownWorkstream` like every other workspace read
+    /// rather than the `.idle` that `Runner.state(for:)` answers for any id at
+    /// all — including one that has never existed.
+    func initializationState(workstreamID: UUID) async throws -> IPC.InitializationInfo {
+        _ = try context(workstreamID: workstreamID)
+        return await Self.initializationInfo(for: Initialization.Runner.shared.state(for: workstreamID))
+    }
+
+    /// The projection, pure and static so all five states can be pinned without
+    /// a live runner or a mounted app.
+    nonisolated static func initializationInfo(for state: Initialization.State) -> IPC.InitializationInfo {
+        IPC.InitializationInfo(state: state.key, detail: state.detail, progress: state.progress)
+    }
+
+    /// The Shortcut story this workstream was created for.
+    ///
+    /// **It fetches rather than reading the cache the Info tab fills.**
+    /// `shortcutStoryCache` is in memory and is only refilled when that tab
+    /// appears, so a cache-only read answers "no story" for any workstream whose
+    /// Info tab has not been opened since the app launched — the availability of
+    /// a fact depending on which pane the user happened to visit, which is the
+    /// bug `hasGitHubRemote` was moved onto the sweep to fix. The fetch goes
+    /// through `AppEnvironment` rather than straight to `Shortcut.Client` so the
+    /// tab and the tool share one cache and one workflows lookup.
+    ///
+    /// The id comes from `Workstream.shortcutStoryID`, which is persisted with
+    /// the project list, and not from `Worktree.Facts` — see the overload this
+    /// calls.
+    func shortcutStory(workstreamID: UUID) async throws -> IPC.ShortcutStoryInfo {
+        let context = try context(workstreamID: workstreamID)
+        guard let appEnvironment else { throw Failure.appNotReady }
+
+        let storyID = context.workstream.shortcutStoryID
+        let token = KeychainTokenStore().readOutcome()
+        // Only fetch when there is something to fetch with. The builder below
+        // reports the other three cases, and asking the network for a story we
+        // have no id or no token for would turn two clear refusals into one
+        // "the fetch failed".
+        var fetched = false
+        if let storyID, case .token = token {
+            fetched = await appEnvironment.refreshShortcutStory(
+                for: context.workingDirectory, storyID: storyID
+            )
+        }
+        return Self.shortcutStoryInfo(
+            storyID: storyID,
+            token: token,
+            story: appEnvironment.shortcutStory(for: context.workingDirectory),
+            stateName: appEnvironment.shortcutStateName(for: context.workingDirectory),
+            didFetch: fetched,
+            hasWorkflows: appEnvironment.hasShortcutWorkflows
+        )
+    }
+
+    /// Four ways to have no story, and one way to have a story with no state.
+    ///
+    /// Pure and static for the reason `resolve` is: the branching is the whole
+    /// of this feature's correctness and needs no live app to assert. The Info
+    /// tab renders every one of these as an absent Shortcut section, which is
+    /// fine for a section and useless for a tool named `get_shortcut_story`.
+    nonisolated static func shortcutStoryInfo(
+        storyID: Int?,
+        token: KeychainTokenStore.ReadOutcome,
+        story: Shortcut.Story?,
+        stateName: String?,
+        didFetch: Bool = true,
+        hasWorkflows: Bool = true
+    ) -> IPC.ShortcutStoryInfo {
+        guard let storyID else {
+            return IPC.ShortcutStoryInfo(story: nil, unavailableReason:
+                "This workstream was not created from a Shortcut story, so there is nothing to read. "
+                    + "Workstreams get a story by being created from one with the Shortcut button on a project row.")
+        }
+        switch token {
+        case .absent:
+            return IPC.ShortcutStoryInfo(story: nil, unavailableReason:
+                "This workstream was created from Shortcut story sc-\(storyID), but no Shortcut API token "
+                    + "is configured, so it cannot be read. The user sets one in Settings → Shortcut.")
+        case let .failed(status):
+            return IPC.ShortcutStoryInfo(story: nil, unavailableReason:
+                "This workstream was created from Shortcut story sc-\(storyID), but the keychain would not "
+                    + "hand over the Shortcut API token (OSStatus \(status)). The token is there; something is "
+                    + "refusing to release it. This is not the same as having no token configured.")
+        case .token:
+            break
+        }
+        guard let story else {
+            return IPC.ShortcutStoryInfo(story: nil, unavailableReason:
+                "This workstream was created from Shortcut story sc-\(storyID), but fetching it from Shortcut "
+                    + "failed. The token may have been revoked, or the story deleted. The Info tab's Shortcut "
+                    + "section shows the same thing.")
+        }
+        let (description, wasTrimmed) = IPC.ShortcutStoryDetail.trimmedDescription(story.description)
+        return IPC.ShortcutStoryInfo(
+            story: IPC.ShortcutStoryDetail(
+                id: story.id,
+                name: story.name,
+                storyType: story.storyType,
+                state: stateName,
+                // Reported rather than omitted: `state` is one of the things
+                // this tool exists to answer, and a missing field with no
+                // reason reads as a story that has no state. Which of the two
+                // causes it is matters — one is Shortcut being unreachable and
+                // one is a state id the fetched list does not contain — so the
+                // sentence names the one that actually happened rather than
+                // asserting the likelier.
+                stateUnavailableReason: Self.stateUnavailableReason(
+                    stateName: stateName, hasWorkflows: hasWorkflows, workflowStateID: story.workflowStateID
+                ),
+                appURL: story.appURL,
+                branchName: story.branchName,
+                description: description,
+                descriptionWasTrimmed: wasTrimmed,
+                isStale: !didFetch
+            ),
+            unavailableReason: nil
+        )
+    }
+
+    /// Why a story has no state name, or nil when it has one.
+    nonisolated static func stateUnavailableReason(
+        stateName: String?,
+        hasWorkflows: Bool,
+        workflowStateID: Int
+    ) -> String? {
+        guard stateName == nil else { return nil }
+        if hasWorkflows {
+            return "Shortcut's workflow list does not contain this story's workflow state "
+                + "(id \(workflowStateID)), so its name is unknown. The story itself is current."
+        }
+        return "Shortcut's workflow list could not be fetched, and a story carries only a state id, "
+            + "so the state's name is unknown."
+    }
+
     // MARK: - Actions
 
     /// Opens `path` in the workstream's editor and makes it the active tab.
