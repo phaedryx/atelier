@@ -1406,14 +1406,14 @@ extension IPC {
                 return .failure(id: request.id, error.localizedDescription)
             }
             do {
-                let result = try await WorkspaceActions.shared.whiteboardAdd(
+                let ids = try await WorkspaceActions.shared.whiteboardAdd(
                     workstreamID: workstreamID,
                     elementsJSON: elements
                 )
-                let count = result.ids.count
+                let count = ids.count
                 return .success(id: request.id, .text(
                     "Added \(count) element\(count == 1 ? "" : "s"): "
-                        + result.ids.joined(separator: ", ") + "."
+                        + ids.joined(separator: ", ") + "."
                         + Self.whiteboardTabNote
                 ))
             } catch {
@@ -1433,7 +1433,7 @@ extension IPC {
                 return .failure(id: request.id, error.localizedDescription)
             }
             do {
-                let result = try await WorkspaceActions.shared.whiteboardUpdate(
+                let updated = try await WorkspaceActions.shared.whiteboardUpdate(
                     workstreamID: workstreamID,
                     id: id,
                     at: arguments.optional("at"),
@@ -1448,7 +1448,7 @@ extension IPC {
                 )
                 return .success(
                     id: request.id,
-                    .text("Updated \(result.id)." + Self.whiteboardTabNote)
+                    .text("Updated \(updated)." + Self.whiteboardTabNote)
                 )
             } catch {
                 return .failure(id: request.id, error.localizedDescription)
@@ -1461,17 +1461,17 @@ extension IPC {
             }
             let ids = ToolArguments(request).list("ids")
             do {
-                let result = try await WorkspaceActions.shared.whiteboardDelete(
+                let removed = try await WorkspaceActions.shared.whiteboardDelete(
                     workstreamID: workstreamID,
                     ids: ids
                 )
                 // What was really there. An id already gone is success and is
                 // simply not listed, which is what makes this replayable.
-                let count = result.removed.count
-                let what = result.removed.isEmpty
+                let count = removed.count
+                let what = removed.isEmpty
                     ? "Nothing to remove — none of those ids are on the board."
                     : "Removed \(count) element\(count == 1 ? "" : "s"): "
-                    + result.removed.joined(separator: ", ") + "."
+                    + removed.joined(separator: ", ") + "."
                 return .success(id: request.id, .text(what + Self.whiteboardTabNote))
             } catch {
                 return .failure(id: request.id, error.localizedDescription)
