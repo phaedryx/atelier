@@ -42,12 +42,25 @@ directory beside the bare repo**, outside every worktree:
 └── my-feature/                  # another worktree, linked the same way
 ```
 
-`.hooks/worktree-create.sh` creates those two symlinks on worktree creation, along
-with the submodule checkout. **A worktree created outside that hook — a bare
-`git worktree add`, say — has neither, and fails to link** with
+`scripts/setup.sh ghostty` creates those two symlinks, along with the submodule
+checkout. **Nothing creates them for you automatically.** A worktree Atelier
+creates runs `setup.sh` only if this project's `initialization.yaml` is in place
+(see `docs/worktree-setup.md`), and a worktree made any other way — a bare
+`git worktree add`, or Atelier's Adopt button, which deliberately skips
+initialization — has neither link, and fails to link with
 `ld: library 'ghostty' not found`, or refuses to start with
-`error: Ghostty resources not found at ghostty/zig-out/share/`. The fix is to make
-the same two links by hand, not to rebuild:
+`error: Ghostty resources not found at ghostty/zig-out/share/`.
+
+The fix is to run the script, not to rebuild:
+
+```bash
+cd <worktree>
+./scripts/setup.sh ghostty
+```
+
+It resolves `.shared/` from git itself and needs no environment variables, so it
+is correct in the bare-repo layout and in a plain clone. Should you need the two
+steps by hand, they are the submodule checkout and the two links:
 
 ```bash
 cd <worktree>

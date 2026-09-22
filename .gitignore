@@ -12,7 +12,7 @@ DerivedData/
 *.xcuserdata
 
 # Ghostty build output. In the bare-repo layout these are symlinks into
-# `.shared/` beside the bare repo, created by `.hooks/worktree-create.sh`; the
+# `.shared/` beside the bare repo, created by `scripts/setup.sh`; the
 # artifacts themselves are built once with zig, not per worktree.
 # See docs/ghostty-xcframework-build.md.
 ghostty/zig-out/
@@ -20,6 +20,9 @@ ghostty/.zig-cache/
 
 # Monaco editor build output (rebuild with scripts/build-editor.sh)
 Resources/MonacoEditor/
+# Where `scripts/setup.sh editor` stages its copy before moving it into place.
+# Cleaned up on both exits; this covers a run killed mid-copy.
+Resources/.MonacoEditor.staged.*
 
 # Node dependencies
 node_modules/
