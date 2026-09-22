@@ -177,7 +177,11 @@ Break something on purpose, rebuild, and confirm the matching check fails.
 Three that have been run:
 
 - Removing the `reflowArrowsTouching` call from `whiteboard.jsx`'s update arm
-  reintroduces PR 3's third bug and should fail exactly two checks and no others.
+  reintroduces PR 3's third bug and should fail exactly **three** checks and no
+  others — section 1's two arrow checks and section 5's caption-sent-with-a-move
+  reflow. It said two until this was re-run: the caption check was added after
+  that recipe was written and nobody re-measured it, which is the failure mode
+  this whole file exists to catch, in the file itself.
 - Forcing the update arm's `label` to `null` reintroduces the left-behind label
   and fails exactly two: the offset check and the move-with-retext one.
 - Skipping the update arm's missing-label refusal reintroduces the silent
