@@ -181,13 +181,23 @@ extension Whiteboard {
                 // completely different" failure this format exists to avoid, in
                 // the one line where an image gets any handle at all. An id with
                 // no file on disk says so in words instead.
-                // The lookup uses the RAW id, because that is the key
-                // `Store.writeAsset` wrote the file under; only the fallback
-                // renders one. That split is the point: a hit is a path Atelier
-                // built out of a component `Store.isSafeComponent` already
-                // vetted, and the fallback fires exactly when that
-                // corroboration failed — the one branch where an id Atelier
-                // has not vouched for reaches the reader.
+                // The lookup uses the RAW id, because that is the key the
+                // file was written under; only the fallback renders an
+                // identifier, and it fires exactly when no file corroborates
+                // the id.
+                //
+                // The path is deliberately NOT put through `identifier`, for
+                // the reason this branch exists at all: it has to stay
+                // openable, and a sanitized path is one that does not resolve
+                // — the "sends a reader somewhere completely different"
+                // failure above, reintroduced by the fix for a different one.
+                // So the residual is stated rather than closed. `assetPaths`
+                // *lists* the directory rather than replaying `writeAsset`, so
+                // `isSafeComponent` does not vouch for what is in there: a
+                // file placed by other means contributes its name to this line
+                // unsanitized. That is the same exposure `line(for:)` already
+                // accepts for `board.png`'s own path, for the same reason, and
+                // closing it is not this function's job.
                 let file = element.fileID.flatMap { assets[$0] }
                     ?? element.fileID.map { "fileId=\(identifier($0)) (no file in assets/)" }
                     ?? "(no file)"
@@ -431,10 +441,10 @@ extension Whiteboard {
         ///
         /// **The class is `Store.isSafeComponent`'s, deliberately.** That is
         /// already this feature's answer to what an identifier of this kind may
-        /// contain — it is what vets a `fileId` before it names a file in
-        /// `assets/`, which is also why the *corroborated* branch of the image
-        /// line needs nothing: a path found in `assets` was built by Atelier
-        /// out of a component that predicate already passed.
+        /// contain — it is what `Store.writeAsset` checks before a `fileId` is
+        /// allowed to name a file in `assets/`. (It does **not** vouch for the
+        /// image line's other branch; the comment at that call site says what
+        /// that path's provenance really is and why it stays verbatim.)
         ///
         /// **Every character this function adds is outside the class it
         /// enforces**, so a marker can never be mistaken for content: an
