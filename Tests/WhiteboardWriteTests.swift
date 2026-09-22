@@ -506,6 +506,35 @@ final class WhiteboardWriteTests: XCTestCase {
         XCTAssertEqual(op["caption"] as? String, "")
     }
 
+    func test_aWhitespaceOnlyCaptionClearsRatherThanStoringBlankWords() throws {
+        // The page removes the key rather than storing "" because the digest
+        // renders a caption line for anything it finds, so an empty string
+        // would leave a blank line under the image forever. A caption of three
+        // spaces renders that same blank line while reading, in the file, as a
+        // transcription that exists — so it is normalized to the clear the
+        // agent meant. Trimmed HERE and not also in the page: one copy, and
+        // this is the half that is testable with no board on disk.
+        for blank in [" ", "   ", "\n", "\t  \n"] {
+            let op = try Write.updatePlan(
+                id: "i1", at: nil, text: nil, color: nil, caption: blank,
+                live: board(ids: ["i1"], images: ["i1"])
+            )
+            XCTAssertEqual(op["caption"] as? String, "", "for \(blank.debugDescription)")
+        }
+    }
+
+    func test_aCaptionKeepsItsOwnWhitespaceWhenItHasWordsInIt() throws {
+        // Only a caption that is ENTIRELY whitespace is a clear. One with words
+        // is a transcription and is stored exactly as sent — a screenshot of
+        // indented code is the ordinary case, and trimming it would silently
+        // rewrite what the agent read off the pixels.
+        let op = try Write.updatePlan(
+            id: "i1", at: nil, text: nil, color: nil, caption: "  def run\n    ok\n  end  ",
+            live: board(ids: ["i1"], images: ["i1"])
+        )
+        XCTAssertEqual(op["caption"] as? String, "  def run\n    ok\n  end  ")
+    }
+
     func test_aCaptionOnSomethingThatIsNotAnImageIsRefused() {
         // A caption is an agent's transcription of pixels nothing else can
         // read. On a box it would be a second, invisible text channel: present

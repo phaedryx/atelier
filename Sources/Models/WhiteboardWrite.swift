@@ -220,9 +220,15 @@ extension Whiteboard {
                 case let .captionNeedsImage(id):
                     // Names the alternative, because a refusal that does not is
                     // one an agent retries verbatim.
+                    // "that already carries words" rather than the flat "a box,
+                    // note, text or arrow" this used to name. `text` is now
+                    // refused by the page for an element drawn without a label,
+                    // so the unqualified advice sent an agent captioning an
+                    // unlabelled box from one refusal straight into another with
+                    // nothing naming the way out.
                     "\"\(id)\" is not an image, and a caption is a transcription of one. "
-                        + "Use `text` to change what a box, note, text or arrow says. "
-                        + "read_whiteboard lists each image on this board."
+                        + "Use `text` to change what a box, note, text or arrow already "
+                        + "says. read_whiteboard lists each image on this board."
                 case let .textNeedsCanvasText(id):
                     // The mirror of `captionNeedsImage`, and the more valuable
                     // of the two: reaching for `text` to describe a screenshot
@@ -413,6 +419,14 @@ extension Whiteboard {
                 // success teaching an agent that its transcription landed.
                 // Reaching for `text` to describe a screenshot is the obvious
                 // first move, so it is the one that most needs answering.
+                //
+                // An image is the only case this side can answer. The other
+                // silent success of the same shape — `text` on a box, ellipse,
+                // diamond or arrow the user drew WITHOUT a label — is refused by
+                // the page, because whether an element carries a bound label is
+                // a fact about the live scene and `Live` does not carry it. Not
+                // a second copy of this rule: the two refuse different things,
+                // each where the fact it needs lives.
                 guard !live.imageIDs.contains(id) else {
                     throw Failure.textNeedsCanvasText(id)
                 }
@@ -428,7 +442,22 @@ extension Whiteboard {
             // under the image.
             if let caption {
                 guard live.imageIDs.contains(id) else { throw Failure.captionNeedsImage(id) }
-                op["caption"] = caption
+                // **Whitespace-only clears**, and everything else is stored
+                // exactly as sent. This is not new policy: the page already
+                // removes the key rather than storing `""` because "the digest
+                // renders a caption line for any caption it finds, so an empty
+                // string would leave a blank one under the image forever" — and
+                // a caption of three spaces renders that same blank line while
+                // reading, in the file, as a transcription that exists. An
+                // agent clearing one is far likelier to send a stray space than
+                // to mean a caption made of whitespace.
+                //
+                // Trimmed HERE and deliberately not also in the page. The two
+                // would be a second copy of one rule, and this half is the pure,
+                // testable one — `WhiteboardWriteTests` pins it with no board on
+                // disk, which is the split `Tests/Harnesses/README.md` states.
+                op["caption"] = caption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "" : caption
                 // **The key travels with the value**, so the page never spells
                 // it. `customData` keys live in exactly one place — `Element`,
                 // the reader — and this is the first write of one from the

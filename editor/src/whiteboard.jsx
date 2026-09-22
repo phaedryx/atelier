@@ -386,11 +386,47 @@ const unbindFrom = (elements, goneIDs) =>
     }
   })
 
-const textTargetFor = (elements, element) => {
-  if (element.type === 'text') return element
+// The text element BOUND to a container, or null.
+//
+// Deliberately not the element itself when that element is a bare `text`: a
+// bare text element IS its own words, so it has nothing hanging off it to drag
+// when it moves. textTargetFor below is the other question — "what does `text`
+// write to" — and the two only coincide for a labelled shape.
+const boundLabelOf = (elements, element) => {
   const boundID = (element.boundElements || []).find((b) => b.type === 'text')?.id
-  return boundID ? elements.find((el) => el.id === boundID) : null
+  return (boundID && elements.find((el) => el.id === boundID)) || null
 }
+
+const textTargetFor = (elements, element) =>
+  element.type === 'text' ? element : boundLabelOf(elements, element)
+
+// Shifts a container's bound label by the same delta the container just moved.
+//
+// Excalidraw positions a label when it CREATES it and never again — measured
+// against 0.18.1: moving four labelled containers by (+1000,+1000) through
+// updateScene left all four labels at their original absolute coordinates. That
+// is exactly the "binds but never moves" behaviour reflowArrowsTouching already
+// works around, applied to labels: the label keeps its containerId, so the
+// digest goes on reporting the box as carrying its words quite correctly, while
+// the picture shows the text floating where the box used to be. Worse than
+// either half being wrong alone, because the two halves of the read path exist
+// to corroborate each other.
+//
+// SHIFTED BY THE DELTA, never recomputed from the container. Recomputing means
+// reimplementing Excalidraw's own per-shape inscribed-rect maths, which it does
+// not export — and measured, that maths is not plain centring: an ellipse insets
+// its label (offset 90.218 where centring gives 90.0), and a diamond constrains
+// the label's WRAP WIDTH instead (99.4px of a 240px diamond against 229px of a
+// 240px rectangle). A delta needs to know none of it, and so stays right for
+// every shape, every wrap and every verticalAlign. The same rule the add arm
+// states for bindings: nothing here hand-writes geometry Excalidraw owns.
+const shiftLabel = (element, dx, dy) => ({
+  ...element,
+  x: (element.x || 0) + dx,
+  y: (element.y || 0) + dy,
+  version: (element.version || 1) + 1,
+  versionNonce: nonce(),
+})
 
 // A write has landed, so save NOW rather than waiting for onChange.
 //
@@ -503,8 +539,56 @@ window.__whiteboardApply = async (op) => {
     if (op.kind === 'update') {
       const target = existing.find((el) => el.id === op.id)
       if (!target) return { ok: false, unknown: [op.id] }
+
+      // Resolved BEFORE anything is written, and a miss refuses the WHOLE op.
+      //
+      // textTargetFor returns null for any box, ellipse, diamond or arrow the
+      // user drew without a label, and this arm used to answer `ok` having
+      // changed nothing — the same silent success that `text` on an image had,
+      // and which Whiteboard.Write now refuses in Swift. Swift cannot refuse
+      // this one: whether an element carries a label is a fact about the live
+      // scene, which only this page holds.
+      //
+      // Refused whole rather than partially applied, the rule the
+      // arrow-cannot-bind-to-an-image case already states: an `at` + `text`
+      // call that moved the element and silently dropped the words would leave
+      // the board in a state the answer does not describe. Nothing below this
+      // line runs, so updateScene and saveNow are never reached.
+      let textEl = null
+      if (op.text !== undefined) {
+        textEl = textTargetFor(existing, target)
+        if (!textEl) {
+          // Names what can actually be done, and deliberately does NOT say
+          // "add a label with whiteboard_add": that tool always mints a NEW
+          // element and cannot attach words to one already on the board, so
+          // advice to reach for it there is advice an agent follows into a
+          // second box sitting on top of the first. The two honest paths are
+          // both stated instead.
+          return {
+            ok: false,
+            reason:
+              `"${op.id}" was drawn without a label, so it carries no words on the ` +
+              'canvas and there is nothing for `text` to change. Nothing can attach ' +
+              'words to an element that is already on the board. Either draw a ' +
+              'replacement — whiteboard_add with `text` and the same `at`, then ' +
+              'whiteboard_delete this one — or add a separate text element beside it. ' +
+              'read_whiteboard reports the words each element already has.',
+          }
+        }
+      }
+
+      // Per axis, and against the position the element is being moved FROM.
+      // updatePlan always sends both, but the page has always guarded them
+      // separately and a half-move must shift the label by half.
+      const dx = op.x !== undefined ? op.x - (target.x || 0) : 0
+      const dy = op.y !== undefined ? op.y - (target.y || 0) : 0
+      const label = dx || dy ? boundLabelOf(existing, target) : null
+
       const next = existing.map((el) => {
         let out = el
+        if (label && el.id === label.id) {
+          return shiftLabel(el, dx, dy)
+        }
         if (el.id === op.id) {
           out = { ...out }
           if (op.x !== undefined) out.x = op.x
@@ -537,23 +621,26 @@ window.__whiteboardApply = async (op) => {
         }
         return out
       })
-      if (op.text !== undefined) {
-        const textEl = textTargetFor(next, next.find((el) => el.id === op.id))
-        if (textEl) {
-          const i = next.indexOf(textEl)
-          // Both fields: `originalText` is the source the editor reopens with,
-          // `text` is what is drawn. Setting only one leaves the board showing
-          // a different string from the one the digest reports.
-          next[i] = {
-            ...textEl,
-            text: op.text,
-            originalText: op.text,
-            version: (textEl.version || 1) + 1,
-            versionNonce: nonce(),
-          }
+      if (textEl) {
+        // By id, not by the object resolved above: a label that also MOVED has
+        // already been replaced in `next`, and writing the pre-move object back
+        // would silently undo the shift.
+        const i = next.findIndex((el) => el.id === textEl.id)
+        // Both fields: `originalText` is the source the editor reopens with,
+        // `text` is what is drawn. Setting only one leaves the board showing
+        // a different string from the one the digest reports.
+        next[i] = {
+          ...next[i],
+          text: op.text,
+          originalText: op.text,
+          version: (next[i].version || 1) + 1,
+          versionNonce: nonce(),
         }
       }
-      // A move drags every arrow attached to this element with it.
+      // A move drags every arrow attached to this element with it. The label
+      // has already been dragged, above, and does not join this set: the set
+      // names ids an arrow may be BOUND to, and nothing binds to a container's
+      // own label, so adding it would be a no-op rather than a second reflow.
       const moved = op.x !== undefined || op.y !== undefined
       api.updateScene({
         elements: moved ? reflowArrowsTouching(next, new Set([op.id])) : next,
