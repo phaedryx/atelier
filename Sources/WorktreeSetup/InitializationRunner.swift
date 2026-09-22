@@ -28,6 +28,59 @@ extension Initialization {
     }
 }
 
+extension Initialization.State {
+    /// A stable key naming this state, for a consumer that has to branch on it
+    /// rather than read it.
+    ///
+    /// Separate from `detail` because the two answer different questions and
+    /// only one of them may ever be reworded: the key is a wire value
+    /// `get_initialization_state` puts in front of an agent, and the sentence is
+    /// the user's copy.
+    var key: String {
+        switch self {
+        case .idle: "idle"
+        case .inProgress: "in_progress"
+        case .completed: "completed"
+        case .completedWithNote: "completed_with_note"
+        case .failed: "failed"
+        }
+    }
+
+    /// What this state says, in one sentence — the Info tab's Setup row, and
+    /// the only wording `get_initialization_state` reports.
+    ///
+    /// It lives here rather than in the view because there are two consumers
+    /// now and the *sentence* is what they must agree on. A second copy in the
+    /// IPC handler would have drifted on exactly the case that matters: `.idle`
+    /// speaks for the session and not for the worktree, and an agent told
+    /// anything stronger than this would conclude setup never ran.
+    /// `initializationRow(for:)` keeps the icon and the tint, which are the
+    /// view's own and which no agent can read.
+    var detail: String {
+        switch self {
+        case .idle:
+            NSLocalizedString("Nothing reported this session.", comment: "")
+        case let .inProgress(step, _):
+            step
+        case .completed:
+            NSLocalizedString("Ran successfully.", comment: "")
+        case let .completedWithNote(note):
+            note
+        case let .failed(detail):
+            detail
+        }
+    }
+
+    /// How far through the declared steps, while one is running. Nil otherwise —
+    /// a finished run has no progress, and 1.0 would read as one.
+    var progress: Double? {
+        if case let .inProgress(_, progress) = self {
+            return progress
+        }
+        return nil
+    }
+}
+
 /// Notification posted on the main thread whenever initialization state changes.
 /// `userInfo` contains "workstreamID" (UUID) and "state" (Initialization.State).
 extension Notification.Name {
