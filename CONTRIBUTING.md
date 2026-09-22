@@ -10,6 +10,10 @@ Thank you for your interest in contributing to Atelier! This document covers the
 - Xcode 16+
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`)
 - Ghostty submodule initialized (`git submodule update --init`)
+- Ghostty xcframework and resources built — see
+  [docs/ghostty-xcframework-build.md](docs/ghostty-xcframework-build.md). They are
+  not in git, nothing builds them for you, and the command below stops with a
+  message naming them if they are missing.
 
 ### Building
 
