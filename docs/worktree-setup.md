@@ -11,7 +11,7 @@ in the README's bare-repo layout and in a plain clone — and it takes a subcomm
 
 ```bash
 ./scripts/setup.sh            # all four, in order
-./scripts/setup.sh ghostty    # submodule checkout + the two symlinks
+./scripts/setup.sh ghostty    # submodule checkout, the two symlinks, and a check
 ./scripts/setup.sh editor     # copy the Monaco bundle from the default checkout
 ./scripts/setup.sh hooks      # prek
 ./scripts/setup.sh build      # xcodegen, dev.sh build, buildServer.json
@@ -27,6 +27,25 @@ reported one here would stop a machine with no seed bundle from ever reaching
 `build`. The copy is also staged and moved into place rather than written
 directly, so a copy that breaks halfway cannot leave a partial bundle whose
 `index.html` suppresses the rebuild that is supposed to be the fallback.
+
+**`ghostty` can and does fail the run**, and it is the one step where that is
+the point. `ln -sfn` succeeds whether or not its target exists, so linking is no
+evidence that anything was built: the step used to print a green ✓ over a
+dangling symlink, and the real failure arrived two steps later as `dev.sh
+build`'s `Ghostty resources not found at ghostty/zig-out/share/` — which names
+neither the xcframework nor the submodule, and which this document already calls
+the misleading error the script exists to stop. So the step now probes the
+*resolved* artifacts (`-d` follows a symlink, so a dangling link fails exactly as
+an absent one does) and, when they are not there, exits non-zero with a message
+naming what is missing and pointing at `docs/ghostty-xcframework-build.md`.
+
+That halts `editor`, `hooks` and `build` behind it, and that is the intended
+trade rather than a cost being overlooked. **The run was already going to fail** —
+`build` cannot succeed without those artifacts — so the change is *where* the
+failure is reported and *what it says*, not whether one happens. What halting
+actually skips is a Monaco copy that `dev.sh build` regenerates by itself and a
+`prek install`, both of which the paragraph above calls not load-bearing, and both
+of which are one **Rerun** away once the artifacts exist.
 
 `build` is last because it is the slowest and the likeliest to fail, so a failure
 there still leaves a worktree that links and runs.

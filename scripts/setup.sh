@@ -118,6 +118,47 @@ setup_ghostty() {
         ln -sfn "$REPO_ROOT/ghostty/zig-out" ghostty/zig-out
         echo "✓ Linked ghostty build artifacts from the main checkout"
     fi
+
+    # **Linking is not evidence that anything was built, so the result is
+    # checked.** `ln -sfn` succeeds whether or not its target exists and the
+    # ticks above are unconditional, so a missing `zig-out` used to get a green
+    # ✓ over a dangling symlink — the step reporting success for work that had
+    # not happened. The real failure then arrived two steps later as `dev.sh
+    # build`'s "Ghostty resources not found at ghostty/zig-out/share/", which
+    # names nothing about the xcframework or the submodule, and which
+    # docs/worktree-setup.md already calls the misleading error this script
+    # exists to stop.
+    #
+    # **Probed through the resolved paths, not the links.** `-d` and `-e` follow
+    # symlinks, so a dangling link fails exactly as an absent one does, and one
+    # check covers all three layouts: `.shared/`, a plain clone's main checkout,
+    # and a plain clone that builds in place and links nothing — the last of
+    # which falls through the `if/elif` above silently and had no check at all.
+    #
+    # Deliberately **not** a probe of the links themselves or of
+    # `ghostty/include`: both are present in exactly the case the unconditional
+    # relinking above exists for, so either would reintroduce the silent skip
+    # that comment is guarding against.
+    #
+    # `share/ghostty` and `share/terminfo` are named individually rather than
+    # `share/` alone because `project.yml` references both by path, and a
+    # partial build can leave the parent behind holding one of them.
+    local missing=""
+    [ -e ghostty/macos/GhosttyKit.xcframework ] || missing="GhosttyKit.xcframework"
+    if [ ! -d ghostty/zig-out/share/ghostty ] || [ ! -d ghostty/zig-out/share/terminfo ]; then
+        missing="${missing:+$missing, }zig-out/share"
+    fi
+    if [ -n "$missing" ]; then
+        # stderr, because that is the stream `Initialization.Runner` quotes on
+        # the Info tab, and it keeps the *tail* — so the actionable line is last.
+        echo "ghostty build artifacts are missing: $missing" >&2
+        echo "They are built once with zig and shared by every worktree; nothing" >&2
+        echo "in this script builds them, and the build cannot succeed without them." >&2
+        echo "Build and install them, then rerun: ./scripts/setup.sh ghostty" >&2
+        echo "See docs/ghostty-xcframework-build.md" >&2
+        exit 1
+    fi
+    echo "✓ ghostty build artifacts present"
 }
 
 # ── editor ──────────────────────────────────────────────────────────────────
