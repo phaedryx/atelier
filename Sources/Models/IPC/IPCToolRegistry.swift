@@ -198,6 +198,7 @@ extension IPC {
             .closeTab,
             .requestAttention,
             .createWorkstream,
+            .createShortcutWorkstream,
             .startVerification,
             .checkVerification,
             .listVerificationChecks,
@@ -571,6 +572,48 @@ extension IPC.Tool {
                         kind: .string,
                         isRequired: false,
                         description: "Name for the workstream, used verbatim as the git branch name. Omit to have one generated. Must be a valid branch name and must not already be taken in this project."
+                    ),
+                    IPC.ArgumentSpec(
+                        name: "prompt",
+                        kind: .string,
+                        isRequired: false,
+                        description: "Instructions for the agent to start with. Omit to create the workstream without starting an agent."
+                    ),
+                    IPC.ArgumentSpec(
+                        name: "bypass_permissions",
+                        kind: .boolean,
+                        isRequired: false,
+                        description: "\"true\" to start the agent with --dangerously-skip-permissions. Omit for \"false\". Any other value is an error."
+                    ),
+                ]
+            )
+        case .createShortcutWorkstream:
+            IPC.ToolSpec(
+                tool: .createShortcutWorkstream,
+                surface: .workspaceAction,
+                replyDeadline: IPC.ToolSpec.Deadline.worktreeCreation,
+                isSafeToReplay: false,
+                description: """
+                Create a workstream for a Shortcut story. Everything
+                create_workstream does — its own git worktree on its own new
+                branch, background initialization, and with `prompt` an agent in
+                its Coding Agent tab — plus the story: the branch is named by the
+                user's Branch Name Pattern rather than by you, and the workstream
+                carries the story id, so its Info tab shows the story and "Open in
+                Shortcut" works. Use this whenever the work has a Shortcut story;
+                use create_workstream when it does not. Requires a Shortcut API
+                token in the user's Settings, and refuses if the story already has
+                a workstream in this project. Creating it does not move the user's
+                view. Returns the workstream's name and path, and the new agent's
+                surface id; poll list_peers for a peer reporting that surface
+                before messaging it.
+                """,
+                arguments: [
+                    IPC.ArgumentSpec(
+                        name: "story",
+                        kind: .string,
+                        isRequired: true,
+                        description: "The Shortcut story: a bare public id (\"17411\"), the sc- form (\"sc-17411\"), or a pasted story URL."
                     ),
                     IPC.ArgumentSpec(
                         name: "prompt",

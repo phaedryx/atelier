@@ -63,6 +63,16 @@ final class IPCProtocolTests: XCTestCase {
         )
     }
 
+    /// It fetches the story and *then* does everything `create_workstream` does,
+    /// so it cannot answer sooner than that tool can.
+    func test_createShortcutWorkstream_waitsAtLeastAsLongAsAPlainCreate() {
+        XCTAssertGreaterThanOrEqual(
+            IPC.Tool.createShortcutWorkstream.replyDeadline,
+            IPC.Tool.createWorkstream.replyDeadline,
+            "it adds a Shortcut round trip in front of the same worktree work"
+        )
+    }
+
     /// Nothing got a *shorter* wait than the single value it replaced. The point
     /// of the split was to stop cutting slow handlers off, not to tighten fast
     /// ones.
@@ -80,7 +90,7 @@ final class IPCProtocolTests: XCTestCase {
     /// puts the same file on screen twice.
     func test_toolsThatChangeSomething_areNotReplayed() {
         for tool in [
-            IPC.Tool.createWorkstream, .openAgentTab, .startVerification, .sendMessage,
+            IPC.Tool.createWorkstream, .createShortcutWorkstream, .openAgentTab, .startVerification, .sendMessage,
             .broadcast, .receiveMessages, .startExecution,
         ] {
             XCTAssertFalse(tool.isSafeToReplay, "\(tool.rawValue) does something different the second time")

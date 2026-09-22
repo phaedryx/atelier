@@ -128,6 +128,17 @@ extension IPC {
         /// Creates a new workstream — worktree, branch, initialization — and
         /// optionally starts an agent there.
         case createWorkstream = "create_workstream"
+        /// Creates a workstream for a Shortcut story — the same worktree,
+        /// branch and initialization `create_workstream` makes, named by the
+        /// user's Branch Name Pattern and carrying the story id, so the
+        /// workstream's Info tab shows the story and "Open in Shortcut" works.
+        ///
+        /// Separate from `create_workstream` rather than an argument on it
+        /// because the name is not the caller's to choose here: it is rendered
+        /// from the story, and the two collisions that can refuse it — the story
+        /// already has a workstream, the rendered name is taken — have no
+        /// meaning for a plain create.
+        case createShortcutWorkstream = "create_shortcut_workstream"
         /// Starts a verification run — some or all of the checks
         /// `verification.yaml` declares — in the caller's own workstream, and
         /// answers with a run id rather than the result.

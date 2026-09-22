@@ -754,7 +754,6 @@ struct ProjectSidebar: View {
         }
 
         let project = projects[index]
-        let existingNames = Set(project.workstreams.map(\.name))
         let bypass = defaultBypass
         shortcutError = ""
         shortcutFetching = true
@@ -768,29 +767,25 @@ struct ProjectSidebar: View {
                 guard !Task.isCancelled, pendingWorkstreamProjectID == projectID else { return }
                 shortcutFetching = false
 
-                let name = Shortcut.BranchName.render(branchTemplate, story: story)
-                guard Git.Operations.isValidBranchName(name) else {
-                    shortcutError = NSLocalizedString(
-                        "Shortcut suggested a branch name git will not accept.",
-                        comment: "Shortcut branch name validation error"
-                    )
-                    return
-                }
-                // Two distinct collisions with two distinct messages. Checking only the name
-                // let the same story through twice under a changed Branch Name Pattern, and
-                // blamed the story when an unrelated workstream happened to match the name.
-                guard !project.workstreams.contains(where: { $0.shortcutStoryID == story.id }) else {
-                    shortcutError = NSLocalizedString(
-                        "A workstream for this story already exists.",
-                        comment: "Error when a Shortcut story already has a workstream"
-                    )
-                    return
-                }
-                guard !existingNames.contains(name) else {
-                    shortcutError = NSLocalizedString(
-                        "A workstream with this name already exists.",
-                        comment: "Error when the workstream name collides with an existing workstream"
-                    )
+                // The render and the two collisions are `Shortcut.WorkstreamName`'s,
+                // shared with `create_shortcut_workstream` so the sheet and the tool
+                // cannot drift. Only the *decision* is shared — the wording is one
+                // per consumer, and this one takes `localizedMessage` because it is
+                // user copy where the tool's is an instruction to an agent. The two
+                // collisions are distinct and their order matters: checking only the
+                // name let the same story through twice under a changed Branch Name
+                // Pattern, and blamed the story when an unrelated workstream happened
+                // to match the name.
+                let name: String
+                switch Shortcut.WorkstreamName.resolve(
+                    template: branchTemplate,
+                    story: story,
+                    existing: project.workstreams
+                ) {
+                case let .success(resolved):
+                    name = resolved
+                case let .failure(refusal):
+                    shortcutError = refusal.localizedMessage
                     return
                 }
 

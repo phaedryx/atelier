@@ -53,6 +53,18 @@ extension IPC {
         /// minted here cannot collide with anything.
         private var deliveredNotices: Set<UUID> = []
 
+        /// How `create_shortcut_workstream` reads a story.
+        ///
+        /// Injected for the reason `WorktreeCreator` is injected on
+        /// `Workstream.Launcher.launch`: the handler's whole job is the order it
+        /// does things in, and none of that is assertable if reaching the first
+        /// guard costs a network round trip. `Shortcut.Client.init(session:token:)`
+        /// is already built for this, but a handler that constructs its own
+        /// leaves nothing for a test to stand in.
+        private var fetchStory: StoryFetch = { try await Shortcut.Client().story(id: $0) }
+
+        typealias StoryFetch = @Sendable (Int) async throws -> Shortcut.Story
+
         init(store: Store = Store(), tasks: TaskStore = TaskStore()) {
             self.store = store
             self.tasks = tasks
@@ -65,6 +77,11 @@ extension IPC {
 
         func setExecutionController(_ controller: ExecutionControlling?) {
             execution = controller
+        }
+
+        /// Replaces the Shortcut read. Tests only; production takes the default.
+        func setStoryFetch(_ fetch: @escaping StoryFetch) {
+            fetchStory = fetch
         }
 
         // MARK: - Dispatch
@@ -101,6 +118,8 @@ extension IPC {
                 return await requestAttention(for: request)
             case .createWorkstream:
                 return await createWorkstream(for: request)
+            case .createShortcutWorkstream:
+                return await createShortcutWorkstream(for: request)
             case .startVerification:
                 return await startVerification(for: request)
             case .checkVerification:
@@ -964,35 +983,124 @@ extension IPC {
         /// The invariant lives there, at the consumer, rather than in an
         /// obligation on this handler to produce a byte-identical command.
         private func createWorkstream(for request: Request) async -> Response {
-            let arguments = ToolArguments(request)
-            let name = arguments.optionalTrimmed("name")
-            let prompt = arguments.optionalTrimmed("prompt")
-            let callerWorkstreamID = callerWorkstreamID(request)
-
-            let bypass: Bool
             do {
-                bypass = try arguments.boolean("bypass_permissions")
+                let plan = try await creationPlan(for: request)
+                return await create(
+                    named: ToolArguments(request).optionalTrimmed("name"),
+                    forStory: nil,
+                    plan: plan,
+                    request: request
+                )
             } catch {
                 return .failure(id: request.id, error.localizedDescription)
             }
+        }
 
+        /// `create_workstream` for a story: the name comes from the user's
+        /// Branch Name Pattern rather than the caller, and the workstream carries
+        /// the story id so the Info tab and "Open in Shortcut" have one.
+        ///
+        /// The sequence is the sidebar's, in the sidebar's order, and the two
+        /// share `Shortcut.WorkstreamName.resolve` rather than each spelling the
+        /// guards out — see that type for why only the *decision* is shared and
+        /// the fetch, the staging and the launch stay here.
+        private func createShortcutWorkstream(for request: Request) async -> Response {
             do {
-                let target = try await MainActor.run {
-                    try Workstream.Launcher.shared.target(
-                        callerWorkstreamID: callerWorkstreamID,
-                        projectDirectory: request.client.projectDirectory
+                let raw = try ToolArguments(request).requiredTrimmed("story")
+                guard let storyID = Shortcut.StoryID.parse(raw) else {
+                    throw ToolError.invalidArgument(
+                        name: "story",
+                        reason: "\(raw) is not a Shortcut story. Pass a public id (17411), the sc- form (sc-17411), or a story URL."
                     )
                 }
 
-                // Checked before anything is created. The worktree is a
-                // directory on disk and a branch in the repository; refusing
-                // after it exists would leave the caller a workstream it was
-                // told it did not get.
-                let inputs = await MainActor.run { AgentLaunchInputs.read() }
-                if prompt?.isEmpty == false, let refusal = inputs.refusal {
-                    return .failure(id: request.id, refusal)
+                // Before the fetch, so a caller that could never have succeeded —
+                // no project, no `claude` for the agent it asked for — spends no
+                // round trip on Shortcut finding that out.
+                let plan = try await creationPlan(for: request)
+                let story = try await fetchStory(storyID)
+
+                let name = try Shortcut.WorkstreamName.resolve(
+                    template: UserDefaults.standard.string(forKey: Shortcut.Settings.branchTemplateKey) ?? "",
+                    story: story,
+                    existing: plan.target.existingWorkstreams
+                ).mapError { ToolError.refused($0.agentMessage) }.get()
+
+                // Keep the copy just fetched: it carries the description, and the
+                // worktree path it will be cached under does not exist yet. The
+                // sidebar stages for the same reason, so the Info tab does not
+                // round-trip again the moment it opens.
+                //
+                // Optional where the sidebar's is not, and a nil bridge costs
+                // exactly that saved round trip: `AppEnvironment.refreshShortcutStory`
+                // fetches on the tab's first appearance regardless, so staging is an
+                // optimization rather than how the story reaches the workstream —
+                // `shortcutStoryID`, passed to `launch` below, is that.
+                await MainActor.run {
+                    WorkspaceActions.shared.appEnvironment?.stageShortcutStory(story)
                 }
 
+                return await create(named: name, forStory: story.id, plan: plan, request: request)
+            } catch let error as Shortcut.Error {
+                // Shortcut's own message is the only thing that says whether the
+                // token is missing, revoked, or the story simply is not there.
+                return .failure(id: request.id, error.message)
+            } catch {
+                return .failure(id: request.id, error.localizedDescription)
+            }
+        }
+
+        /// What both creation tools resolve before anything exists on disk.
+        private struct CreationPlan {
+            let target: Workstream.Launcher.Target
+            let prompt: String?
+            let bypass: Bool
+            let inputs: AgentLaunchInputs
+        }
+
+        /// The preconditions both creation tools check, in the order that keeps
+        /// their refusals true: the argument, then the project, then the agent.
+        ///
+        /// Every one of them happens before anything is created. The worktree is
+        /// a directory on disk and a branch in the repository; refusing after it
+        /// exists would leave the caller a workstream it was told it did not get.
+        private func creationPlan(for request: Request) async throws -> CreationPlan {
+            let arguments = ToolArguments(request)
+            let prompt = arguments.optionalTrimmed("prompt")
+            // Before the project is resolved, so a caller cannot get a worktree
+            // out of a request that was malformed.
+            let bypass = try arguments.boolean("bypass_permissions")
+
+            let callerWorkstreamID = callerWorkstreamID(request)
+            let target = try await MainActor.run {
+                try Workstream.Launcher.shared.target(
+                    callerWorkstreamID: callerWorkstreamID,
+                    projectDirectory: request.client.projectDirectory
+                )
+            }
+
+            let inputs = await MainActor.run { AgentLaunchInputs.read() }
+            if prompt?.isEmpty == false, let refusal = inputs.refusal {
+                throw ToolError.refused(refusal)
+            }
+
+            return CreationPlan(target: target, prompt: prompt, bypass: bypass, inputs: inputs)
+        }
+
+        /// The half of a creation that does not care why it was asked for:
+        /// launch, seed the agent, answer.
+        ///
+        /// One copy, because the two tools differ in exactly the two values this
+        /// takes — the name that was resolved and the story it carries. A sibling
+        /// handler would have been sixty lines of seeding and answer strings that
+        /// nothing keeps in step.
+        private func create(
+            named name: String?,
+            forStory shortcutStoryID: Int?,
+            plan: CreationPlan,
+            request: Request
+        ) async -> Response {
+            do {
                 // The agent starts inside `beforeReady`, which the launcher runs
                 // after the worktree exists and *before* it posts
                 // `.workstreamWorktreeReady`. That notification is what makes the
@@ -1007,24 +1115,26 @@ extension IPC {
                 // on the main actor and read only after `launch` has returned.
                 let outcome = AgentStartOutcome()
                 let launched = try await Workstream.Launcher.shared.launch(
-                    in: target,
+                    in: plan.target,
                     requestedName: name,
-                    bypassPermissions: bypass,
+                    bypassPermissions: plan.bypass,
+                    shortcutStoryID: shortcutStoryID,
                     beforeReady: { launched in
-                        guard let prompt, !prompt.isEmpty, let claudePath = inputs.claudePath else { return }
+                        guard let prompt = plan.prompt, !prompt.isEmpty,
+                              let claudePath = plan.inputs.claudePath else { return }
                         // Built from what the launcher hands over rather than by
                         // reading the workstream back out of `ProjectList`: the
                         // append happened on `.workstreamCreated`, but the
                         // notification that sets `worktreePath` has not been
                         // posted yet — that is the point of running here.
-                        let environment = self.codingAgentEnvironment(target: target, launched: launched)
+                        let environment = self.codingAgentEnvironment(target: plan.target, launched: launched)
                         let command = self.codingAgentCommand(
-                            target: target,
+                            target: plan.target,
                             launched: launched,
                             prompt: prompt,
                             claudePath: claudePath,
-                            bypassPermissions: bypass,
-                            inputs: inputs,
+                            bypassPermissions: plan.bypass,
+                            inputs: plan.inputs,
                             environment: environment
                         )
                         await MainActor.run {
@@ -1043,7 +1153,7 @@ extension IPC {
                     }
                 )
 
-                guard prompt?.isEmpty == false else {
+                guard plan.prompt?.isEmpty == false else {
                     return .success(id: request.id, .text(
                         "Created workstream \(launched.name) at \(launched.worktreePath). "
                             + "Its initialization is running in the background. No agent was started — pass `prompt` to start one."

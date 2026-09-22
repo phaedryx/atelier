@@ -728,7 +728,7 @@ final class IPCServerTests: XCTestCase {
             [
                 "register_peer", "list_peers", "send_message", "receive_messages", "broadcast", "get_peer_status",
                 "list_tabs", "read_review_comments", "open_editor", "open_tab", "open_agent_tab", "close_tab",
-                "request_attention", "create_workstream", "start_verification", "check_verification",
+                "request_attention", "create_workstream", "create_shortcut_workstream", "start_verification", "check_verification",
                 "list_verification_checks",
                 "list_processes", "read_process_logs", "start_execution", "stop_execution",
                 "start_process", "stop_process", "restart_process",
