@@ -61,7 +61,18 @@ extension Workstream {
             let checkout: String
             /// `Project.directory` — the repository's home, where `initialization.yaml` lives.
             let directory: String
-            let existingWorkstreamNames: Set<String>
+            /// The project's workstreams, in the order it holds them.
+            ///
+            /// The whole value rather than just the names, because
+            /// `create_shortcut_workstream` has to ask which workstream already
+            /// carries a story id — a question names cannot answer, and one a
+            /// second lookup on the main actor would answer against a list that
+            /// had moved on.
+            let existingWorkstreams: [Workstream]
+
+            var existingWorkstreamNames: Set<String> {
+                Set(existingWorkstreams.map(\.name))
+            }
         }
 
         /// Why a launch could not start, or could not finish.
@@ -239,7 +250,7 @@ extension Workstream {
                 projectName: project.name,
                 checkout: project.checkout,
                 directory: project.directory,
-                existingWorkstreamNames: Set(project.workstreams.map(\.name))
+                existingWorkstreams: project.workstreams
             )
         }
 

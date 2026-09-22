@@ -1,4 +1,4 @@
-// ABOUTME: Tests the create_workstream handler's refusals and the ordering that keeps them honest.
+// ABOUTME: Tests the create_workstream and create_shortcut_workstream handlers' refusals, and the ordering that keeps them honest.
 // ABOUTME: Also pins the tmux wrapping the seeded Coding Agent shares with the Coding Agent tab.
 
 @testable import Atelier
@@ -240,6 +240,197 @@ final class CreateWorkstreamToolTests: XCTestCase {
             silence.posted.isEmpty,
             "the worktree must not exist when the caller is told the agent could not start"
         )
+    }
+
+    // MARK: - create_shortcut_workstream
+
+    private nonisolated static func story(
+        id: Int = 17411,
+        branchName: String = "tadthorley/sc-17411/org-import-run-card"
+    ) -> Shortcut.Story {
+        let json = """
+        {
+          "id": \(id),
+          "name": "Org Import run card",
+          "description": null,
+          "story_type": "bug",
+          "app_url": "https://app.shortcut.com/sixfifty/story/\(id)",
+          "formatted_vcs_branch_name": "\(branchName)",
+          "workflow_state_id": 500000030
+        }
+        """
+        return try! JSONDecoder().decode(Shortcut.Story.self, from: Data(json.utf8))
+    }
+
+    private func createFromShortcut(
+        _ arguments: [String: String],
+        as client: IPC.ClientIdentity
+    ) async -> IPC.Response {
+        await service.handle(
+            IPC.Request(token: "unused", tool: .createShortcutWorkstream, arguments: arguments, client: client)
+        )
+    }
+
+    /// The Branch Name Pattern is a real user default, and this host shares the
+    /// app's defaults domain — so a test that asserts on a rendered name has to
+    /// say which pattern rendered it rather than inherit whatever is stored.
+    private func pinBranchTemplate(_ template: String) {
+        let key = Shortcut.Settings.branchTemplateKey
+        let previous = UserDefaults.standard.string(forKey: key)
+        UserDefaults.standard.set(template, forKey: key)
+        addTeardownBlock {
+            UserDefaults.standard.set(previous, forKey: key)
+        }
+    }
+
+    /// Records the ids the handler asked for, so ordering assertions can say
+    /// *when* the network was reached rather than only what came back.
+    private final class FetchCount: @unchecked Sendable {
+        private let lock = NSLock()
+        private var seen: [Int] = []
+
+        var ids: [Int] {
+            lock.withLock { seen }
+        }
+
+        var count: Int {
+            ids.count
+        }
+
+        func answering(_ story: Shortcut.Story) -> @Sendable (Int) async throws -> Shortcut.Story {
+            { id in
+                self.lock.withLock { self.seen.append(id) }
+                return story
+            }
+        }
+    }
+
+    /// A story the parser will not take. `Shortcut.StoryID.parse` is deliberately
+    /// strict — an ordinary branch name has to come back nil rather than be
+    /// coerced into an id — so this must refuse rather than create a workstream
+    /// under a nonsense story.
+    func test_anUnparseableStory_isRefusedAndCreatesNothing() async {
+        install([Project(name: "app", directory: "/repos/app")])
+        let fetches = FetchCount()
+        await service.setStoryFetch(fetches.answering(Self.story()))
+        let silence = SilenceCheck()
+
+        let response = await createFromShortcut(["story": "release-2"], as: client(project: "/repos/app"))
+
+        XCTAssertNil(response.payload)
+        XCTAssertTrue(response.error?.contains("story") ?? false, "the refusal must name the argument: \(response.error ?? "nil")")
+        XCTAssertEqual(fetches.count, 0, "an unparseable id must be caught before the network")
+        XCTAssertTrue(silence.posted.isEmpty)
+    }
+
+    /// The three spellings the sheet accepts, because an agent has whichever one
+    /// its own Shortcut tooling handed it — a bare id, `sc-`, or a pasted URL.
+    func test_aStoryMayArriveBare_prefixed_orAsAURL() async {
+        for spelling in ["17411", "sc-17411", "https://app.shortcut.com/sixfifty/story/17411/some-title"] {
+            install([Project(name: "app", directory: "/repos/app")])
+            let fetches = FetchCount()
+            await service.setStoryFetch(fetches.answering(Self.story()))
+
+            _ = await createFromShortcut(["story": spelling], as: client(project: "/repos/app"))
+
+            XCTAssertEqual(fetches.ids, [17411], "\(spelling) should have been read as story 17411")
+        }
+    }
+
+    /// The project is resolved before the story is fetched, so a caller that
+    /// could never have succeeded pays no round trip and Shortcut sees no
+    /// traffic for it.
+    func test_anUnknownProject_isRefusedBeforeTheStoryIsFetched() async {
+        install([Project(name: "app", directory: "/repos/app")])
+        let fetches = FetchCount()
+        await service.setStoryFetch(fetches.answering(Self.story()))
+        let silence = SilenceCheck()
+
+        let response = await createFromShortcut(["story": "17411"], as: client(project: "/repos/other"))
+
+        XCTAssertTrue(response.error?.contains("/repos/other") ?? false, "expected the project refusal, got: \(response.error ?? "nil")")
+        XCTAssertEqual(fetches.count, 0)
+        XCTAssertTrue(silence.posted.isEmpty)
+    }
+
+    /// A missing or revoked token is the commonest failure here, and Shortcut's
+    /// own message is the only thing that says which — so it travels rather than
+    /// being flattened into "the story could not be read".
+    func test_aFailedFetch_reportsShortcutsOwnMessageAndCreatesNothing() async {
+        pinBranchTemplate("sc-${STORY_ID}")
+        install([Project(name: "app", directory: "/repos/app")])
+        await service.setStoryFetch { _ in throw Shortcut.Error.noToken }
+        let silence = SilenceCheck()
+
+        let response = await createFromShortcut(["story": "17411"], as: client(project: "/repos/app"))
+
+        XCTAssertNil(response.payload)
+        XCTAssertEqual(response.error, Shortcut.Error.noToken.message)
+        XCTAssertTrue(silence.posted.isEmpty)
+    }
+
+    func test_aStoryThatAlreadyHasAWorkstream_isRefusedAndCreatesNothing() async {
+        pinBranchTemplate("sc-${STORY_ID}")
+        install([
+            Project(
+                name: "app",
+                directory: "/repos/app",
+                workstreams: [Workstream(name: "already-on-it", shortcutStoryID: 17411)]
+            ),
+        ])
+        await service.setStoryFetch { _ in Self.story() }
+        let silence = SilenceCheck()
+
+        let response = await createFromShortcut(["story": "17411"], as: client(project: "/repos/app"))
+
+        XCTAssertNil(response.payload)
+        XCTAssertTrue(
+            response.error?.contains("already-on-it") ?? false,
+            "the refusal must name the workstream that already covers the story: \(response.error ?? "nil")"
+        )
+        XCTAssertTrue(silence.posted.isEmpty)
+    }
+
+    /// The other collision, and a different sentence: the name is held by a
+    /// workstream carrying no story at all, so pointing the caller at it as
+    /// "this story's workstream" would be wrong.
+    func test_aRenderedNameAlreadyTaken_isRefusedAndCreatesNothing() async {
+        pinBranchTemplate("sc-${STORY_ID}")
+        install([
+            Project(name: "app", directory: "/repos/app", workstreams: [Workstream(name: "sc-17411")]),
+        ])
+        await service.setStoryFetch { _ in Self.story() }
+        let silence = SilenceCheck()
+
+        let response = await createFromShortcut(["story": "17411"], as: client(project: "/repos/app"))
+
+        XCTAssertNil(response.payload)
+        XCTAssertTrue(
+            response.error?.contains("sc-17411") ?? false,
+            "the refusal must name the collision: \(response.error ?? "nil")"
+        )
+        XCTAssertTrue(silence.posted.isEmpty)
+    }
+
+    /// The agent preconditions are `create_workstream`'s, checked here too and
+    /// *before* the fetch — so a caller told its agent could not start has not
+    /// also spent a round trip finding that out.
+    func test_aPromptWithNoClaude_isRefusedBeforeTheStoryIsFetched() async {
+        install([Project(name: "app", directory: "/repos/app")])
+        WorkspaceActions.shared.appEnvironment = nil
+        let fetches = FetchCount()
+        await service.setStoryFetch(fetches.answering(Self.story()))
+        let silence = SilenceCheck()
+
+        let response = await createFromShortcut(
+            ["story": "17411", "prompt": "write the tests"],
+            as: client(project: "/repos/app")
+        )
+
+        XCTAssertNil(response.payload)
+        XCTAssertTrue(response.error?.contains("claude") ?? false, "expected the missing-binary refusal, got: \(response.error ?? "nil")")
+        XCTAssertEqual(fetches.count, 0)
+        XCTAssertTrue(silence.posted.isEmpty)
     }
 }
 

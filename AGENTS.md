@@ -1729,7 +1729,7 @@ checks rather than a comment:
 |---|---|---|
 | Messaging | `register_peer`, `list_peers`, `send_message`, `receive_messages`, `broadcast`, `get_peer_status` | none needed — text between agents, nothing a user can see |
 | Workspace reads | `list_tabs`, `read_review_comments`, `check_verification`, `list_verification_checks`, `list_processes`, `read_process_logs`, `read_whiteboard`, `get_session_checkpoint` | none needed — answers about the caller's own workstream |
-| Workspace actions | `open_agent_tab`, `open_editor`, `open_tab`, `close_tab`, `request_attention`, `create_workstream`, `start_verification`, `start_execution`, `stop_execution`, `start_process`, `stop_process`, `restart_process`, `whiteboard_add`, `whiteboard_update`, `whiteboard_delete`, `update_session_checkpoint` | see below |
+| Workspace actions | `open_agent_tab`, `open_editor`, `open_tab`, `close_tab`, `request_attention`, `create_workstream`, `create_shortcut_workstream`, `start_verification`, `start_execution`, `stop_execution`, `start_process`, `stop_process`, `restart_process`, `whiteboard_add`, `whiteboard_update`, `whiteboard_delete`, `update_session_checkpoint` | see below |
 | Project tasks | `add_task`, `get_pending_tasks`, `list_tasks`, `claim_task`, `complete_task`, `fail_task` | see "The project task queue" below — project-scoped, and ungated for a third reason distinct from the two above |
 
 The messaging six were once the whole enum. Calix's IPC core is the same six, and everything it
@@ -1762,9 +1762,12 @@ wrong deadline, and a default of 15 would still satisfy every deadline assertion
 decides **order only**; it is not enum order and never has been, which is why it is written out
 rather than derived from `allCases`.
 
-Adding a tool is therefore **three edit sites**: the `Tool` case, its `spec`, and the handler
-plus its `Service.handle` arm. All three are compiler-enforced. It used to be eight across four
-files, three of them silent.
+Adding a tool is therefore **three compiler-enforced edit sites**: the `Tool` case, its `spec`,
+and the handler plus its `Service.handle` arm. It used to be eight across four files, three of
+them silent. There is a fourth, and it is the one exception: `advertisedOrder` is a plain
+`[Tool]`, so a case left out of it **compiles** and is caught only by `IPCToolRegistryTests`,
+which pins that the advertised list and `allCases` are the same set. That is the price of
+writing the order out; do not read "three edit sites" as meaning the array maintains itself.
 
 This retires a paragraph that said the opposite — that a case with no entry in the helper's
 `toolDefinitions` table was "dispatchable but undiscoverable", justified as room for a tool to
@@ -1991,6 +1994,51 @@ report one to close by — and giving them one is a `TabInfo` change, out of sco
 closing the terminal tab you are running in — the actual peer-teardown case — destroys your own
 surface immediately, the same as a user's `⌘W`; you will not see the reply, because there is
 nothing left to send it to.
+
+**`create_shortcut_workstream` is `create_workstream` for work that has a Shortcut story**, and
+the two share everything except two values. It parses `story` with `Shortcut.StoryID.parse` — the
+same bare id / `sc-` / pasted-URL spellings the sheet takes, which is why the argument is a
+**string** rather than an integer — fetches the story, resolves the name, stages the story so the
+Info tab does not round-trip again, and hands off. It is `.workspaceAction`, on
+`Deadline.worktreeCreation`, and **not replayable**: it is a create, and the duplicate-story guard
+making a replay *look* idempotent is not a reason to flip that, since a caller cannot tell a
+genuine collision from one its own retry caused.
+
+Two things are shared rather than copied, and both are the second-copy trap this document keeps
+naming:
+
+- **The name/guard decision is `Shortcut.WorkstreamName.resolve`**, which `ProjectSidebar`'s sheet
+  calls too. It renders the Branch Name Pattern, then refuses in a fixed order — an invalid branch
+  name, the story already having a workstream, the rendered name being taken. The order is
+  load-bearing for the reason the sidebar's comment always gave: checking the name first blamed the
+  story when an unrelated workstream matched, and let one story through twice under a changed
+  pattern. Only the *decision* is shared. The **wording is per consumer** —
+  `Refusal.localizedMessage` for the sheet, `Refusal.agentMessage` for the tool — which is
+  `Project.ConfigLoad`'s shape, and for the same reason: user copy and an instruction to an agent
+  are different artifacts, and `Workstream.Launcher.Failure` already says IPC refusals are
+  deliberately not localized. The rest of the sidebar's sequence deliberately stays in the view,
+  because it is entangled with `shortcutFetching`, `shortcutErrorNeedsToken`, sheet dismissal and
+  task cancellation, none of which belongs in a handler.
+- **The handler's own tail is `IPC.Service.create(named:forStory:plan:request:)`**, with
+  `creationPlan(for:)` in front of it. Everything from `AgentLaunchInputs.read()` down — the prompt
+  pre-check, the `AgentStartOutcome` box, the `beforeReady` seeding closure and the three answer
+  strings — is identical for both tools, and a sibling handler would have been sixty lines of it
+  that nothing keeps in step. `creationPlan` is also what fixes the ordering: the argument, then
+  the project, then the agent preconditions, **then** the fetch, so a caller that could never have
+  succeeded spends no Shortcut round trip learning it.
+
+**The story read is injected** (`Service.setStoryFetch`), for the reason `WorktreeCreator` is
+injected on `launch`: this handler's whole job is the order it does things in, and none of that is
+assertable if reaching the first guard costs a network round trip.
+`Workstream.Launcher.Target` carries `existingWorkstreams` rather than a name set because the
+story-collision guard asks *which* workstream already holds a story id — a question names cannot
+answer, and one a second main-actor lookup would answer against a list that had moved on.
+`existingWorkstreamNames` survives as a derived property.
+
+**It is not gated on `atelier.shortcutButtonEnabled`.** That key is "the user's way to keep a
+working key but hide the button" — chrome, not capability. The token is the real requirement, and
+a missing or revoked one arrives as `Shortcut.Error`'s own message, which is the only thing that
+says which of the two it is.
 
 **`create_workstream` inherits `bootstrap`'s policy by not touching it.** Creating a
 workstream runs the project's `bootstrap` namespace — the thing `PhasePolicy.plan` exists to
