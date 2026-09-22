@@ -165,6 +165,31 @@ only the page holds — so unlike the `text`-on-an-image and `caption`-on-a-non-
 image refusals, this one cannot be pinned in XCTest. That is the shape this file
 exists for.
 
+**8. A pasted image's bytes are posted once.** Three saves over a board holding
+an image whose `dataURL` is still inline, and the bytes reach `assets/` on the
+first and are not posted again.
+
+Two things about it are worth knowing before changing it. **Its instrument is a
+post count, not a file** — the only check in this file of which that is true,
+and the rule above survives it because what that rule forbids is trusting a
+*JavaScript return value*, while this is the Swift end counting what the page
+really sent it. It has to be: the re-posted bytes are identical, since the name
+is a SHA-1 of them, so `assets/` is byte-for-byte correct after every redundant
+post and **no assertion about a file can see this bug at all**. The on-disk half
+is checked either side of it.
+
+And it **compares against a baseline it takes for itself** rather than an
+absolute count, because `assetWrites` is cumulative across every host this file
+builds. A section added above this one would otherwise fail *this* check and
+report the re-upload bug as back.
+
+The fixture is a scene file carrying its image bytes inline, which is what
+`api.getFiles()` holds for an image pasted this session. It is the only way a
+harness can reach that state — a paste needs a real paste event, and both other
+routes hand Excalidraw an asset-scheme URL — and it is faithful, because the
+loop under test discriminates on exactly one thing: whether the `dataURL` has a
+comma in it.
+
 ### If you change the page
 
 `./scripts/build-editor.sh` first. The harness runs the **built** bundle in

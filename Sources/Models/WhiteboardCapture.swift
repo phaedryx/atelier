@@ -89,10 +89,27 @@ extension Whiteboard {
         ///
         /// **Cancelling is not an error.** A non-zero exit, or an exit that
         /// wrote no file, is the user deciding not to capture after all, and is
-        /// answered with nil so the caller can do nothing quietly. That also
-        /// covers the case where macOS refuses for want of Screen Recording
-        /// permission, which it reports itself, in its own alert, naming the
-        /// setting to change — a second alert from Atelier would say less.
+        /// answered with nil so the caller can do nothing quietly.
+        ///
+        /// **A denial of Screen Recording permission lands on that same nil**,
+        /// and the half of that worth trusting is measured: from a process
+        /// without the permission, `screencapture` exits **1**, prints "could
+        /// not create image from display", and writes no file (Darwin 25.6.0,
+        /// non-interactive `-x`). So the `terminationStatus == 0` guard covers
+        /// it, and Atelier stays quiet.
+        ///
+        /// What is **not** measured is what the user sees, and this comment
+        /// deliberately no longer claims it. It used to assert that macOS puts
+        /// up its own alert naming the setting to change; that is plausible for
+        /// a signed app bundle hitting the interactive `-i` path, which is what
+        /// actually runs here, and it is not what the probe above exercised.
+        /// Establishing it means revoking the permission on a real machine.
+        ///
+        /// The thing to rule out if anyone does revisit this: a *silent* denial
+        /// that exits 0 and writes a wallpaper-only image would be placed on
+        /// the board as if it were what the user selected, and nothing in this
+        /// function could tell. The probe is evidence against that shape rather
+        /// than proof, because it did not test `-i` from a bundle.
         static func run() async -> Data? {
             let destination = FileManager.default.temporaryDirectory
                 .appendingPathComponent("atelier-capture-\(UUID().uuidString).png")
@@ -101,8 +118,15 @@ extension Whiteboard {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
             // `-i` interactive, `-o` to leave out a captured window's drop
-            // shadow, which is transparent margin nobody wants on a board.
-            process.arguments = ["-i", "-o", destination.path]
+            // shadow, which is transparent margin nobody wants on a board, and
+            // `-t png` because everything downstream asserts PNG and none of it
+            // looks at the bytes: the file is named `<sha>.png` and the image
+            // element is given `image/png`. png is screencapture's built-in
+            // default, but `com.apple.screencapture type` overrides it, so a
+            // user who set that to jpg would have had JPEG bytes stored and
+            // served under both of those claims. Asking for the format is a
+            // flag; inferring it afterwards would be a decoder.
+            process.arguments = ["-i", "-o", "-t", "png", destination.path]
 
             let exited: Bool = await withCheckedContinuation { continuation in
                 process.terminationHandler = { _ in continuation.resume(returning: true) }

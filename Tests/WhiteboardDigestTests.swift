@@ -136,6 +136,73 @@ final class WhiteboardDigestTests: XCTestCase {
         XCTAssertTrue(text.contains("caption: \"Settings pane, Environment tab\""), text)
     }
 
+    /// A board carrying one captioned image, for the caption-budget tests.
+    private func captioned(_ caption: String) -> String {
+        """
+        {"type":"excalidraw","elements":[
+        {"id":"i","type":"image","x":60,"y":620,"width":800,"height":450,"isDeleted":false,
+         "fileId":"abc","customData":{"\(Whiteboard.Element.captionKey)":"\(caption)"}}]}
+        """
+    }
+
+    func test_aRealisticTranscriptionIsNotCut() {
+        // The regression. A caption is a transcription of pixels, written so a
+        // later agent need not open the picture at all — and it used to go
+        // through the LABEL cap of 240 bytes, which cut most of the
+        // screenshots this feature is for. This one is 380 bytes: a settings
+        // pane, which is the ordinary case rather than an extreme.
+        let transcription = "Atelier Settings, Environment tab. Detected Tools: "
+            + "git 2.51.0 at /opt/homebrew/bin/git (green check); tmux 3.5a at "
+            + "/opt/homebrew/bin/tmux (green check); process-compose - not found (red x), "
+            + "with an Install link beside it. Below: a Refresh button, and the note "
+            + "'Atelier searches /opt/homebrew/bin, /usr/local/bin and ~/.local/bin.'"
+        XCTAssertGreaterThan(transcription.utf8.count, 240, "no longer exercises the old cap")
+        let text = digest(captioned(transcription))
+        XCTAssertTrue(text.contains("caption: \"\(transcription)\""), text)
+        XCTAssertFalse(text.contains("cut at"), text)
+    }
+
+    func test_aCaptionThatIsCutSaysSo_ratherThanEndingInAnEllipsis() {
+        // The whole of finding 3. A cut transcription reported as if it were
+        // whole is worse than a cut label: the reader was told it need not open
+        // the picture. The marker is OUTSIDE the quotes, because inside it is
+        // indistinguishable from a transcription of a screenshot that was
+        // itself clipped.
+        // Multi-byte on purpose: the cut has to land on a character boundary,
+        // and "é" is the two-byte case the byte-array version of this loop
+        // rendered as U+FFFD.
+        let text = digest(captioned(String(repeating: "é", count: 5_000)))
+        XCTAssertTrue(text.contains("\"\(String(repeating: "é", count: 600))…\""), text)
+        XCTAssertTrue(text.contains("(cut at 1200 bytes"), text)
+        XCTAssertTrue(text.contains("the rest is only in the image itself)"), text)
+        XCTAssertFalse(text.contains("\u{FFFD}"), "cut mid-scalar")
+    }
+
+    func test_aLabelIsStillCutAtTheLabelBudget() {
+        // The caption budget must not have widened the label one on its way
+        // past. A label is what the user typed into the shape and the shape is
+        // right there; the 240 is what stops one of them spending the digest.
+        let label = String(repeating: "a", count: 600)
+        let text = digest("""
+        {"type":"excalidraw","elements":[
+        {"id":"n","type":"rectangle","x":0,"y":0,"width":10,"height":10,
+         "isDeleted":false,"text":"\(label)"}]}
+        """)
+        XCTAssertTrue(text.contains("\"\(String(repeating: "a", count: 240))…\""), text)
+        XCTAssertFalse(text.contains("cut at"), "a label says nothing in words")
+    }
+
+    func test_anEnormousCaptionStillLeavesTheDigestInsideItsBudget() {
+        // The invariant the 240 existed for, checked against the new cap: one
+        // element's text must not silently starve the rest. It does not,
+        // because the assembly loop is honest — the entry that does not fit is
+        // counted into the overflow note rather than dropped.
+        let text = digest(captioned(String(repeating: "a", count: 50_000)), budget: 900)
+        XCTAssertLessThanOrEqual(text.utf8.count, 900)
+        XCTAssertTrue(text.contains("more elements"), text)
+        XCTAssertTrue(text.hasSuffix(Whiteboard.Digest.closingLine), text)
+    }
+
     // MARK: - The closing line
 
     func test_theClosingLineIsAlwaysThereForABoardWithContent() {
@@ -197,6 +264,30 @@ final class WhiteboardDigestTests: XCTestCase {
         XCTAssertLessThanOrEqual(text.utf8.count, 900)
         XCTAssertFalse(text.contains("\u{FFFD}"), "cut mid-scalar")
         XCTAssertTrue(text.hasSuffix(Whiteboard.Digest.closingLine), text)
+    }
+
+    func test_aNewlineInACaptionDoesNotBreakTheLineFormat() {
+        // The label sibling below covers `quoted`; a caption goes through
+        // `captionText`, which is a different function, so this path needs its
+        // own pin rather than inheriting one.
+        //
+        // It is also the more load-bearing of the two. A transcription of
+        // terminal output or a stack trace is FULL of newlines, where a label
+        // rarely has one — and an element's entry is one line plus at most one
+        // indented caption line, so a caption that kept its newlines would let
+        // a transcription forge entries for elements that are not on the board.
+        // That is the digest lying about the board, which is the one thing this
+        // feature is organised around not doing.
+        let text = digest(captioned("Failures:\\n  1) User#full_name\\n     expected: 'Ada'"))
+        let captionLines = text
+            .components(separatedBy: "\n")
+            .filter { $0.contains("caption:") }
+        XCTAssertEqual(captionLines.count, 1, text)
+        XCTAssertTrue(captionLines[0].contains("Failures:   1) User#full_name"), text)
+        // One element line and one caption line, and nothing else that could be
+        // mistaken for an entry.
+        let elementLines = text.components(separatedBy: "\n").filter { $0.hasPrefix("i  ") }
+        XCTAssertEqual(elementLines.count, 1, text)
     }
 
     func test_aNewlineInALabelDoesNotBreakTheLineFormat() {

@@ -147,6 +147,35 @@ const renderPng = async (rev) => {
   }
 }
 
+// File ids whose bytes have already been posted to Swift this session.
+//
+// Without it, save()'s loop re-posted the base64 of EVERY image pasted this
+// session on EVERY 800ms save, and Bridge rewrote each to disk — so a board
+// with several screenshots paid megabytes of bridge traffic per edit, forever.
+//
+// Safe as a plain Set because a fileId is a SHA-1 of the bytes — Excalidraw's
+// own convention, and the one Whiteboard.Capture.fileID follows deliberately so
+// a pasted and a captured image are named by one rule. The name is therefore
+// content-addressed: "already written" cannot go stale for the same id, because
+// the same id can never mean different bytes.
+//
+// Correctness does NOT rest on the write having succeeded, which is the thing
+// to check before touching this. The page never reads back from assets/ in the
+// session it pasted in: Excalidraw keeps the image in its own files map as the
+// data: URL it already has, the export path re-inlines from that same map
+// (inlineFiles skips anything already `data:`), and assets/ is only read on the
+// NEXT mount, by savedFiles(). So a skipped re-post costs nothing this session
+// even if the write failed, and a genuinely lost asset is a board relaunched
+// after a failed disk write — which is what that failure means either way.
+//
+// What it does give up, stated rather than hidden: a failed write is no longer
+// retried by the next save. That retry was an accident of the loop rather than
+// a policy, and nothing recoverable is lost by it — Store.writeAsset fails
+// either with unsafeName, which is deterministic and would fail identically
+// every 800ms forever, or because the disk write failed, which re-posting
+// megabytes on a timer does not fix. Both are logged.
+const writtenAssets = new Set()
+
 const save = () => {
   if (!api) return
   const rev = ++revision
@@ -156,10 +185,16 @@ const save = () => {
   // same separation Excalidraw's own `files` map makes. Inlining them would put
   // base64 image data in the file PR 2's digest is generated from.
   for (const [id, file] of Object.entries(files)) {
+    if (writtenAssets.has(id)) continue
+    // No comma means an asset-scheme URL rather than bytes: a file already in
+    // assets/, rebuilt by savedFiles() on reload or placed by the capture arm.
+    // There is nothing to write, and this predates the skip above — do not fold
+    // the two together, they refuse for different reasons.
     const comma = file.dataURL.indexOf(',')
     if (comma < 0) continue
     const ext = (file.mimeType || 'image/png').split('/')[1] || 'png'
     post({ action: 'saveAsset', id, ext, data: file.dataURL.slice(comma + 1) })
+    writtenAssets.add(id)
   }
 
   // An EMPTY files map, deliberately. serializeAsJSON inlines every file an
@@ -212,6 +247,12 @@ function savedScene() {
 // any of the bytes travelling through JavaScript. That is what keeps a board
 // with a dozen screenshots from injecting tens of megabytes of base64 at
 // document start.
+const assetMimeTypes = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  svg: 'image/svg+xml',
+}
+
 function savedFiles() {
   const base = window.__whiteboardAssetBase
   const names = window.__whiteboardAssets || []
@@ -224,7 +265,10 @@ function savedFiles() {
     const ext = name.slice(dot + 1).toLowerCase()
     files[id] = {
       id,
-      mimeType: ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : `image/${ext}`,
+      // `image/svg` is not a media type and Excalidraw does not accept one:
+      // an SVG asset has to come back as `image/svg+xml` or the image is lost
+      // on reload. jpg/jpeg is the same class of mapping, already here.
+      mimeType: assetMimeTypes[ext] || `image/${ext}`,
       dataURL: base + name,
       created: Date.now(),
     }

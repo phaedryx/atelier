@@ -67,6 +67,18 @@ final class BoardFiles {
     let directory: URL
     var sceneWrites = 0
     var renderWrites = 0
+    /// How many times the page has POSTED an asset's bytes.
+    ///
+    /// The one thing in here that is not a file, and section 7 says why: the
+    /// bug it exists for re-posts bytes that are identical, so the file on disk
+    /// is correct after every one of them and cannot see it.
+    ///
+    /// **Cumulative for the whole run, across every host this file builds.**
+    /// Section 7 therefore compares against a baseline it takes for itself
+    /// rather than against zero — an absolute count would make a section added
+    /// above it fail *this* check, reporting the re-upload bug as back when
+    /// what really happened is that something else posted an asset.
+    var assetWrites = 0
     var lastRenderFailure: String?
 
     init() {
@@ -299,6 +311,7 @@ final class HarnessHost: NSObject, WKScriptMessageHandler {
                   let base64 = body["data"] as? String,
                   let data = Data(base64Encoded: base64) else { return }
             try? data.write(to: files.assets.appendingPathComponent("\(id).\(ext)"), options: .atomic)
+            files.assetWrites += 1
         default:
             break
         }
@@ -1020,6 +1033,138 @@ check(
     "\(bothRefused) position=(\(number(files.elements()["h-bare"]?["x"])), "
         + "\(number(files.elements()["h-bare"]?["y"])))"
 )
+
+// ---------------------------------------------------------------------------
+section("8. A pasted image's bytes are posted once, not on every save")
+// The board's save loop used to post the base64 of every image whose dataURL was
+// still a `data:` one — every image pasted this session — on EVERY 800ms save,
+// and Bridge rewrote each to disk. A board with several screenshots paid
+// megabytes of bridge traffic per edit, for the life of the session.
+
+host.teardown()
+pump(0.5)
+
+/// Bytes that are deliberately NOT the capture's, so this cannot pass on a file
+/// that section 4 already put in assets/.
+let pastedPNG: Data = {
+    let rep = NSBitmapImageRep(
+        bitmapDataPlanes: nil, pixelsWide: 64, pixelsHigh: 48,
+        bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+    )!
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+    NSColor.systemPink.setFill()
+    NSRect(x: 0, y: 0, width: 64, height: 48).fill()
+    NSGraphicsContext.restoreGraphicsState()
+    return rep.representation(using: .png, properties: [:])!
+}()
+
+let pastedID = Insecure.SHA1.hash(data: pastedPNG)
+    .map { String(format: "%02x", $0) }.joined()
+
+/// A board whose scene file carries its image bytes INLINE, which is what
+/// `api.getFiles()` holds for an image pasted this session.
+///
+/// It is the only way this harness can produce that state — a paste needs a real
+/// paste event, while savedFiles() and the capture arm both hand Excalidraw an
+/// asset-scheme URL — and it is faithful, because the loop under test
+/// discriminates on exactly one thing: whether the dataURL has a comma in it. It
+/// is also a real board rather than a contrivance. A scene written before
+/// assets/ existed looks precisely like this, and rule 5's check in section 4 is
+/// the assertion that Atelier never writes another one.
+let inlinedScene: [String: Any] = [
+    "type": "excalidraw",
+    "version": 2,
+    "source": "whiteboard-harness",
+    "elements": [[
+        "id": "h-pasted", "type": "image", "x": 40, "y": 40,
+        "width": 320, "height": 200, "fileId": pastedID, "status": "saved",
+        "angle": 0, "strokeColor": "#1e1e1e", "backgroundColor": "transparent",
+        "fillStyle": "solid", "strokeWidth": 2, "strokeStyle": "solid",
+        "roughness": 1, "opacity": 100, "groupIds": [], "frameId": NSNull(),
+        "roundness": NSNull(), "boundElements": [], "link": NSNull(),
+        "locked": false, "seed": 1, "version": 1, "versionNonce": 1,
+        "updated": 1, "isDeleted": false, "scale": [1, 1],
+    ]],
+    "appState": ["viewBackgroundColor": "#ffffff"],
+    "files": [pastedID: [
+        "id": pastedID,
+        "mimeType": "image/png",
+        "dataURL": "data:image/png;base64," + pastedPNG.base64EncodedString(),
+        "created": 1,
+    ]],
+]
+try! JSONSerialization.data(withJSONObject: inlinedScene)
+    .write(to: files.scene, options: .atomic)
+
+/// What the counter stood at before this section — see `assetWrites`. Taken
+/// after the seed is written and before the page that reads it exists, so
+/// everything counted from here is this section's own.
+let postsBeforeSection = files.assetWrites
+
+host = HarnessHost(files: files, bundle: bundleDir)
+if host.waitUntilReady() {
+    // Driven by an op rather than waited for, so nothing here depends on
+    // whether Excalidraw's own onChange happens to fire on mount.
+    _ = host.apply(["kind": "update", "id": "h-pasted", "x": 80, "y": 40])
+
+    check(
+        "a pasted image's bytes reach assets/ on the first save",
+        files.assetNames().contains("\(pastedID).png"),
+        "\(files.assetNames())"
+    )
+    // Rule 5 again, on the way out: the bytes leave the scene file.
+    check(
+        "and leave board.excalidraw behind them",
+        !files.sceneText().contains("data:image"),
+        "the scene file still contains a data: URL"
+    )
+
+    // The finding itself, and the one check in this file whose instrument is a
+    // POST COUNT rather than a file.
+    //
+    // That is not the return value the README forbids trusting: this is the
+    // Swift end counting what the page really sent it, which is the same class
+    // of evidence as reading the file. It has to be, because the re-posted
+    // bytes are IDENTICAL — the name is a SHA-1 of them — so assets/ is
+    // byte-for-byte correct after every redundant post, and no assertion about
+    // a file can see this bug at all.
+    let postsAfterFirstSave = files.assetWrites
+    check(
+        "the first save posted those bytes exactly once",
+        postsAfterFirstSave - postsBeforeSection == 1,
+        "\(postsAfterFirstSave - postsBeforeSection) posts"
+    )
+
+    _ = host.apply(["kind": "update", "id": "h-pasted", "x": 120, "y": 40])
+    _ = host.apply(["kind": "update", "id": "h-pasted", "x": 160, "y": 40])
+    check(
+        "two further saves post no asset at all",
+        files.assetWrites == postsAfterFirstSave,
+        "\(files.assetWrites - postsAfterFirstSave) further posts"
+    )
+    check(
+        "and the image is still in assets/ after them",
+        files.assetNames().contains("\(pastedID).png"),
+        "\(files.assetNames())"
+    )
+
+    // The standing pair, for a change that alters WHEN bytes are posted: it
+    // moves no element and removes none, so the board must be exactly what the
+    // three moves left. Checked rather than asserted, because the loop runs
+    // inside the same save every op ends with.
+    let finalScene = files.elements()
+    check(
+        "skipping a post changes nothing about the board itself",
+        finalScene["h-pasted"] != nil
+            && number(finalScene["h-pasted"]?["x"]) == 160
+            && finalScene["h-pasted"]?["fileId"] as? String == pastedID,
+        "\(finalScene["h-pasted"] ?? [:])"
+    )
+} else {
+    check("the board reloads with an inlined image", false, "never became ready")
+}
 
 // ---------------------------------------------------------------------------
 print("\n\(checksRun - failures.count)/\(checksRun) checks passed")
