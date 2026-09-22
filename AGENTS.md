@@ -2493,9 +2493,17 @@ reply out of `NSNumber`-versus-`Double` guesswork — a real hazard here, becaus
 agent sends may be integral, the same trap `SceneLoad.number` documents on the read side.
 
 **`whiteboard_add` is not replayable**, with `add_task` and `create_workstream`: it is a create, the
-helper mints a fresh request id on every replay, and a replayed create draws the diagram twice. Its
-refusals — the readiness timeout included — **forbid** a retry rather than inviting one, because a
-caller cannot tell a genuine failure from one its own retry caused. `update` and `delete` are
+helper mints a fresh request id on every replay, and a replayed create draws the diagram twice. A
+refusal whose **outcome is unknown** therefore forbids a retry rather than inviting one, because a
+caller cannot tell a genuine failure from one its own retry caused. **Which refusals those are is
+decided by whether the op was posted, not by how the failure looked**, and
+`Whiteboard.Host.WriteFailure` is where the line is drawn: `.outcomeUnknown` for a `__whiteboardApply`
+that was called and never answered for, `.notReady` — a readiness timeout, a page that would not
+report its state, a state that would not decode — for every failure *before* that call, all of which
+say they are safe to retry. The readiness timeout used to be on the forbidding side of that line, and
+it is the one an agent meets most: a cold board has to mount before the session's first write, so the
+first call of a session was the one most likely to be told, wrongly, that it might already have drawn
+something. `update` and `delete` are
 replayable, and `delete` is replayable *because* an id already gone is success; the answer reports
 what was really removed rather than echoing back what it was asked for.
 
