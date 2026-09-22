@@ -72,6 +72,12 @@ final class BoardFiles {
     /// The one thing in here that is not a file, and section 7 says why: the
     /// bug it exists for re-posts bytes that are identical, so the file on disk
     /// is correct after every one of them and cannot see it.
+    ///
+    /// **Cumulative for the whole run, across every host this file builds.**
+    /// Section 7 therefore compares against a baseline it takes for itself
+    /// rather than against zero — an absolute count would make a section added
+    /// above it fail *this* check, reporting the re-upload bug as back when
+    /// what really happened is that something else posted an asset.
     var assetWrites = 0
     var lastRenderFailure: String?
 
@@ -1092,6 +1098,11 @@ let inlinedScene: [String: Any] = [
 try! JSONSerialization.data(withJSONObject: inlinedScene)
     .write(to: files.scene, options: .atomic)
 
+/// What the counter stood at before this section — see `assetWrites`. Taken
+/// after the seed is written and before the page that reads it exists, so
+/// everything counted from here is this section's own.
+let postsBeforeSection = files.assetWrites
+
 host = HarnessHost(files: files, bundle: bundleDir)
 if host.waitUntilReady() {
     // Driven by an op rather than waited for, so nothing here depends on
@@ -1122,8 +1133,8 @@ if host.waitUntilReady() {
     let postsAfterFirstSave = files.assetWrites
     check(
         "the first save posted those bytes exactly once",
-        postsAfterFirstSave == 1,
-        "\(postsAfterFirstSave) posts"
+        postsAfterFirstSave - postsBeforeSection == 1,
+        "\(postsAfterFirstSave - postsBeforeSection) posts"
     )
 
     _ = host.apply(["kind": "update", "id": "h-pasted", "x": 120, "y": 40])

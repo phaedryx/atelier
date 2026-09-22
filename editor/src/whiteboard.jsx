@@ -159,7 +159,16 @@ const renderPng = async (rev) => {
 // content-addressed: "already written" cannot go stale for the same id, because
 // the same id can never mean different bytes.
 //
-// What this gives up, stated rather than hidden: a failed write is no longer
+// Correctness does NOT rest on the write having succeeded, which is the thing
+// to check before touching this. The page never reads back from assets/ in the
+// session it pasted in: Excalidraw keeps the image in its own files map as the
+// data: URL it already has, the export path re-inlines from that same map
+// (inlineFiles skips anything already `data:`), and assets/ is only read on the
+// NEXT mount, by savedFiles(). So a skipped re-post costs nothing this session
+// even if the write failed, and a genuinely lost asset is a board relaunched
+// after a failed disk write — which is what that failure means either way.
+//
+// What it does give up, stated rather than hidden: a failed write is no longer
 // retried by the next save. That retry was an accident of the loop rather than
 // a policy, and nothing recoverable is lost by it — Store.writeAsset fails
 // either with unsafeName, which is deterministic and would fail identically
