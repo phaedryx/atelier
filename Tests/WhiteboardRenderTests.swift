@@ -83,7 +83,10 @@ final class WhiteboardRenderTests: XCTestCase {
             encoding: .utf8
         )
         XCTAssertTrue(written.contains("box"), written)
-        XCTAssertTrue(written.hasSuffix(Whiteboard.Digest.closingLine), written)
+        // No PNG was written, so this board has no render — and the closing
+        // line is the one for that state rather than the one telling the reader
+        // to go and open a picture that is not there.
+        XCTAssertTrue(written.hasSuffix(Whiteboard.Digest.closingLine(for: .none)), written)
     }
 
     func test_theToolsTextIsGeneratedFresh_notReadBackFromBoardMarkdown() throws {
