@@ -363,19 +363,25 @@ final class WhiteboardDigestTests: XCTestCase {
         // The escape is appended whole or not at all, exactly as a grapheme is.
         // A cut between the two halves leaves a dangling `\`, which reaches the
         // reader as an escape for whatever the template puts next — the same
-        // malformed output as a U+FFFD, by a different route. 241 quotes is the
-        // odd count that offers the cut that boundary.
+        // malformed output as a U+FFFD, by a different route.
+        //
+        // The input is chosen to STRADDLE the boundary, which a label of
+        // nothing but quotes cannot do: 239 plain bytes then one quote, so the
+        // escape is the two bytes that do not fit in 240. An implementation
+        // that escaped the whole string and then cut the result would keep the
+        // `\` and drop its `"`.
+        let label = String(repeating: "a", count: 239) + #"\""#
         let text = digest("""
         {"type":"excalidraw","elements":[
         {"id":"n","type":"rectangle","x":0,"y":0,"width":10,"height":10,
-         "isDeleted":false,"text":"\(String(repeating: #"\""#, count: 241))"}]}
+         "isDeleted":false,"text":"\(label)"}]}
         """)
         let line = text.components(separatedBy: "\n").first { $0.hasPrefix("n  ") } ?? ""
         let field = line.components(separatedBy: "  ")[2]
-        // Strip the surrounding quote and the ellipsis to get the kept region.
+        // Strip the surrounding quotes and the ellipsis to get the kept region.
         let kept = String(field.dropFirst().dropLast(2))
-        XCTAssertFalse(kept.hasSuffix(#"\"#), kept)
-        XCTAssertEqual(kept.utf8.count % 2, 0, "an escape was split: \(kept)")
+        XCTAssertFalse(kept.hasSuffix("\\"), "an escape was split: \(kept.suffix(8))")
+        XCTAssertEqual(kept, String(repeating: "a", count: 239), kept)
     }
 
     func test_aQuoteHeavyCaptionIsStillCutAtItsOwnBudget_andSaysSo() {
