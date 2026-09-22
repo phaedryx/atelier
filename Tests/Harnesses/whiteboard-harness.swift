@@ -1167,6 +1167,152 @@ if host.waitUntilReady() {
 }
 
 // ---------------------------------------------------------------------------
+section("10. The mermaid arm — expanded by Excalidraw's own converter, placed where asked")
+// A mermaid definition is the one thing Swift hands the page WITHOUT having
+// validated it: only `parseMermaidToExcalidraw` can say whether it parses, and
+// only the page knows how big the result is. So every claim about this arm is a
+// claim about the page, and every one is read off board.excalidraw and assets/.
+//
+// The op is spelled here exactly as `Whiteboard.Write.Mermaid.op` spells it —
+// which, per the README, means this file cannot prove the two ends agree on
+// those names; `WhiteboardWriteTests` pins the Swift side.
+
+/// The op Swift sends, with the marker and the caption key travelling on it the
+/// way `Write.Mermaid.op` sends them.
+func mermaid(_ definition: String, x: Double, y: Double) -> [String: Any] {
+    [
+        "kind": "mermaid", "definition": definition, "x": x, "y": y,
+        "customData": ["atelierAuthor": "agent"],
+        "captionKey": "atelierCaption",
+    ]
+}
+
+func fresh(since before: [String: [String: Any]]) -> [String: [String: Any]] {
+    files.elements().filter { before[$0.key] == nil }
+}
+
+if host.waitUntilReady() {
+    let flowchart = "graph LR; A[Auth] --> B[Token store]"
+
+    // --- a flowchart, the ordinary case ------------------------------------
+    let beforeFlowchart = files.elements()
+    let answer = host.apply(mermaid(flowchart, x: 900, y: 900))
+    let drawn = fresh(since: beforeFlowchart)
+    let answeredIDs = (answer["ids"] as? [String]) ?? []
+
+    // Two nodes, their two labels and the edge between them.
+    check(
+        "a flowchart lands on disk as its nodes, labels and edge",
+        drawn.count == 5,
+        "\(drawn.count) new elements: \(answer)"
+    )
+    check(
+        "the answer's ids are all on the board",
+        !answeredIDs.isEmpty && answeredIDs.allSatisfy { drawn[$0] != nil },
+        "\(answeredIDs)"
+    )
+    check(
+        "and name no bound label",
+        answeredIDs.allSatisfy { drawn[$0]?["containerId"] == nil },
+        "\(answeredIDs)"
+    )
+    let edges = drawn.values.filter { $0["type"] as? String == "arrow" }
+    check(
+        "the edge is bound at both ends to nodes the diagram drew",
+        edges.count == 1
+            && binding(edges.first, "startBinding").map { drawn[$0] != nil } == true
+            && binding(edges.first, "endBinding").map { drawn[$0] != nil } == true,
+        "start=\(binding(edges.first, "startBinding") ?? "nil") end=\(binding(edges.first, "endBinding") ?? "nil")"
+    )
+    let labels = drawn.values.compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }
+    check(
+        "the node labels reach the board as the words in the definition",
+        Set(labels).isSuperset(of: ["Auth", "Token store"]),
+        "\(labels)"
+    )
+    // Placement is the page's job here — Swift cannot know the diagram's size —
+    // and a diagram left at the converter's own origin lands on top of whatever
+    // the user has at (0,0), which reads perfectly well in the digest.
+    let minX = drawn.values.map { number($0["x"]) }.min() ?? .nan
+    let minY = drawn.values.map { number($0["y"]) }.min() ?? .nan
+    check(
+        "the diagram's top-left is where it was asked to go",
+        abs(minX - 900) < 1 && abs(minY - 900) < 1,
+        "top-left=(\(minX), \(minY))"
+    )
+    // Every node and edge — not the bound labels, which the converter creates
+    // fresh from `label` and which carry nothing on the add arm either; the
+    // digest folds a label into its container and never reports it on its own.
+    let authored = drawn.values.filter { $0["containerId"] == nil }
+    check(
+        "every node and edge it drew is marked agent-authored",
+        !authored.isEmpty && authored.allSatisfy {
+            (($0["customData"] as? [String: Any])?["atelierAuthor"] as? String) == "agent"
+        },
+        "\(authored.map { $0["customData"] ?? "nil" })"
+    )
+
+    // --- the same diagram twice --------------------------------------------
+    // Mermaid names its nodes `A` and `B`; two diagrams that kept those ids
+    // would collide on the board, and Excalidraw dedupes by id.
+    let beforeSecond = files.elements()
+    _ = host.apply(mermaid(flowchart, x: 900, y: 1400))
+    let second = fresh(since: beforeSecond)
+    check(
+        "adding the same diagram again draws it again rather than colliding on mermaid's ids",
+        second.count == drawn.count && Set(second.keys).isDisjoint(with: drawn.keys),
+        "\(second.count) new elements, overlap \(Set(second.keys).intersection(drawn.keys))"
+    )
+
+    // --- a definition that does not parse ----------------------------------
+    let sceneBefore = files.sceneText()
+    let refused = host.apply(mermaid("this is not a diagram", x: 900, y: 1900))
+    check(
+        "a definition mermaid cannot parse is refused, and the refusal says why",
+        refused["ok"] as? Bool != true && !((refused["reason"] as? String) ?? "").isEmpty,
+        "\(refused)"
+    )
+    check(
+        "and leaves the scene byte-identical",
+        files.sceneText() == sceneBefore
+    )
+
+    // --- a diagram type the converter renders as an image ------------------
+    // Flowcharts, sequence, class, ER and state diagrams become elements; every
+    // other type comes back as an SVG rendered by mermaid itself, as an image
+    // plus a file. That file has to survive the way a pasted image does, and it
+    // carries no words on the canvas — so the definition is its caption.
+    let pie = "pie title Pets\n    \"Dogs\" : 386\n    \"Cats\" : 85"
+    let beforePie = files.elements()
+    _ = host.apply(mermaid(pie, x: 900, y: 2000))
+    let pieDrawn = fresh(since: beforePie)
+    let image = pieDrawn.values.first { $0["type"] as? String == "image" }
+    check(
+        "a diagram type the converter cannot express lands as one image",
+        image != nil && pieDrawn.count == 1,
+        "\(pieDrawn.count) new elements: \(pieDrawn.values.map { $0["type"] ?? "?" })"
+    )
+    let fileID = image?["fileId"] as? String
+    check(
+        "its SVG reaches assets/ under the image's file id",
+        fileID.map { files.assetNames().contains("\($0).svg") } == true,
+        "fileId=\(fileID ?? "nil") assets=\(files.assetNames())"
+    )
+    check(
+        "the image is captioned with the definition, so the digest is not blind to it",
+        ((image?["customData"] as? [String: Any])?["atelierCaption"] as? String) == pie,
+        "\(image?["customData"] ?? "nil")"
+    )
+    check(
+        "and is placed where asked",
+        abs(number(image?["x"]) - 900) < 1 && abs(number(image?["y"]) - 2000) < 1,
+        "at=(\(number(image?["x"])), \(number(image?["y"])))"
+    )
+} else {
+    check("the mermaid arm has a page to run in", false, "never became ready")
+}
+
+// ---------------------------------------------------------------------------
 print("\n\(checksRun - failures.count)/\(checksRun) checks passed")
 if failures.isEmpty {
     print("PASS")

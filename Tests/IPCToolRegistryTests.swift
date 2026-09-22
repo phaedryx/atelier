@@ -373,4 +373,15 @@ final class IPCToolRegistryTests: XCTestCase {
             description
         )
     }
+
+    /// The description is how an agent learns the kind exists at all, and the
+    /// standalone rule is the one refusal it cannot infer from the shape.
+    func test_whiteboardAddsDescription_namesMermaidAndItsStandaloneRule() {
+        let spec = IPC.Tool.whiteboardAdd.spec
+        let description = spec.description.lowercased()
+        XCTAssertTrue(description.contains("mermaid"), description)
+        XCTAssertTrue(description.contains("on its own") || description.contains("only entry"), description)
+        let elements = spec.arguments.first { $0.name == "elements" }?.description.lowercased() ?? ""
+        XCTAssertTrue(elements.contains("mermaid"), elements)
+    }
 }

@@ -857,11 +857,17 @@ extension WorkspaceActions {
         let target = try whiteboardTarget(workstreamID: workstreamID)
         // The live page, not the scene on disk — see `Host.liveState`.
         let live = try await target.host.liveState()
-        let plan = try Whiteboard.Write.addPlan(fromJSON: elementsJSON, live: live)
-        let ids = try await target.host.apply([
-            "kind": "add",
-            "elements": plan.skeletons.map(\.json),
-        ])
+        // Either arm answers with the ids the page reports really landed. For
+        // a mermaid diagram that is the only source there is: Swift mints
+        // nothing, because how many elements a definition becomes is the
+        // converter's answer.
+        let op: [String: Any] = switch try Whiteboard.Write.plan(fromJSON: elementsJSON, live: live) {
+        case let .elements(_, skeletons):
+            ["kind": "add", "elements": skeletons.map(\.json)]
+        case let .mermaid(mermaid):
+            mermaid.op
+        }
+        let ids = try await target.host.apply(op)
         logger.detailed("whiteboard_add: \(ids.count) elements")
         return (ids, target.wasAlreadyOpen)
     }

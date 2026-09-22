@@ -930,7 +930,7 @@ extension IPC.Tool {
 
                 `elements` is a JSON array; each entry is {"kind": ..., "text": ...,
                 "at": "x,y", "from": ..., "to": ..., "color": ...}. `kind` is one of
-                box, note, text, arrow. A box is a diagram node; a note is an
+                box, note, text, arrow, mermaid. A box is a diagram node; a note is an
                 annotation, and read_whiteboard reports it back as a note, so your own
                 commentary stays distinguishable from the structure you drew. `at` is
                 optional — anything you do not place is stacked below what is already
@@ -941,6 +941,16 @@ extension IPC.Tool {
                 this same call, using the id you are about to be handed back. So a
                 whole diagram is one call: the boxes first, then the arrows between
                 them. Naming an element added later in the same call is refused.
+
+                A mermaid entry draws a whole diagram from a mermaid definition in
+                `text` — flowcharts, sequence, class, ER and state diagrams become
+                real boxes, arrows and labels you can then move and edit by id; any
+                other diagram type lands as one image, captioned with the definition.
+                It must be the only entry in its call, because its size is not known
+                until it is drawn; `at` places its top-left corner, and `color`,
+                `from` and `to` are refused — style and connections go in the
+                definition. A definition mermaid cannot parse is refused with
+                mermaid's own message and nothing is drawn.
 
                 The ids returned are the board's real element ids. Pass them straight
                 to whiteboard_update and whiteboard_delete; read_whiteboard reports the
@@ -960,7 +970,7 @@ extension IPC.Tool {
                         name: "elements",
                         kind: .string,
                         isRequired: true,
-                        description: "A JSON array of elements to add. Each is an object with `kind` (box, note, text or arrow) and optionally `text`, `at` (\"x,y\"), `from`, `to`, `color`. For example [{\"kind\": \"box\", \"text\": \"Auth service\", \"at\": \"120,80\"}]."
+                        description: "A JSON array of elements to add. Each is an object with `kind` (box, note, text, arrow or mermaid) and optionally `text`, `at` (\"x,y\"), `from`, `to`, `color`. For example [{\"kind\": \"box\", \"text\": \"Auth service\", \"at\": \"120,80\"}], or, on its own, [{\"kind\": \"mermaid\", \"text\": \"graph LR; A[Auth] --> B[Token store]\"}]."
                     ),
                 ]
             )
