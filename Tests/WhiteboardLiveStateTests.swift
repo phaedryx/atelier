@@ -173,4 +173,64 @@ final class WhiteboardLiveStateTests: XCTestCase {
             "the op may have landed: \(description)"
         )
     }
+
+    // MARK: - The log's audience is not the agent's
+
+    /// `captureToBoard` reaches these failures from a button press, and logs
+    /// them. The retry advice above is addressed to an agent holding an IPC
+    /// call it could make again; there is no such call behind the capture
+    /// button, so a log line telling a human to retry names an action they do
+    /// not have and points them at `read_whiteboard`, which is not a thing a
+    /// person can call.
+    func test_theDiagnosticCarriesWhatFailedAndNoAdviceAboutIt() {
+        for failure: Host.WriteFailure in [
+            .notReady("it did not finish loading in time"),
+            .outcomeUnknown("the page went away"),
+            .refused("no reason given"),
+            .unknownElements(["n1"]),
+        ] {
+            for advice in ["retry", "read_whiteboard"] {
+                XCTAssertFalse(
+                    failure.diagnostic.contains(advice),
+                    "\(failure) tells a log reader to \(advice): \(failure.diagnostic)"
+                )
+            }
+        }
+    }
+
+    /// And they are one string with advice appended, never two copies: a
+    /// wording fix to what failed cannot land in the agent's sentence and miss
+    /// the log's.
+    func test_theAgentsSentenceIsTheDiagnosticPlusItsAdvice() throws {
+        for failure: Host.WriteFailure in [
+            .notReady("it did not finish loading in time"),
+            .outcomeUnknown("the page went away"),
+            .refused("no reason given"),
+            .unknownElements(["n1"]),
+        ] {
+            let description = try XCTUnwrap(failure.errorDescription)
+            XCTAssertTrue(
+                description.hasPrefix(failure.diagnostic),
+                "\(failure) says what failed twice over: \(description)"
+            )
+        }
+    }
+
+    /// A `WKWebView` error never passed through `WriteFailure`, and the log
+    /// site cannot tell the two apart before it logs them.
+    func test_anErrorThatIsNotAWriteFailureStillLogsItsOwnDescription() {
+        struct Nothing: LocalizedError {
+            var errorDescription: String? {
+                "the webview went away"
+            }
+        }
+        XCTAssertEqual(
+            Host.WriteFailure.diagnostic(for: Nothing()),
+            "the webview went away"
+        )
+        XCTAssertEqual(
+            Host.WriteFailure.diagnostic(for: Host.WriteFailure.refused("no reason given")),
+            "The whiteboard page refused the write: no reason given"
+        )
+    }
 }

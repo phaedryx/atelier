@@ -265,32 +265,68 @@ extension Whiteboard {
             case refused(String)
             case unknownElements([String])
 
-            var errorDescription: String? {
+            /// What failed, with nothing about what to do about it.
+            ///
+            /// **`errorDescription` is written for one audience and this is
+            /// for the other.** Every sentence that type adds on top of this
+            /// one is addressed to an agent that just made an IPC call — a
+            /// retry it may or may not make, and `read_whiteboard` to find out
+            /// what landed. `captureToBoard` has no such caller: the user
+            /// pressed a button, it answers by doing nothing, and its failures
+            /// go to a log. Telling whoever is reading Console that their call
+            /// is safe to retry names a call that does not exist and an action
+            /// they cannot take.
+            ///
+            /// So the two are not two copies: the half both audiences need —
+            /// which read failed, or what the page said — is written here once
+            /// and `errorDescription` appends its advice to it. A wording fix
+            /// to the failure itself cannot land in one and miss the other.
+            var diagnostic: String {
                 switch self {
                 case let .notReady(what):
+                    "The whiteboard page was not ready: \(what)."
+                case let .outcomeUnknown(what):
+                    "The whiteboard page stopped answering while applying the write: \(what)."
+                case let .refused(reason):
+                    "The whiteboard page refused the write: \(reason)"
+                case let .unknownElements(ids):
+                    "No element on this board has the id "
+                        + ids.map { "\"\($0)\"" }.joined(separator: ", ") + "."
+                }
+            }
+
+            var errorDescription: String? {
+                switch self {
+                case .notReady:
                     // Invites the retry that `outcomeUnknown` forbids. Nothing
                     // was posted to the page, so there is nothing a second
                     // attempt could duplicate — and saying otherwise costs the
                     // caller a write it could have had.
-                    "The whiteboard page was not ready: \(what). Nothing was sent to the board, "
-                        + "so this call is safe to retry."
-                case let .outcomeUnknown(what):
+                    diagnostic + " Nothing was sent to the board, so this call is safe to retry."
+                case .outcomeUnknown:
                     // Forbids a retry rather than inviting one, the rule
                     // `create_workstream`'s timeout message states: the page may
                     // have applied the write before it stopped answering, and a
                     // caller cannot tell a genuine failure from one its own
                     // retry caused.
-                    "The whiteboard page stopped answering while applying the write: \(what). Do "
-                        + "not retry this call — it may have been applied anyway, and repeating it "
-                        + "could duplicate what it drew. Call read_whiteboard to see what is on "
-                        + "the board."
-                case let .refused(reason):
-                    "The whiteboard page refused the write: \(reason)"
-                case let .unknownElements(ids):
-                    "No element on this board has the id "
-                        + ids.map { "\"\($0)\"" }.joined(separator: ", ")
-                        + ". Call read_whiteboard for the current ids."
+                    diagnostic + " Do not retry this call — it may have been applied anyway, and "
+                        + "repeating it could duplicate what it drew. Call read_whiteboard to see "
+                        + "what is on the board."
+                case .refused:
+                    diagnostic
+                case .unknownElements:
+                    diagnostic + " Call read_whiteboard for the current ids."
                 }
+            }
+
+            /// The diagnostic half of any error a write path can throw.
+            ///
+            /// `liveState` and `apply` can also surface a `WKWebView` error
+            /// that never passed through this type, so a log site cannot simply
+            /// downcast and would otherwise have to choose between losing those
+            /// or carrying the agent's copy for the ones it has.
+            static func diagnostic(for error: Error) -> String {
+                (error as? WriteFailure)?.diagnostic ?? error.localizedDescription
             }
         }
 
@@ -519,7 +555,7 @@ extension Whiteboard {
             do {
                 layout = try await liveState().layout
             } catch {
-                logger.error("Could not read where to place the capture: \(error.localizedDescription, privacy: .public)")
+                logger.error("Could not read where to place the capture: \(WriteFailure.diagnostic(for: error), privacy: .public)")
                 return false
             }
             do {
@@ -543,7 +579,7 @@ extension Whiteboard {
                     "height": size.height,
                 ])
             } catch {
-                logger.error("Could not place the capture: \(error.localizedDescription, privacy: .public)")
+                logger.error("Could not place the capture: \(WriteFailure.diagnostic(for: error), privacy: .public)")
                 return false
             }
             return true
