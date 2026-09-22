@@ -1167,6 +1167,104 @@ if host.waitUntilReady() {
 }
 
 // ---------------------------------------------------------------------------
+section("9. A pasted SVG lands under an extension Swift will write")
+// `image/svg+xml` used to reach assets/ as the extension `svg+xml`, because
+// save() derived one by taking the half of the MIME type after the slash.
+// `Whiteboard.Store.isSafeComponent` refuses the `+`, so `writeAsset` threw
+// `unsafeName` and only logged — while `writtenAssets` had already marked the id
+// written, so no later save retried it. The board showed the image for the
+// session and dropped it on the next relaunch.
+//
+// The name on disk is the whole of the bug, and it is why this section stops at
+// the write half: `savedFiles()` splits on the LAST dot, so a file misnamed
+// `<sha1>.svg+xml` would come back as the id `<sha1>` with a mimeType of
+// `image/svg+xml` regardless — a reload check cannot tell the two apart, and
+// this harness's own AssetScheme copy serves everything but PNG as JPEG, so it
+// could not be trusted to either.
+
+host.teardown()
+pump(0.5)
+
+/// Deliberately its own bytes, so this cannot pass on a file another section
+/// already put in assets/ — the rule section 8 states for itself.
+let pastedSVG = Data("""
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="48" viewBox="0 0 64 48">\
+<rect width="64" height="48" fill="#4f46e5"/></svg>
+""".utf8)
+
+let svgID = Insecure.SHA1.hash(data: pastedSVG)
+    .map { String(format: "%02x", $0) }.joined()
+
+/// The same inlined-bytes fixture section 8 uses and for the same reason — a
+/// real paste needs a real paste event — with the one value under test changed:
+/// the file's mimeType. Excalidraw accepts `image/svg+xml` pastes, and the
+/// mermaid work renders a diagram it cannot express as an asset of exactly this
+/// type, so this is the ordinary case rather than an exotic one.
+let svgScene: [String: Any] = [
+    "type": "excalidraw",
+    "version": 2,
+    "source": "whiteboard-harness",
+    "elements": [[
+        "id": "h-svg", "type": "image", "x": 40, "y": 40,
+        "width": 320, "height": 240, "fileId": svgID, "status": "saved",
+        "angle": 0, "strokeColor": "#1e1e1e", "backgroundColor": "transparent",
+        "fillStyle": "solid", "strokeWidth": 2, "strokeStyle": "solid",
+        "roughness": 1, "opacity": 100, "groupIds": [], "frameId": NSNull(),
+        "roundness": NSNull(), "boundElements": [], "link": NSNull(),
+        "locked": false, "seed": 2, "version": 1, "versionNonce": 2,
+        "updated": 1, "isDeleted": false, "scale": [1, 1],
+    ]],
+    "appState": ["viewBackgroundColor": "#ffffff"],
+    "files": [svgID: [
+        "id": svgID,
+        "mimeType": "image/svg+xml",
+        "dataURL": "data:image/svg+xml;base64," + pastedSVG.base64EncodedString(),
+        "created": 1,
+    ]],
+]
+try! JSONSerialization.data(withJSONObject: svgScene)
+    .write(to: files.scene, options: .atomic)
+
+host = HarnessHost(files: files, bundle: bundleDir)
+if host.waitUntilReady() {
+    // Driven by an op rather than waited for, the way section 8 drives its save.
+    _ = host.apply(["kind": "update", "id": "h-svg", "x": 80, "y": 40])
+
+    check(
+        "a pasted SVG's bytes reach assets/ as <sha1>.svg",
+        files.assetNames().contains("\(svgID).svg"),
+        "\(files.assetNames())"
+    )
+    // The failing name, named — so a regression reports what it really wrote
+    // rather than only that the file it wanted is missing.
+    check(
+        "and not under the MIME type's subtype, which Swift refuses to write",
+        !files.assetNames().contains("\(svgID).svg+xml"),
+        "the page posted the extension svg+xml"
+    )
+    // Rule 5, as every asset check restates it: the bytes leave the scene file.
+    check(
+        "and leave board.excalidraw behind them",
+        !files.sceneText().contains("data:image"),
+        "the scene file still contains a data: URL"
+    )
+
+    // The standing pair, for a change that alters only what an asset is NAMED:
+    // it moves nothing and removes nothing, so the board must be exactly what
+    // the one move left it.
+    let svgSceneOnDisk = files.elements()
+    check(
+        "naming the asset changes nothing about the board itself",
+        svgSceneOnDisk["h-svg"] != nil
+            && number(svgSceneOnDisk["h-svg"]?["x"]) == 80
+            && svgSceneOnDisk["h-svg"]?["fileId"] as? String == svgID,
+        "\(svgSceneOnDisk["h-svg"] ?? [:])"
+    )
+} else {
+    check("the board reloads with an inlined SVG", false, "never became ready")
+}
+
+// ---------------------------------------------------------------------------
 print("\n\(checksRun - failures.count)/\(checksRun) checks passed")
 if failures.isEmpty {
     print("PASS")
