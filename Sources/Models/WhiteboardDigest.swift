@@ -29,16 +29,6 @@ extension Whiteboard {
         /// board belongs.
         static let maxBytes = 8_000
 
-        /// The sentence that stops an agent reading five boxes and concluding
-        /// that is the whole board.
-        ///
-        /// **Required, not decoration**, and charged to the budget *before* a
-        /// single element is assembled. A digest that truncates and drops this
-        /// is the precise failure the budget exists to report: the reader is
-        /// told less than everything and not told that it was.
-        static let closingLine =
-            "Strokes and images are not transcribed. They are in board.png — open it."
-
         /// What `board.png` currently is.
         ///
         /// `.stale` is a real answer rather than an absence. A render that no
@@ -95,6 +85,11 @@ extension Whiteboard {
         ) -> String {
             let header = "# Whiteboard — \(scene.elements.count) elements, updated \(updated)"
             let renderLine = line(for: render)
+            // Bound once and used for both the reserve and the append, so the
+            // sentence that is charged to the budget is the sentence that is
+            // written. Two reads of a state-dependent value are two numbers
+            // that can disagree.
+            let closing = closingLine(for: render)
 
             // Reserved before anything is assembled, the way
             // `VerificationSummary.fitVerdicts` reserves its overflow note.
@@ -105,7 +100,7 @@ extension Whiteboard {
             var reserved = header.utf8.count + 1
             reserved += renderLine.utf8.count + 1
             reserved += 1 // the blank line under the header
-            reserved += 1 + closingLine.utf8.count + 1
+            reserved += 1 + closing.utf8.count + 1
             reserved += overflowNote(count: scene.elements.count).utf8.count + 1
 
             var lines: [String] = []
@@ -131,7 +126,7 @@ extension Whiteboard {
                 out.append(overflowNote(count: omitted))
             }
             out.append("")
-            out.append(closingLine)
+            out.append(closing)
             return out.joined(separator: "\n")
         }
 
@@ -146,6 +141,35 @@ extension Whiteboard {
             case .none:
                 "# No board.png has been rendered yet, so there is no picture to read — "
                     + "freehand strokes and images are listed below by position only."
+            }
+        }
+
+        /// The sentence that stops an agent reading five boxes and concluding
+        /// that is the whole board.
+        ///
+        /// **Required, not decoration**, and charged to the budget *before* a
+        /// single element is assembled. A digest that truncates and drops this
+        /// is the precise failure the budget exists to report: the reader is
+        /// told less than everything and not told that it was.
+        ///
+        /// It is a function of the `Render` rather than a constant, and it
+        /// lives here so that it is written in the same place as `line(for:)`
+        /// and cannot drift from it. A constant said "they are in board.png —
+        /// open it" over a header saying no picture had been rendered: the
+        /// digest contradicting itself two lines apart, which is the one thing
+        /// this format is organised around not doing. `.stale` had the milder
+        /// version of the same fault — the picture is there, but it is of an
+        /// earlier board, and the closing line said nothing about that.
+        static func closingLine(for render: Render) -> String {
+            switch render {
+            case .current:
+                "Strokes and images are not transcribed. They are in board.png — open it."
+            case .stale:
+                "Strokes and images are not transcribed. They are in board.png — open it, "
+                    + "remembering that it is a render of an earlier version of this board."
+            case .none:
+                "Strokes and images are not transcribed, and no board.png has been rendered "
+                    + "yet — they appear above by position and size only."
             }
         }
 

@@ -5,9 +5,19 @@
 import XCTest
 
 final class WhiteboardDigestTests: XCTestCase {
+    /// The render every test gets unless it says otherwise, and the closing
+    /// line that goes with it. Bound together so a test asserting the closing
+    /// line cannot be asserting one for a different state than it rendered.
+    private static let currentRender = Whiteboard.Digest.Render.current(
+        width: 1360,
+        height: 1520,
+        path: "/tmp/b/board.png"
+    )
+    private static let currentClosingLine = Whiteboard.Digest.closingLine(for: currentRender)
+
     private func digest(
         _ json: String,
-        render: Whiteboard.Digest.Render = .current(width: 1360, height: 1520, path: "/tmp/b/board.png"),
+        render: Whiteboard.Digest.Render = WhiteboardDigestTests.currentRender,
         updated: String = "14s ago",
         assets: [String: String] = [:],
         budget: Int = Whiteboard.Digest.maxBytes
@@ -200,7 +210,7 @@ final class WhiteboardDigestTests: XCTestCase {
         let text = digest(captioned(String(repeating: "a", count: 50_000)), budget: 900)
         XCTAssertLessThanOrEqual(text.utf8.count, 900)
         XCTAssertTrue(text.contains("more elements"), text)
-        XCTAssertTrue(text.hasSuffix(Whiteboard.Digest.closingLine), text)
+        XCTAssertTrue(text.hasSuffix(Self.currentClosingLine), text)
     }
 
     // MARK: - The closing line
@@ -209,15 +219,46 @@ final class WhiteboardDigestTests: XCTestCase {
         // Without it an agent reads five boxes and concludes that is the whole
         // board. It is the load-bearing sentence of this format, not a footer.
         let text = digest(WhiteboardSceneTests.fixture)
-        XCTAssertTrue(text.hasSuffix(Whiteboard.Digest.closingLine), text)
-        XCTAssertTrue(Whiteboard.Digest.closingLine.contains("board.png"))
+        XCTAssertTrue(text.hasSuffix(Self.currentClosingLine), text)
+        XCTAssertTrue(text.contains("board.png"), text)
     }
 
     func test_theClosingLineSurvivesTruncation() {
         // The failure this prevents: a digest cut to fit, losing the one line
         // that tells the reader it is not looking at everything.
         let text = digest(crowded(500), budget: 1200)
-        XCTAssertTrue(text.hasSuffix(Whiteboard.Digest.closingLine), text)
+        XCTAssertTrue(
+            text.hasSuffix(
+                Self.currentClosingLine
+            ),
+            text
+        )
+    }
+
+    func test_withNoRenderTheClosingLineDoesNotSendTheAgentToOpenOne() {
+        // The bug: a constant closing line told the agent to go and open
+        // board.png two lines under a header saying none had been rendered.
+        // Asserting the function was called would pass for that wording too, so
+        // what is pinned is the contradiction being gone.
+        let text = digest(WhiteboardSceneTests.fixture, render: .none)
+        XCTAssertTrue(text.lowercased().contains("no board.png"), text)
+        XCTAssertFalse(text.lowercased().contains("open it"), text)
+    }
+
+    func test_withAStaleRenderTheClosingLineSaysThePictureIsOfAnEarlierBoard() {
+        // Milder version of the same fault: the picture exists, so "open it" is
+        // right, and leaving it at that presents an earlier board as current.
+        let text = digest(WhiteboardSceneTests.fixture, render: .stale(path: "/tmp/b/board.png"))
+        XCTAssertTrue(text.lowercased().contains("open it"), text)
+        XCTAssertTrue(text.lowercased().hasSuffix("earlier version of this board."), text)
+    }
+
+    func test_withACurrentRenderTheClosingLineStillSaysToOpenIt() {
+        // The state the sentence was written for, unchanged: a picture that is
+        // current is one the agent should go and read.
+        let text = digest(WhiteboardSceneTests.fixture)
+        XCTAssertTrue(text.hasSuffix("They are in board.png — open it."), text)
+        XCTAssertTrue(text.hasSuffix(Self.currentClosingLine), text)
     }
 
     // MARK: - The budget
@@ -263,7 +304,7 @@ final class WhiteboardDigestTests: XCTestCase {
         """, budget: 900)
         XCTAssertLessThanOrEqual(text.utf8.count, 900)
         XCTAssertFalse(text.contains("\u{FFFD}"), "cut mid-scalar")
-        XCTAssertTrue(text.hasSuffix(Whiteboard.Digest.closingLine), text)
+        XCTAssertTrue(text.hasSuffix(Self.currentClosingLine), text)
     }
 
     func test_aNewlineInACaptionDoesNotBreakTheLineFormat() {
