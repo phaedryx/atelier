@@ -121,16 +121,16 @@ occluded window is the assumption the entire agent-read path rests on, and it
 has failed outright before — invisibly, because on disk a render that failed and
 one that never arrived look identical.
 
-**4. The caption arm.** Captions merge into `customData` rather than replacing
-it, a caption write leaves every other element's bindings alone, and a caption
-sent together with a move still reflows the arrows bound to what moved.
-
-**5. The capture arm.** A placed image keeps its bytes out of
+**4. The capture arm.** A placed image keeps its bytes out of
 `board.excalidraw`, its `assets/` filename is its `fileId`, it does not land on
 top of what is already on the board, and — the part that cannot be inherited
 from PR 2 — the PNG export still succeeds afterwards. A captured image is an
 asset-scheme URL from the moment it lands, unlike a pasted one, so it exercises
 the export-canvas taint path in its own session rather than after a relaunch.
+
+**5. The caption arm.** Captions merge into `customData` rather than replacing
+it, a caption write leaves every other element's bindings alone, and a caption
+sent together with a move still reflows the arrows bound to what moved.
 
 **6. The one known limitation, pinned so it cannot go quiet.** An arrow cannot
 bind to an image — `convertToExcalidrawElements` throws for one, measured
