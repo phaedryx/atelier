@@ -1728,7 +1728,7 @@ checks rather than a comment:
 | Group | Tools | Trust story |
 |---|---|---|
 | Messaging | `register_peer`, `list_peers`, `send_message`, `receive_messages`, `broadcast`, `get_peer_status` | none needed — text between agents, nothing a user can see |
-| Workspace reads | `list_tabs`, `read_review_comments`, `check_verification`, `list_verification_checks`, `list_processes`, `read_process_logs`, `read_whiteboard`, `get_session_checkpoint` | none needed — answers about the caller's own workstream |
+| Workspace reads | `list_tabs`, `read_review_comments`, `check_verification`, `list_verification_checks`, `list_processes`, `read_process_logs`, `read_whiteboard`, `get_session_checkpoint`, `get_initialization_state`, `get_shortcut_story` | none needed — answers about the caller's own workstream |
 | Workspace actions | `open_agent_tab`, `open_editor`, `open_tab`, `close_tab`, `request_attention`, `create_workstream`, `create_shortcut_workstream`, `start_verification`, `start_execution`, `stop_execution`, `start_process`, `stop_process`, `restart_process`, `whiteboard_add`, `whiteboard_update`, `whiteboard_delete`, `update_session_checkpoint` | see below |
 | Project tasks | `add_task`, `get_pending_tasks`, `list_tasks`, `claim_task`, `complete_task`, `fail_task` | see "The project task queue" below — project-scoped, and ungated for a third reason distinct from the two above |
 
@@ -2358,6 +2358,94 @@ is bounded twice — a line count (100 default, 1000 ceiling, clamped rather tha
 64KB byte budget trimmed oldest-first, which says when it cut. The store's 64KB message cap is
 **not** what binds: a tool response is not an inbox message. `IPC.Server.maxFrameBytes` and the
 agent's own context are.
+
+### The Info tab's two reads
+
+`get_initialization_state` and `get_shortcut_story` are the Info tab over IPC. That tab was the
+one pane with no IPC read at all, and of what it shows only two things are Atelier's alone: a
+branch is `git`, dirtiness is `git`, a pull request is `gh`. **Setup state and the Shortcut story
+are the facts an agent cannot get another way**, and they are all that was added — the tab's other
+sections are deliberately not mirrored, because a tool that re-answers `git status` is a second
+copy of a fact with no owner.
+
+Both are `.workspaceRead`, both replayable, and neither gets a gate: they answer about the
+caller's own workstream, which is what that surface already means.
+
+**`.idle` is the case that decides whether `get_initialization_state` is honest.**
+`Initialization.Runner.states` is in memory, so *every* workstream answers `.idle` after a
+relaunch — including ones whose setup ran perfectly days ago. It is evidence of neither outcome,
+and the tool's own description says so in as many words, because the sentence alone does not:
+"Nothing reported this session." is true and still invites "so nothing needed doing". An agent
+that reads `idle` as "setup never ran" and reruns it, or as "nothing to do" and debugs a missing
+dependency for an hour, is the failure this ships with otherwise.
+
+**The sentence is `Initialization.State.detail` and is written once.** It moved off
+`initializationRow(for:)` when this became its second consumer: an agent and the user reading the
+Setup row have to be told the same thing about the same run, which is the rule
+`Verification.Runner.loadConfig` had to be corrected to after wording two of its three refusals
+differently from the tab. The view keeps the icon and the tint, which are its own and which no
+agent can read. `Initialization.State.key` is beside it and is the *other* half deliberately —
+the key is a wire value that must stay stable, the sentence is copy that may be reworded, and
+collapsing them would make either promise impossible to keep.
+
+**`get_shortcut_story` fetches; it does not read the cache the Info tab fills.**
+`shortcutStoryCache` is in memory and is only refilled when that tab appears, so a cache-only
+read answers "no story" for any workstream whose Info tab has not been opened since launch —
+a fact's availability depending on which pane the user happened to visit, which is exactly the
+bug `hasGitHubRemote` was moved onto `refreshPathValidity`'s sweep to fix. It goes through
+`AppEnvironment.refreshShortcutStory` rather than straight to `Shortcut.Client` so the tab and
+the tool share one cache and one workflows lookup.
+
+**The story id comes from `Workstream.shortcutStoryID`, not from `Worktree.Facts`.** That field
+is persisted with the project list; the facts copy is written by `ContentView.syncShortcutStoryIDs`,
+so reading it would make the answer depend on whether that sweep had run — and the wrong answer
+would be "this workstream has no Shortcut story", which is unfalsifiable from the agent's side.
+`refreshShortcutStory(for:storyID:)` exists for that, with the facts-reading version delegating
+to it.
+
+**Four ways to have no story, and they are four sentences.** No story linked; a story but no
+API token; a story and a token the keychain would not release; a story, a token, and a fetch that
+failed. The tab renders all four as an absent Shortcut section, which is fine for a section and
+useless for a tool named `get_shortcut_story`. The third is not padding:
+`KeychainTokenStore.ReadOutcome` already separates `.absent` from `.failed` precisely because
+collapsing them told a user their token had vanished and sent them to re-paste one they still
+had — flattening it back at the IPC boundary would undo that fix one layer up.
+`refreshShortcutStory` logs and swallows its error, so an empty cache after a fetch is the only
+evidence the fetch failed; that is what the fourth sentence is reading.
+`WorkspaceActions.shortcutStoryInfo` is a pure static holding all of it, for the reason `resolve`
+is one.
+
+**A cached story is not a current one, and `isStale` is what keeps that from being a lie.**
+`refreshShortcutStory`'s `catch` deliberately keeps any cached copy rather than blanking the tab,
+and `registerShortcutStory` caches a story at *creation* — so every Shortcut-created workstream
+has one before any pane is opened. Reading the cache after a failed fetch therefore hands an agent
+an old copy under a tool description promising the answer is current, which is precisely the
+failure a revoked token or a deleted story produces. So the refresh returns **whether the fetch
+succeeded** — not whether it published anything, since an unchanged story is a successful fetch
+that writes nothing — and a story returned over a failed fetch carries `isStale`, the same meaning
+`VerificationRunInfo.isStale` has: this no longer describes reality. The tab ignores the return
+value and goes on rendering the stale copy, which is right for a pane whose user can see it is not
+moving.
+
+Two lesser cases ride inside a successful answer. A story whose workflow **state name** is unknown,
+because stories carry only a `workflow_state_id` and the workflow list is a second round trip that
+fails on its own: `state` goes nil and `stateUnavailableReason` says why, rather than the field
+simply being absent — `state` is one of the four things this tool exists to answer, and an absent
+one with no reason reads as a story that has no state. And that reason names **which** of its two
+causes actually happened — the list could not be fetched, or the list was fetched and does not
+contain this story's state id. They are different facts, and asserting the likelier one is the
+mistake `KeychainTokenStore.ReadOutcome` exists to prevent one layer down.
+
+`description` rides along, clamped to 8KB with the cut reported the way `ExecutionLogs` reports a
+trimmed tail — and trimmed from the **end**, the opposite of a log tail, because a story's first
+paragraph is the one that says what the work is.
+
+**Neither is tested through `IPCServerTests`' round-trip harness, and that is not laziness.**
+That harness parks the test's own thread in an untimed `recv()` — the reason
+`AgentStateTracker.lastUserPromptAt` is `nonisolated` — so a round trip through either handler's
+`MainActor` hop would deadlock and read as a bug in the handler. The mappings are pure statics and
+are asserted directly; `test_helperBinary_answersToolsCallOverStdio` still pins that both are
+advertised on the wire.
 
 ### The whiteboard write tools
 

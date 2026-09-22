@@ -735,6 +735,7 @@ final class IPCServerTests: XCTestCase {
                 "read_whiteboard", "whiteboard_add", "whiteboard_update", "whiteboard_delete",
                 "add_task", "get_pending_tasks", "list_tasks", "claim_task", "complete_task", "fail_task",
                 "get_session_checkpoint", "update_session_checkpoint",
+                "get_initialization_state", "get_shortcut_story",
             ]
         )
         // Every advertised name must be a real `IPC.Tool`. `toolDefinitions` and

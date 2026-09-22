@@ -25,18 +25,24 @@ import SwiftUI
 ///
 /// A free function, so the copy for all five states can be pinned without a
 /// view.
+///
+/// The sentence is `Initialization.State.detail` and is not written again here.
+/// It moved to the state when `get_initialization_state` became a second
+/// consumer of it: an agent and the user reading this row have to be told the
+/// same thing about the same run, which is the rule `Verification.Runner`
+/// had to be corrected to. What stays is the part only a view can use.
 func initializationRow(for state: Initialization.State) -> (detail: String, icon: String, tint: Color) {
     switch state {
     case .idle:
-        (NSLocalizedString("Nothing reported this session.", comment: ""), "questionmark.circle", .secondary)
-    case let .inProgress(step, _):
-        (step, "clock", .secondary)
+        (state.detail, "questionmark.circle", .secondary)
+    case .inProgress:
+        (state.detail, "clock", .secondary)
     case .completed:
-        (NSLocalizedString("Ran successfully.", comment: ""), "checkmark.circle", .green)
-    case let .completedWithNote(note):
-        (note, "info.circle", .secondary)
-    case let .failed(detail):
-        (detail, "exclamationmark.triangle", .orange)
+        (state.detail, "checkmark.circle", .green)
+    case .completedWithNote:
+        (state.detail, "info.circle", .secondary)
+    case .failed:
+        (state.detail, "exclamationmark.triangle", .orange)
     }
 }
 

@@ -374,7 +374,30 @@ final class AppEnvironment: ObservableObject {
     @MainActor
     func refreshShortcutStory(for worktreePath: String) async {
         guard let storyID = factsCache[worktreePath]?.shortcutStoryID else { return }
+        await refreshShortcutStory(for: worktreePath, storyID: storyID)
+    }
 
+    /// The same refresh, for a caller that already holds the story id.
+    ///
+    /// `get_shortcut_story` reads the id off `Workstream.shortcutStoryID`, which
+    /// is persisted, rather than off `factsCache`, which is filled by
+    /// `ContentView.syncShortcutStoryIDs` — so the sweep having run or not is
+    /// something the tool must not depend on. Going through the version above
+    /// would have made a workstream whose facts had not been synced yet report
+    /// "this workstream has no Shortcut story", which is the wrong answer and an
+    /// unfalsifiable one.
+    ///
+    /// **Returns whether the story fetch itself succeeded**, which is not the
+    /// same as whether anything was published — an unchanged story is a
+    /// successful fetch that writes nothing. `get_shortcut_story` needs the
+    /// distinction because the `catch` below deliberately *keeps* any cached
+    /// copy: a story cached at creation by `registerShortcutStory` would
+    /// otherwise be handed to an agent as a current answer after the token was
+    /// revoked or the story deleted. The tab ignores it and goes on rendering
+    /// the stale copy, which is the right call for a pane the user can see is
+    /// not moving.
+    @MainActor @discardableResult
+    func refreshShortcutStory(for worktreePath: String, storyID: Int) async -> Bool {
         if shortcutWorkflows.isEmpty {
             do {
                 let workflows = try await Shortcut.Client().workflows()
@@ -387,14 +410,27 @@ final class AppEnvironment: ObservableObject {
 
         do {
             let story = try await Shortcut.Client().story(id: storyID)
-            guard shortcutStoryCache[worktreePath] != story else { return }
-            commitChanges { shortcutStoryCache[worktreePath] = story }
+            if shortcutStoryCache[worktreePath] != story {
+                commitChanges { shortcutStoryCache[worktreePath] = story }
+            }
+            return true
         } catch {
             // Any cached copy deliberately stays on screen rather than blanking the tab,
             // but a revoked token or deleted story would otherwise be invisible — the
             // stale copy would keep rendering as though it were current.
             logger.warning("[Atelier] shortcut: story \(storyID, privacy: .public) refresh failed: \(String(describing: error), privacy: .public)")
+            return false
         }
+    }
+
+    /// Whether Shortcut's workflow list has been fetched this launch.
+    ///
+    /// `shortcutStateName` returns nil for two reasons — no workflow list, or a
+    /// story whose state id is not in the list we have — and they are different
+    /// facts. Naming the wrong one is the mistake `KeychainTokenStore.ReadOutcome`
+    /// exists to prevent, one layer down.
+    var hasShortcutWorkflows: Bool {
+        !shortcutWorkflows.isEmpty
     }
 
     func isGitRepo(_ directory: String) -> Bool {

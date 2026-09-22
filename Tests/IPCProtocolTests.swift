@@ -106,6 +106,7 @@ final class IPCProtocolTests: XCTestCase {
             .openEditor, .openTab, .requestAttention, .closeTab,
             .listProcesses, .readProcessLogs, .stopExecution,
             .startProcess, .stopProcess, .restartProcess,
+            .getInitializationState, .getShortcutStory,
         ] {
             XCTAssertTrue(tool.isSafeToReplay, "\(tool.rawValue) changes nothing by running twice")
         }
