@@ -212,9 +212,15 @@ extension Whiteboard {
                 case let .captionNeedsImage(id):
                     // Names the alternative, because a refusal that does not is
                     // one an agent retries verbatim.
+                    // "that already carries words" rather than the flat "a box,
+                    // note, text or arrow" this used to name. `text` is now
+                    // refused by the page for an element drawn without a label,
+                    // so the unqualified advice sent an agent captioning an
+                    // unlabelled box from one refusal straight into another with
+                    // nothing naming the way out.
                     "\"\(id)\" is not an image, and a caption is a transcription of one. "
-                        + "Use `text` to change what a box, note, text or arrow says. "
-                        + "read_whiteboard lists each image on this board."
+                        + "Use `text` to change what a box, note, text or arrow already "
+                        + "says. read_whiteboard lists each image on this board."
                 case let .textNeedsCanvasText(id):
                     // The mirror of `captionNeedsImage`, and the more valuable
                     // of the two: reaching for `text` to describe a screenshot

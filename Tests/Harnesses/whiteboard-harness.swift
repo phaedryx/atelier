@@ -949,6 +949,28 @@ check(
         + "offset y=\(number(labelBoth?["y"]) - 3200) expected \(offsetBefore.y)"
 )
 
+// A STANDALONE text element is the other branch of textTargetFor — it is its own
+// words rather than a container's, so `text` writes to the element itself and
+// there is no label to drag. Nothing else in this file retexts one: box() always
+// attaches a label, and sections 4 and 5 work on images.
+
+_ = host.apply([
+    "kind": "add",
+    "elements": [[
+        "id": "h-standalone", "type": "text", "x": 200, "y": 3400,
+        "text": "a free-floating note",
+        "customData": ["atelierAuthor": "agent"],
+    ]],
+])
+_ = host.apply(["kind": "update", "id": "h-standalone", "text": "rewritten in place"])
+check(
+    "`text` on a standalone text element rewrites the element itself",
+    files.elements()["h-standalone"]?["text"] as? String == "rewritten in place"
+        && files.elements()["h-standalone"]?["originalText"] as? String == "rewritten in place",
+    "text=\(files.elements()["h-standalone"]?["text"] as? String ?? "nil") "
+        + "originalText=\(files.elements()["h-standalone"]?["originalText"] as? String ?? "nil")"
+)
+
 // --- `text` on an element that has no label ---------------------------------
 // textTargetFor returns null for any box, ellipse, diamond or arrow drawn
 // without one, and the arm used to answer `ok` having changed nothing — the

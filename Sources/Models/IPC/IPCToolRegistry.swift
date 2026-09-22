@@ -942,6 +942,10 @@ extension IPC.Tool {
                 for anything that carries words on the canvas. Pass an empty string to
                 clear one. `text` on an image is refused rather than ignored — an image
                 carries no words on the canvas, so there would be nothing to change.
+                `text` is refused the same way on a shape that was drawn without a
+                label, for the same reason, and nothing can attach words to an element
+                already on the board: draw a replacement, or add a text element beside
+                it.
 
                 A caption is not drawn on the board, so Excalidraw's own canvas search
                 will not find it. That is deliberate: materializing it would put a block

@@ -138,9 +138,15 @@ against 0.18.1 — and what is checked is that it stays a **refusal** with the
 board untouched, rather than becoming a partial apply.
 
 **7. The update arm.** A moved labelled box drags its label with it, at the same
-offset; a move and a retext in one call land both; and `text` on an element the
-user drew without a label is refused with the board untouched, rather than
-answering `ok` having changed nothing.
+offset; a move and a retext in one call land both; `text` on a standalone text
+element rewrites that element; and `text` on an element the user drew without a
+label is refused with the board untouched, rather than answering `ok` having
+changed nothing.
+
+The standalone-text check is here because it is `textTargetFor`'s other branch
+and nothing else in the file exercises it — `box()` always attaches a label, and
+sections 4 and 5 work on images. Without it, a refusal widened to catch bare
+`text` elements too would pass every other check in this file.
 
 The label check asserts the **offset**, not the position, and that is the point
 of it rather than a convenience. Excalidraw positions a bound label when it

@@ -558,12 +558,21 @@ window.__whiteboardApply = async (op) => {
       if (op.text !== undefined) {
         textEl = textTargetFor(existing, target)
         if (!textEl) {
+          // Names what can actually be done, and deliberately does NOT say
+          // "add a label with whiteboard_add": that tool always mints a NEW
+          // element and cannot attach words to one already on the board, so
+          // advice to reach for it there is advice an agent follows into a
+          // second box sitting on top of the first. The two honest paths are
+          // both stated instead.
           return {
             ok: false,
             reason:
-              `"${op.id}" carries no text on the canvas, so there is nothing to change. ` +
-              'A shape gets its words when it is drawn: add one with `text` through ' +
-              'whiteboard_add. read_whiteboard reports the words each element already has.',
+              `"${op.id}" was drawn without a label, so it carries no words on the ` +
+              'canvas and there is nothing for `text` to change. Nothing can attach ' +
+              'words to an element that is already on the board. Either draw a ' +
+              'replacement — whiteboard_add with `text` and the same `at`, then ' +
+              'whiteboard_delete this one — or add a separate text element beside it. ' +
+              'read_whiteboard reports the words each element already has.',
           }
         }
       }
@@ -629,9 +638,9 @@ window.__whiteboardApply = async (op) => {
         }
       }
       // A move drags every arrow attached to this element with it. The label
-      // has already been dragged, above, and deliberately does NOT join this
-      // set: arrows bind to containers, never to a container's own label, and
-      // edgePoints would be computing geometry against the wrong box.
+      // has already been dragged, above, and does not join this set: the set
+      // names ids an arrow may be BOUND to, and nothing binds to a container's
+      // own label, so adding it would be a no-op rather than a second reflow.
       const moved = op.x !== undefined || op.y !== undefined
       api.updateScene({
         elements: moved ? reflowArrowsTouching(next, new Set([op.id])) : next,
