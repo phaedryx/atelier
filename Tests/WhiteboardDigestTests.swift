@@ -301,6 +301,110 @@ final class WhiteboardDigestTests: XCTestCase {
         XCTAssertEqual(elementLines.count, 1, text)
     }
 
+    // MARK: - Quoting
+
+    func test_aQuoteInALabelIsEscaped_soTheDelimitersStayUnambiguous() {
+        // Unescaped, `He said "hello"` rendered as `"He said "hello""` and a
+        // reader cannot tell where the user's text ends. Mild — the digest is
+        // read by an LLM rather than parsed — but the whole format's claim is
+        // that it is the half of the board that can be reasoned about exactly.
+        let text = digest("""
+        {"type":"excalidraw","elements":[
+        {"id":"n","type":"rectangle","x":0,"y":0,"width":10,"height":10,
+         "isDeleted":false,"text":"He said \\"hello\\" to it"}]}
+        """)
+        XCTAssertTrue(text.contains(#""He said \"hello\" to it""#), text)
+        // The bare form is what the bug produced, and it must be gone.
+        XCTAssertFalse(text.contains(#""He said "hello" to it""#), text)
+    }
+
+    func test_aQuoteInACaptionIsEscaped_becauseTheEscapingIsInTheSharedPath() {
+        // A caption goes through `captionText` and a label through `quoted`.
+        // Both delegate to `clipped`, which is where the escaping lives — so
+        // this pins that the shared path really is shared rather than the two
+        // agreeing by coincidence.
+        let text = digest(captioned(#"He said \"hello\" to the dialog"#))
+        XCTAssertTrue(text.contains(#"caption: "He said \"hello\" to the dialog""#), text)
+    }
+
+    func test_aBackslashIsEscapedToo_becauseTheQuoteIs() {
+        // Escaping only the quote is the ambiguous-in-a-new-way variant: a
+        // literal backslash before a quote renders `\\"`, which under the rules
+        // the reader has just been given decodes as an escaped backslash and
+        // then a TERMINATOR. The field ends early and the output looks fine.
+        let text = digest("""
+        {"type":"excalidraw","elements":[
+        {"id":"n","type":"rectangle","x":0,"y":0,"width":10,"height":10,
+         "isDeleted":false,"text":"C:\\\\Users\\\\tad"}]}
+        """)
+        XCTAssertTrue(text.contains(#""C:\\Users\\tad""#), text)
+    }
+
+    func test_theLabelBudgetCountsEscapeCharacters_soTheByteBoundStillHolds() {
+        // THE clip-order decision, and the only test that discriminates it.
+        // `clipped` escapes as it cuts, so a label of 240 quotes spends its
+        // whole 240-byte cap on 120 escaped pairs. Escape-after-clip would keep
+        // 240 quotes and render 480 bytes — `maxTextBytes` would go on saying
+        // "one shape cannot spend the whole digest" while one did.
+        let text = digest("""
+        {"type":"excalidraw","elements":[
+        {"id":"n","type":"rectangle","x":0,"y":0,"width":10,"height":10,
+         "isDeleted":false,"text":"\(String(repeating: #"\""#, count: 240))"}]}
+        """)
+        let line = text.components(separatedBy: "\n").first { $0.hasPrefix("n  ") } ?? ""
+        XCTAssertEqual(line.components(separatedBy: #"\""#).count - 1, 120, line)
+        // And the rendered field is the cap plus its fixed decoration — two
+        // quotes and the ellipsis — never a multiple of it.
+        let field = line.components(separatedBy: "  ")[2]
+        XCTAssertEqual(field.utf8.count, 240 + 5, field)
+    }
+
+    func test_aCutNeverLandsBetweenABackslashAndItsQuote() {
+        // The escape is appended whole or not at all, exactly as a grapheme is.
+        // A cut between the two halves leaves a dangling `\`, which reaches the
+        // reader as an escape for whatever the template puts next — the same
+        // malformed output as a U+FFFD, by a different route.
+        //
+        // The input is chosen to STRADDLE the boundary, which a label of
+        // nothing but quotes cannot do: 239 plain bytes then one quote, so the
+        // escape is the two bytes that do not fit in 240. An implementation
+        // that escaped the whole string and then cut the result would keep the
+        // `\` and drop its `"`.
+        let label = String(repeating: "a", count: 239) + #"\""#
+        let text = digest("""
+        {"type":"excalidraw","elements":[
+        {"id":"n","type":"rectangle","x":0,"y":0,"width":10,"height":10,
+         "isDeleted":false,"text":"\(label)"}]}
+        """)
+        let line = text.components(separatedBy: "\n").first { $0.hasPrefix("n  ") } ?? ""
+        let field = line.components(separatedBy: "  ")[2]
+        // Strip the surrounding quotes and the ellipsis to get the kept region.
+        let kept = String(field.dropFirst().dropLast(2))
+        XCTAssertFalse(kept.hasSuffix("\\"), "an escape was split: \(kept.suffix(8))")
+        XCTAssertEqual(kept, String(repeating: "a", count: 239), kept)
+    }
+
+    func test_aQuoteHeavyCaptionIsStillCutAtItsOwnBudget_andSaysSo() {
+        // The caption budget counts escape characters the same way, so the
+        // "(cut at 1200 bytes" sentence names bytes of the escaped field. 700
+        // quotes is 1400 escaped bytes, which is over the cap where 700 raw
+        // ones would not have been — the honest half of the ordering trade.
+        let text = digest(captioned(String(repeating: #"\""#, count: 700)))
+        XCTAssertTrue(text.contains("(cut at 1200 bytes"), text)
+        XCTAssertTrue(text.contains(#"\""#), text)
+        XCTAssertFalse(text.contains("\u{FFFD}"), text)
+    }
+
+    func test_ordinaryTextIsUntouchedByTheEscaping() {
+        // Very nearly every real board is this case, and it must render exactly
+        // as it did before: the escaping is not allowed to cost the common path
+        // a single byte.
+        let text = digest(WhiteboardSceneTests.fixture)
+        XCTAssertTrue(text.contains("\"Auth service\""), text)
+        XCTAssertTrue(text.contains("\"why is this sync?\""), text)
+        XCTAssertFalse(text.contains("\\"), text)
+    }
+
     // MARK: - The render line
 
     func test_aCurrentRenderIsPointedAtByItsAbsolutePath() {

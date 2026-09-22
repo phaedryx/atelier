@@ -233,6 +233,18 @@ extension Whiteboard {
         ///
         /// A **caption** is not this. It goes through `captionText`, which is
         /// bounded far more generously and says in words when it cut.
+        ///
+        /// **A quote in the user's text is escaped `\"`, and a backslash
+        /// `\\`** — `clipped` does it, so a label and a caption cannot
+        /// disagree about it. Unescaped, the delimiters were ambiguous: a label
+        /// of `He said "hello"` rendered as `"He said "hello""`, and a reader
+        /// cannot always tell where the user's text ends. That is the mildest
+        /// class of defect this format has — the digest is read by an LLM, not
+        /// parsed, so it is ambiguous rather than corrupt, and the dangerous
+        /// relative (text that kept its newlines and could forge an entry for
+        /// an element not on the board) was closed separately. It is fixed here
+        /// rather than in `captionText` alone because the shared path is where
+        /// it lives, which necessarily moves how **every label** renders too.
         private static func quoted(_ raw: String) -> String {
             let (kept, cut) = clipped(flattened(raw), to: maxTextBytes)
             return cut ? "\"\(kept)…\"" : "\"\(kept)\""
@@ -255,6 +267,13 @@ extension Whiteboard {
         /// business deciding that; the entry's own first line already carries
         /// the absolute path of the image in `assets/`, which is where the
         /// pixels are whatever the render is doing.
+        ///
+        /// **The number it names is bytes of the escaped field, not of the
+        /// user's transcription**, because `clipped` escapes as it cuts. For a
+        /// caption carrying neither a quote nor a backslash — very nearly all
+        /// of them — the two are the same number. A quote-heavy one that used
+        /// to fit now cuts and says so, which is the honest half of the trade
+        /// `clipped` argues: the sentence stays true about what was spent.
         private static func captionText(_ raw: String) -> String {
             let (kept, cut) = clipped(flattened(raw), to: maxCaptionBytes)
             guard cut else { return "\"\(kept)\"" }
@@ -279,6 +298,32 @@ extension Whiteboard {
         /// The budgeted cut both limits share, and **whether it cut** — which
         /// is what lets a caption say so and a label not.
         ///
+        /// **It escapes as it goes, and that is the whole of the ordering
+        /// decision.** Escaping adds bytes, so where it happens relative to the
+        /// cut decides which of two things stays true. Escaping *after* the cut
+        /// keeps the count of the user's own characters predictable and lets
+        /// the rendered field reach twice its cap — `maxTextBytes` would go on
+        /// saying "one shape cannot spend the whole digest" while a label of
+        /// quotes spent 480 bytes of it. Escaping *before* keeps the cap true
+        /// and costs a label made of quotes half its visible characters. This
+        /// takes the second: the caps are stated as bounds on the rendered
+        /// field, ordinary text holds neither a quote nor a backslash so for
+        /// very nearly every real board the output is byte-identical to before,
+        /// and what degrades is pathological by construction. The field already
+        /// overshoots its cap by a fixed five bytes — two quotes and the
+        /// ellipsis — and a *constant* overshoot is not what that sentence is
+        /// guarding against; a multiplier is.
+        ///
+        /// **So the escape is charged and appended one character at a time,
+        /// here, rather than applied to a string this function then cuts.** A
+        /// cut landing between a `\` and its `"` leaves a dangling escape, which
+        /// is the same malformed output as the U+FFFD below and reaches the
+        /// reader the same way — the following character reads as escaped. The
+        /// grapheme rule this loop already keeps is the identical rule, so the
+        /// escape is simply the other thing that is appended whole or not at
+        /// all. It is also why the early return on `flat.utf8.count` is gone:
+        /// a string that fits unescaped need not fit escaped.
+        ///
         /// **Accumulated by `Character`, not cut out of a byte array.** The
         /// obvious byte version — `prefix(n)`, then walk back off any trailing
         /// continuation byte — does not work, and fails in the case it is
@@ -298,16 +343,39 @@ extension Whiteboard {
         /// The loop stops at the budget, so it costs `limit` steps rather than
         /// the length of the text.
         private static func clipped(_ flat: String, to limit: Int) -> (text: String, cut: Bool) {
-            guard flat.utf8.count > limit else { return (flat, false) }
             var kept = ""
             var spent = 0
-            for character in flat {
-                let width = String(character).utf8.count
+            var index = flat.startIndex
+            while index < flat.endIndex {
+                let piece = escaped(flat[index])
+                let width = piece.utf8.count
                 guard spent + width <= limit else { break }
-                kept.append(character)
+                kept += piece
                 spent += width
+                index = flat.index(after: index)
             }
-            return (kept, true)
+            return (kept, index < flat.endIndex)
+        }
+
+        /// One character as it appears between the quotes.
+        ///
+        /// **A backslash is escaped because the quote is.** Escaping only the
+        /// quote looks like the smaller change and is a worse bug: a literal
+        /// backslash sitting before a quote in the user's text then renders as
+        /// `\\"`, which under the very rules the reader has just been given
+        /// decodes as an escaped backslash followed by a *terminator*. The
+        /// field ends early, the output looks well-formed, and nothing says
+        /// otherwise — strictly worse than the ambiguity this replaced.
+        ///
+        /// Deliberately **not** `\n`. `flattened` has already run and there is
+        /// no newline left to meet; an escape for one would imply the digest
+        /// can carry multi-line text, which is the forgery #200 closed.
+        private static func escaped(_ character: Character) -> String {
+            switch character {
+            case "\\": #"\\"#
+            case "\"": #"\""#
+            default: String(character)
+            }
         }
 
         /// Per-label cap, well under `maxBytes` so that one shape cannot spend
