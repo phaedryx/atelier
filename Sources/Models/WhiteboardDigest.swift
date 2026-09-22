@@ -157,7 +157,7 @@ extension Whiteboard {
         /// One element's line, plus its caption indented under it when it has
         /// one.
         private static func entry(for element: Element, assets: [String: String]) -> String {
-            let id = element.id
+            let id = identifier(element.id)
             let kind = name(of: element)
             let at = "at \(rounded(element.x)),\(rounded(element.y))"
             let size = "\(rounded(element.width))×\(rounded(element.height))"
@@ -181,13 +181,32 @@ extension Whiteboard {
                 // completely different" failure this format exists to avoid, in
                 // the one line where an image gets any handle at all. An id with
                 // no file on disk says so in words instead.
+                // The lookup uses the RAW id, because that is the key the
+                // file was written under; only the fallback renders an
+                // identifier, and it fires exactly when no file corroborates
+                // the id.
+                //
+                // The path is deliberately NOT put through `identifier`, for
+                // the reason this branch exists at all: it has to stay
+                // openable, and a sanitized path is one that does not resolve
+                // — the "sends a reader somewhere completely different"
+                // failure above, reintroduced by the fix for a different one.
+                // So the residual is stated rather than closed. `assetPaths`
+                // *lists* the directory rather than replaying `writeAsset`, so
+                // `isSafeComponent` does not vouch for what is in there: a
+                // file placed by other means contributes its name to this line
+                // unsanitized. That is the same exposure `line(for:)` already
+                // accepts for `board.png`'s own path, for the same reason, and
+                // closing it is not this function's job.
                 let file = element.fileID.flatMap { assets[$0] }
-                    ?? element.fileID.map { "fileId=\($0) (no file in assets/)" }
+                    ?? element.fileID.map { "fileId=\(identifier($0)) (no file in assets/)" }
                     ?? "(no file)"
                 line = "\(id)  \(kind)  \(file)  \(at)  \(size)"
             case .arrow:
                 let bound = element.from != nil || element.to != nil
-                let ends = bound ? "\(element.from ?? "?") → \(element.to ?? "?")" : at
+                let ends = bound
+                    ? "\(element.from.map(identifier) ?? "?") → \(element.to.map(identifier) ?? "?")"
+                    : at
                 let label = element.text.map { "  \(quoted($0))" } ?? ""
                 line = "\(id)  \(kind)  \(ends)\(label)"
             default:
@@ -214,7 +233,7 @@ extension Whiteboard {
             case .image: "image"
             // Its own name rather than the nearest thing this build knows: a
             // kind it has never heard of must say so, not be reported as a box.
-            case .other: element.rawType
+            case .other: identifier(element.rawType)
             }
         }
 
@@ -377,6 +396,136 @@ extension Whiteboard {
             default: String(character)
             }
         }
+
+        /// An identifier as it stands in a positional column: `id`, an unknown
+        /// kind, an arrow's two bindings, and the `fileId` of an image with no
+        /// file on disk.
+        ///
+        /// **These are not `quoted`'s problem in smaller clothes, and routing
+        /// them through it would be wrong twice over.** That function renders
+        /// *prose* — it wraps in `"…"` and escapes the quote and the backslash
+        /// so the delimiters stay unambiguous. Here there are no delimiters:
+        /// every other kind renders bare (`box`, `note`, `ellipse`), so quoting
+        /// only the unrecognised one puts quotes in a column where no other
+        /// value has them, and an escape outside a quoted field is a backslash
+        /// that means nothing to the reader. The column keeps its shape and the
+        /// value is made to fit it instead.
+        ///
+        /// **The exposure is an injected line, the vector #200 closed for
+        /// captions.** An element's entry is one line and the digest's reader
+        /// counts lines, so a newline here injects a line that reads as another
+        /// element's entry — the digest reporting elements that are not on the
+        /// board, which is the one thing this feature is organised around not
+        /// doing. `id` is the worst of the five because it is *first* on the
+        /// line: a newline there hands the forger the whole of the next one.
+        ///
+        /// **But flattening alone is not enough, and that is what picks an
+        /// allowlist over `flattened`.** Nothing about
+        /// `box  at 999,999  50×50  (agent)` as a kind crosses a line. The entry
+        /// stays one line, the line-counting reader is satisfied, and the
+        /// columns after the kind now read as a box at a position the user
+        /// never put it, marked as drawn by an agent. A digest that invents
+        /// authorship is worse than one with an extra line, because nothing
+        /// about it looks wrong. So a space is as dangerous here as a newline,
+        /// and neither is in the class.
+        ///
+        /// **No producer mints one of these today**, which is why this is
+        /// stated as a structural guarantee rather than as a fix for a bug
+        /// anybody has seen: `Write.Kind` is a closed enum so an agent cannot
+        /// name an arbitrary type, and Excalidraw emits its own type names and
+        /// a hex `fileId`. But "one element is one line" is an invariant this
+        /// file states about itself, every other field reaching a line honours
+        /// it, and whether a third-party dependency's current version only ever
+        /// emits admissible values is pinned nowhere and is not this file's to
+        /// assume.
+        ///
+        /// **The class is `Store.isSafeComponent`'s, deliberately.** That is
+        /// already this feature's answer to what an identifier of this kind may
+        /// contain — it is what `Store.writeAsset` checks before a `fileId` is
+        /// allowed to name a file in `assets/`. (It does **not** vouch for the
+        /// image line's other branch; the comment at that call site says what
+        /// that path's provenance really is and why it stays verbatim.)
+        ///
+        /// **Every character this function adds is outside the class it
+        /// enforces**, so a marker can never be mistaken for content: an
+        /// ellipsis in one of these columns is always the digest saying it cut,
+        /// and a `*` is always the digest saying something inadmissible was
+        /// there. That is the inverse of the delimiter ambiguity `quoted`
+        /// fixes — the same goal reached by making the field's alphabet small
+        /// rather than by escaping within a large one.
+        ///
+        /// Per-`Character` rather than per-scalar, the grapheme rule `clipped`
+        /// and `IPC.Names.sanitized` both keep: an emoji costs one marker, not
+        /// one per scalar. Substituted rather than dropped, because dropping
+        /// collapses two distinct ids into one string and says nothing about
+        /// what was removed.
+        private static func identifier(_ raw: String) -> String {
+            var kept = ""
+            var spent = 0
+            var cut = false
+            for character in raw {
+                guard spent < maxIdentifierBytes else {
+                    cut = true
+                    break
+                }
+                // Every admissible character is single-byte ASCII and so is the
+                // marker, so one `Character` costs exactly one byte and the
+                // budget needs no width arithmetic. It is also why the U+FFFD
+                // hazard `clipped`'s comment fights cannot arise here: nothing
+                // multi-byte survives into the output to be cut in half.
+                kept.append(admissible(character) ? character : marker)
+                spent += 1
+            }
+            // An empty identifier is not a missing one. `raw["type"] as? String`
+            // accepts `""`, and an absent kind column silently moves every
+            // column after it one place to the left — the same misread-by-
+            // position this function exists to prevent, arrived at by omission
+            // rather than by injection.
+            guard !kept.isEmpty else { return "(none)" }
+            return cut ? "\(kept)…" : kept
+        }
+
+        /// ASCII letters, digits, `-` and `_` — `Store.isSafeComponent`'s class,
+        /// per character. It covers what every producer of these fields
+        /// actually mints: Excalidraw's type names are lowercase ASCII, a
+        /// `fileId` is a SHA-1 in lowercase hex, and an element id is
+        /// alphanumerics with `-` and `_`.
+        ///
+        /// The two predicates ask different questions — may this name a file,
+        /// may this stand unquoted in a column — and land on the same class
+        /// because they are about the same identifiers, which is why this is
+        /// restated per-`Character` rather than either being reused for the
+        /// other's question. `isASCII` is checked rather than leaning on
+        /// `isLetter`, which is true for a great many characters that are not
+        /// safe here; that is `Store.isSafeComponent`'s own note.
+        private static func admissible(_ character: Character) -> Bool {
+            character.isASCII
+                && (character.isLetter || character.isNumber || character == "-" || character == "_")
+        }
+
+        /// Stands in for one inadmissible character.
+        ///
+        /// Outside the class by construction, and deliberately **not** `?`,
+        /// which an arrow's own line already spends on an unbound end — a
+        /// marker colliding with a meaning the format already has is the
+        /// ambiguity this closes, reintroduced one column over.
+        private static let marker: Character = "*"
+
+        /// Per-identifier cap, and it is **not** `maxTextBytes` (240) or
+        /// `maxCaptionBytes` (1200), because it bounds a different kind of
+        /// thing. Those bound prose the user typed, which is legitimately long,
+        /// and the question there is how much of a real sentence to keep. This
+        /// bounds an identifier: a SHA-1 in hex is 40 characters, the longest
+        /// type name Excalidraw mints is about ten, and an element id is
+        /// shorter still — so anything past 64 is already not an identifier,
+        /// and nothing a reader wanted is being cut. Nothing at the scene layer
+        /// bounds these fields at all, so without this one element can spend
+        /// the whole digest the way an unbounded label used to.
+        ///
+        /// The rendered field can exceed it by the three bytes of the cut
+        /// marker, the fixed overshoot `clipped`'s comment already argues is
+        /// not what a cap of this sort guards against.
+        private static let maxIdentifierBytes = 64
 
         /// Per-label cap, well under `maxBytes` so that one shape cannot spend
         /// the whole digest and leave every other element unlisted — which would
