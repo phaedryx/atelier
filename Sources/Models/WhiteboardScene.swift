@@ -203,8 +203,25 @@ extension Whiteboard {
             // Strokes and images stay opaque: a bounding box and nothing more.
             // A caption is an agent's own transcription and is reported as one,
             // never as the element's text.
+            //
+            // **A frame's words are in `name`, not `text`.** It is the one
+            // element type Excalidraw labels that way, and a mermaid class
+            // diagram with a `namespace` block draws one per namespace. Read
+            // through `text` alone it came out as a bare `frame` with its
+            // dimensions and nothing saying *which* namespace — a real element,
+            // on the canvas, carrying a word the digest could not see. Scoped
+            // to `frame` rather than added to the general fallback: `name` is
+            // not a field this reader knows the meaning of anywhere else, and
+            // honouring it everywhere would be the "relabel any element" rule
+            // the note promotion above refuses for the same reason.
+            //
+            // The kind still reports itself as `frame` through `.other`'s
+            // `rawType`. This adds the word, and deliberately does **not** add
+            // a `frame` case to the vocabulary: that would be a claim about how
+            // a frame's children relate to it, which nothing here reads.
             let text: String? = switch kind {
             case .stroke, .image: nil
+            case .other where rawType == "frame": raw["name"] as? String
             default: labels[id] ?? raw["text"] as? String
             }
 

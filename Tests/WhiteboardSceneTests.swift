@@ -231,6 +231,39 @@ final class WhiteboardSceneTests: XCTestCase {
         XCTAssertEqual(orphan?.text, "orphaned words")
     }
 
+    /// **A frame carries its words in `name`.**
+    ///
+    /// Excalidraw labels a frame that way and nothing else, and a mermaid class
+    /// diagram with a `namespace` block draws one per namespace. Read through
+    /// `text` alone the digest printed a bare `frame` with its dimensions and
+    /// nothing saying which namespace it was — an element on the canvas
+    /// carrying a word the digest could not see.
+    func test_aFrameIsNamedByItsNameRatherThanRenderedWordless() {
+        guard case let .loaded(scene) = Whiteboard.SceneLoad.parse("""
+        {"elements":[
+          {"id":"f1","type":"frame","name":"Auth","x":0,"y":0,"width":400,"height":300}]}
+        """) else { return XCTFail("expected a loaded scene") }
+        let frame = try? XCTUnwrap(scene.elements.first)
+        XCTAssertEqual(frame?.text, "Auth")
+        // Still `.other`, which names itself from `rawType`. Adding a `frame`
+        // case would be a claim about how its children relate to it, and
+        // nothing here reads that.
+        XCTAssertEqual(frame?.kind, .other)
+        XCTAssertEqual(frame?.rawType, "frame")
+    }
+
+    /// `name` is honoured for a frame and nowhere else — the same rule the note
+    /// promotion follows, for the same reason: a board must not be able to
+    /// rename its own shapes out from under the reader.
+    func test_aNameOnSomethingThatIsNotAFrameIsIgnored() {
+        guard case let .loaded(scene) = Whiteboard.SceneLoad.parse("""
+        {"elements":[
+          {"id":"r1","type":"rectangle","name":"not a label","x":0,"y":0,
+           "width":10,"height":10}]}
+        """) else { return XCTFail("expected a loaded scene") }
+        XCTAssertNil(scene.elements.first?.text)
+    }
+
     /// A container that is present but *deleted* is gone for this purpose too:
     /// `parse` filters `isDeleted` before anything else, so the label has no
     /// container to be folded into and must be reported.
