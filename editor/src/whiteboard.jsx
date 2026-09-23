@@ -37,15 +37,6 @@ let saveTimer = null
 // matching a scene it was never rendered from.
 let revision = 0
 
-// setTimeout, deliberately, and NOT requestAnimationFrame.
-//
-// The webview spends most of its life parked in an offscreen window, which is
-// NSWindowOcclusionState-occluded — and rAF is the one thing an occluded window
-// loses. Measured: setTimeout, MessageChannel, document.fonts.ready,
-// canvas.toBlob and OffscreenCanvas all keep firing there; rAF does not. A
-// rAF-driven debounce would stop saving the moment the tab is closed, with no
-// error and no timeout — a promise that simply never settles. See
-// Whiteboard.Host.
 // Everything about the board that a save actually writes.
 //
 // `serializeAsJSON(elements, appState, {}, 'local')` runs its appState through
@@ -79,6 +70,9 @@ const saveSignature = () => {
 
 // The signature of the last save that was scheduled or performed.
 let savedSignature = null
+// See `window.__whiteboardDebug` below.
+let saveGateCalls = 0
+let saveGateArmed = 0
 
 // setTimeout, deliberately, and NOT requestAnimationFrame.
 //
@@ -103,11 +97,33 @@ let savedSignature = null
 // and is deliberately not gated, because that path has just changed the scene
 // and must persist it whatever any comparison says.
 const scheduleSave = () => {
+  saveGateCalls += 1
   const signature = saveSignature()
   if (signature === savedSignature) return
+  saveGateArmed += 1
   savedSignature = signature
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = setTimeout(save, 800)
+}
+
+// The harness's seam onto this module, and the ONLY thing here that exists for a
+// test rather than for the app.
+//
+// Two things it has to give, and neither is reachable otherwise. `api` and
+// `scheduleSave` are module-scoped in a bundle, so an injected script cannot see
+// them — a harness driving `api.updateScene` to pan the board gets a
+// ReferenceError, which its `callJS` reports as a string nobody reads. And the
+// gate's counters separate "Excalidraw never fired onChange" from "the gate
+// declined": without them "a pan posts no save" passes just as well with the
+// gate deleted, so it would assert nothing and would go on passing forever.
+//
+// Same argument as `ProcessCompose.Settings.resolveBinary(searchPaths:)`, which
+// took an injection point into production because declining it left resolution
+// unassertable on any host. A save gate that silently stops saving is lost work,
+// so it has to be possible to watch it work.
+window.__whiteboardDebug = {
+  api: () => api,
+  gate: () => JSON.stringify({ calls: saveGateCalls, armed: saveGateArmed }),
 }
 
 // FileReader, not a String.fromCharCode loop over the bytes: a pasted screenshot
