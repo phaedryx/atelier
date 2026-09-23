@@ -703,6 +703,7 @@
 /* Sidebar accessibility labels — VoiceOver only, no visible text */
 "Add project" = "Add project";
 "Remove workstream" = "Remove workstream";
-/* SwiftUI renders an Int interpolation as %lld, so that is the key the sidebar's
-   workstream-count label looks up. */
-"%lld workstreams" = "%lld workstreams";
+/* "%lld workstreams" is deliberately NOT here. It is a plural — a plain entry
+   reads "1 workstreams" aloud for a single-workstream project — so it lives in
+   Localizable.stringsdict, which takes precedence over this file for a key
+   present in both. */
