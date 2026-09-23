@@ -699,3 +699,17 @@
 "Process" = "Process";
 "Namespace" = "Namespace";
 "Ready" = "Ready";
+
+/* Project overview - fallbacks for a branch name that could not be read or does not exist.
+   Each is the `??` arm of a String expression, so it localizes itself rather than being
+   a LocalizedStringKey — the branch name it stands in for must never be localized. */
+"unknown" = "unknown";
+"detached" = "detached";
+
+/* Project overview - the trailing marker on the main worktree's row. Keyed by what it
+   labels rather than by the word it shows, because it is a role and not a branch name:
+   the main worktree's branch may be master or trunk, and this reads "main" regardless. */
+"Main worktree label" = "main";
+
+/* Project overview - bulk prune in progress */
+"Pruning..." = "Pruning...";

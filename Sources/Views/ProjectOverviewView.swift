@@ -64,7 +64,14 @@ struct ProjectOverviewView: View {
                                     HStack(spacing: 4) {
                                         Image(systemName: "arrow.triangle.branch")
                                             .font(.caption)
-                                        Text(info.branch ?? "unknown")
+                                        // The `??` makes this a String, which binds
+                                        // Text's StringProtocol init — right for a
+                                        // branch name, which must never be localized,
+                                        // but it means the fallback has to localize
+                                        // itself rather than being a LocalizedStringKey.
+                                        Text(info.branch ?? NSLocalizedString(
+                                            "unknown", comment: "Repository branch name could not be read"
+                                        ))
                                     }
                                     .foregroundStyle(.secondary)
 
@@ -550,8 +557,13 @@ private struct WorktreeInfoRow: View {
                 .frame(width: 20, alignment: .top)
                 .padding(.top, 4)
             VStack(alignment: .leading, spacing: 2) {
-                Text(worktree.branch ?? "detached")
-                    .font(.system(.body, design: .monospaced))
+                // Same shape as the Repository section's branch line: the `??` makes
+                // this a String, so the fallback localizes itself and the branch name
+                // stays verbatim.
+                Text(worktree.branch ?? NSLocalizedString(
+                    "detached", comment: "Worktree is on a detached HEAD, so it has no branch name"
+                ))
+                .font(.system(.body, design: .monospaced))
                 Text(worktree.path.abbreviatedPath)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
@@ -623,7 +635,12 @@ private struct WorktreeInfoRow: View {
             .frame(minHeight: 36, alignment: .leading)
             Spacer()
             if worktree.isMain {
-                Text("main")
+                // A role label, not a branch name — it is gated on `isMain` and the
+                // main worktree's branch may be `master`, `trunk` or anything else,
+                // so this would read "main" regardless. The branch itself is the
+                // monospaced line above. Hence a key of its own: a bare "main" would
+                // be a short, generic key for one specific label to collide over.
+                Text("Main worktree label")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else if !isWorkstream, !isPurging {
