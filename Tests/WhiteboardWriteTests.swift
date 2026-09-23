@@ -815,6 +815,43 @@ final class WhiteboardWriteTests: XCTestCase {
         }
     }
 
+    /// **A `null` and an empty string are not asking for the field.**
+    ///
+    /// `JSONSerialization` hands a JSON `null` back as `NSNull`, which is not
+    /// nil, so a serializer that writes every key of its struct had a mermaid
+    /// entry refused for a `color` it never set — while the elements arm
+    /// accepts exactly those two from exactly that serializer, since
+    /// `normalizedColor` returns nil for an empty string and `from`/`to` are
+    /// read as non-empty strings. One serializer, one answer.
+    func test_aMermaidDiagramIgnoresAFieldThatIsNullOrEmpty() throws {
+        for field in ["color", "from", "to"] {
+            for absent in [NSNull(), "" as Any] {
+                var entry: [String: Any] = ["kind": "mermaid", "text": flowchart, "at": "10,20"]
+                entry[field] = absent
+                let plan = try Write.plan(from: [entry], live: empty, mint: minter())
+                XCTAssertEqual(
+                    plan,
+                    .mermaid(Write.Mermaid(definition: flowchart, x: 10, y: 20)),
+                    "\(field) = \(absent)"
+                )
+            }
+        }
+    }
+
+    /// The other half of the same rule: the elements arm really does accept
+    /// what the mermaid arm now stops refusing.
+    func test_theElementsArmAcceptsTheSameNullAndEmptyFields() throws {
+        let plan = try Write.plan(
+            from: [["kind": "box", "text": "Auth", "at": "10,20", "color": "", "from": NSNull()]],
+            live: empty,
+            mint: minter()
+        )
+        guard case let .elements(_, skeletons) = plan else {
+            return XCTFail("expected an elements plan, got \(plan)")
+        }
+        XCTAssertNil(skeletons.first?.strokeColor)
+    }
+
     func test_aMermaidDiagramWithAMalformedPositionIsRefused() {
         XCTAssertThrowsError(
             try Write.plan(

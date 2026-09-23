@@ -361,8 +361,28 @@ extension Whiteboard {
             return try .mermaid(mermaidPlan(from: entry, live: live))
         }
 
+        /// Whether an entry really asked for a field.
+        ///
+        /// **A JSON `null` and an empty string are not asking.** `entry[field]
+        /// != nil` reads both as present — `JSONSerialization` hands `null`
+        /// back as `NSNull`, which is very much not nil — so a serializer that
+        /// writes every key of its struct had a mermaid entry refused for a
+        /// `color` it never set, with `mermaidFieldRefused` explaining that
+        /// colour belongs in the definition. The elements arm accepts exactly
+        /// those two from exactly that serializer: `normalizedColor` returns
+        /// nil for an empty string, and `from`/`to` are read as
+        /// `as? String, !isEmpty`. One serializer must not be refused by one
+        /// arm and accepted by the other for the same bytes.
+        private static func asks(_ entry: [String: Any], for field: String) -> Bool {
+            guard let value = entry[field], !(value is NSNull) else { return false }
+            if let text = value as? String {
+                return !text.isEmpty
+            }
+            return true
+        }
+
         private static func mermaidPlan(from entry: [String: Any], live: Live) throws -> Mermaid {
-            for field in ["color", "from", "to"] where entry[field] != nil {
+            for field in ["color", "from", "to"] where asks(entry, for: field) {
                 throw Failure.mermaidFieldRefused(field)
             }
             guard let definition = entry["text"] as? String, !definition.isEmpty else {
