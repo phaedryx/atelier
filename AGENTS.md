@@ -1212,6 +1212,29 @@ active tab. What made run state survive navigation was always that the cache own
 holding it. Across a *launch* no surface exists and a restored command string would be a lie, so
 `restore`'s tmux probe is the only thing that carries a run over a relaunch.
 
+**The editor tab answers the same question the same way, and it cost unsaved work to learn.**
+`EditorView` is a `@ViewBuilder` branch of `TerminalContainerView`, so the rule above applies to
+it unchanged: anything an editor tab needs to survive navigation belongs on `WorkspaceModel`,
+which `TerminalSurfaceCache` owns, and not in view `@State`. `fileLoaded` was view `@State` — it
+means "this tab's Monaco model already holds its file's contents" — so a fresh view read it as
+`false`, `onAppear` read *that* as "never loaded", and reloaded the file from disk through
+`openFile`, whose `model.setValue(text)` replaced whatever the user had been typing and reset the
+model's clean version. Typing in a file and pressing ⌘⏎ lost the edits, the dirty dot and the ⌘W
+save prompt together. It is now `WorkspaceModel.editorFileLoaded`, and `onAppear` calls
+`switchModel` rather than reloading — which also keeps the undo stack, cursor and scroll position
+across a switch on a clean tab. `currentFilePath` did **not** have to move: it is already durable
+as `editorFilePaths[id]`, arrives as `initialFilePath`, and is kept current by `onFileChanged`.
+
+Three things about it are load-bearing. The flag is **not** `@Published`, for the reason
+`hasBeenPresented` and `editorInitialLines` give — nothing renders from it and it is written
+inside a load the view is already performing. It is cleared in `removeTab` beside
+`editorDirtyState`, and deliberately kept out of `WorkspaceTabSnapshot`, which carries no live
+model state. And the attach branch is **gated on `initialFilePath` being present**: Save As to a
+file outside the worktree removes that entry and detaches the editor, and there is nowhere
+durable to record an absolute path, so that case keeps the do-nothing it has always had rather
+than attaching the model underneath the opaque "Select a file to edit" placeholder. That gap is
+known and open — a detached editor still loses its association across a navigation.
+
 ### Port detection
 Run scripts are wrapped in the `atelier-run` launcher binary (bundled at `Contents/Helpers/atelier-run`).
 The launcher monitors the child process tree for listening TCP ports using `libproc` and writes
