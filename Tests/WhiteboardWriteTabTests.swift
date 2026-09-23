@@ -36,14 +36,17 @@ final class WhiteboardWriteTabTests: XCTestCase {
     }
 
     override func tearDown() {
-        // The host is deliberately left standing. `removeWhiteboardHost` calls
-        // `Host.teardown`, which closes the offscreen `NSWindow` the host also
-        // holds strongly — and `WhiteboardHost.swift` never sets
-        // `isReleasedWhenClosed`, so it keeps its default of true and the close
-        // over-releases it: measured here, the process segfaults in the next
-        // autorelease pool pop, after `teardown` has already returned. That is a
-        // separate bug and not this file's to fix; what it costs here is one
-        // parked offscreen webview per test, which the suite carries fine.
+        // **Torn down for real, which is also this file's regression proof for
+        // the over-release.** `removeWhiteboardHost` calls `Host.teardown`,
+        // which closes the offscreen `NSWindow` the host holds strongly — and
+        // while `WhiteboardHost.swift` left `isReleasedWhenClosed` at its
+        // default of true, that close over-released it and the process
+        // segfaulted in the next autorelease pool pop, *after* `teardown` had
+        // already returned. This file used to leak a parked webview per test to
+        // stay alive. It no longer does, so a regression there does not fail an
+        // assertion — it takes the test process down, which is the only way
+        // this particular bug ever announces itself.
+        surfaceCache.removeWhiteboardHost(for: workstreamID)
         Whiteboard.Store.sweep(for: workstreamID)
         WorkspaceActions.shared.projectList = nil
         WorkspaceActions.shared.surfaceCache = nil

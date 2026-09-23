@@ -75,6 +75,19 @@ extension Whiteboard {
                 defer: false
             )
             offscreenWindow.isExcludedFromWindowsMenu = true
+            // **`close()` must not release this window, because ARC owns it.**
+            //
+            // `NSWindow.isReleasedWhenClosed` defaults to true, and it is a
+            // contract from the days before ARC: the window releases *itself*
+            // on close, on the assumption that nothing else holds a strong
+            // reference. `offscreenWindow` is a strong `let` on this class, so
+            // it is held twice and released twice — `teardown` returns
+            // normally and the process segfaults in the next autorelease pool
+            // pop, which is what made this look like a crash somewhere else
+            // entirely. Both archive paths reach `teardown` through
+            // `removeWhiteboardHost`, so archiving or purging a workstream
+            // whose board had ever been opened was enough.
+            offscreenWindow.isReleasedWhenClosed = false
 
             let config = WKWebViewConfiguration()
             config.setURLSchemeHandler(
