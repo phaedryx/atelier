@@ -125,7 +125,10 @@ extension Whiteboard {
             // Built once, not per element: a board is unbounded and this is the
             // one place the whole list is walked twice.
             let bound = labels(in: live)
-            let elements = live.compactMap { element(from: $0, labels: bound) }
+            // Which containers are really here, so a label whose container is
+            // gone is not folded into nothing — see `element(from:…)`.
+            let present = Set(live.compactMap { $0["id"] as? String })
+            let elements = live.compactMap { element(from: $0, labels: bound, present: present) }
             return elements.isEmpty ? .empty : .loaded(Scene(elements: elements))
         }
 
@@ -151,14 +154,29 @@ extension Whiteboard {
 
         private static func element(
             from raw: [String: Any],
-            labels: [String: String]
+            labels: [String: String],
+            present: Set<String>
         ) -> Element? {
             guard let id = raw["id"] as? String,
                   let rawType = raw["type"] as? String
             else { return nil }
             // A bound label has already been folded into its container; listing
             // it again is the double-rendering this join exists to prevent.
-            if rawType == "text", raw["containerId"] is String {
+            //
+            // **Only when the container is really there.** A `containerId` is
+            // a claim about another element, and nothing guarantees it is
+            // still true: a scene edited outside Atelier, an older file, or a
+            // delete that removed a container without its label leaves a text
+            // element that Excalidraw draws on the canvas exactly where it sits
+            // — while this skipped it unconditionally, so it vanished from the
+            // digest. That is the digest reporting less than the picture holds,
+            // which is the one thing the two halves of the read path exist to
+            // make impossible. With the container gone there is nothing to fold
+            // it into, so it is reported as the ordinary text element it has
+            // become.
+            if rawType == "text", let container = raw["containerId"] as? String,
+               present.contains(container)
+            {
                 return nil
             }
 

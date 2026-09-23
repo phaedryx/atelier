@@ -210,4 +210,38 @@ final class WhiteboardSceneTests: XCTestCase {
         XCTAssertEqual(scene.elements.first?.kind, .note)
         XCTAssertEqual(scene.elements.first?.text, "check the TTL")
     }
+
+    /// **A label whose container is gone is still on the canvas.**
+    ///
+    /// The fold is an optimisation over a `containerId`, which is a claim
+    /// about another element rather than a guarantee — a scene edited outside
+    /// Atelier, an older file, or a delete that took a container without its
+    /// label all leave one behind. Skipped unconditionally it vanished from
+    /// the digest while Excalidraw went on drawing it, which is the digest
+    /// reporting less than the picture holds.
+    func test_aLabelWhoseContainerIsGoneIsReportedRatherThanFoldedIntoNothing() {
+        guard case let .loaded(scene) = Whiteboard.SceneLoad.parse("""
+        {"elements":[
+          {"id":"n1","type":"rectangle","x":0,"y":0,"width":200,"height":80},
+          {"id":"t1","type":"text","containerId":"gone","text":"orphaned words"}]}
+        """) else { return XCTFail("expected a loaded scene") }
+        XCTAssertEqual(scene.elements.count, 2)
+        let orphan = scene.elements.first { $0.id == "t1" }
+        XCTAssertEqual(orphan?.kind, .text)
+        XCTAssertEqual(orphan?.text, "orphaned words")
+    }
+
+    /// A container that is present but *deleted* is gone for this purpose too:
+    /// `parse` filters `isDeleted` before anything else, so the label has no
+    /// container to be folded into and must be reported.
+    func test_aLabelWhoseContainerIsDeletedIsReportedToo() {
+        guard case let .loaded(scene) = Whiteboard.SceneLoad.parse("""
+        {"elements":[
+          {"id":"n1","type":"rectangle","x":0,"y":0,"width":200,"height":80,
+           "isDeleted":true},
+          {"id":"t1","type":"text","containerId":"n1","text":"orphaned words"}]}
+        """) else { return XCTFail("expected a loaded scene") }
+        XCTAssertEqual(scene.elements.map(\.id), ["t1"])
+        XCTAssertEqual(scene.elements.first?.text, "orphaned words")
+    }
 }
