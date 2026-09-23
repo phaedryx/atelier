@@ -2818,15 +2818,42 @@ When adding, removing, or changing keyboard shortcuts:
 3. Update `HelpView.swift` (shortcut reference)
 4. Update the shortcut table in `README.md`
 5. Update the list below
+6. Check the **two key monitors**, because half the real bindings are not in
+   the menu at all: `AppDelegate`'s `NSEvent.addLocalMonitorForEvents`
+   (Cmd+1-9, Cmd+L) and `ContentView.commandKeyAction` (Cmd+[/], Cmd+Shift+{/},
+   Cmd+W). A chord one of those swallows never reaches a menu item, so adding it
+   to the menu alone does nothing.
+
+**`HelpView.swift` is the list to reconcile against.** It is the one a user can
+read, and every other list here has drifted from it at least once — this section
+and README's table were both missing Cmd+N, Cmd+Shift+N and Cmd+comma, and this
+one was also missing Cmd+T. The exception is Cmd+Option+←/→, which the menu
+binds and *no* list carried, HelpView's included.
 
 Current shortcuts:
+
+Global — available everywhere:
+- **Cmd+comma**: Settings
+- **Cmd+/**: Help
+- **Cmd+N**: New workstream, or new project when none is selected. The absent
+  payload means "the `atelier.bypassPermissions` default" — see `AppCommand`.
+- **Cmd+Shift+N**: New project, always
+- **Cmd+Shift+C**: Toggle sidebar
+- **Cmd+Shift+P**: Command Palette
+
+Workstream — when a workstream is active:
 - **Cmd+I**: Info
 - **Cmd+1-9**: Switch tab (all tabs in display order). Positional, so no
   number reaches a closed tab — and Changes, Execution and Verification start
   closed. Open them from the tab bar's quick-add buttons or the command
   palette; nothing is bound to them by name.
 - **Cmd+Shift+[/]**: Cycle tabs
+- **Cmd+Option+Left/Right**: Cycle tabs, the menu's own binding for the same
+  two commands. `AtelierApp.swift`'s "Previous Tab" / "Next Tab" items carry it
+  because `ContentView.commandKeyAction` reads the bracket chords off a monitor
+  and a menu item cannot be given a chord a monitor swallows.
 - **Cmd+Return**: Focus Coding Agent
+- **Cmd+T**: New terminal tab
 - **Cmd+P**: Find File (Editor)
 - **Cmd+S**: Save (Editor)
 - **Cmd+Shift+S**: Save As (Editor)
@@ -2835,14 +2862,15 @@ Current shortcuts:
 - **Cmd+Shift+W**: Archive workstream
 - **Cmd+L**: Address bar (browser)
 - **Cmd+Shift+Return**: Start/Rerun
+
+Navigation:
 - **Cmd+[/]**: Cycle workstreams
 - **Cmd+Up/Down**: Cycle projects
 - **Cmd+0**: Back to project
-- **Cmd+Shift+C**: Toggle sidebar
-- **Cmd+Shift+P**: Command Palette
+
+External apps — open the current workstream's directory:
 - **Cmd+Option+B**: External browser
 - **Cmd+Option+T**: External terminal
-- **Cmd+/**: Help
 
 ## Naming
 - The app is "Atelier". Internal ID is `atelier` (no hyphen).
