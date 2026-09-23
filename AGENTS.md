@@ -1785,6 +1785,44 @@ argument. That collapsed three ad-hoc list/bool parsers applied unevenly —
 `Launcher.Failure.invalidArgument`), `VerificationSummary.checks(from:)` and
 `TaskSummary.tags(from:)` (both now delegating to `ToolArguments.parseList`).
 
+**Every argument is declared a string, and models send real JSON anyway — so the helper
+coerces rather than renders, in `ToolArguments.strings(fromJSON:)`.** That is a shared
+function rather than a literal in `main.swift` for the reason `IPC.Vocabulary` is one: it
+lives in `IPCToolRegistry.swift`, which is one of the two files compiled into `AtelierMCP`,
+so the helper calls it and the app's tests assert it. The rule is that each JSON type gets
+the spelling this surface's own readers already parse — a boolean becomes `"true"`/`"false"`,
+an array becomes the comma-separated form `parseList` takes (elements by the same rules), an
+object becomes compact JSON, and **null is dropped**, because "absent" is what a null
+argument means and every optional read here treats absent and empty alike. It replaced
+`value as? String ?? String(describing: value)`, whose comment claimed a non-string was
+"rendered rather than rejected"; only numbers survived that. `JSONSerialization` returns
+`__NSCFBoolean` for a JSON boolean and `String(describing:)` renders it **"1"**, which
+`boolean(_:)` then refused as `received "1"` for an argument the agent spelled `true`; an
+`NSArray` rendered with parentheses, which `parseList` does not split on, so
+`start_verification(checks: ["rspec"])` reached the runner as `["(", "rspec", ")"]` and was
+refused for an undeclared check named `(`; `NSNull` became the literal `"<null>"`. The
+boolean test is `CFGetTypeID(… as CFTypeRef) == CFBooleanGetTypeID()` and not `is Bool`,
+which answers true for `NSNumber(1)` and would spell a genuine `tail: 1` as `"true"`.
+
+**And `IPC.Service` is a reentrant actor, so `list_peers` prunes only what it observed.**
+`pruneContexts` takes the `contexts` keys snapshotted *before* the `store.listPeers()` await
+and drops only ids in that snapshot the store no longer reports. Pruning to the store's
+answer alone deleted a context written by a `register_peer` that completed inside the hop:
+the new peer's reply carried its id, so its helper believed itself registered, while
+`registeredPeerID` answered nil for the rest of the session — `send_message`,
+`receive_messages` and `broadcast` all told it to register first, and `peersBySurface` missed
+it so verification and task notices addressed to it were dropped. `touch` cannot repair that,
+because its own guard needs a context to exist. It is reachable from the coordinator workflow
+this document recommends, verbatim: polling `list_peers` for a spawned peer's surface id *is*
+a read running while that peer registers.
+
+**Only a `register_peer` reply binds a peer to a connection** (`IPC.Server.peerToClaim`).
+The gate is the tool, never the payload's shape: `get_peer_status` answers `.peer` too, for a
+peer that is somebody else's, and in the window between `forget` removing `peerOwners[P]` and
+the *asynchronous* `retire` removing P from the store, P is ownerless and still readable — so
+a read in that window claimed P, and the one-connection-speaks-for-one-peer branch retired
+the caller's **own** live peer and bound its socket to P.
+
 **`IPC.ToolError` unifies the *type* that crosses into a `Response`, not every wording.**
 `missingArgument`/`invalidArgument`/`notInWorkstream` moved off `WorkspaceActions.Failure`,
 which keeps only what the live app can know (`unknownWorkstream`, `appNotReady`,
