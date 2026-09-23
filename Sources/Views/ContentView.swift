@@ -1219,10 +1219,26 @@ struct ContentView: View {
     private func performRemove() {
         guard let wsID = workstreamToRemove,
               let projectIndex = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
+        let projectID = projects[projectIndex].id
         Workstream.Archiver.remove(wsID, in: &projects[projectIndex], surfaceCache: surfaceCache, tmuxPath: appEnvironment.toolStatus.tmux.path,
                                    verificationRunner: verificationRunner, agentStateTracker: agentStateTracker)
         ProjectStore.save(projects)
         syncHeadWatcher(projects: projects)
+        // The selection has to move off the workstream that no longer exists,
+        // here as much as in `ProjectSidebar.performRemove` and the purge
+        // completion, which both already do it. Missing here, ⌘⇧W — and the
+        // menu's Archive Workstream, and the palette, none of which go through
+        // the sidebar — left `selection` naming a dead id: `activeProject`
+        // resolves nil for it and `detailView` falls through to
+        // `OnboardingView` beside a populated sidebar.
+        //
+        // `onChange(of: projectList.items)` cannot rescue this. `Project`'s
+        // `==` compares `id` only, so dropping a workstream from a project does
+        // not make the list unequal and the observer does not fire.
+        if case let .workstream(id) = selection, id == wsID {
+            selection = projects[projectIndex].workstreams.first.map { .workstream($0.id) }
+                ?? .project(projectID)
+        }
         workstreamToRemove = nil
     }
 }
