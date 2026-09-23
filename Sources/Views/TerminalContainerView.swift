@@ -1732,7 +1732,12 @@ struct TerminalContainerView: View {
     }
 
     private func confirmCloseEditor(tab: WorkspaceTab, id: UUID) {
-        let fileName = (model.editorFilePaths[id] as? NSString)?.lastPathComponent ?? "file"
+        // The fallback is localized and the expression stays a `String`: it is
+        // substituted into the `%@` of the `NSLocalizedString` format below, so
+        // the surrounding sentence was already localized and this was the one
+        // unlocalized half of it.
+        let fileName = (model.editorFilePaths[id] as? NSString)?.lastPathComponent
+            ?? NSLocalizedString("file", comment: "Stand-in for a file name in the unsaved-changes alert")
         let alert = NSAlert()
         alert.messageText = String(
             format: NSLocalizedString("Do you want to save changes to \"%@\"?", comment: ""),
@@ -1924,7 +1929,11 @@ struct TerminalContainerView: View {
         }
     }
 
-    private func terminalLoadingView(message: String) -> some View {
+    /// `LocalizedStringKey`, not `String`: a `String` binds `Text`'s
+    /// `StringProtocol` overload, which renders verbatim, so the three literals
+    /// the call sites pass never reached the strings file however they were
+    /// spelled there.
+    private func terminalLoadingView(message: LocalizedStringKey) -> some View {
         VStack(spacing: 12) {
             ProgressView()
                 .controlSize(.regular)
