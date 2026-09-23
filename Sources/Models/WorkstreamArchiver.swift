@@ -37,31 +37,156 @@ extension Workstream {
                     }
                 }
             }
-            // Before the surfaces go: an agent here may be stopped on a
-            // permission request, and the banner that would answer it is about
-            // to stop existing. Releasing hands it back to Claude Code instead
-            // of leaving it to wait out a hold nothing will service.
-            PermissionApprovalStore.shared.releaseAll(workstreamID: workstreamID)
-            // Before the sweep below, which cannot reach a check's terminal: that
-            // sweep enumerates ids derived from `WorkspaceModel`'s counters, and a
-            // check surface is keyed by `Verification.Spawn.surfaceID`. Without
-            // this, removing a workstream with rspec running leaves that terminal
-            // and its process alive for the session with nothing able to reach
-            // either. Optional only so the two call sites can adopt it without a
-            // third having to invent a runner; both pass one.
-            verificationRunner?.forget(workstreamID: workstreamID)
-            // The whiteboard goes on **both** archive paths, the way
-            // `verificationRunner?.forget` above is called from both — and
-            // deliberately *not* the way `clearWorkstreamState` is, which is
-            // purge-only because `remove` keeps the worktree and destroys
-            // nothing. A reviewer will pattern-match this to that rule, so:
+            // Before the sweep in the shared tail, which cannot reach a check's
+            // terminal: that sweep enumerates ids derived from
+            // `WorkspaceModel`'s counters, and a check surface is keyed by
+            // `Verification.Spawn.surfaceID`. Without this, removing a
+            // workstream with rspec running leaves that terminal and its process
+            // alive for the session with nothing able to reach either. Optional
+            // only so the two call sites can adopt it without a third having to
+            // invent a runner; both pass one.
             //
-            // A board is keyed by the workstream's UUID, and `remove` drops the
+            // Deliberately **not** in `detachWorkstream`, however much it looks
+            // like it belongs there. `purge` reaches the same call from inside
+            // its detached task, awaited and only after `quiesceVerification`
+            // has watched the checks actually die; hoisting it would run it
+            // here, before the stop, which is the "signalled and moved on"
+            // ordering that teardown exists to prevent.
+            verificationRunner?.forget(workstreamID: workstreamID)
+            // `Initialization.Runner.states` is in memory and keyed by the
+            // workstream id this is about to drop from the project, so an entry
+            // left here is unreachable for the life of the process — the same
+            // leak, and the same discriminator, that `purge`'s own call to this
+            // records at the end of its detached task. Not hoisted into
+            // `detachWorkstream` for the reason `forget` above is not: `purge`
+            // must clear *after* `Initialization.Runner.cancel`, which writes a
+            // final `.cancelled` state, and an early clear there would be
+            // overwritten by the very run it is meant to forget.
+            Task { await Initialization.Runner.shared.clearState(for: workstreamID) }
+            detachWorkstream(
+                workstreamID,
+                from: &project,
+                surfaceCache: surfaceCache,
+                agentStateTracker: agentStateTracker
+            )
+        }
+
+        /// Archive every workstream of a project that is itself about to be
+        /// dropped from the list.
+        ///
+        /// Three paths delete a project — the sidebar's Delete, the sweep that
+        /// drops projects whose directory has gone, and Clear Projects — and all
+        /// three used to do only `removeWorkstreamSurfaces` plus
+        /// `AgentStateTracker.clear`, skipping everything else `remove` does. A
+        /// running verification check kept its terminal and its process for the
+        /// session with nothing able to reach either, an offscreen `WKWebView`
+        /// and its window leaked per workstream, permission holds were never
+        /// released, tmux sessions were left running, and the mcp-config,
+        /// `--settings` and launch-log files stayed in Caches. AGENTS.md's own
+        /// warning next to `clearAgentState` is that "a third archive path would
+        /// forget it" — there were three.
+        ///
+        /// **By value, not `inout`.** Every caller deletes the project in the
+        /// same breath, so there is nothing to write back — and the callers hold
+        /// the list as a `Binding` onto a `@Published` array, where a write per
+        /// workstream would publish the whole list N times over, each one
+        /// re-running `onChange(of: projectList.items)`, for a project that is
+        /// about to leave it anyway.
+        ///
+        /// Nothing here touches the project directory on disk, which is what
+        /// makes it safe for the missing-directory sweep to call: the worktrees
+        /// are left exactly as `remove` leaves them.
+        @MainActor
+        static func removeAllWorkstreams(
+            in project: Project,
+            surfaceCache: TerminalSurfaceCache,
+            tmuxPath: String?,
+            verificationRunner: Verification.Runner? = nil,
+            agentStateTracker: Workstream.AgentStateTracker
+        ) {
+            var project = project
+            let projectName = project.name
+            let workstreamNames = project.workstreams.map(\.name)
+            // Over a snapshot of the ids: `remove` drops each one from
+            // `project.workstreams` as it goes.
+            for workstreamID in project.workstreams.map(\.id) {
+                remove(
+                    workstreamID,
+                    in: &project,
+                    surfaceCache: surfaceCache,
+                    // Deliberately nil, and the tmux kill is done once below
+                    // instead. `remove` kills its workstream's sessions from a
+                    // `Task.detached`, and `killWorkstreamSessions` is two
+                    // `ProcessRunner` spawns — each blocking its thread for the
+                    // child's whole life. One of those is the shape `remove`
+                    // has always had; *N at once* is the documented production
+                    // failure this codebase measured, where fourteen of
+                    // fourteen cooperative threads parked in `capture` and
+                    // every child was killed at its deadline, `tmux -V` blowing
+                    // a 120s bound among them. Clearing a list of a dozen
+                    // workstreams would have reached it directly.
+                    tmuxPath: nil,
+                    verificationRunner: verificationRunner,
+                    agentStateTracker: agentStateTracker
+                )
+            }
+            guard let tmuxPath, !workstreamNames.isEmpty else { return }
+            // One queue, one thread, the kills serialized on it — rather than
+            // `Task.detached`, which is the cooperative pool the paragraph above
+            // is about. The names were snapshotted before the loop, because
+            // `remove` has emptied `project.workstreams` by now.
+            DispatchQueue.global(qos: .utility).async {
+                for workstreamName in workstreamNames {
+                    TmuxSession.killWorkstreamSessions(
+                        tmuxPath: tmuxPath, project: projectName, workstream: workstreamName
+                    )
+                }
+            }
+        }
+
+        /// Everything both archive paths do to end a workstream in the app,
+        /// synchronously and on the main actor.
+        ///
+        /// The `Remove vs purge` table in AGENTS.md says purge does what remove
+        /// does "plus" more, and for three of these steps it did not: releasing
+        /// a permission hold, and dropping the mcp-config and `--settings`
+        /// files, were written into `remove` alone. A purge of a workstream
+        /// whose agent sat on a permission banner left that agent waiting out a
+        /// deadline nothing would service, and leaked two files into Caches for
+        /// good. One function is what keeps the table true — a fourth step added
+        /// to one path cannot go missing from the other.
+        ///
+        /// What stays *out* of here is as load-bearing as what is in it, and a
+        /// reviewer should expect to find each of these at its own call site
+        /// rather than folded in: `Verification.Runner.forget` and
+        /// `Initialization.Runner.clearState`, which both paths run but at
+        /// different points (see `remove`); everything destructive, which is
+        /// `purge`'s alone; and `clearWorkstreamState`, which is purge-only
+        /// because `remove` keeps the worktree and destroys nothing.
+        @MainActor
+        private static func detachWorkstream(
+            _ workstreamID: UUID,
+            from project: inout Project,
+            surfaceCache: TerminalSurfaceCache,
+            agentStateTracker: Workstream.AgentStateTracker
+        ) {
+            // First, and before the surfaces go: an agent here may be stopped on
+            // a permission request, and the banner that would answer it is about
+            // to stop existing. Releasing hands it back to Claude Code instead
+            // of leaving it to wait out a hold nothing will service. A
+            // workstream holding nothing makes this a no-op, which is what lets
+            // both paths call it unconditionally.
+            PermissionApprovalStore.shared.releaseAll(workstreamID: workstreamID)
+            // The whiteboard goes on **both** archive paths — and deliberately
+            // *not* the way `clearWorkstreamState` is, which is purge-only
+            // because `remove` keeps the worktree and destroys nothing. A
+            // reviewer will pattern-match this to that rule, so:
+            //
+            // A board is keyed by the workstream's UUID, and both paths drop the
             // workstream from the project. Re-adopting the worktree mints a new
             // id, so nothing can ever reach that board again — left behind it is
             // unreachable bytes in a cache, not preserved work. That is the
-            // discriminator, and it is why this follows `forget` rather than
-            // `clearWorkstreamState`.
+            // discriminator.
             //
             // Host first, then the directory: the host holds a live webview with
             // a save still sitting on its debounce, and sweeping underneath it
@@ -70,13 +195,17 @@ extension Workstream {
             Whiteboard.Store.sweep(for: workstreamID)
             surfaceCache.removeWorkstreamSurfaces(for: workstreamID)
             // Fire-and-forget: reverting an in-memory dictionary entry back to
-            // `.pending` carries none of the weight `verificationRunner?.forget`
-            // above does (killing running processes, waiting on them), so this
-            // does not need the injected-optional-parameter pattern that exists
-            // for that heavier operation — same shape as the tmux-kill
-            // `Task.detached` at the top of this function. A project with no
-            // tasks, or a workstream with no claims, makes this a genuine no-op.
+            // `.pending` carries none of the weight `Verification.Runner.forget`
+            // does (killing running processes, waiting on them), so this does not
+            // need the injected-optional-parameter pattern that exists for that
+            // heavier operation — same shape as the tmux-kill `Task.detached` in
+            // `remove`. A project with no tasks, or a workstream with no claims,
+            // makes this a genuine no-op.
             Task { await IPC.Service.shared.releaseTaskClaims(inWorkstream: workstreamID) }
+            // The agent's mcp-config JSON and its `--settings` file, both named
+            // for this workstream id. Nothing re-reads either once the
+            // workstream is gone, so a path that skips them leaks two files into
+            // Caches per archive, for good.
             IPC.Config.remove(for: workstreamID)
             StatusLine.Config.remove(for: workstreamID)
             LaunchLogger.removeLog(for: workstreamID)
@@ -111,7 +240,18 @@ extension Workstream {
         /// Check if purging a workstream would lose work. Returns a warning message
         /// describing what would be lost, or nil if it is safe to purge.
         static func purgeWarning(for workstream: Workstream) -> String? {
-            guard let path = workstream.worktreePath else { return nil }
+            purgeWarning(forWorktreeAt: workstream.worktreePath)
+        }
+
+        /// The same decision against a bare path.
+        ///
+        /// Split out so the probe can be handed to a background queue carrying
+        /// only a `String`: this runs `git status --porcelain` and
+        /// `git log @{upstream}..HEAD` through `ProcessRunner`, which blocks its
+        /// thread for the child's whole life, and `Workstream` is not what needs
+        /// to cross that boundary. See `PurgeConfirmation.present`.
+        static func purgeWarning(forWorktreeAt path: String?) -> String? {
+            guard let path else { return nil }
             // A probe that did not run must not read as "nothing here": this warning
             // is the only thing between the user and a --force removal.
             guard let uncommitted = Git.Operations.hasUncommittedChanges(at: path) else {
@@ -258,8 +398,6 @@ extension Workstream {
                 let standardizedPath = URL(fileURLWithPath: worktreePath ?? projectDir).standardizedFileURL.path
                 let wsName = ws.name
                 let projName = project.name
-                // Capture the branch name before the worktree is removed
-                let branchName = worktreePath.flatMap { Git.Operations.currentBranch(at: $0) }
                 archivingPaths.insert(standardizedPath)
                 NotificationCenter.default.post(name: archivingDidStart, object: nil)
                 Task.detached {
@@ -324,6 +462,18 @@ extension Workstream {
                     await withCheckedContinuation { continuation in
                         DispatchQueue.global(qos: .utility).async {
                             if let worktreePath {
+                                // Read before anything below removes the
+                                // worktree, and read *here* rather than on the
+                                // main actor where it used to be: this goes
+                                // through `ProcessRunner`, which blocks its
+                                // thread for the child's whole life, so on a
+                                // large repository it froze the UI before the
+                                // confirmation alert had even been answered.
+                                // This queue, not the enclosing `Task.detached`,
+                                // for the reason the comment above it gives —
+                                // a blocking child on the cooperative pool is
+                                // the documented way to park every thread in it.
+                                let branchName = Git.Operations.currentBranch(at: worktreePath)
                                 // Before the worktree is removed: dispose runs
                                 // in it.
                                 runDispose(
@@ -376,14 +526,14 @@ extension Workstream {
                     clearWorkstreamState(for: workstreamID)
                 }
             }
-            // See the note in `remove`. Same two steps, same order, same reason.
-            surfaceCache.removeWhiteboardHost(for: workstreamID)
-            Whiteboard.Store.sweep(for: workstreamID)
-            surfaceCache.removeWorkstreamSurfaces(for: workstreamID)
-            Task { await IPC.Service.shared.releaseTaskClaims(inWorkstream: workstreamID) }
-            LaunchLogger.removeLog(for: workstreamID)
-            project.workstreams.removeAll { $0.id == workstreamID }
-            clearAgentState(workstreamID, tracker: agentStateTracker)
+            // The same tail `remove` runs, and that is the whole of the "plus"
+            // in AGENTS.md's table: everything above this line is purge's alone.
+            detachWorkstream(
+                workstreamID,
+                from: &project,
+                surfaceCache: surfaceCache,
+                agentStateTracker: agentStateTracker
+            )
         }
 
         /// Stop this workstream's verification checks and wait until none of them
@@ -555,7 +705,6 @@ extension Workstream {
         @MainActor
         static func purgeOrphanWorktree(projectDirectory: String, worktreePath: String) {
             let standardizedPath = URL(fileURLWithPath: worktreePath).standardizedFileURL.path
-            let branchName = Git.Operations.currentBranch(at: worktreePath)
             archivingPaths.insert(standardizedPath)
             NotificationCenter.default.post(name: archivingDidStart, object: nil)
             Task.detached {
@@ -565,21 +714,34 @@ extension Workstream {
                         NotificationCenter.default.post(name: archivingDidComplete, object: nil)
                     }
                 }
-                // Same as `purge`: git's stderr is the only account of why an
-                // orphan could not be removed, and nothing downstream can recover it.
-                if case let .failure(failure) = Git.Operations.removeWorktree(
-                    projectPath: projectDirectory, worktreePath: worktreePath
-                ) {
-                    logger.error("[Atelier] orphan purge could not remove the worktree: \(failure.description, privacy: .public)")
+                // Every git call below blocks its thread for the child's whole
+                // life, so they go to a utility queue rather than staying on the
+                // cooperative pool this detached task runs on — the same bridge
+                // `purge` uses, and for the reason stated there. `currentBranch`
+                // in particular used to run on the *main actor*, before the
+                // caller's confirmation alert had been drawn.
+                await withCheckedContinuation { continuation in
+                    DispatchQueue.global(qos: .utility).async {
+                        // Before the worktree is removed out from under it.
+                        let branchName = Git.Operations.currentBranch(at: worktreePath)
+                        // Same as `purge`: git's stderr is the only account of why an
+                        // orphan could not be removed, and nothing downstream can recover it.
+                        if case let .failure(failure) = Git.Operations.removeWorktree(
+                            projectPath: projectDirectory, worktreePath: worktreePath
+                        ) {
+                            logger.error("[Atelier] orphan purge could not remove the worktree: \(failure.description, privacy: .public)")
+                        }
+                        if let branchName,
+                           case let .failure(failure) = Git.Operations.deleteLocalBranch(
+                               at: projectDirectory, branchName: branchName
+                           )
+                        {
+                            logger.error("[Atelier] orphan purge could not delete branch \(branchName, privacy: .public): \(failure.description, privacy: .public)")
+                        }
+                        Git.Operations.fetchDefaultBranch(at: projectDirectory)
+                        continuation.resume()
+                    }
                 }
-                if let branchName,
-                   case let .failure(failure) = Git.Operations.deleteLocalBranch(
-                       at: projectDirectory, branchName: branchName
-                   )
-                {
-                    logger.error("[Atelier] orphan purge could not delete branch \(branchName, privacy: .public): \(failure.description, privacy: .public)")
-                }
-                Git.Operations.fetchDefaultBranch(at: projectDirectory)
             }
         }
     }

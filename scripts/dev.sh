@@ -13,7 +13,6 @@ APP_PATH="$BUILD_DIR/Build/Products/Debug/$APP_NAME.app"
 SPM_CACHE="$HOME/Library/Caches/atelier/spm"
 BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
 GHOSTTY_RESOURCES="ghostty/zig-out/share"
-MONACO_OUTPUT="Resources/MonacoEditor/index.html"
 
 ensure_ghostty_resources() {
   if [ ! -d "$GHOSTTY_RESOURCES/terminfo" ] || [ ! -d "$GHOSTTY_RESOURCES/ghostty" ]; then
@@ -45,11 +44,24 @@ release_version() {
   fi
 }
 
+# Always delegate; never decide here whether the bundle is current.
+#
+# This tested `[ ! -f "$MONACO_OUTPUT" ]` and called build-editor.sh only when
+# the bundle was **missing**, so once it existed it was never rebuilt — and
+# build-editor.sh's own staleness check, which is the only thing that looks at
+# `editor/src/`, was never consulted. Anyone editing the editor and running
+# `./scripts/dev.sh test` was therefore testing the previous bundle, and the
+# suite passed and told them nothing. That is not a hypothetical: the whiteboard
+# tests drive a real `Whiteboard.Host` that loads this bundle, and the workaround
+# people found was to run build-editor.sh by hand after every edit.
+#
+# The existence test is not kept as a fast path in front of the call. Doing so
+# would leave two staleness policies, and the wrong one would win in exactly the
+# case that matters — a bundle that exists and is out of date. build-editor.sh
+# skips in ~0.02s when it is current, so there is nothing to save and a green
+# suite that proves nothing to lose.
 ensure_monaco_editor() {
-  if [ ! -f "$MONACO_OUTPUT" ]; then
-    echo "info: Monaco editor not built, running scripts/build-editor.sh..."
-    bash scripts/build-editor.sh
-  fi
+  bash scripts/build-editor.sh
 }
 
 case "${1:-build}" in

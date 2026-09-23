@@ -251,7 +251,18 @@
 "Switch tab" = "Switch tab";
 "Previous tab" = "Previous tab";
 "Next tab" = "Next tab";
+"Toggle sidebar" = "Toggle sidebar";
+"New terminal tab" = "New terminal tab";
+"Save (Editor)" = "Save (Editor)";
+"Save As (Editor)" = "Save As (Editor)";
+"Rename workstream" = "Rename workstream";
+"Archive workstream" = "Archive workstream";
+"Previous workstream" = "Previous workstream";
+"Next workstream" = "Next workstream";
+"Previous project" = "Previous project";
+"Next project" = "Next project";
 "Navigation" = "Navigation";
+"Move between workstreams and projects" = "Move between workstreams and projects";
 "External Apps" = "External Apps";
 "Opens the current workstream directory" = "Opens the current workstream directory";
 "Open in external browser" = "Open in external browser";
@@ -261,6 +272,7 @@
 "Reveal in Finder" = "Reveal in Finder";
 "Copy project path" = "Copy project path";
 "Copy branch name" = "Copy branch name";
+"Copy path" = "Copy path";
 "Copy worktree path" = "Copy worktree path";
 
 /* Agent tab - Claude not installed */
@@ -699,3 +711,43 @@
 "Process" = "Process";
 "Namespace" = "Namespace";
 "Ready" = "Ready";
+
+/* Execution tab - Start button while the previous run's control socket is being reclaimed */
+"Reclaiming…" = "Reclaiming…";
+
+/* Editor - stand-in filename when the editor is not pointing at a file. Reaches
+   the user through the save prompt ("Do you want to save changes to ...?") and
+   as the Save As panel's default name. */
+"file" = "file";
+
+/* Terminal container - loading states while tools are detected and the agent is spawned */
+"Checking terminal tools..." = "Checking terminal tools...";
+"Preparing Coding Agent..." = "Preparing Coding Agent...";
+/* Terminal container - a surface whose process could not be started */
+"Terminal failed to start" = "Terminal failed to start";
+/* Terminal container - stand-in for a file name in the unsaved-changes alert */
+"file" = "file";
+/* Terminal - desktop notification body when a terminal rings the bell */
+"Terminal bell" = "Terminal bell";
+
+/* Project overview - fallbacks for a branch name that could not be read or does not exist.
+   Each is the `??` arm of a String expression, so it localizes itself rather than being
+   a LocalizedStringKey — the branch name it stands in for must never be localized. */
+"unknown" = "unknown";
+"detached" = "detached";
+
+/* Project overview - the trailing marker on the main worktree's row. Keyed by what it
+   labels rather than by the word it shows, because it is a role and not a branch name:
+   the main worktree's branch may be master or trunk, and this reads "main" regardless. */
+"Main worktree label" = "main";
+
+/* Project overview - bulk prune in progress */
+"Pruning..." = "Pruning...";
+
+/* Sidebar accessibility labels — VoiceOver only, no visible text */
+"Add project" = "Add project";
+"Remove workstream" = "Remove workstream";
+/* "%lld workstreams" is deliberately NOT here. It is a plural — a plain entry
+   reads "1 workstreams" aloud for a single-workstream project — so it lives in
+   Localizable.stringsdict, which takes precedence over this file for a key
+   present in both. */

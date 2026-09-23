@@ -74,6 +74,11 @@ targets:
         buildPhase: resources
       - path: Localization/en.lproj/Localizable.strings
         buildPhase: resources
+      # Plurals. Listed separately because this block names each strings file by
+      # path rather than globbing the lproj directory, so a file not named here
+      # is not copied into the bundle and its keys resolve to the raw key.
+      - path: Localization/en.lproj/Localizable.stringsdict
+        buildPhase: resources
       - path: Localization/en.lproj/InfoPlist.strings
         buildPhase: resources
       - path: Resources/Scripts/atl

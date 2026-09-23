@@ -452,10 +452,17 @@ from.
 
 | Shortcut | Action |
 |----------|--------|
+| ⌘N | New workstream, or new project when none is selected |
+| ⌘⇧N | New project |
+| ⌘, | Settings |
+| ⌘/ | Help |
+| ⌘⇧C | Toggle sidebar |
+| ⌘⇧P | Command palette |
 | ⌘I | Info tab |
 | ⌘↩ | Focus Coding Agent |
 | ⌘1–9 | Switch to tab by position |
 | ⌘⇧[ / ⌘⇧] | Cycle tabs |
+| ⌘⌥← / ⌘⌥→ | Cycle tabs |
 | ⌘T | New terminal tab |
 | ⌘W | Close tab |
 | ⌘[ / ⌘] | Cycle workstreams |
@@ -464,15 +471,16 @@ from.
 | ⌘⇧R | Rename workstream |
 | ⌘⇧W | Archive workstream |
 | ⌘⇧↩ | Start / Rerun |
-| ⌘⇧C | Toggle sidebar |
-| ⌘⇧P | Command palette |
 | ⌘P | Find file (editor) |
 | ⌘S / ⌘⇧S | Save / Save As (editor) |
 | ⌘L | Address bar (browser) |
 | ⌘⌥B | Open in external browser |
 | ⌘⌥T | Open in external terminal |
-| ⌘/ | Help |
 | ⇧drag | Select in a terminal, over a TUI that has grabbed the mouse |
+
+⌘⌥← / ⌘⌥→ and ⌘⇧[ / ⌘⇧] do the same thing: the bracket chords are read off a
+key monitor, and the menu's own Previous Tab / Next Tab items carry the arrow
+pair because a menu item cannot be given a chord a monitor already swallows.
 
 A full-screen TUI — process-compose's own, which Start runs for the `execute`
 phase — reports mouse events to itself, so an ordinary drag never reaches the

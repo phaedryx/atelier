@@ -98,6 +98,50 @@ extension ProcessCompose {
             "ATELIER_PROJECT_DIR", "ATELIER_WORKTREE_DIR", "ATELIER_DEFAULT_BRANCH",
         ]
 
+        /// Three more names Atelier owns, reserved for a different reason from the
+        /// six above and deliberately not extended past these three.
+        ///
+        /// **This is not a reversal of the merge-over rule.** A project may still
+        /// redefine `ATELIER_PORT` and mean it — that is documented and stands
+        /// untouched for every name outside these two sets. What is refused here is
+        /// a name whose value Atelier itself assigns per *surface*, where a port
+        /// number is never a meaningful value.
+        ///
+        /// **The real defect is that a declaration lands inconsistently**, which is
+        /// worse than either outcome on its own. The surface paths assign all three
+        /// *after* the `ports.yaml` merge — `TerminalContainerView.envVars` and
+        /// `terminalEnvVars`, and `WorkspaceActions.environment(for:surfaceID:)` —
+        /// so a declaration there is silently overwritten and the line does
+        /// nothing. The phase paths do not: `ProcessCompose.PhaseEnvironment.variables`
+        /// returns the merged set unchanged, so the declared value reaches every
+        /// verification check, every `initialization.yaml` step and `dispose`
+        /// verbatim. One line in one file therefore means two different things
+        /// depending on which surface reads it, with nothing anywhere reporting the
+        /// difference.
+        ///
+        /// What each name costs on the paths where it does land:
+        /// - `ATELIER_SURFACE_ID` is how a peer is identified. `IPC.Service.PeerContext`
+        ///   carries it, it is the only thing telling two agents in one worktree
+        ///   apart, and `IPC.TaskStore` keys **claim ownership** on it, so a wrong
+        ///   value is a task claim attributed to the wrong agent.
+        /// - `TMUX` and `TMUX_PANE` are the lesser half: both are blanked
+        ///   deliberately for terminal tabs so a pane does not inherit them, and a
+        ///   declaration puts them back.
+        ///
+        /// **Scope, recorded so it is not re-litigated.** This does *not* reserve
+        /// `PATH`, `HOME`, `SHELL`, `TMPDIR`, `USER` or `LOGNAME`, which were
+        /// considered and declined: those break loudly and visibly in the user's own
+        /// terminal, and a footgun the user can see and fix is different from one
+        /// they cannot. (`PATH` is separately protected on the spawned-child path
+        /// by `PhaseEnvironment.childEnvironment`, which assigns it last and
+        /// unconditionally.) The better long-term shape is a general rule rather
+        /// than a blocklist — if a declared name can only ever hold a port, the
+        /// validator should say so in general — and that is left as the shape to
+        /// move to rather than grown one name at a time.
+        private static let reservedSurfaceNames: Set<String> = [
+            "ATELIER_SURFACE_ID", "TMUX", "TMUX_PANE",
+        ]
+
         /// A declared name becomes an environment variable name, and reaches a
         /// shell as one.
         ///
@@ -124,6 +168,22 @@ extension ProcessCompose {
                 throw LoadError.invalidEntry(
                     name: name,
                     reason: NSLocalizedString("is a name Atelier sets; choose another", comment: "")
+                )
+            }
+            // Refused whole-file, matching the names above rather than skipping the
+            // one entry: that is this loader's existing contract, and a per-entry
+            // skip would leave a file whose meaning depends on which entries
+            // survived. The message names the variable and says what it is for,
+            // because the failure is otherwise the loud-but-unexplained kind — the
+            // declaration looks reasonable and the reason it cannot be honoured is
+            // not visible from the file.
+            if reservedSurfaceNames.contains(name) {
+                throw LoadError.invalidEntry(
+                    name: name,
+                    reason: NSLocalizedString(
+                        "identifies the terminal surface to Atelier and cannot hold a port; choose another",
+                        comment: "ports.yaml declared a per-surface name Atelier assigns itself"
+                    )
                 )
             }
             // The FF_ mirror is derived from ATELIER_*, so an FF_ declaration is

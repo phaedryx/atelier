@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The sidebar's per-project workstream count, read aloud by VoiceOver.
+	     The source is .accessibilityLabel("\(project.workstreams.count) workstreams"),
+	     and SwiftUI renders an Int interpolation as %lld, so that is the key. -->
+	<key>%lld workstreams</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@count@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld workstream</string>
+			<key>other</key>
+			<string>%lld workstreams</string>
+		</dict>
+	</dict>
+</dict>
+</plist>

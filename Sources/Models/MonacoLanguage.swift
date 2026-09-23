@@ -40,6 +40,7 @@ enum MonacoLanguage {
         case "r": return "r"
         case "lua": return "lua"
         case "dart": return "dart"
+        case "dockerfile": return "dockerfile"
         case "diff", "patch": return "diff"
         case "ini", "cfg": return "ini"
         case "bat", "cmd": return "bat"

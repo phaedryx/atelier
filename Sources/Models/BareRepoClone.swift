@@ -56,9 +56,20 @@ enum BareRepoClone {
             return trimmed
         }
 
-        // Local paths, including ~-relative ones.
-        if trimmed.hasPrefix("/") || trimmed.hasPrefix(".") {
+        // Absolute local paths.
+        if trimmed.hasPrefix("/") {
             return trimmed
+        }
+
+        // A relative path is refused here rather than left to fail later, because it
+        // cannot succeed: `clone` runs `git clone --bare <remote> .bare` with the
+        // newly created — and still empty — container as its working directory, so
+        // `./foo` and `../foo` resolve against *that* rather than against whatever the
+        // user was thinking of. What the user saw was a clone that built a container,
+        // failed, removed it again, and reported a git error naming a directory they
+        // had never typed. `~`-relative paths are unaffected: they expand below.
+        if trimmed.hasPrefix(".") {
+            return nil
         }
         if trimmed.hasPrefix("~") {
             return (trimmed as NSString).expandingTildeInPath

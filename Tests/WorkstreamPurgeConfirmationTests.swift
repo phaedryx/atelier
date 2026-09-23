@@ -34,7 +34,7 @@ final class WorkstreamPurgeConfirmationTests: XCTestCase {
 
     /// The one rule the three copies each spelled out for themselves:
     /// "Purge Anyway" is offered exactly when there is a warning to overrule.
-    func test_confirmButtonTitle_isPurgeAnywayExactlyWhenThereIsAWarning() throws {
+    func test_confirmButtonTitle_isPurgeAnywayExactlyWhenThereIsAWarning() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(atPath: directory) }
 
@@ -43,35 +43,40 @@ final class WorkstreamPurgeConfirmationTests: XCTestCase {
         // A path that is not a git repository: `hasUncommittedChanges` cannot
         // read it, which is the "could not establish what would be lost" warning.
         confirmation.confirm(orphanWorktree: directory, projectDirectory: projectDirectory)
+        await settle(confirmation)
         XCTAssertNotNil(confirmation.warning)
         XCTAssertEqual(confirmation.confirmButtonTitle, "Purge Anyway")
 
         // And a workstream with no worktree at all: `purgeWarning` returns nil,
         // because there is nothing on disk to lose.
         confirmation.confirm(workstream: Workstream(name: "scan-deep-thr", worktreePath: nil))
+        await settle(confirmation)
         XCTAssertNil(confirmation.warning)
         XCTAssertEqual(confirmation.confirmButtonTitle, "Purge")
     }
 
-    func test_title_namesWhatIsBeingPurged() {
+    func test_title_namesWhatIsBeingPurged() async {
         let confirmation = confirmation(Spy())
 
         XCTAssertEqual(confirmation.title, "Purge Workstream", "with nothing pending")
 
         confirmation.confirm(workstream: Workstream(name: "scan-deep-thr", worktreePath: nil))
+        await settle(confirmation)
         XCTAssertEqual(confirmation.title, "Purge Workstream")
 
         confirmation.confirm(
             orphanWorktree: "\(projectDirectory)/stray", projectDirectory: projectDirectory
         )
+        await settle(confirmation)
         XCTAssertEqual(confirmation.title, "Purge Worktree")
     }
 
     /// The message falls back to the generic sentence rather than going blank
     /// when there is nothing to warn about.
-    func test_message_fallsBackToTheGenericSentenceWithNoWarning() {
+    func test_message_fallsBackToTheGenericSentenceWithNoWarning() async {
         let confirmation = confirmation(Spy())
         confirmation.confirm(workstream: Workstream(name: "scan-deep-thr", worktreePath: nil))
+        await settle(confirmation)
 
         XCTAssertEqual(
             confirmation.message, "The worktree and its branch will be permanently deleted."
@@ -80,12 +85,13 @@ final class WorkstreamPurgeConfirmationTests: XCTestCase {
 
     // MARK: - Routing
 
-    func test_perform_routesAnOrphanTargetToPurgeOrphanWorktree() {
+    func test_perform_routesAnOrphanTargetToPurgeOrphanWorktree() async {
         let spy = Spy()
         let confirmation = confirmation(spy)
         confirmation.confirm(
             orphanWorktree: "\(projectDirectory)/stray", projectDirectory: projectDirectory
         )
+        await settle(confirmation)
 
         confirmation.perform(archiving: nil) { _ in }
 
@@ -94,12 +100,13 @@ final class WorkstreamPurgeConfirmationTests: XCTestCase {
         XCTAssertEqual(spy.orphanPurges.first?.worktreePath, "\(projectDirectory)/stray")
     }
 
-    func test_perform_runsThePostPurgeClosureAfterTheArchiverCall() {
+    func test_perform_runsThePostPurgeClosureAfterTheArchiverCall() async {
         let spy = Spy()
         let confirmation = confirmation(spy)
         confirmation.confirm(
             orphanWorktree: "\(projectDirectory)/stray", projectDirectory: projectDirectory
         )
+        await settle(confirmation)
 
         var completions: [Workstream.PurgeConfirmation.Completion] = []
         var purgesSeenWhenClosureRan = -1
@@ -112,11 +119,12 @@ final class WorkstreamPurgeConfirmationTests: XCTestCase {
         XCTAssertEqual(purgesSeenWhenClosureRan, 1, "the closure must run after the purge, not before")
     }
 
-    func test_perform_dismissesTheAlert() {
+    func test_perform_dismissesTheAlert() async {
         let confirmation = confirmation(Spy())
         confirmation.confirm(
             orphanWorktree: "\(projectDirectory)/stray", projectDirectory: projectDirectory
         )
+        await settle(confirmation)
         XCTAssertTrue(confirmation.isPresented)
 
         confirmation.perform(archiving: nil) { _ in }
@@ -133,10 +141,11 @@ final class WorkstreamPurgeConfirmationTests: XCTestCase {
     /// button — a future caller that reaches `perform` without going through
     /// `WorktreeInfoRow`'s `isMain`/`isProtected` filter would otherwise walk
     /// straight past it.
-    func test_perform_refusesWhenTheTargetIsTheProjectDirectory() {
+    func test_perform_refusesWhenTheTargetIsTheProjectDirectory() async {
         let spy = Spy()
         let confirmation = confirmation(spy)
         confirmation.confirm(orphanWorktree: projectDirectory, projectDirectory: projectDirectory)
+        await settle(confirmation)
 
         var closureRan = false
         confirmation.perform(archiving: nil) { _ in closureRan = true }
@@ -146,7 +155,7 @@ final class WorkstreamPurgeConfirmationTests: XCTestCase {
         XCTAssertFalse(confirmation.isPresented)
     }
 
-    func test_perform_refusesWhenTheTargetIsTheProjectsCheckout() {
+    func test_perform_refusesWhenTheTargetIsTheProjectsCheckout() async {
         let spy = Spy()
         let confirmation = confirmation(spy)
         confirmation.confirm(
@@ -154,6 +163,7 @@ final class WorkstreamPurgeConfirmationTests: XCTestCase {
             projectDirectory: projectDirectory,
             checkoutDirectory: checkoutDirectory
         )
+        await settle(confirmation)
 
         confirmation.perform(archiving: nil) { _ in }
 
@@ -163,10 +173,11 @@ final class WorkstreamPurgeConfirmationTests: XCTestCase {
     /// A relative path never equals the protected set, so it would sail through a
     /// guard written as a string comparison. `destroyablePath` refuses it, and
     /// `perform` has to honour that.
-    func test_perform_refusesARelativeTarget() {
+    func test_perform_refusesARelativeTarget() async {
         let spy = Spy()
         let confirmation = confirmation(spy)
         confirmation.confirm(orphanWorktree: "stray", projectDirectory: projectDirectory)
+        await settle(confirmation)
 
         confirmation.perform(archiving: nil) { _ in }
 
@@ -177,10 +188,11 @@ final class WorkstreamPurgeConfirmationTests: XCTestCase {
     /// surface cache and verification runner; with no context there is nothing
     /// to call, and half-performing it would drop the workstream from the list
     /// without touching anything else.
-    func test_perform_refusesAWorkstreamTargetWithNoArchiveContext() {
+    func test_perform_refusesAWorkstreamTargetWithNoArchiveContext() async {
         let spy = Spy()
         let confirmation = confirmation(spy)
         confirmation.confirm(workstream: Workstream(name: "scan-deep-thr", worktreePath: nil))
+        await settle(confirmation)
 
         var closureRan = false
         confirmation.perform(archiving: nil) { _ in closureRan = true }
@@ -192,13 +204,14 @@ final class WorkstreamPurgeConfirmationTests: XCTestCase {
 
     // MARK: - Cancelling
 
-    func test_cancel_clearsTheTargetAndItsWarning() throws {
+    func test_cancel_clearsTheTargetAndItsWarning() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(atPath: directory) }
 
         let spy = Spy()
         let confirmation = confirmation(spy)
         confirmation.confirm(orphanWorktree: directory, projectDirectory: projectDirectory)
+        await settle(confirmation)
         XCTAssertNotNil(confirmation.warning)
 
         confirmation.cancel()
@@ -212,18 +225,71 @@ final class WorkstreamPurgeConfirmationTests: XCTestCase {
         XCTAssertTrue(spy.orphanPurges.isEmpty)
     }
 
+    /// A probe still running when the alert is dismissed must not publish its
+    /// target afterwards. Without the cancel in `cancel()`, the alert raises
+    /// itself again once the git calls answer — naming a purge the user has
+    /// already declined, and offering it a second time.
+    func test_cancel_stopsAProbeStillInFlightFromRaisingTheAlertAgain() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+
+        let confirmation = confirmation(Spy())
+        confirmation.confirm(orphanWorktree: directory, projectDirectory: projectDirectory)
+        // Before the probe can answer — `confirm` returns with nothing published.
+        let probe = confirmation.pendingWarning
+        confirmation.cancel()
+        await probe?.value
+
+        XCTAssertNil(confirmation.target, "a dismissed alert must not come back")
+        XCTAssertNil(confirmation.warning)
+        XCTAssertFalse(confirmation.isPresented)
+    }
+
+    /// A second confirmation while the first is still probing: the older answer
+    /// must not land on top of the newer one.
+    func test_confirm_dropsTheAnswerOfAProbeASecondConfirmReplaced() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+
+        let confirmation = confirmation(Spy())
+        // A directory that is not a git repository: this one warns.
+        confirmation.confirm(orphanWorktree: directory, projectDirectory: projectDirectory)
+        let first = confirmation.pendingWarning
+        // A workstream with no worktree at all: this one does not.
+        confirmation.confirm(workstream: Workstream(name: "scan-deep-thr", worktreePath: nil))
+        await first?.value
+        await settle(confirmation)
+
+        guard case let .workstream(_, name) = confirmation.target else {
+            return XCTFail("the second confirm's target is the one that stands")
+        }
+        XCTAssertEqual(name, "scan-deep-thr")
+        XCTAssertNil(confirmation.warning, "the replaced probe's warning must not land")
+    }
+
     /// The modifier binds to `isPresented`; SwiftUI writes false when the alert
     /// is dismissed by the escape key, and that has to clear the target the way
     /// the Cancel button does.
-    func test_isPresented_clearsTheTargetWhenSetFalse() {
+    func test_isPresented_clearsTheTargetWhenSetFalse() async {
         let confirmation = confirmation(Spy())
         confirmation.confirm(
             orphanWorktree: "\(projectDirectory)/stray", projectDirectory: projectDirectory
         )
+        await settle(confirmation)
 
         confirmation.isPresented = false
 
         XCTAssertNil(confirmation.target)
+    }
+
+    /// `confirm` no longer publishes anything by the time it returns: the
+    /// warning is a `git status` and a `git log` through `ProcessRunner`, which
+    /// blocks its thread for the child's whole life, so it runs off the main
+    /// actor and `target` and `warning` are published together when it answers.
+    /// See `PurgeConfirmation.present`. Every test therefore settles the probe
+    /// before reading either.
+    private func settle(_ confirmation: Workstream.PurgeConfirmation) async {
+        await confirmation.pendingWarning?.value
     }
 
     private func temporaryDirectory() throws -> String {

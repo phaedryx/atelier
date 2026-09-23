@@ -414,7 +414,12 @@ extension Git {
         /// nil could recover. Installing git while the app runs is the only way to
         /// reach that, and a stale answer either way is worth the ~37 lookups a
         /// render this removes.
-        private static let gitPath: String? = CommandLineTools.path(for: "git")
+        ///
+        /// Not private, because `GitHub.Operations` ran git too and carried a verbatim
+        /// copy of this — its own `static let`, its own cache, and this comment with it,
+        /// citing a `listWorktreesWithInfo` that lives here and not there. One lookup,
+        /// one answer.
+        static let gitPath: String? = CommandLineTools.path(for: "git")
 
         /// Check if a directory is a git repository.
         static func isGitRepo(at path: String) -> Bool {
@@ -469,8 +474,9 @@ extension Git {
 
         /// This repository's default branch, resolved once per directory.
         ///
-        /// Prefers `development`, then falls back to auto-detection — see
-        /// `resolveDefaultBranch`, which is where that order lives.
+        /// What git reports as `origin/HEAD`, falling back to a `development` branch
+        /// and then to the usual names — see `resolveDefaultBranch`, which is where
+        /// that order lives and why it is in that order.
         ///
         /// **Cached, because the cost is a fan-out and the answer is a property of
         /// the repository.** Resolving costs up to six sequential git probes, and
@@ -545,17 +551,63 @@ extension Git {
             }
         }
 
-        /// Detect the default branch. Prefers `development`, then falls back to auto-detection.
+        /// Detect the default branch: git's own `origin/HEAD` first, then a
+        /// `development` branch, then the usual names.
+        ///
+        /// **`origin/HEAD` is asked first, and used to be asked third.** A
+        /// `development` branch — remote or local — won outright, so a repository
+        /// whose real default is `main` but which merely *carries* a long-lived
+        /// `development` branch answered `development` to every caller. There is one
+        /// reader, `defaultBranch(at:)`, and it is cached per directory, so that one
+        /// answer was wrong everywhere for the session:
+        ///
+        /// - the "Repository default" base branch, so every new worktree was cut from
+        ///   `origin/development` (`BaseBranchSetting.resolve`);
+        /// - the Changes tab's diff base (`mergeBase`);
+        /// - the ahead count (`hasBranchCommits`), and the "open a pull request" offer
+        ///   that reads it;
+        /// - **prune's clean decision**, which is the ahead count again and is the
+        ///   consequence with teeth: a branch merged to `main` but not to
+        ///   `development` reads as *having commits* and is withheld, and — the
+        ///   dangerous direction — one merged to `development` but not to `main` reads
+        ///   as clean and is offered for deletion while its work is not on the real
+        ///   default branch (`pruneCleanWorktrees`, `ProjectOverviewView`);
+        /// - the exported `ATELIER_DEFAULT_BRANCH`, seen by every project-supplied
+        ///   command, initialization step and verification check.
+        ///
+        /// Two documented promises said otherwise — `BaseBranchSetting`'s
+        /// `repositoryDefault` ("ask git what the repository's default branch is") and
+        /// AGENTS.md on `ATELIER_DEFAULT_BRANCH` ("what git thinks this repository's
+        /// default branch is") — and both are true again now without being reworded.
+        ///
+        /// **The `development` preference is kept, as a fallback, and that is not
+        /// timidity.** It now answers only where git has said nothing:
+        /// `refs/remotes/origin/HEAD` is present in the README's container layout —
+        /// measured, on git 2.55.0, through exactly what `BareRepoClone.clone` runs
+        /// (`clone --bare`, the refspec, `fetch --all --prune`), because git sets that
+        /// ref on fetch when it is unset (2.45+). So on current git this rarely fires
+        /// at all; deleting it outright would buy nothing and would drop a repository
+        /// whose default really *is* `development`, and whose `origin/HEAD` was never
+        /// fetched, to `origin/main` and then to the `"HEAD"` sentinel — which
+        /// `mergeBase` and `hasBranchCommits` correctly refuse to compare against, so
+        /// the Changes tab and the ahead count would go blank rather than wrong.
+        ///
+        /// **This is not the `BaseBranchSetting` migration AGENTS.md holds all-or-none
+        /// across `mergeBase` and `hasBranchCommits`**, and a reviewer will
+        /// pattern-match it to one — the caching change had to say so too. That rule
+        /// governs whether those two sites consult the *setting* instead of
+        /// `defaultBranch(at:)`. Both still ask `defaultBranch(at:)`, and still agree
+        /// with each other; only what it resolves has changed.
         private static func resolveDefaultBranch(at path: String) -> String {
-            // Prefer development branch if it exists (remote then local)
+            // What git itself says the default is.
+            if let ref = remoteHeadRef(at: path) {
+                return ref
+            }
+            // Only where it has said nothing: a development branch, remote then local.
             for branch in ["origin/development", "development"] {
                 if run(args: ["rev-parse", "--verify", branch], in: path) != nil {
                     return branch
                 }
-            }
-            // Try remote HEAD
-            if let ref = remoteHeadRef(at: path) {
-                return ref
             }
             // Check if origin/main or origin/master exist
             for branch in ["origin/main", "origin/master"] {
@@ -1355,42 +1407,85 @@ extension Git {
             return !status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
 
-        /// The destination half of a `git status --porcelain` path field.
+        /// One entry of `git status --porcelain -z`: the two status columns and the path
+        /// they describe.
+        struct StatusEntry: Equatable {
+            /// The index column and the work-tree column, always exactly two characters.
+            let xy: String
+            let path: String
+
+            var indexStatus: Character {
+                xy.first ?? " "
+            }
+
+            var workTreeStatus: Character {
+                xy.last ?? " "
+            }
+        }
+
+        /// Split `git status --porcelain -z` output into entries. Shared so the two
+        /// parsers of this output cannot drift apart.
         ///
-        /// Renames and copies are reported as `old -> new`; every other status reports a
-        /// bare path. Callers want the path that exists on disk now, which is the
-        /// destination. Shared so the two parsers of this output cannot drift apart.
-        static func renamedDestination(in pathField: String) -> String {
-            guard let arrow = pathField.range(of: " -> ") else { return pathField }
-            return String(pathField[arrow.upperBound...]).trimmingCharacters(in: .whitespaces)
+        /// **`-z`, for the reason the diff listings take it** (see `parseNameStatus`):
+        /// without it git C-quotes any path holding a space-adjacent quote, a backslash
+        /// or a non-ASCII byte, so `café.txt` arrives as `"caf\303\251.txt"` — a
+        /// spelling that names no file on disk. `fileStatuses`' keys are looked up
+        /// against paths the file tree read straight out of `contentsOfDirectory`, so
+        /// every non-ASCII file silently lost its modified and untracked badge, and
+        /// `worktreeDetail` rendered the quoted spelling in the changes popover.
+        ///
+        /// Under `-z` each entry is its own NUL-terminated record, spelled `XY <path>`.
+        /// A rename or a copy spends **two**: git drops the `->` and reverses the order,
+        /// so the destination comes first and the origin follows as its own record. The
+        /// origin is consumed and dropped — callers want the path that exists on disk
+        /// now, which is the destination. That consumption is why this is one parser and
+        /// not two: an origin record left in the stream is read as an entry whose first
+        /// two characters happened to look like a status.
+        ///
+        /// The pair is detected on the **index column alone**, which is the only column
+        /// git puts an `R` or a `C` in — it does not detect renames in the work tree, so
+        /// ` R` is not a status it emits. Accepting one in either column would consume a
+        /// record git never paired and put every entry after it out of step, which is a
+        /// worse failure than the quoting this fixes.
+        static func parsePorcelainStatus(_ output: String) -> [StatusEntry] {
+            var entries: [StatusEntry] = []
+            let records = output.split(separator: "\0", omittingEmptySubsequences: true)
+            var index = 0
+            while index < records.count {
+                let record = records[index]
+                index += 1
+                // "XY " plus at least one character of path.
+                guard record.count >= 4 else { continue }
+                let xy = String(record.prefix(2))
+                entries.append(StatusEntry(xy: xy, path: String(record.dropFirst(3))))
+                if xy.hasPrefix("R") || xy.hasPrefix("C") {
+                    index += 1
+                }
+            }
+            return entries
         }
 
         /// Get the uncommitted file changes in a worktree.
         static func worktreeDetail(at worktreePath: String) -> Worktree.Detail {
             var changes: [Worktree.Detail.FileChange] = []
 
-            let status = run(args: ["status", "--porcelain"], in: worktreePath)
+            let status = run(args: ["status", "--porcelain", "-z"], in: worktreePath)
             if let status {
-                for line in status.components(separatedBy: "\n") where !line.isEmpty {
-                    let trimmed = line
-                    guard trimmed.count >= 3 else { continue }
+                for entry in parsePorcelainStatus(status) {
+                    // A rename's path is the destination, which is the one that exists on
+                    // disk and the one `fileStatuses` records, so both readers of this
+                    // output agree on it.
+                    let filePath = entry.path
 
-                    let indexStatus = trimmed[trimmed.startIndex]
-                    let workTreeStatus = trimmed[trimmed.index(after: trimmed.startIndex)]
-                    // Renames and copies render as "R  old -> new". The destination is
-                    // the path that exists on disk and the one `fileStatuses` records,
-                    // so both parsers of this output agree on it.
-                    let filePath = renamedDestination(in: String(trimmed.dropFirst(3)))
-
-                    if indexStatus == "?" {
+                    if entry.indexStatus == "?" {
                         changes.append(.init(status: .untracked, path: filePath, isStaged: false))
                     } else {
-                        if indexStatus != " " {
-                            let status = parseStatus(indexStatus)
+                        if entry.indexStatus != " " {
+                            let status = parseStatus(entry.indexStatus)
                             changes.append(.init(status: status, path: filePath, isStaged: true))
                         }
-                        if workTreeStatus != " " {
-                            let status = parseStatus(workTreeStatus)
+                        if entry.workTreeStatus != " " {
+                            let status = parseStatus(entry.workTreeStatus)
                             changes.append(.init(status: status, path: filePath, isStaged: false))
                         }
                     }
@@ -1780,7 +1875,7 @@ extension Git {
         /// Returns an empty dictionary on failure so the tree degrades gracefully.
         static func fileStatuses(at path: String) -> [String: Git.FileStatus] {
             guard let output = runWithTimeout(
-                args: ["status", "--porcelain", "--ignored", "--ignore-submodules=dirty"],
+                args: ["status", "--porcelain", "--ignored", "--ignore-submodules=dirty", "-z"],
                 in: path,
                 timeout: 3
             ) else {
@@ -1788,21 +1883,20 @@ extension Git {
             }
 
             var result: [String: Git.FileStatus] = [:]
-            for line in output.components(separatedBy: "\n") {
-                guard line.count >= 4 else { continue }
-                let xy = String(line.prefix(2))
-                var filePath = String(line.dropFirst(3))
+            for entry in parsePorcelainStatus(output) {
+                var filePath = entry.path
 
-                if xy == "!!" {
+                if entry.xy == "!!" {
                     // Ignored — strip trailing slash for directories
                     if filePath.hasSuffix("/") {
                         filePath = String(filePath.dropLast())
                     }
                     result[filePath] = .ignored
-                } else if xy == "??" {
+                } else if entry.xy == "??" {
                     result[filePath] = .untracked
                 } else {
-                    result[renamedDestination(in: filePath)] = .modified
+                    // Already the destination half of a rename — see `parsePorcelainStatus`.
+                    result[filePath] = .modified
                 }
             }
             return result
@@ -1971,11 +2065,25 @@ extension Git {
 
         /// Runs git and reports either stdout or why it did not run.
         ///
-        /// **The one spawn site.** `runWithTimeout`, `run` and `runOnWholeTree` are
-        /// all projections of this, so the deadline, `gitEnvironment`'s
-        /// `GIT_TERMINAL_PROMPT=0`/`GIT_ASKPASS` pair and the concurrent pipe drain
-        /// are decided once. Every mutator returning a `Git.Failure` gets its exit
-        /// code and stderr from here rather than re-spawning to ask.
+        /// **The spawn site for everything shaped like a read.** `runWithTimeout`,
+        /// `run` and `runOnWholeTree` are all projections of this, so the deadline,
+        /// `gitEnvironment`'s `GIT_TERMINAL_PROMPT=0`/`GIT_ASKPASS` pair and the
+        /// concurrent pipe drain are decided once. Every mutator returning a
+        /// `Git.Failure` gets its exit code and stderr from here rather than
+        /// re-spawning to ask.
+        ///
+        /// It is not the *only* spawn site, and said it was for a while.
+        /// `pushCurrentBranch` and `pullCurrentBranch` reach `ProcessRunner.capture`
+        /// directly, because both hand the user git's own words and this returns
+        /// stdout alone: git reports a push almost entirely on stderr, and a failed
+        /// pull's diagnosis is the stderr `PullResult.failure` carries. They still
+        /// take `gitEnvironment` and a `Timeout` tier, so what this decides once they
+        /// agree with — but they are two more places to change, not zero.
+        ///
+        /// `pushCurrentBranch` is also the one caller that says where to run with
+        /// `-C <path>` rather than `currentDirectory:`. Equivalent for the push
+        /// itself, and left alone deliberately: it is a network path with no test,
+        /// and a difference nothing can observe is not worth moving blind.
         ///
         /// `ProcessRunner` owns the deadline and drains both pipes concurrently,
         /// which is what makes a large `git show`/`git status` safe: git blocks

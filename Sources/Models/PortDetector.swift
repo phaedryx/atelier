@@ -109,12 +109,37 @@ extension Port {
             stop()
         }
 
+        /// **Every touch of `fileSource` and `directorySource` happens on
+        /// `queue`.** This used to run on whichever thread called `init`, while
+        /// the directory source's handler mutated the very same properties on
+        /// `queue` — `attachDirectoryWatcher` and `refreshState` both reach
+        /// `attachFileWatcherIfNeeded`, which reads `fileSource`, cancels it and
+        /// assigns it. Unsynchronized, and the same bug `atelier-run`'s
+        /// `PortScanner.start` carries a comment about having fixed the same way.
+        ///
+        /// The directory creation stays on the caller's thread deliberately: it
+        /// is a plain filesystem call touching none of this state, and doing it
+        /// before the hop means the watcher is never attached to a directory that
+        /// does not exist yet.
         private func start() {
             try? FileManager.default.createDirectory(at: RunState.Store.directoryURL, withIntermediateDirectories: true)
-            attachDirectoryWatcher()
-            refreshState()
+            queue.async { [weak self] in
+                guard let self else { return }
+                attachDirectoryWatcher()
+                refreshState()
+            }
         }
 
+        /// Reached only from `deinit`, which is why it does **not** hop to
+        /// `queue`.
+        ///
+        /// It needs no hop and must not take one. Every event handler holds
+        /// `self` weakly, so a handler that has resolved `self` owns a strong
+        /// reference for its whole body — meaning `deinit` and any handler body
+        /// are mutually exclusive by construction, and there is nothing left to
+        /// race with. A `queue.sync` here would be a deadlock rather than a
+        /// safeguard: the last reference is frequently released *by* a handler
+        /// finishing, so `deinit` can run on `queue` itself.
         private func stop() {
             fileSource?.cancel()
             fileSource = nil

@@ -52,6 +52,25 @@ final class BareRepoCloneTests: XCTestCase {
         XCTAssertEqual(BareRepoClone.normalizeRemote("/tmp/some/origin"), "/tmp/some/origin")
     }
 
+    /// `clone` runs `git clone --bare <remote> .bare` from inside the container it has
+    /// just created, so a relative remote resolves against an empty directory the user
+    /// never named and can never succeed. It used to pass through untouched and fail
+    /// there, with git's error naming that container.
+    func testNormalizeRemoteRejectsRelativePaths() {
+        XCTAssertNil(BareRepoClone.normalizeRemote("./repo"))
+        XCTAssertNil(BareRepoClone.normalizeRemote("../repo"))
+        XCTAssertNil(BareRepoClone.normalizeRemote("."))
+        XCTAssertNil(BareRepoClone.normalizeRemote(".."))
+    }
+
+    /// The refusal above is for `.`-relative input only: a `~` path is still expanded,
+    /// which is the one relative spelling that resolves to somewhere real.
+    func testNormalizeRemoteExpandsATildePath() {
+        let expanded = BareRepoClone.normalizeRemote("~/repos/origin")
+        XCTAssertEqual(expanded, NSString(string: "~/repos/origin").expandingTildeInPath)
+        XCTAssertTrue(expanded?.hasPrefix("/") == true, "a ~ path must come back absolute")
+    }
+
     func testNormalizeRemoteTrimsSurroundingWhitespace() {
         XCTAssertEqual(BareRepoClone.normalizeRemote("  org/repo\n"), "git@github.com:org/repo.git")
     }
