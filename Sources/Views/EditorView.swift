@@ -152,8 +152,7 @@ struct EditorView: View {
         .onChange(of: fileFinderRequest) { _, _ in
             openFileFinder()
         }
-        .onChange(of: finderQuery) { _, newQuery in
-            print("[Atelier] query -> \(newQuery)")
+        .onChange(of: finderQuery) { _, _ in
             refreshFinderResults()
         }
         .alert(
@@ -362,17 +361,6 @@ struct EditorView: View {
                     finderRow(path: path, isSelected: isSelected)
                 }
             }
-            // Debug telemetry: makes the query/results state visible so any
-            // divergence between what is typed and what is searched is obvious.
-            Text("'\(finderQuery)' -> \(finderResults.count) results" +
-                (finderResults.first.map { " | \($0)" } ?? ""))
-                .font(.system(size: 9))
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 10)
-                .padding(.bottom, 4)
         }
         .frame(width: 480)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
@@ -488,7 +476,6 @@ struct EditorView: View {
             DispatchQueue.main.async {
                 fileIndex = visible
                 isScanningFiles = false
-                print("[Atelier] scan done: \(visible.count) files")
                 refreshFinderResults()
             }
         }
@@ -501,7 +488,6 @@ struct EditorView: View {
         let results = FileFinder.results(matching: finderQuery, in: fileIndex)
         finderResults = results
         finderSelection = results.first
-        print("[Atelier] refresh(\(finderQuery)) -> \(results.prefix(3).map { ($0 as NSString).lastPathComponent }.joined(separator: ", "))")
     }
 
     private func moveFinderSelection(_ delta: Int) {
