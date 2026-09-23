@@ -50,7 +50,15 @@ jobs:
         env:
           GHOSTTY_TAG_INPUT: ${{ github.event.inputs.ghostty_tag }}
         run: |
-          cd ghostty
+          # `|| exit 1` here and not in the build step below, which is ci.yml's
+          # wording untouched. A failed `cd` there runs `zig build` in the repo
+          # root, which fails loudly. Here it would run the tag resolution
+          # against the SUPERPROJECT, whose tags are also `v*` — so an empty
+          # input would resolve Atelier's own newest tag, pass the existence
+          # check, and `git checkout` Atelier at an old release. That is the
+          # silently-test-the-wrong-thing shape, the same one the missing cache
+          # would have produced.
+          cd ghostty || exit 1
           git fetch --tags
           if [ -n "$GHOSTTY_TAG_INPUT" ]; then
             TAG="$GHOSTTY_TAG_INPUT"
