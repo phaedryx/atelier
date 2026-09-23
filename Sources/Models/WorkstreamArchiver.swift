@@ -37,31 +37,83 @@ extension Workstream {
                     }
                 }
             }
-            // Before the surfaces go: an agent here may be stopped on a
-            // permission request, and the banner that would answer it is about
-            // to stop existing. Releasing hands it back to Claude Code instead
-            // of leaving it to wait out a hold nothing will service.
-            PermissionApprovalStore.shared.releaseAll(workstreamID: workstreamID)
-            // Before the sweep below, which cannot reach a check's terminal: that
-            // sweep enumerates ids derived from `WorkspaceModel`'s counters, and a
-            // check surface is keyed by `Verification.Spawn.surfaceID`. Without
-            // this, removing a workstream with rspec running leaves that terminal
-            // and its process alive for the session with nothing able to reach
-            // either. Optional only so the two call sites can adopt it without a
-            // third having to invent a runner; both pass one.
-            verificationRunner?.forget(workstreamID: workstreamID)
-            // The whiteboard goes on **both** archive paths, the way
-            // `verificationRunner?.forget` above is called from both — and
-            // deliberately *not* the way `clearWorkstreamState` is, which is
-            // purge-only because `remove` keeps the worktree and destroys
-            // nothing. A reviewer will pattern-match this to that rule, so:
+            // Before the sweep in the shared tail, which cannot reach a check's
+            // terminal: that sweep enumerates ids derived from
+            // `WorkspaceModel`'s counters, and a check surface is keyed by
+            // `Verification.Spawn.surfaceID`. Without this, removing a
+            // workstream with rspec running leaves that terminal and its process
+            // alive for the session with nothing able to reach either. Optional
+            // only so the two call sites can adopt it without a third having to
+            // invent a runner; both pass one.
             //
-            // A board is keyed by the workstream's UUID, and `remove` drops the
+            // Deliberately **not** in `detachWorkstream`, however much it looks
+            // like it belongs there. `purge` reaches the same call from inside
+            // its detached task, awaited and only after `quiesceVerification`
+            // has watched the checks actually die; hoisting it would run it
+            // here, before the stop, which is the "signalled and moved on"
+            // ordering that teardown exists to prevent.
+            verificationRunner?.forget(workstreamID: workstreamID)
+            // `Initialization.Runner.states` is in memory and keyed by the
+            // workstream id this is about to drop from the project, so an entry
+            // left here is unreachable for the life of the process — the same
+            // leak, and the same discriminator, that `purge`'s own call to this
+            // records at the end of its detached task. Not hoisted into
+            // `detachWorkstream` for the reason `forget` above is not: `purge`
+            // must clear *after* `Initialization.Runner.cancel`, which writes a
+            // final `.cancelled` state, and an early clear there would be
+            // overwritten by the very run it is meant to forget.
+            Task { await Initialization.Runner.shared.clearState(for: workstreamID) }
+            detachWorkstream(
+                workstreamID,
+                from: &project,
+                surfaceCache: surfaceCache,
+                agentStateTracker: agentStateTracker
+            )
+        }
+
+        /// Everything both archive paths do to end a workstream in the app,
+        /// synchronously and on the main actor.
+        ///
+        /// The `Remove vs purge` table in AGENTS.md says purge does what remove
+        /// does "plus" more, and for three of these steps it did not: releasing
+        /// a permission hold, and dropping the mcp-config and `--settings`
+        /// files, were written into `remove` alone. A purge of a workstream
+        /// whose agent sat on a permission banner left that agent waiting out a
+        /// deadline nothing would service, and leaked two files into Caches for
+        /// good. One function is what keeps the table true — a fourth step added
+        /// to one path cannot go missing from the other.
+        ///
+        /// What stays *out* of here is as load-bearing as what is in it, and a
+        /// reviewer should expect to find each of these at its own call site
+        /// rather than folded in: `Verification.Runner.forget` and
+        /// `Initialization.Runner.clearState`, which both paths run but at
+        /// different points (see `remove`); everything destructive, which is
+        /// `purge`'s alone; and `clearWorkstreamState`, which is purge-only
+        /// because `remove` keeps the worktree and destroys nothing.
+        @MainActor
+        private static func detachWorkstream(
+            _ workstreamID: UUID,
+            from project: inout Project,
+            surfaceCache: TerminalSurfaceCache,
+            agentStateTracker: Workstream.AgentStateTracker
+        ) {
+            // First, and before the surfaces go: an agent here may be stopped on
+            // a permission request, and the banner that would answer it is about
+            // to stop existing. Releasing hands it back to Claude Code instead
+            // of leaving it to wait out a hold nothing will service. A
+            // workstream holding nothing makes this a no-op, which is what lets
+            // both paths call it unconditionally.
+            PermissionApprovalStore.shared.releaseAll(workstreamID: workstreamID)
+            // The whiteboard goes on **both** archive paths — and deliberately
+            // *not* the way `clearWorkstreamState` is, which is purge-only
+            // because `remove` keeps the worktree and destroys nothing. A
+            // reviewer will pattern-match this to that rule, so:
+            //
+            // A board is keyed by the workstream's UUID, and both paths drop the
             // workstream from the project. Re-adopting the worktree mints a new
             // id, so nothing can ever reach that board again — left behind it is
             // unreachable bytes in a cache, not preserved work. That is the
-            // discriminator, and it is why this follows `forget` rather than
-            // `clearWorkstreamState`.
+            // discriminator.
             //
             // Host first, then the directory: the host holds a live webview with
             // a save still sitting on its debounce, and sweeping underneath it
@@ -70,13 +122,17 @@ extension Workstream {
             Whiteboard.Store.sweep(for: workstreamID)
             surfaceCache.removeWorkstreamSurfaces(for: workstreamID)
             // Fire-and-forget: reverting an in-memory dictionary entry back to
-            // `.pending` carries none of the weight `verificationRunner?.forget`
-            // above does (killing running processes, waiting on them), so this
-            // does not need the injected-optional-parameter pattern that exists
-            // for that heavier operation — same shape as the tmux-kill
-            // `Task.detached` at the top of this function. A project with no
-            // tasks, or a workstream with no claims, makes this a genuine no-op.
+            // `.pending` carries none of the weight `Verification.Runner.forget`
+            // does (killing running processes, waiting on them), so this does not
+            // need the injected-optional-parameter pattern that exists for that
+            // heavier operation — same shape as the tmux-kill `Task.detached` in
+            // `remove`. A project with no tasks, or a workstream with no claims,
+            // makes this a genuine no-op.
             Task { await IPC.Service.shared.releaseTaskClaims(inWorkstream: workstreamID) }
+            // The agent's mcp-config JSON and its `--settings` file, both named
+            // for this workstream id. Nothing re-reads either once the
+            // workstream is gone, so a path that skips them leaks two files into
+            // Caches per archive, for good.
             IPC.Config.remove(for: workstreamID)
             StatusLine.Config.remove(for: workstreamID)
             LaunchLogger.removeLog(for: workstreamID)
@@ -376,14 +432,14 @@ extension Workstream {
                     clearWorkstreamState(for: workstreamID)
                 }
             }
-            // See the note in `remove`. Same two steps, same order, same reason.
-            surfaceCache.removeWhiteboardHost(for: workstreamID)
-            Whiteboard.Store.sweep(for: workstreamID)
-            surfaceCache.removeWorkstreamSurfaces(for: workstreamID)
-            Task { await IPC.Service.shared.releaseTaskClaims(inWorkstream: workstreamID) }
-            LaunchLogger.removeLog(for: workstreamID)
-            project.workstreams.removeAll { $0.id == workstreamID }
-            clearAgentState(workstreamID, tracker: agentStateTracker)
+            // The same tail `remove` runs, and that is the whole of the "plus"
+            // in AGENTS.md's table: everything above this line is purge's alone.
+            detachWorkstream(
+                workstreamID,
+                from: &project,
+                surfaceCache: surfaceCache,
+                agentStateTracker: agentStateTracker
+            )
         }
 
         /// Stop this workstream's verification checks and wait until none of them
