@@ -231,7 +231,17 @@ it receives only the `X.Y.Z` core; the suffix naming the commit rides on
   prompt replaces the banner rather than stacking one, and withdraws it when the block clears.
   Clicking it goes back through `AppDelegate`'s `didReceive` as `.focusWorkstream`, which selects
   that workstream. Gated by `atelier.notifyOnPermission`, which **defaults on**.
-- **Tool detection** runs at startup in `AppEnvironment.refresh()`
+- **Tool detection** runs at startup in `AppEnvironment.refresh()`, and `ToolStatus`,
+  `BinaryStatus` and `AppInfo` live in `Sources/Models/ToolStatus.swift`. They spawn child
+  processes and `AppEnvironment`, `OnboardingView`, `TerminalContainerView` and the IPC layer
+  all read them, so they are model types; they sat in `SettingsView.swift` because Settings was
+  the first thing to render them. `ToolRow` and `PrerequisiteRow` are the two views that do,
+  and **both resolve the auth dot through `ToolRow.authenticationDotColor`** rather than
+  re-deriving it — `ghAuthDetail` is display-only and free to be reworded, and each view in
+  turn shipped a `detail != "Not authenticated"` comparison that turned the dot green for an
+  unauthenticated `gh`. The process-compose row is fed by
+  `ProcessCompose.Settings.resolveBinary()` and never by `ToolStatus.findBinary`, for the
+  reason **Detected Tools** gives at length above.
 - **Sidebar state** (selection, expanded sections) stored in UserDefaults (`atelier.selection`, `atelier.expandedProjects`)
 - **Process-compose approval is gone**, with `ScriptTrust` and `ConfigApprovalView`.
   `atelier.approvedConfigFiles` held a SHA-256 of every repository-provided file a config would
