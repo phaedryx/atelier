@@ -388,10 +388,7 @@ private struct CodingAgentSettingsPane: View {
                 SettingToggle(
                     "Approve tool permissions in Atelier",
                     isOn: $permissionApproval,
-                    description: NSLocalizedString(
-                        "When the agent asks to run a tool, Atelier shows the request above its terminal with Allow and Deny. The agent is stopped while it waits. If nobody answers within the hold below, Atelier lets go and Claude Code asks in the terminal as usual.",
-                        comment: "In-app permission approval setting description"
-                    )
+                    description: "When the agent asks to run a tool, Atelier shows the request above its terminal with Allow and Deny. The agent is stopped while it waits. If nobody answers within the hold below, Atelier lets go and Claude Code asks in the terminal as usual."
                 )
 
                 if permissionApproval {
@@ -427,10 +424,7 @@ private struct CodingAgentSettingsPane: View {
                 SettingToggle(
                     "Agent messaging",
                     isOn: $agentIPC,
-                    description: NSLocalizedString(
-                        "The master switch for agent-to-agent messaging in this project: agents can find each other and send messages, which the recipient sees only when it checks its inbox. Nothing is typed into any terminal unless you also turn on Nudge idle agents below. Takes effect the next time a Coding Agent starts. Only applies to Claude Code.",
-                        comment: "Agent IPC setting description"
-                    )
+                    description: "The master switch for agent-to-agent messaging in this project: agents can find each other and send messages, which the recipient sees only when it checks its inbox. Nothing is typed into any terminal unless you also turn on Nudge idle agents below. Takes effect the next time a Coding Agent starts. Only applies to Claude Code."
                 )
                 .onChange(of: agentIPC) { _, _ in
                     IPC.AgentSettings.apply()
@@ -439,10 +433,7 @@ private struct CodingAgentSettingsPane: View {
                 SettingToggle(
                     "Nudge idle agents",
                     isOn: $agentIPCNudge,
-                    description: NSLocalizedString(
-                        "Requires Agent messaging. When a message arrives for an agent that has finished its turn, Atelier types a notice into its terminal. That is typed input: an agent running without permission prompts will act on it.",
-                        comment: "Agent IPC nudge setting description"
-                    ),
+                    description: "Requires Agent messaging. When a message arrives for an agent that has finished its turn, Atelier types a notice into its terminal. That is typed input: an agent running without permission prompts will act on it.",
                     descriptionStyle: agentIPCNudge ? .warning : .secondary
                 )
                 .disabled(!agentIPC)
@@ -707,10 +698,7 @@ private struct IntegrationsSettingsPane: View {
                 SettingToggle(
                     "Show Shortcut button in sidebar",
                     isOn: $shortcutButtonEnabled,
-                    description: NSLocalizedString(
-                        "Adds a button to each project row that creates a workstream from a Shortcut story, using the story's suggested branch name. The button is hidden until an API token is saved.",
-                        comment: "Shortcut button setting description"
-                    )
+                    description: "Adds a button to each project row that creates a workstream from a Shortcut story, using the story's suggested branch name. The button is hidden until an API token is saved."
                 )
             }
         }
@@ -872,13 +860,22 @@ private enum SettingDescriptionStyle {
     case warning
 }
 
+/// `LocalizedStringKey`, not `String`: `Text(String)` binds the `StringProtocol`
+/// overload, which does not localize. A `String` parameter here kept every
+/// toggle's title and description out of the strings file, which is why four
+/// descriptions had grown a hand-rolled `NSLocalizedString` and the rest had not.
 private struct SettingToggle: View {
-    let title: String
+    let title: LocalizedStringKey
     @Binding var isOn: Bool
-    let description: String
+    let description: LocalizedStringKey
     var descriptionStyle: SettingDescriptionStyle
 
-    init(_ title: String, isOn: Binding<Bool>, description: String, descriptionStyle: SettingDescriptionStyle = .secondary) {
+    init(
+        _ title: LocalizedStringKey,
+        isOn: Binding<Bool>,
+        description: LocalizedStringKey,
+        descriptionStyle: SettingDescriptionStyle = .secondary
+    ) {
         self.title = title
         _isOn = isOn
         self.description = description
