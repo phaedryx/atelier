@@ -2113,16 +2113,30 @@ private struct GitHubActionMenu: View {
     let hasGitHubRemote: Bool
     let branchPR: GitHub.PR?
 
-    private var prState: String? {
-        branchPR?.state
+    /// Read through `GitHub.PR.status`, never off `state` — the raw string is
+    /// case-sensitive where `status` folds case, and folding `isDraft` in is
+    /// what stops a draft being answered as an ordinary open PR anywhere it
+    /// matters. `PRStatusBadge` already takes the colour and symbol from it.
+    private var prStatus: GitHub.PR.Status? {
+        branchPR?.status
     }
 
+    /// A draft counts, deliberately: it is open, and the work it needs next —
+    /// commit, push — is the work an open PR needs. Only the *badge* draws the
+    /// two differently, which is the distinction `GitHubPRStatusStyle` exists
+    /// for.
     private var hasOpenPR: Bool {
-        prState == "OPEN"
+        prStatus == .open || prStatus == .draft
     }
 
     private var isMerged: Bool {
-        prState == "MERGED"
+        prStatus == .merged
+    }
+
+    /// Whether this branch has no pull request at all, which is what gates
+    /// Create PR — distinct from having one that is closed or merged.
+    private var hasNoPR: Bool {
+        branchPR == nil
     }
 
     /// The most relevant next action to move the workflow forward.
@@ -2146,7 +2160,7 @@ private struct GitHubActionMenu: View {
                 return .push
             }
         }
-        if prState == nil, hasGitHubRemote, worktreeState.hasBranchCommits {
+        if hasNoPR, hasGitHubRemote, worktreeState.hasBranchCommits {
             return .createPR
         }
         if worktreeState.hasUncommittedChanges {
@@ -2169,7 +2183,7 @@ private struct GitHubActionMenu: View {
         if worktreeState.hasUnpushedCommits, worktreeState.hasRemote {
             actions.append(.push)
         }
-        if prState == nil, hasGitHubRemote, worktreeState.hasBranchCommits {
+        if hasNoPR, hasGitHubRemote, worktreeState.hasBranchCommits {
             actions.append(.createPR)
         }
         if hasOpenPR {
