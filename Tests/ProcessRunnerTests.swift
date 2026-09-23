@@ -146,9 +146,23 @@ final class ProcessRunnerTests: XCTestCase {
 
     // MARK: - Drain threads and orphaned grandchildren
 
-    /// A `sleep` duration no other test or tool on the machine uses, so the
-    /// cleanup below cannot kill a bystander.
-    private static let sentinelSleep = "98765"
+    /// A `sleep` duration **unique to this test instance**, so neither the
+    /// cleanup nor the assertions can see another process's child.
+    ///
+    /// It used to be the bare constant `98765`, shared by every run on the
+    /// machine. `pgrep -f "^sleep 98765"` therefore matched any concurrent
+    /// suite's sentinel — nine worktrees build and test this project at once —
+    /// and the test failed for reasons that had nothing to do with the code. The
+    /// fractional suffix keeps it a real `sleep` while making the pattern this
+    /// host's alone; XCTest builds a fresh instance per test method, so the two
+    /// tests that spawn sentinels cannot see each other's either.
+    private let sentinelSleep = "98765.\(UInt32.random(in: 100_000 ... 999_999))"
+
+    /// Anchored at both ends, and the `.` escaped, so the pattern cannot widen
+    /// into another instance's token.
+    private var sentinelPattern: String {
+        "^sleep \(sentinelSleep.replacingOccurrences(of: ".", with: "\\."))$"
+    }
 
     /// Enough leaky captures to exhaust libdispatch's global pool if each one
     /// parks its two drain threads permanently. The pool tops out around 64
@@ -163,20 +177,46 @@ final class ProcessRunnerTests: XCTestCase {
         killSentinelStrays()
     }
 
-    private func killSentinelStrays() {
+    /// Kills this instance's sentinels and **waits for them to actually go**.
+    ///
+    /// `pkill` exiting is not the signalled processes having died and been
+    /// reaped, so asserting the count immediately after it returned was a race
+    /// inside a single run — concurrent suites only widened the window. That is
+    /// what made `testKillingAtTheDeadlineReapsAGrandchild…` the most-hit flake
+    /// in the fleet, and why it could still fail on a serial re-run: the
+    /// assertion that tripped was usually the test's own *precondition*, before
+    /// it had exercised anything.
+    @discardableResult
+    private func killSentinelStrays() -> Bool {
         let killer = Process()
         killer.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-        killer.arguments = ["-f", "^sleep \(Self.sentinelSleep)"]
+        killer.arguments = ["-f", sentinelPattern]
         killer.standardOutput = FileHandle.nullDevice
         killer.standardError = FileHandle.nullDevice
         try? killer.run()
         killer.waitUntilExit()
+        return waitForNoSentinelStrays()
+    }
+
+    /// Polls until no sentinel of this instance is left, or the bound passes.
+    ///
+    /// Five seconds is three orders of magnitude past the real cost of reaping a
+    /// `sleep`, and it is only ever paid in full by a genuine failure.
+    private func waitForNoSentinelStrays(timeout: TimeInterval = 5) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if sentinelStrayCount() == 0 {
+                return true
+            }
+            usleep(50_000)
+        }
+        return sentinelStrayCount() == 0
     }
 
     private func sentinelStrayCount() -> Int {
         let finder = Process()
         finder.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        finder.arguments = ["-f", "^sleep \(Self.sentinelSleep)"]
+        finder.arguments = ["-f", sentinelPattern]
         let pipe = Pipe()
         finder.standardOutput = pipe
         finder.standardError = FileHandle.nullDevice
@@ -207,7 +247,7 @@ final class ProcessRunnerTests: XCTestCase {
         for _ in 0 ..< Self.leakyCaptureCount {
             _ = ProcessRunner.capture(
                 executable: "/bin/sh",
-                arguments: ["-c", "sleep \(Self.sentinelSleep) &"],
+                arguments: ["-c", "sleep \(sentinelSleep) &"],
                 timeout: 0.25
             )
         }
@@ -295,15 +335,26 @@ final class ProcessRunnerTests: XCTestCase {
     /// deadline fires Foundation has reaped the child, so `terminate()` has
     /// nothing to signal; only the process group reaches the survivor.
     func testKillingAtTheDeadlineReapsAGrandchildTheChildLeftBehind() {
-        killSentinelStrays()
-        XCTAssertEqual(sentinelStrayCount(), 0, "a stray from an earlier run would make this test meaningless")
+        XCTAssertTrue(
+            killSentinelStrays(),
+            "a stray from an earlier run would make this test meaningless"
+        )
 
         XCTAssertNil(ProcessRunner.capture(
             executable: "/bin/sh",
-            arguments: ["-c", "sleep \(Self.sentinelSleep) &"],
+            arguments: ["-c", "sleep \(sentinelSleep) &"],
             timeout: 0.5
         ))
 
-        XCTAssertEqual(sentinelStrayCount(), 0, "the grandchild outlived the deadline: only the direct child was signalled")
+        // Polled, not asserted outright: the group kill happens inside `capture`
+        // at the deadline, and a signalled process is not a reaped one by the
+        // time `capture` returns — the same race the cleanup above has. What is
+        // under test is that the grandchild is reached *at all*, which a bounded
+        // wait states exactly and an immediate read only states on a quiet
+        // machine.
+        XCTAssertTrue(
+            waitForNoSentinelStrays(),
+            "the grandchild outlived the deadline: only the direct child was signalled"
+        )
     }
 }

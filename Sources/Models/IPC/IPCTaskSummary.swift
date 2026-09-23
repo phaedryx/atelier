@@ -29,10 +29,6 @@ extension IPC {
         /// duplicates. Empty means no filter. Same parsing convention as
         /// `VerificationSummary.checks(from:)` — an argument is always text
         /// however a model chose to spell a list.
-        static func tags(from raw: String?) -> [String] {
-            ToolArguments.parseList(raw)
-        }
-
         // MARK: - The completion/failure notice
 
         /// The notice posted to a task's creator when it completes or fails.

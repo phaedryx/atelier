@@ -251,7 +251,18 @@
 "Switch tab" = "Switch tab";
 "Previous tab" = "Previous tab";
 "Next tab" = "Next tab";
+"Toggle sidebar" = "Toggle sidebar";
+"New terminal tab" = "New terminal tab";
+"Save (Editor)" = "Save (Editor)";
+"Save As (Editor)" = "Save As (Editor)";
+"Rename workstream" = "Rename workstream";
+"Archive workstream" = "Archive workstream";
+"Previous workstream" = "Previous workstream";
+"Next workstream" = "Next workstream";
+"Previous project" = "Previous project";
+"Next project" = "Next project";
 "Navigation" = "Navigation";
+"Move between workstreams and projects" = "Move between workstreams and projects";
 "External Apps" = "External Apps";
 "Opens the current workstream directory" = "Opens the current workstream directory";
 "Open in external browser" = "Open in external browser";
@@ -261,6 +272,7 @@
 "Reveal in Finder" = "Reveal in Finder";
 "Copy project path" = "Copy project path";
 "Copy branch name" = "Copy branch name";
+"Copy path" = "Copy path";
 "Copy worktree path" = "Copy worktree path";
 
 /* Agent tab - Claude not installed */
@@ -699,6 +711,14 @@
 "Process" = "Process";
 "Namespace" = "Namespace";
 "Ready" = "Ready";
+
+/* Execution tab - Start button while the previous run's control socket is being reclaimed */
+"Reclaiming…" = "Reclaiming…";
+
+/* Editor - stand-in filename when the editor is not pointing at a file. Reaches
+   the user through the save prompt ("Do you want to save changes to ...?") and
+   as the Save As panel's default name. */
+"file" = "file";
 
 /* Terminal container - loading states while tools are detected and the agent is spawned */
 "Checking terminal tools..." = "Checking terminal tools...";

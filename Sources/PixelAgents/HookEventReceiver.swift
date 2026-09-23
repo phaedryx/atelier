@@ -108,6 +108,14 @@ final class HookEventReceiver: @unchecked Sendable {
         queue.sync { connections.count }
     }
 
+    /// Cancels the live listener *without* asking the receiver to shut down, for
+    /// tests. This is the shape a listener reaching a terminal state on its own
+    /// takes — `wantsListener` stays true, so the receiver is expected to repair
+    /// itself, where `stop()` would mean it must not.
+    func _testCancelListenerWithoutStopping() {
+        queue.sync { listener?.cancel() }
+    }
+
     private let queue = DispatchQueue(label: "atelier.hook-receiver", qos: .utility)
     private var listener: NWListener?
     /// The port the listener bound to, once ready. Read this rather than the
@@ -120,19 +128,51 @@ final class HookEventReceiver: @unchecked Sendable {
     private var currentPort: UInt16?
     private var connections: [NWConnection] = []
 
+    /// Whether the app currently wants a listener at all.
+    ///
+    /// Set by `start()` and cleared by `stop()`, and consulted by the retry in
+    /// `listenerEnded`. Without it a retry scheduled just before a quit would
+    /// re-listen and rewrite the rendezvous file *after* the app had asked to
+    /// shut down — taking the port away from whichever instance is still
+    /// running, which is the one bug `removePortFile`'s ownership check exists
+    /// to prevent.
+    private var wantsListener = false
+
+    /// How many times the listener has been rebuilt after failing.
+    ///
+    /// Bounded rather than endless: a listener that cannot bind loopback is not
+    /// going to start working because it was asked a hundredth time, and an
+    /// unbounded timer is worse than the honest "No Signal" the probe already
+    /// reports. Reset on every `.ready`, so a channel that fails once an hour
+    /// keeps being repaired.
+    private var listenerFailures = 0
+
+    /// The ceiling on rebuild attempts, and the delay before each.
+    ///
+    /// The delay backs off so a listener failing for a persistent reason (a
+    /// sandbox denial, an exhausted ephemeral range) stops costing anything
+    /// quickly, while the common transient case is repaired within a second.
+    private static let maxListenerFailures = 5
+    private static func listenerRetryDelay(afterFailures failures: Int) -> DispatchTimeInterval {
+        .seconds(min(30, 1 << max(0, failures - 1)))
+    }
+
     private init() {}
 
     // MARK: - Lifecycle
 
     func start() {
         queue.async { [weak self] in
-            self?.setupListener()
+            guard let self else { return }
+            wantsListener = true
+            setupListener()
         }
     }
 
     func stop() {
         queue.async { [weak self] in
             guard let self else { return }
+            wantsListener = false
             // Read before the teardown clears it: the port is what decides
             // whether this instance is the one allowed to remove the rendezvous
             // file, and `removePortFile` runs last.
@@ -165,13 +205,20 @@ final class HookEventReceiver: @unchecked Sendable {
                     if let port = newListener.port {
                         logger.info("Hook receiver listening on port \(port.rawValue)")
                         self?.currentPort = port.rawValue
+                        self?.listenerFailures = 0
                         self?.writePortFile(port: port.rawValue)
                     }
                 case let .failed(error):
                     logger.error("Hook receiver failed: \(error.localizedDescription)")
                     newListener.cancel()
+                    self?.listenerEnded(newListener, retry: true)
                 case .cancelled:
                     logger.info("Hook receiver cancelled")
+                    // A cancel is reached two ways and only one of them wants a
+                    // rebuild: `stop()` cancels deliberately, and `wantsListener`
+                    // is what `listenerEnded` reads to tell them apart. The
+                    // property must still be cleared either way — see below.
+                    self?.listenerEnded(newListener, retry: true)
                 default:
                     break
                 }
@@ -187,6 +234,48 @@ final class HookEventReceiver: @unchecked Sendable {
             newListener.start(queue: queue)
         } catch {
             logger.error("Failed to create hook listener: \(error.localizedDescription)")
+        }
+    }
+
+    /// A listener reached a terminal state, so let go of it — and rebuild if the
+    /// app still wants one.
+    ///
+    /// **Clearing `listener` is the whole point.** `setupListener` guards on
+    /// `listener == nil` to stay idempotent, and neither terminal state used to
+    /// clear it: `.failed` cancelled the listener and left the property pointing
+    /// at the dead object, so every later `start()` returned immediately and hook
+    /// delivery was finished for the session. That is exactly the "No Signal" the
+    /// probe reports, with nothing in the app able to repair it.
+    ///
+    /// Identity-guarded, because these states arrive asynchronously: `stop()`
+    /// cancels and clears the property itself, and a `start()` may already have
+    /// installed a *replacement* by the time the old listener's `.cancelled`
+    /// lands. Clearing unconditionally would throw away the live one.
+    ///
+    /// The port file is released **before** `currentPort` is cleared, the order
+    /// `stop()` takes deliberately: `removePortFile` only removes a file that
+    /// still names this instance's port, so clearing first would fail that check
+    /// and strand a rendezvous file pointing at a port nothing is listening on.
+    /// Since `atelier-hook` exits 0 when the file is missing, a stale file and a
+    /// missing one are equally silent — but a missing one lets the next
+    /// `writePortFile` win cleanly, here or from another instance.
+    private func listenerEnded(_ ended: NWListener, retry: Bool) {
+        guard listener === ended else { return }
+        removePortFile(ownPort: currentPort)
+        currentPort = nil
+        listener = nil
+
+        guard retry, wantsListener else { return }
+        listenerFailures += 1
+        guard listenerFailures <= Self.maxListenerFailures else {
+            logger.error("Hook receiver gave up rebuilding after \(Self.maxListenerFailures) failures")
+            return
+        }
+        let delay = Self.listenerRetryDelay(afterFailures: listenerFailures)
+        logger.info("Rebuilding the hook receiver (attempt \(self.listenerFailures))")
+        queue.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, wantsListener else { return }
+            setupListener()
         }
     }
 

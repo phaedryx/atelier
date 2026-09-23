@@ -915,6 +915,14 @@ struct TerminalContainerView: View {
                         get: { model.editorDirtyState[id] ?? false },
                         set: { model.editorDirtyState[id] = $0 }
                     ),
+                    // Both bindings read per-tab state off the model rather
+                    // than the view, so it survives this view being destroyed
+                    // on every tab and workstream switch. See
+                    // `WorkspaceModel.editorFileLoaded`.
+                    isFileLoaded: Binding(
+                        get: { model.editorFileLoaded[id] ?? false },
+                        set: { model.editorFileLoaded[id] = $0 }
+                    ),
                     onFileChanged: { path in
                         if let path {
                             model.editorFilePaths[id] = path

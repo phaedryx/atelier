@@ -20,6 +20,21 @@ final class WorkspaceModel: ObservableObject {
     @Published var terminalTitles: [UUID: String]
     @Published var editorFilePaths: [UUID: String]
     @Published var editorDirtyState: [UUID: Bool] = [:]
+    /// Whether an editor tab's Monaco model already holds its file's contents.
+    ///
+    /// Lives here rather than in `EditorView` for the reason the run session's
+    /// state does: `TerminalContainerView` is `.id(workstreamID)` and the editor
+    /// is a `@ViewBuilder` branch of it, so the view is destroyed on every tab
+    /// and workstream switch and a fresh one cannot tell "this tab has never
+    /// loaded" from "this tab loaded, and the user has been typing into it". It
+    /// read as the former and reloaded from disk, which replaced the model's
+    /// text — unsaved edits, dirty dot and close prompt with it.
+    ///
+    /// Deliberately not `@Published`: nothing renders from it. It is read and
+    /// written inside a load the view is already performing, and publishing it
+    /// would invalidate the view mid-load for a value nothing draws — the same
+    /// reasoning `hasBeenPresented` and `editorInitialLines` state.
+    var editorFileLoaded: [UUID: Bool] = [:]
     /// Requested scroll position per editor tab, pending its first load. See
     /// `addEditor(filePath:line:)`.
     private var editorInitialLines: [UUID: Int] = [:]
@@ -225,6 +240,7 @@ final class WorkspaceModel: ObservableObject {
         case let .editor(id):
             editorFilePaths.removeValue(forKey: id)
             editorDirtyState.removeValue(forKey: id)
+            editorFileLoaded.removeValue(forKey: id)
         case .info, .agent, .changes, .execution, .verification, .whiteboard:
             break
         }

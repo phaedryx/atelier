@@ -127,8 +127,14 @@ private final class PortScanner: @unchecked Sendable {
     private var tracker: RunState.PortSelectionTracker
     private(set) var detectedPorts: [Int] = []
     private(set) var selectedPort: Int?
-    private var pollCount = 0
     private var active = false
+    /// The last snapshot actually written, so an unchanged poll costs no I/O.
+    ///
+    /// This is what pays for scanning at 1Hz for the whole life of a run: the
+    /// steady state is two `libproc` reads and nothing else. It also means the
+    /// app's FSEvents watcher is woken only when something really moved, which
+    /// `Port.Detector.refreshState` used to have to guard against itself.
+    private var lastWritten: RunState.Snapshot?
 
     init(pid: Int32, expectedPort: Int?) {
         self.pid = pid
@@ -146,9 +152,31 @@ private final class PortScanner: @unchecked Sendable {
             let timer = DispatchSource.makeTimerSource(queue: queue)
             self.timer = timer
             timer.schedule(deadline: .now() + .seconds(1), repeating: .seconds(1))
+            // **The scan runs at 1Hz for the whole life of the run, and never
+            // stops or slows.** It used to cancel the timer the moment a port was
+            // selected, and to drop to a 60-second cadence after sixty polls.
+            // Both cost more than they saved:
+            //
+            // - Cancelling froze the state file. A dev server that restarts on a
+            //   *different* port — Vite falling to the next free one while the
+            //   old sits in TIME_WAIT — left the browser pointed at the dead
+            //   port, `Port.Detector.status` stuck on `.running`, and
+            //   `isWaitingForServer` never re-engaging. It also made
+            //   `RunState.PortSelectionTracker.update`'s "the selected port is no
+            //   longer listening, clear it" branch unreachable in production: the
+            //   only thing that could ever have exercised it had already stopped
+            //   running.
+            // - The 60-second cadence meant a stack whose browser port binds
+            //   after a minute-long compile — an ordinary Rails or webpack boot —
+            //   kept the "Starting dev server…" overlay up for up to a minute
+            //   after it was actually ready.
+            //
+            // What paid for the old behaviour was write volume, not scan cost, so
+            // that is what is removed instead: the snapshot is written only when
+            // it differs from the last one written. The steady state is two
+            // `libproc` reads a second and no I/O at all.
             timer.setEventHandler { [weak self] in
                 guard let self, active else { return }
-                pollCount += 1
 
                 let ports = listeningPorts(in: processTree(rootPID: pid))
                 let result = tracker.update(listeningPorts: ports)
@@ -163,17 +191,9 @@ private final class PortScanner: @unchecked Sendable {
                     selectedPort: result.selectedPort,
                     startedAt: startedAt
                 )
+                guard state != lastWritten else { return }
                 try? RunState.Store.write(state, for: workstreamID)
-
-                if result.selectedPort != nil {
-                    active = false
-                    timer.cancel()
-                    return
-                }
-
-                if pollCount == 60 {
-                    timer.schedule(deadline: .now() + .seconds(60), repeating: .seconds(60))
-                }
+                lastWritten = state
             }
             active = true
             timer.resume()

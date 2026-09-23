@@ -7,16 +7,26 @@ import XCTest
 final class IPCTaskSummaryTests: XCTestCase {
     // MARK: - Tag parsing
 
+    /// Through the reader `addTask` actually calls. `TaskSummary.tags(from:)`
+    /// was a one-line delegation to `ToolArguments.parseList` with no production
+    /// caller left, kept alive only by these tests.
+    private func tags(_ raw: String?) -> [String] {
+        IPC.ToolArguments(
+            tool: .addTask,
+            raw: raw.map { ["tags": $0] } ?? [:]
+        ).list("tags")
+    }
+
     func test_tags_fromNil_isEmpty() {
-        XCTAssertEqual(IPC.TaskSummary.tags(from: nil), [])
+        XCTAssertEqual(tags(nil), [])
     }
 
     func test_tags_splitsOnCommasAndTrimsWhitespace() {
-        XCTAssertEqual(IPC.TaskSummary.tags(from: "security, high , audit"), ["security", "high", "audit"])
+        XCTAssertEqual(tags("security, high , audit"), ["security", "high", "audit"])
     }
 
     func test_tags_dropsDuplicatesButKeepsFirstOrder() {
-        XCTAssertEqual(IPC.TaskSummary.tags(from: "a,b,a,c"), ["a", "b", "c"])
+        XCTAssertEqual(tags("a,b,a,c"), ["a", "b", "c"])
     }
 
     // MARK: - The completion/failure notice

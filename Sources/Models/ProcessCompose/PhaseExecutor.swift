@@ -492,20 +492,55 @@ extension ProcessCompose {
 
         // MARK: - Shutdown
 
-        /// Ask the server on this socket to stop, and clear the path either way.
+        /// Ask the server on this socket to stop, and remove the socket **only if
+        /// it agreed to**.
         ///
         /// Called before spawning as well as after, because the state this cleans
         /// up is exactly what a killed run leaves behind. A failure is expected and
-        /// unremarkable — most of the time there is nothing listening.
-        static func shutDown(binary: String, socketPath: String, workingDirectory: String) {
-            guard FileManager.default.fileExists(atPath: socketPath) else { return }
-            _ = ProcessRunner.capture(
+        /// unremarkable — most of the time there is nothing listening, and that
+        /// case is the `fileExists` guard rather than this one.
+        ///
+        /// **The socket is the only handle anything has on a phase server, so
+        /// unlinking it after a `down` that did not succeed orphans that server
+        /// unreachably.** It used to be removed either way. A `down` that hits its
+        /// deadline is precisely the case where a server is most likely still
+        /// alive, and deleting its socket then means neither a later `shutDown`,
+        /// nor `stopAllServers` at quit, nor the next run's pre-spawn `shutDown`
+        /// can ever address it again — the only remaining handle is a machine-wide
+        /// command-line match. Leaving the file is what keeps every one of those
+        /// routes open, which is the whole reason to keep it.
+        ///
+        /// What made this survivable in production, and hid it, is `run`'s
+        /// pre-spawn `shutDown` (see its call site): process-compose rebinds over
+        /// an existing socket file rather than refusing, so the *next* run of the
+        /// same phase would ask the orphan to leave and usually succeed. That
+        /// self-heal only ever fires if the file is still there to be found.
+        ///
+        /// A `down` that fails leaves a socket file that may name nothing at all —
+        /// a server that died without unlinking. That costs nothing: `shutDown`'s
+        /// own guard makes a stale file one wasted `down` on the next pass, and
+        /// `ProcessCompose.Client.isServerListening` deliberately connects rather
+        /// than calling `fileExists` for exactly this reason.
+        @discardableResult
+        static func shutDown(binary: String, socketPath: String, workingDirectory: String) -> Bool {
+            guard FileManager.default.fileExists(atPath: socketPath) else { return true }
+            let output = ProcessRunner.capture(
                 executable: binary,
                 arguments: ["down", "-u", socketPath],
                 currentDirectory: URL(fileURLWithPath: workingDirectory),
                 timeout: ProcessRunner.Timeout.local
             )
+            // nil is a timeout or a spawn failure, not an answer — treated exactly
+            // as a non-zero exit, because both mean nobody confirmed the server
+            // stopped.
+            guard output?.isSuccess == true else {
+                logger.warning(
+                    "process-compose down did not confirm for \(socketPath, privacy: .public); leaving the socket so it can be reached again"
+                )
+                return false
+            }
             try? FileManager.default.removeItem(atPath: socketPath)
+            return true
         }
 
         /// Stop every phase server this user has left listening.
