@@ -72,7 +72,7 @@ struct ProjectSidebar: View {
     @State private var cloneCancellation: BareRepoClone.Cancellation?
     @State private var isDropTargeted = false
     @State private var projectToDelete: UUID?
-    @State private var workstreamToRemove: UUID?
+    @StateObject private var removeConfirmation = Workstream.RemoveConfirmation()
     /// The pending Purge, its warning and its alert copy — see
     /// `Workstream.PurgeConfirmation`. Remove above stays a plain `UUID?`: it
     /// has no warning and no button-title rule to share.
@@ -356,12 +356,12 @@ struct ProjectSidebar: View {
                         taskDescription: facts?.taskDescription,
                         prTitle: pr?.title,
                         prNumber: pr?.number,
-                        prState: pr?.state,
+                        prStatus: pr?.status,
                         isRenaming: Binding(
                             get: { renamingWorkstreamID == workstream.id },
                             set: { renamingWorkstreamID = $0 ? workstream.id : nil }
                         ),
-                        onRemove: { workstreamToRemove = workstream.id },
+                        onRemove: { removeConfirmation.confirm(workstreamID: workstream.id) },
                         onPurge: { confirmPurge(workstream) },
                         onRenameCommit: { commitRename(workstreamID: workstream.id, input: $0) }
                     )
@@ -444,23 +444,19 @@ struct ProjectSidebar: View {
                     Text(String(format: NSLocalizedString("Remove \"%@\" from the list? Files in %@ will not be deleted.", comment: ""), project.name, project.directory))
                 }
             }
-            .alert(
-                "Remove Workstream",
-                isPresented: Binding(
-                    get: { workstreamToRemove != nil },
-                    set: {
-                        if !$0 {
-                            workstreamToRemove = nil
-                        }
-                    }
-                )
-            ) {
-                Button("Cancel", role: .cancel) { workstreamToRemove = nil }
-                Button("Remove", role: .destructive) {
-                    performRemove()
-                }
-            } message: {
-                Text("Ongoing terminals and Coding Agent sessions will be killed. The worktree and its files will remain on disk.")
+            .removeConfirmationAlert(
+                removeConfirmation,
+                archiving: Workstream.ArchiveContext(
+                    projects: $projects,
+                    surfaceCache: surfaceCache,
+                    tmuxPath: appEnv.toolStatus.tmux.path,
+                    verificationRunner: verificationRunner,
+                    agentStateTracker: agentStateTracker
+                ),
+                selection: $selection
+            ) { _ in
+                rebuildIndices()
+                onProjectsChanged()
             }
             .purgeConfirmationAlert(
                 purgeConfirmation,
@@ -1085,28 +1081,20 @@ struct ProjectSidebar: View {
         return nil
     }
 
-    private func performRemove() {
-        guard let wsID = workstreamToRemove,
-              let pi = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
-        let projectID = projects[pi].id
-        Workstream.Archiver.remove(wsID, in: &projects[pi], surfaceCache: surfaceCache, tmuxPath: appEnv.toolStatus.tmux.path,
-                                   verificationRunner: verificationRunner, agentStateTracker: agentStateTracker)
-        rebuildIndices()
-        if case let .workstream(id) = selection, id == wsID {
-            selection = projects[pi].workstreams.first.map { .workstream($0.id) } ?? .project(projectID)
-        }
-        onProjectsChanged()
-        workstreamToRemove = nil
-    }
-
     // MARK: - Project management
 
     private func deleteProject(id: UUID) {
+        // Through `Archiver`, not a hand-rolled pair of cleanup calls: deleting
+        // a project ends every workstream in it, and this used to do only two
+        // of the ten things ending one involves. See `removeAllWorkstreams`.
         if let project = projects.first(where: { $0.id == id }) {
-            for ws in project.workstreams {
-                surfaceCache.removeWorkstreamSurfaces(for: ws.id)
-                agentStateTracker.clear(workstreamID: ws.id)
-            }
+            Workstream.Archiver.removeAllWorkstreams(
+                in: project,
+                surfaceCache: surfaceCache,
+                tmuxPath: appEnv.toolStatus.tmux.path,
+                verificationRunner: verificationRunner,
+                agentStateTracker: agentStateTracker
+            )
         }
         projects.removeAll { $0.id == id }
         // The cached (project, workstream) index pairs are positional, so they have to be
@@ -1485,7 +1473,13 @@ private struct WorkstreamRow: View {
     var taskDescription: String?
     var prTitle: String?
     var prNumber: Int?
-    var prState: String?
+    /// The PR's decoded status, never its raw `state` string.
+    ///
+    /// `GitHub.PR.status` is what folds `isDraft` in, and it is the only thing
+    /// that can: `state` is "OPEN" for a draft exactly as it is for a ready PR.
+    /// Carrying the status rather than the string is what keeps the string from
+    /// reaching the badge at all.
+    var prStatus: GitHub.PR.Status?
     /// True while the row shows the inline rename field. Owned by the
     /// sidebar so the edit survives row rebuilds and stays exclusive.
     @Binding var isRenaming: Bool
@@ -1631,16 +1625,22 @@ private struct WorkstreamRow: View {
 
                 if let subtitle {
                     HStack(spacing: 3) {
-                        if prState == "MERGED" {
-                            Image(systemName: "arrow.triangle.merge")
+                        // Colour and glyph from `GitHubPRStatusStyle`, which
+                        // `PRStatusBadge` and the Info tab already share — its
+                        // own words are "so the two PR badges and the Info tab
+                        // cannot drift apart". Deliberately *not* its `label`:
+                        // the subtitle here is a short "#123" and a word beside
+                        // it would change every row's density.
+                        if let prStatus {
+                            Image(systemName: prStatus.symbolName)
                                 .font(.system(size: 8))
-                                .foregroundStyle(.purple)
+                                .foregroundStyle(prStatus.color)
                         }
                         Text(subtitle)
                             .lineLimit(1)
                     }
                     .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(prState == "MERGED" ? AnyShapeStyle(.purple) : AnyShapeStyle(.tertiary))
+                    .foregroundStyle(prStatus.map { AnyShapeStyle($0.color) } ?? AnyShapeStyle(.tertiary))
                 }
 
                 if let statusLabel {

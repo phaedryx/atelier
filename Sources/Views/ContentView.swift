@@ -154,7 +154,7 @@ struct ContentView: View {
     @ObservedObject private var agentStateTracker = Workstream.AgentStateTracker.shared
     @ObservedObject private var channelProbe = HookChannelProbe.shared
     @State private var saveWork: DispatchWorkItem?
-    @State private var workstreamToRemove: UUID?
+    @StateObject private var removeConfirmation = Workstream.RemoveConfirmation()
     /// The pending Purge, its warning and its alert copy. See
     /// `Workstream.PurgeConfirmation` — Remove stays a plain `UUID?` above
     /// because it has no warning, no button-title rule and no destroyable
@@ -311,7 +311,7 @@ struct ContentView: View {
             ProjectOverviewView(
                 project: $projectList.items[projectIndex],
                 onSelectWorkstream: { wsID in selection = .workstream(wsID) },
-                onRemoveWorkstream: { wsID in workstreamToRemove = wsID },
+                onRemoveWorkstream: { wsID in removeConfirmation.confirm(workstreamID: wsID) },
                 onPurgeWorkstream: { wsID in confirmPurge(wsID) },
                 onProjectChanged: {
                     ProjectStore.save(projects)
@@ -364,23 +364,19 @@ struct ContentView: View {
                 syncHeadWatcher(projects: newValue)
                 syncShortcutStoryIDs(projects: newValue)
             }
-            .alert(
-                "Remove Workstream",
-                isPresented: Binding(
-                    get: { workstreamToRemove != nil },
-                    set: {
-                        if !$0 {
-                            workstreamToRemove = nil
-                        }
-                    }
-                )
-            ) {
-                Button("Cancel", role: .cancel) { workstreamToRemove = nil }
-                Button("Remove", role: .destructive) {
-                    performRemove()
-                }
-            } message: {
-                Text("Ongoing terminals and Coding Agent sessions will be killed. The worktree and its files will remain on disk.")
+            .removeConfirmationAlert(
+                removeConfirmation,
+                archiving: Workstream.ArchiveContext(
+                    projects: $projectList.items,
+                    surfaceCache: surfaceCache,
+                    tmuxPath: appEnvironment.toolStatus.tmux.path,
+                    verificationRunner: verificationRunner,
+                    agentStateTracker: agentStateTracker
+                ),
+                selection: $selection
+            ) { _ in
+                ProjectStore.save(projects)
+                syncHeadWatcher(projects: projects)
             }
             .purgeConfirmationAlert(
                 purgeConfirmation,
@@ -425,12 +421,20 @@ struct ContentView: View {
                 logger.warning("[Atelier] missingProjectIDs changed: \(missing.count, privacy: .public) missing, \(projects.count, privacy: .public) total projects")
                 let names = projects.filter { missing.contains($0.id) }.map(\.name)
                 logger.warning("[Atelier] removing projects: \(names, privacy: .public)")
+                // Through `Archiver`, not a hand-rolled pair of cleanup calls.
+                // The project's directory is gone, but its worktrees may be
+                // elsewhere and its checks, terminals and tmux sessions are
+                // certainly still running — `removeAllWorkstreams` is what ends
+                // them, and it touches nothing on disk.
                 for id in missing {
                     if let project = projects.first(where: { $0.id == id }) {
-                        for ws in project.workstreams {
-                            surfaceCache.removeWorkstreamSurfaces(for: ws.id)
-                            agentStateTracker.clear(workstreamID: ws.id)
-                        }
+                        Workstream.Archiver.removeAllWorkstreams(
+                            in: project,
+                            surfaceCache: surfaceCache,
+                            tmuxPath: appEnvironment.toolStatus.tmux.path,
+                            verificationRunner: verificationRunner,
+                            agentStateTracker: agentStateTracker
+                        )
                     }
                 }
                 projects.removeAll { missing.contains($0.id) }
@@ -1038,7 +1042,7 @@ struct ContentView: View {
             cycleProject(direction: -1)
         case .archiveWorkstream:
             if let wsID = selection?.workstreamID {
-                workstreamToRemove = wsID
+                removeConfirmation.confirm(workstreamID: wsID)
             }
         case let .purgeWorkstream(wsID):
             // A nil id means "the selected workstream", which is what the
@@ -1083,11 +1087,18 @@ struct ContentView: View {
     }
 
     private func clearProjects() {
+        // Through `Archiver`, for the reason the two paths above go through it:
+        // clearing the list ends every workstream in every project, and a
+        // hand-rolled pair of cleanup calls did two of the ten things that
+        // involves. See `removeAllWorkstreams`.
         for project in projects {
-            for ws in project.workstreams {
-                surfaceCache.removeWorkstreamSurfaces(for: ws.id)
-                agentStateTracker.clear(workstreamID: ws.id)
-            }
+            Workstream.Archiver.removeAllWorkstreams(
+                in: project,
+                surfaceCache: surfaceCache,
+                tmuxPath: appEnvironment.toolStatus.tmux.path,
+                verificationRunner: verificationRunner,
+                agentStateTracker: agentStateTracker
+            )
         }
         projects.removeAll()
         selectionBeforeSettings = nil
@@ -1199,16 +1210,6 @@ struct ContentView: View {
     private func confirmPurge(_ wsID: UUID) {
         guard let ws = projects.flatMap(\.workstreams).first(where: { $0.id == wsID }) else { return }
         purgeConfirmation.confirm(workstream: ws)
-    }
-
-    private func performRemove() {
-        guard let wsID = workstreamToRemove,
-              let projectIndex = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
-        Workstream.Archiver.remove(wsID, in: &projects[projectIndex], surfaceCache: surfaceCache, tmuxPath: appEnvironment.toolStatus.tmux.path,
-                                   verificationRunner: verificationRunner, agentStateTracker: agentStateTracker)
-        ProjectStore.save(projects)
-        syncHeadWatcher(projects: projects)
-        workstreamToRemove = nil
     }
 }
 
