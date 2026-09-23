@@ -474,8 +474,9 @@ extension Git {
 
         /// This repository's default branch, resolved once per directory.
         ///
-        /// Prefers `development`, then falls back to auto-detection — see
-        /// `resolveDefaultBranch`, which is where that order lives.
+        /// What git reports as `origin/HEAD`, falling back to a `development` branch
+        /// and then to the usual names — see `resolveDefaultBranch`, which is where
+        /// that order lives and why it is in that order.
         ///
         /// **Cached, because the cost is a fan-out and the answer is a property of
         /// the repository.** Resolving costs up to six sequential git probes, and
@@ -550,17 +551,63 @@ extension Git {
             }
         }
 
-        /// Detect the default branch. Prefers `development`, then falls back to auto-detection.
+        /// Detect the default branch: git's own `origin/HEAD` first, then a
+        /// `development` branch, then the usual names.
+        ///
+        /// **`origin/HEAD` is asked first, and used to be asked third.** A
+        /// `development` branch — remote or local — won outright, so a repository
+        /// whose real default is `main` but which merely *carries* a long-lived
+        /// `development` branch answered `development` to every caller. There is one
+        /// reader, `defaultBranch(at:)`, and it is cached per directory, so that one
+        /// answer was wrong everywhere for the session:
+        ///
+        /// - the "Repository default" base branch, so every new worktree was cut from
+        ///   `origin/development` (`BaseBranchSetting.resolve`);
+        /// - the Changes tab's diff base (`mergeBase`);
+        /// - the ahead count (`hasBranchCommits`), and the "open a pull request" offer
+        ///   that reads it;
+        /// - **prune's clean decision**, which is the ahead count again and is the
+        ///   consequence with teeth: a branch merged to `main` but not to
+        ///   `development` reads as *having commits* and is withheld, and — the
+        ///   dangerous direction — one merged to `development` but not to `main` reads
+        ///   as clean and is offered for deletion while its work is not on the real
+        ///   default branch (`pruneCleanWorktrees`, `ProjectOverviewView`);
+        /// - the exported `ATELIER_DEFAULT_BRANCH`, seen by every project-supplied
+        ///   command, initialization step and verification check.
+        ///
+        /// Two documented promises said otherwise — `BaseBranchSetting`'s
+        /// `repositoryDefault` ("ask git what the repository's default branch is") and
+        /// AGENTS.md on `ATELIER_DEFAULT_BRANCH` ("what git thinks this repository's
+        /// default branch is") — and both are true again now without being reworded.
+        ///
+        /// **The `development` preference is kept, as a fallback, and that is not
+        /// timidity.** It now answers only where git has said nothing:
+        /// `refs/remotes/origin/HEAD` is present in the README's container layout —
+        /// measured, on git 2.55.0, through exactly what `BareRepoClone.clone` runs
+        /// (`clone --bare`, the refspec, `fetch --all --prune`), because git sets that
+        /// ref on fetch when it is unset (2.45+). So on current git this rarely fires
+        /// at all; deleting it outright would buy nothing and would drop a repository
+        /// whose default really *is* `development`, and whose `origin/HEAD` was never
+        /// fetched, to `origin/main` and then to the `"HEAD"` sentinel — which
+        /// `mergeBase` and `hasBranchCommits` correctly refuse to compare against, so
+        /// the Changes tab and the ahead count would go blank rather than wrong.
+        ///
+        /// **This is not the `BaseBranchSetting` migration AGENTS.md holds all-or-none
+        /// across `mergeBase` and `hasBranchCommits`**, and a reviewer will
+        /// pattern-match it to one — the caching change had to say so too. That rule
+        /// governs whether those two sites consult the *setting* instead of
+        /// `defaultBranch(at:)`. Both still ask `defaultBranch(at:)`, and still agree
+        /// with each other; only what it resolves has changed.
         private static func resolveDefaultBranch(at path: String) -> String {
-            // Prefer development branch if it exists (remote then local)
+            // What git itself says the default is.
+            if let ref = remoteHeadRef(at: path) {
+                return ref
+            }
+            // Only where it has said nothing: a development branch, remote then local.
             for branch in ["origin/development", "development"] {
                 if run(args: ["rev-parse", "--verify", branch], in: path) != nil {
                     return branch
                 }
-            }
-            // Try remote HEAD
-            if let ref = remoteHeadRef(at: path) {
-                return ref
             }
             // Check if origin/main or origin/master exist
             for branch in ["origin/main", "origin/master"] {

@@ -121,8 +121,12 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertTrue(branch.contains("origin"), "Expected origin-prefixed branch, got: \(branch)")
     }
 
-    func testDefaultBranchPrefersLocalDevelopmentOverMain() throws {
-        // development beats main/master in the precedence order.
+    /// The fallback that is deliberately kept: with no remote there is no
+    /// `origin/HEAD` for git to answer with, so `development` is still preferred
+    /// over `main`. Deleting the preference outright rather than demoting it would
+    /// have changed this case too, and this is the repository where `development`
+    /// genuinely is the most likely default.
+    func testDefaultBranchStillPrefersDevelopmentWhereGitSaysNothing() throws {
         let repoDir = tempDir.appendingPathComponent("dev-over-main")
         try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
         git(["init", "-b", "main"], in: repoDir)
@@ -131,11 +135,20 @@ final class GitOperationsTests: XCTestCase {
         git(["branch", "development"], in: repoDir)
 
         let branch = Git.Operations.defaultBranch(at: repoDir.path)
-        XCTAssertEqual(branch, "development", "local development must win over local main")
+        XCTAssertEqual(
+            branch, "development",
+            "with no origin/HEAD to consult, development is still the better guess than main"
+        )
     }
 
-    func testDefaultBranchPrefersOriginDevelopmentOverEverything() throws {
-        // origin/development is the highest-priority ref of all.
+    /// The regression this reordering is for, and it is the ordinary case rather
+    /// than a contrived one: a plain `git clone` sets `refs/remotes/origin/HEAD`
+    /// (verified, git 2.55.0), so a repository whose real default is `main` and
+    /// which merely *carries* a long-lived `development` branch used to answer
+    /// `origin/development` to every caller — the base new worktrees were cut from,
+    /// the Changes tab's diff base, the ahead count, prune's clean decision and the
+    /// exported `ATELIER_DEFAULT_BRANCH`.
+    func testDefaultBranchPrefersOriginHEADOverADevelopmentBranch() throws {
         let remoteDir = tempDir.appendingPathComponent("remote-dev")
         try FileManager.default.createDirectory(at: remoteDir, withIntermediateDirectories: true)
         git(["init", "-b", "main"], in: remoteDir)
@@ -146,14 +159,24 @@ final class GitOperationsTests: XCTestCase {
         let repoDir = tempDir.appendingPathComponent("cloned-dev")
         git(["clone", remoteDir.path, repoDir.path], in: tempDir)
 
+        // Precondition: this test is only meaningful while origin/development is
+        // there to lose to origin/HEAD.
+        XCTAssertTrue(
+            git(["rev-parse", "--verify", "origin/development"], in: repoDir),
+            "precondition: the development branch must have been cloned"
+        )
+
         let branch = Git.Operations.defaultBranch(at: repoDir.path)
-        XCTAssertEqual(branch, "origin/development",
-                       "origin/development must take precedence over every other ref")
+        XCTAssertEqual(
+            branch, "origin/main",
+            "git's own origin/HEAD must win over a development branch that merely exists"
+        )
     }
 
     func testDefaultBranchUsesOriginHEADWhenNoDevelopment() throws {
-        // No development branch anywhere → resolve via origin/HEAD symbolic-ref,
-        // which a clone sets to the remote's default branch (here: master).
+        // origin/HEAD is now consulted first rather than third, so this passes for a
+        // simpler reason than it used to — but it is still the case worth pinning:
+        // a clone sets origin/HEAD to the remote's default branch (here: master).
         let remoteDir = tempDir.appendingPathComponent("remote-head")
         try FileManager.default.createDirectory(at: remoteDir, withIntermediateDirectories: true)
         git(["init", "-b", "master"], in: remoteDir)
@@ -167,7 +190,7 @@ final class GitOperationsTests: XCTestCase {
 
         let branch = Git.Operations.defaultBranch(at: repoDir.path)
         XCTAssertEqual(branch, "origin/master",
-                       "with no development branch, origin/HEAD must resolve the default, got: \(branch)")
+                       "origin/HEAD must resolve the default, got: \(branch)")
     }
 
     /// The cache lives here rather than in `AppEnvironment` because callers like
@@ -1842,10 +1865,10 @@ final class GitOperationsTests: XCTestCase {
     }
 
     func testProjectLocationPrefersTheCheckedOutDefaultOverADevelopmentBranch() throws {
-        // defaultBranch prefers `development` for branching new work, which is a
-        // different question from which checkout represents the project. A repo
-        // that has a development branch but is checked out on main must still
-        // resolve to main rather than falling through to an arbitrary worktree.
+        // Which branch to branch new work from is a different question from which
+        // checkout represents the project. A repo that has a development branch but
+        // is checked out on main must still resolve to main rather than falling
+        // through to an arbitrary worktree — whatever `defaultBranch` would answer.
         let container = try makeBareContainer(named: "bare-project")
         git(["config", "--unset", "wt.default"], in: container)
         git(["branch", "development", "main"], in: container)
