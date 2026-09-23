@@ -647,6 +647,23 @@ final class WhiteboardDigestTests: XCTestCase {
         )
     }
 
+    /// **A namespace frame reads as a named element, not as a bare rectangle
+    /// of dimensions.** A mermaid class diagram with a `namespace` block draws
+    /// one, so this is what an agent re-reading its own diagram sees. The name
+    /// rides in the text slot, which puts it through the ordinary label arm.
+    func test_aFrameRendersItsNameTheWayALabelledShapeDoes() {
+        let line = digest("""
+        {"elements":[
+          {"id":"f1","type":"frame","name":"Auth","x":10,"y":20,
+           "width":400,"height":300}]}
+        """)
+        XCTAssertTrue(line.contains("frame"), line)
+        XCTAssertTrue(line.contains("\"Auth\""), line)
+        // And not through `.other`'s self-naming path, which would have printed
+        // the raw type with no name beside it.
+        XCTAssertFalse(line.contains("f1  frame  at"), line)
+    }
+
     func test_anUnboundArrowEndIsStillDistinctFromOneBoundToANamelessElement() {
         // The one place empty and absent must NOT collapse. `?` means there is
         // no binding; an empty `elementId` means there is a binding whose

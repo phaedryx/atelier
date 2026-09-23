@@ -8,6 +8,7 @@ import {
   serializeAsJSON,
   exportToBlob,
   convertToExcalidrawElements,
+  getSceneVersion,
 } from '@excalidraw/excalidraw'
 import '@excalidraw/excalidraw/index.css'
 
@@ -36,6 +37,43 @@ let saveTimer = null
 // matching a scene it was never rendered from.
 let revision = 0
 
+// Everything about the board that a save actually writes.
+//
+// `serializeAsJSON(elements, appState, {}, 'local')` runs its appState through
+// Excalidraw's `cleanAppStateForExport`, which keeps exactly four keys
+// (0.18.1): gridModeEnabled, viewBackgroundColor, gridSize, gridStep. Scroll,
+// zoom and selection are NOT persisted, which is what makes gating on this
+// signature safe rather than a way to lose the user's place.
+//
+// HAND-MIRRORED, and the bound on being wrong is stated rather than assumed: if
+// a later Excalidraw persists a fifth appState key, a change to that key alone
+// would not schedule a save. It cannot cost anything drawn — every element goes
+// through `getSceneVersion` above it — so the worst case is a preference that
+// does not survive a relaunch, not a lost stroke.
+//
+// `getSceneVersion` is `elements.reduce((acc, el) => acc + el.version, 0)` (read
+// from 0.18.1's own build), and `version` is bumped on every mutation — it is
+// the function Excalidraw's collaboration uses to decide a scene has moved. The
+// residual is a sum that coincides: a delete of an element at version V landing
+// in the same change as exactly V of bumps elsewhere. That would skip one
+// debounce, not the next one, and nothing else in this file depends on it.
+const saveSignature = () => {
+  const appState = api.getAppState()
+  return [
+    getSceneVersion(api.getSceneElements()),
+    appState.gridModeEnabled,
+    appState.viewBackgroundColor,
+    appState.gridSize,
+    appState.gridStep,
+  ].join('|')
+}
+
+// The signature of the last save that was scheduled or performed.
+let savedSignature = null
+// See `window.__whiteboardDebug` below.
+let saveGateCalls = 0
+let saveGateArmed = 0
+
 // setTimeout, deliberately, and NOT requestAnimationFrame.
 //
 // The webview spends most of its life parked in an offscreen window, which is
@@ -45,9 +83,47 @@ let revision = 0
 // rAF-driven debounce would stop saving the moment the tab is closed, with no
 // error and no timeout — a promise that simply never settles. See
 // Whiteboard.Host.
+//
+// **Excalidraw fires onChange for APP STATE, not only for elements** — every
+// pan, every zoom step, every selection and every pointer move that changes a
+// hovered id. Each one used to arm a full save, and a save is not cheap: a
+// scene serialise, then a PNG export that re-fetches every asset over the
+// asset scheme and base64-encodes it, then a main-actor digest re-parse of the
+// whole file. Panning a board with three screenshots on it did all of that
+// repeatedly for a board nobody had changed.
+//
+// So this compares what a save would actually write. It is the gate on
+// SCHEDULING only: `saveNow()` on the agent write path calls `save()` directly
+// and is deliberately not gated, because that path has just changed the scene
+// and must persist it whatever any comparison says.
 const scheduleSave = () => {
+  saveGateCalls += 1
+  const signature = saveSignature()
+  if (signature === savedSignature) return
+  saveGateArmed += 1
+  savedSignature = signature
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = setTimeout(save, 800)
+}
+
+// The harness's seam onto this module, and the ONLY thing here that exists for a
+// test rather than for the app.
+//
+// Two things it has to give, and neither is reachable otherwise. `api` and
+// `scheduleSave` are module-scoped in a bundle, so an injected script cannot see
+// them — a harness driving `api.updateScene` to pan the board gets a
+// ReferenceError, which its `callJS` reports as a string nobody reads. And the
+// gate's counters separate "Excalidraw never fired onChange" from "the gate
+// declined": without them "a pan posts no save" passes just as well with the
+// gate deleted, so it would assert nothing and would go on passing forever.
+//
+// Same argument as `ProcessCompose.Settings.resolveBinary(searchPaths:)`, which
+// took an injection point into production because declining it left resolution
+// unassertable on any host. A save gate that silently stops saving is lost work,
+// so it has to be possible to watch it work.
+window.__whiteboardDebug = {
+  api: () => api,
+  gate: () => JSON.stringify({ calls: saveGateCalls, armed: saveGateArmed }),
 }
 
 // FileReader, not a String.fromCharCode loop over the bytes: a pasted screenshot
@@ -192,6 +268,16 @@ const renderPng = async (rev) => {
 // The vocabulary is Excalidraw's own image table (`MIME_TYPES`, 0.18.1), so
 // anything it will accept as a paste has an extension here and the refusal below
 // is unreachable rather than merely unlikely.
+//
+// THERE IS A THIRD READER, IN SWIFT: `Whiteboard.AssetSchemeHandler.mimeTypes`
+// turns the extension a file landed under back into the `Content-Type` it is
+// served with. It was written independently and knew only png/jpg/gif/svg/webp,
+// so the four entries below that it lacked — bmp, ico, avif, jfif — were served
+// as `application/octet-stream` and re-inlined under the wrong type after a
+// relaunch. A scheme handler answers a network request, so there is no op for
+// this vocabulary to travel on the way a `captionKey` does: it is hand-mirrored,
+// `WhiteboardAssetSchemeHandlerTests` pins the whole set, and a change here is a
+// change there.
 const assetExtensions = {
   'image/png': 'png',
   'image/jpeg': 'jpg',
@@ -219,6 +305,12 @@ const writtenAssets = new Set()
 const save = () => {
   if (!api) return
   const rev = ++revision
+  // Whatever brought us here, this is now what is on disk. At a debounce fire
+  // scheduleSave has already recorded it; this is for `saveNow()`, which is
+  // ungated and would otherwise leave the gate one write behind — costing a
+  // redundant full save 800ms after every agent write, when Excalidraw's own
+  // onChange for that write arrived.
+  savedSignature = saveSignature()
   const files = api.getFiles() || {}
 
   // Image bytes are written to assets/ and kept out of the scene file — the
@@ -517,6 +609,58 @@ const shiftLabel = (element, dx, dy) => ({
   versionNonce: nonce(),
 })
 
+// The mermaid diagram types the converter expands into real elements.
+//
+// Everything else — pie, gantt, mindmap, journey — is rendered by mermaid
+// itself and arrives as ONE image skeleton, which is the documented and wanted
+// behaviour. The problem this table exists for is that a type IN this set can
+// arrive the same way: parseMermaid wraps each per-type parser in a try/catch
+// and falls back to convertSvgToGraphImage on a throw (measured,
+// mermaid-to-excalidraw 2.2.2, parseMermaid.js), logging to the page's console
+// and telling its caller nothing. So a flowchart whose parser trips lands as a
+// flat picture while the tool's own description promises editable boxes, and
+// the answer says "Added 1 element".
+//
+// Keyed on the keyword an author writes rather than on mermaid's internal
+// diagram type, because this is read from the definition text before anything
+// has parsed it.
+const expandableMermaidKeywords = new Set([
+  'graph',
+  'flowchart',
+  'flowchart-v2',
+  'sequencediagram',
+  'classdiagram',
+  'erdiagram',
+  'statediagram',
+  'statediagram-v2',
+])
+
+// The diagram keyword a definition declares, or null when it cannot be read
+// with confidence.
+//
+// Deliberately conservative: this only ever decides whether to ADD a warning,
+// so a definition whose shape is not recognised says nothing rather than
+// guessing. Skips `---` frontmatter, `%%` comments and `%%{init}%%` directives,
+// which are the three things that legally precede the keyword.
+const mermaidKeyword = (definition) => {
+  const lines = String(definition || '').split('\n')
+  let inFrontmatter = false
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    if (trimmed === '---') {
+      inFrontmatter = !inFrontmatter
+      continue
+    }
+    if (inFrontmatter || trimmed.startsWith('%%')) continue
+    // `graph LR;` and `stateDiagram-v2` alike: the keyword runs up to the first
+    // space, semicolon or colon.
+    const word = trimmed.split(/[\s;:]/)[0]
+    return word ? word.toLowerCase() : null
+  }
+  return null
+}
+
 // A write has landed, so save NOW rather than waiting for onChange.
 //
 // `onChange` is Excalidraw's, and whether it fires for a programmatic
@@ -570,15 +714,39 @@ window.__whiteboardApply = async (op) => {
         }
       }
 
+      // **An endpoint that does not resolve refuses the WHOLE op**, the rule
+      // the update arm's missing label target already states, and for the same
+      // reason: an arrow handed to the converter naming nothing arrives with
+      // startBinding and endBinding both null — drawn, floating and attached
+      // to nothing, exactly as measured above — and the call answered `ok`
+      // with its id, so the digest reported an arrow the agent believed was
+      // connected.
+      //
+      // Swift already refuses an endpoint that is not on the board, but it
+      // reads `live.ids` in a SEPARATE `liveState()` call before this one:
+      // between the two, a user or another agent can delete the very box the
+      // arrow names. This page holds the only copy of the truth at write time,
+      // which is why the check belongs here as well rather than only there.
+      const resolve = (id) => byID.get(id) || op.elements.find((c) => c.id === id) || null
+      const unresolved = []
+      for (const el of op.elements) {
+        if (el.type !== 'arrow') continue
+        for (const ref of [el.start?.id, el.end?.id]) {
+          if (ref && !resolve(ref) && !unresolved.includes(ref)) unresolved.push(ref)
+        }
+      }
+      // `unknown` rather than `reason`: these are ids, and Whiteboard.Host
+      // turns that key into the refusal that names each one and points at
+      // read_whiteboard. Nothing below this line runs, so the scene is
+      // untouched.
+      if (unresolved.length) return { ok: false, unknown: unresolved }
+
       // Arrow geometry, resolved against whatever the endpoints really are —
       // in this batch or already on the board. See edgePoints.
       const positioned = op.elements.map((el) => {
         if (el.type !== 'arrow' || !el.start?.id || !el.end?.id) return el
-        const resolve = (id) =>
-          byID.get(id) || op.elements.find((c) => c.id === id) || null
         const a = resolve(el.start.id)
         const b = resolve(el.end.id)
-        if (!a || !b) return el
         const { start, end } = edgePoints(a, b)
         return {
           ...el,
@@ -798,12 +966,49 @@ window.__whiteboardApply = async (op) => {
       )
       if (!skeletons.length) return { ok: false, reason: 'the definition produced no elements' }
 
+      // **A supported type that arrives as one image was degraded, not drawn.**
+      // See `expandableMermaidKeywords`: the converter swallows a per-type
+      // parser failure and renders the diagram as a flat SVG instead, so the
+      // board gets a picture where the tool promised editable boxes. Reported
+      // rather than refused — mermaid did render the definition, and throwing
+      // the rendering away would leave the caller with nothing at all. An
+      // unrecognised keyword says nothing; this note may only ever be added.
+      const keyword = mermaidKeyword(op.definition)
+      const note =
+        skeletons.length === 1 &&
+        skeletons[0].type === 'image' &&
+        keyword &&
+        expandableMermaidKeywords.has(keyword)
+          ? `mermaid could not expand this ${keyword} diagram into editable elements and ` +
+            'rendered it as a single image instead. The board carries a picture of the ' +
+            'diagram, not boxes and arrows. This usually means the definition uses syntax ' +
+            "the converter does not handle; the image's caption holds the definition."
+          : null
+      if (note) console.error('whiteboard:', note)
+
+      // **Not every skeleton the converter emits carries coordinates.** A
+      // class diagram with a `namespace` block emits one
+      // `{type, id, name, children}` frame per namespace, with no x and no y
+      // (measured: `mermaid-to-excalidraw` 2.2.2, converter/types/class.js) —
+      // Excalidraw derives a frame's bounds from the children it names. Read
+      // through `el.x || 0` such a skeleton clamped `minX` and `minY` to zero,
+      // so `dx`/`dy` were computed against an origin no element is at and the
+      // whole diagram landed offset from the `at` the tool promises to place
+      // its top-left corner on. Translating one is equally meaningless: it
+      // would stamp a bare `dx`/`dy` onto a shape whose geometry comes from
+      // elsewhere.
+      const isPlaceable = (el) => typeof el.x === 'number' && typeof el.y === 'number'
+      const placeable = skeletons.filter(isPlaceable)
       // Placed by translating the whole diagram so its top-left lands where
       // Swift said. The converter lays out from its own origin, and a diagram
       // left there lands on top of whatever the user has near (0,0) — which
       // reads perfectly well in the digest, since the coordinates are real.
-      const minX = Math.min(...skeletons.map((el) => el.x || 0))
-      const minY = Math.min(...skeletons.map((el) => el.y || 0))
+      //
+      // A diagram of nothing but frames cannot happen — a namespace frame
+      // names the classes it contains — but a zero-length `Math.min` answers
+      // `Infinity`, so the guard is written rather than argued.
+      const minX = placeable.length ? Math.min(...placeable.map((el) => el.x)) : 0
+      const minY = placeable.length ? Math.min(...placeable.map((el) => el.y)) : 0
       const dx = op.x - minX
       const dy = op.y - minY
       const placed = skeletons.map((el) => {
@@ -815,7 +1020,8 @@ window.__whiteboardApply = async (op) => {
         // It carries no words on the canvas, so the definition is its caption;
         // the key travels with the op because this page cannot spell it.
         if (el.type === 'image' && op.captionKey) data[op.captionKey] = op.definition
-        return { ...el, x: (el.x || 0) + dx, y: (el.y || 0) + dy, customData: data }
+        if (!isPlaceable(el)) return { ...el, customData: data }
+        return { ...el, x: el.x + dx, y: el.y + dy, customData: data }
       })
 
       // Regenerated ids, deliberately — the opposite of the add arm. Mermaid
@@ -828,10 +1034,52 @@ window.__whiteboardApply = async (op) => {
       // Before the scene, so the image has bytes to draw the moment it lands.
       // Each file's dataURL is a real `data:` URL, so save()'s loop posts it to
       // assets/ the way a pasted image's bytes are posted.
+      //
+      // **These fileIds are the converter's nanoids, NOT a SHA-1 of the bytes,
+      // and that is a documented exception rather than an oversight.** The
+      // capture button names its file by the lowercase hex SHA-1 of its bytes
+      // because that is Excalidraw's own convention — but Excalidraw's own
+      // `generateIdFromFile` says of itself "generates SHA-1 digest from
+      // supplied file (if not supported, falls back to a 40-char base64 random
+      // id)", so even a pasted image is not guaranteed to be content-named.
+      // The invariant that actually matters is unchanged and is about the
+      // JOIN, not the hash: the stem of a file in assets/ IS the fileId on its
+      // image element, and a nanoid satisfies that as well as a digest does.
+      //
+      // What is lost is only deduplication — the same diagram added twice
+      // writes two identical SVGs into assets/. Hashing here would mean
+      // `crypto.subtle` in a custom-scheme page that may not be a secure
+      // context, with a silent random-id fallback when it is not: two naming
+      // rules where there is currently one join, to save a few kilobytes.
       if (fileList.length) api.addFiles(fileList)
-      api.updateScene({ elements: [...existing, ...converted] })
+      // **Re-read, because this arm is the only one that awaits.** Every other
+      // op is synchronous between the `existing` snapshot at the top of this
+      // function and its `updateScene`, so nothing can land in between. This
+      // one awaits a dynamic import and then `parseMermaidToExcalidraw`, which
+      // does real DOM layout and takes hundreds of milliseconds to seconds — a
+      // user stroke, a drag, a capture or another agent's write landing in that
+      // window would be replaced wholesale by the stale snapshot, and
+      // `saveNow()` below persists the loss after the caller has already been
+      // answered `ok`. The snapshot above is still right for everything before
+      // the await; this is the one read that has to be taken at write time.
+      api.updateScene({ elements: [...api.getSceneElements(), ...converted] })
       await saveNow()
-      return { ok: true, ids: converted.filter((el) => !el.containerId).map((el) => el.id) }
+      // A frame is left out for the same reason a bound label is: it is not an
+      // element of the vocabulary this tool answers in. A namespace frame is a
+      // grouping Excalidraw derives from the classes it contains, and handing
+      // its id back invites an agent to move or delete it as though it were a
+      // box. Filtered on the converted type rather than on which skeleton it
+      // came from, because `regenerateIds: true` has already remapped the ids.
+      return {
+        ok: true,
+        ids: converted
+          .filter((el) => !el.containerId && el.type !== 'frame')
+          .map((el) => el.id),
+        // Present only when the diagram was degraded to an image. `Host.apply`
+        // logs it; putting it in front of the agent is one line in
+        // `WorkspaceActions.whiteboardAdd`, which is not this file's to write.
+        ...(note ? { note } : {}),
+      }
     }
 
     if (op.kind === 'delete') {

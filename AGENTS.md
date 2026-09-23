@@ -2764,6 +2764,18 @@ so the import shares the chunk rather than adding one. Four consequences, each p
   through, which is why the SVG extension fix (`image/svg+xml` must land as `.svg`) is load-bearing
   here and not a nicety. The image carries no words on the canvas, so its **caption is the
   definition**: the digest is not blind to it, and a later agent can re-read what was drawn.
+  Two things about that arm are **not** what they look like. First, **a type from the supported list
+  can land as an image too**: `parseMermaid` wraps each per-type parser in a `try`/`catch` and falls
+  back to `convertSvgToGraphImage` on a throw (measured, 2.2.2), logging to the page's console and
+  telling its caller nothing — so a flowchart whose parser trips becomes a flat picture while the
+  tool promises editable boxes. The page detects that (one image skeleton for a definition whose
+  declared keyword is one the converter expands) and returns a `note` beside `ids`, which
+  `Whiteboard.Host.apply` logs; **surfacing it in `whiteboard_add`'s answer is still to do**.
+  Second, that image's file keeps the **converter's nanoid**, not the lowercase-hex SHA-1 the capture
+  button uses — so the same diagram drawn twice writes two identical assets. Deliberate: Excalidraw's
+  own `generateIdFromFile` falls back to a random id where SHA-1 is unavailable, so content-naming
+  was never the invariant. The invariant is the **join** — a file's stem in `assets/` *is* the
+  `fileId` on its image element — and a nanoid keeps it.
 
 `Tests/WhiteboardWriteTests.swift` pins the Swift half; section 10 of the harness pins what the page
 does with it, from disk — including that the same diagram added twice yields disjoint ids and that a

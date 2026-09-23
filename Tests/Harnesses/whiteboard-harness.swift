@@ -1412,6 +1412,158 @@ if host.waitUntilReady() {
     check("the mermaid arm has a page to run in", false, "never became ready")
 }
 
+section("11. The save gate — a pan does not save, an edit does")
+// Excalidraw fires onChange for APP STATE as well as elements: every pan, every
+// zoom step, every selection. Each one used to arm a full save — a scene
+// serialise, a PNG export that re-fetches and base64-encodes every asset, and a
+// main-actor digest re-parse. `scheduleSave` now compares what a save would
+// actually write (getSceneVersion plus the four appState keys serializeAsJSON
+// persists) and declines when nothing did.
+//
+// **The gate's own counters are what make this non-vacuous.** "A pan posts no
+// save" passes just as well if Excalidraw never fired onChange, so it would
+// prove nothing and would go on passing with the gate deleted. `calls` rising
+// while `armed` does not is the gate declining, which is the actual assertion.
+
+host.teardown()
+pump(0.5)
+
+let gateScene: [String: Any] = [
+    "type": "excalidraw",
+    "elements": [[
+        "id": "h-gate", "type": "rectangle", "x": 10, "y": 10,
+        "width": 100, "height": 60, "version": 1, "versionNonce": 1,
+        "isDeleted": false,
+    ]],
+    "appState": ["viewBackgroundColor": "#ffffff"],
+]
+try! JSONSerialization.data(withJSONObject: gateScene)
+    .write(to: files.scene, options: .atomic)
+
+host = HarnessHost(files: files, bundle: bundleDir)
+if host.waitUntilReady() {
+    /// `{calls, armed}` from the page.
+    func gate() -> (calls: Int, armed: Int) {
+        guard let raw = host.callJS("return window.__whiteboardDebug.gate()"),
+              let data = raw.data(using: .utf8),
+              let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return (-1, -1) }
+        return (parsed["calls"] as? Int ?? -1, parsed["armed"] as? Int ?? -1)
+    }
+
+    // **A baseline save first, and the reason is the gate's own honest default.**
+    // `savedSignature` starts null, so the FIRST onChange of a session always
+    // arms a save whatever provoked it — the page cannot assume the file on disk
+    // matches what it mounted, and one save to establish that is the safe answer.
+    // Measuring a pan before any save had run therefore measured that baseline
+    // rather than the gate. An agent write is the reliable way to produce one,
+    // because Excalidraw's onChange does not necessarily fire on mount in an
+    // occluded window — which is exactly what this harness exists to not assume.
+    _ = host.apply(["kind": "update", "id": "h-gate", "x": 11, "y": 11])
+    pump(1.2)
+
+    // --- a pan -------------------------------------------------------------
+    let beforePan = gate()
+    let writesBeforePan = files.sceneWrites
+    host.callJS("""
+    const api = window.__whiteboardDebug.api()
+    const st = api.getAppState()
+    api.updateScene({ appState: { ...st, scrollX: (st.scrollX || 0) + 137,
+                                  scrollY: (st.scrollY || 0) - 42, zoom: { value: 1.75 } } })
+    return "done"
+    """)
+    // Past the 800ms debounce with margin, so a save that WAS armed has landed.
+    pump(1.6)
+    let afterPan = gate()
+
+    check(
+        "a pan reaches the gate at all — without this the next check is vacuous",
+        afterPan.calls > beforePan.calls,
+        "calls \(beforePan.calls) → \(afterPan.calls); onChange did not fire for an appState change"
+    )
+    check(
+        "and the gate declines it rather than arming a save",
+        afterPan.armed == beforePan.armed,
+        "armed \(beforePan.armed) → \(afterPan.armed)"
+    )
+    // A companion assertion, NOT an independent guard — the shape
+    // `WhiteboardWriteTabTests` already names for one of its three. Measured:
+    // it passes with the gate deleted too, so it discriminates nothing on its
+    // own. The `armed` check above is the one with teeth (verified by deleting
+    // the gate: armed 1 → 2). This states the consequence the gate exists for,
+    // which is worth saying out loud even where it cannot fail alone.
+    check(
+        "so nothing is written to board.excalidraw",
+        files.sceneWrites == writesBeforePan,
+        "\(files.sceneWrites - writesBeforePan) writes"
+    )
+
+    // --- an edit -----------------------------------------------------------
+    // A new element, cloned from one already on the board so it is a real
+    // Excalidraw element rather than a hand-written shape.
+    let beforeEdit = gate()
+    let writesBeforeEdit = files.sceneWrites
+    host.callJS("""
+    const api = window.__whiteboardDebug.api()
+    const els = api.getSceneElements()
+    const clone = { ...els[0], id: "h-gate-2", x: 500, y: 500,
+                    version: (els[0].version || 1) + 1, versionNonce: 987654321 }
+    api.updateScene({ elements: [...els, clone] })
+    return "done"
+    """)
+    let saved = waitUntil(timeout: 10) { files.sceneWrites > writesBeforeEdit }
+    let afterEdit = gate()
+
+    check(
+        "an edit arms a save",
+        afterEdit.armed > beforeEdit.armed,
+        "armed \(beforeEdit.armed) → \(afterEdit.armed)"
+    )
+    check(
+        "and it reaches board.excalidraw",
+        saved,
+        "\(files.sceneWrites - writesBeforeEdit) writes"
+    )
+    check(
+        "and the element it wrote is really there",
+        files.elements()["h-gate-2"] != nil,
+        "\(files.elements().keys.sorted())"
+    )
+
+    // --- an agent write costs exactly one save --------------------------------
+    // `saveNow()` bypasses the gate on purpose: that path has just changed the
+    // scene and must persist it whatever any comparison says. What the gate is
+    // for here is the SECOND save — Excalidraw fires its own onChange for the
+    // agent's updateScene, and before `save()` recorded the signature that
+    // onChange armed a full redundant save (serialise, PNG export, digest
+    // re-parse) 800ms after every single agent write.
+    //
+    // An identical `updateScene({elements: unchanged})` was tried here first and
+    // is not a usable provocation: Excalidraw short-circuits it and fires no
+    // onChange at all, so the check could only ever pass vacuously.
+    let gateBeforeApply = gate()
+    let writesBeforeApply = files.sceneWrites
+    _ = host.apply(["kind": "update", "id": "h-gate", "x": 300, "y": 300])
+    // Past the debounce, so a second save that WAS armed has had time to land.
+    pump(1.6)
+    let gateAfterApply = gate()
+
+    check(
+        "an agent write still saves, because saveNow bypasses the gate",
+        files.sceneWrites > writesBeforeApply,
+        "\(files.sceneWrites - writesBeforeApply) writes"
+    )
+    check(
+        "and costs exactly one save, not a second armed by its own onChange",
+        files.sceneWrites - writesBeforeApply == 1,
+        "\(files.sceneWrites - writesBeforeApply) writes; "
+            + "calls \(gateBeforeApply.calls) → \(gateAfterApply.calls), "
+            + "armed \(gateBeforeApply.armed) → \(gateAfterApply.armed)"
+    )
+} else {
+    check("the save gate has a page to run in", false, "never became ready")
+}
+
 // ---------------------------------------------------------------------------
 print("\n\(checksRun - failures.count)/\(checksRun) checks passed")
 if failures.isEmpty {

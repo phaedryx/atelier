@@ -888,10 +888,15 @@ extension WorkspaceActions {
     /// cross an actor hop to reach this `@MainActor` type, and `[Any]` is not
     /// `Sendable`. `Whiteboard.Write` owns the parse, so a malformed array is
     /// refused in the same voice as every other bad argument.
+    /// **Answers with a `note` as well as the ids**, for a write that landed
+    /// and is still not what was asked for — see `Whiteboard.Host.Applied`.
+    /// The one case today is a mermaid diagram the converter degraded to a
+    /// flat image; reporting only the ids told an agent "Added 1 element" for
+    /// a diagram that never expanded into the boxes the tool promises.
     func whiteboardAdd(
         workstreamID: UUID,
         elementsJSON: String
-    ) async throws -> [String] {
+    ) async throws -> (ids: [String], note: String?) {
         let target = try whiteboardTarget(workstreamID: workstreamID)
         // The live page, not the scene on disk — see `Host.liveState`.
         let live = try await target.host.liveState()
@@ -900,15 +905,15 @@ extension WorkspaceActions {
         // nothing, because how many elements a definition becomes is the
         // converter's answer.
         let op: [String: Any] = switch try Whiteboard.Write.plan(fromJSON: elementsJSON, live: live) {
-        case let .elements(_, skeletons):
+        case let .elements(skeletons):
             ["kind": "add", "elements": skeletons.map(\.json)]
         case let .mermaid(mermaid):
             mermaid.op
         }
-        let ids = try await target.host.apply(op)
+        let applied = try await target.host.apply(op)
         openBoardTab(target.model)
-        logger.detailed("whiteboard_add: \(ids.count) elements")
-        return ids
+        logger.detailed("whiteboard_add: \(applied.ids.count) elements")
+        return (applied.ids, applied.note)
     }
 
     /// Moves, retexts, recolours or captions one element of the caller's board.
@@ -945,7 +950,7 @@ extension WorkspaceActions {
     ) async throws -> [String] {
         let target = try whiteboardTarget(workstreamID: workstreamID)
         let op = try Whiteboard.Write.deletePlan(ids: ids)
-        let removed = try await target.host.apply(op)
+        let removed = try await target.host.apply(op).ids
         // After `apply`, like the other two. A delete that matched nothing still
         // ran, so the tab still opens and the note that says so stays true.
         openBoardTab(target.model)

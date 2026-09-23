@@ -114,15 +114,47 @@ extension Whiteboard {
             return canonical
         }
 
+        /// Extension → media type, for every extension the page can write.
+        ///
+        /// **This is the read half of `assetExtensions` in
+        /// `editor/src/whiteboard.jsx`, and the two are one vocabulary.** That
+        /// table is Excalidraw's own image table (`MIME_TYPES`, 0.18.1) and
+        /// decides the extension a pasted image lands under in `assets/`; this
+        /// one decides the `Content-Type` it is served back with, and
+        /// `savedFiles()` in that same file turns the extension back into the
+        /// `mimeType` Excalidraw is handed on the next mount. They were written
+        /// independently and disagreed: the page writes `bmp`, `ico`, `avif`
+        /// and `jfif`, and this knew none of them, so those four were served as
+        /// `application/octet-stream` and re-inlined under the wrong type after
+        /// a relaunch.
+        ///
+        /// The boundary is a scheme handler answering a network request, so
+        /// there is no op for the vocabulary to travel on the way a
+        /// `captionKey` does. It is hand-mirrored, and
+        /// `WhiteboardAssetSchemeHandlerTests` pins the whole set rather than
+        /// leaving the agreement to whoever edits one of them next. **Any
+        /// change here is a change there**, and vice versa.
+        ///
+        /// `jpeg` is a second spelling of `jpg` rather than an entry of its
+        /// own, which is the same allowance the page's reverse table makes.
+        static let mimeTypes: [String: String] = [
+            "png": "image/png",
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "gif": "image/gif",
+            "svg": "image/svg+xml",
+            "webp": "image/webp",
+            "bmp": "image/bmp",
+            "ico": "image/x-icon",
+            "avif": "image/avif",
+            "jfif": "image/jfif",
+        ]
+
+        /// The fallback is now unreachable for anything the page can write,
+        /// which is the point of the table above — it stays as the honest
+        /// answer for a file put in `assets/` by some other hand.
         private static func mimeType(for ext: String) -> String {
-            switch ext.lowercased() {
-            case "png": "image/png"
-            case "jpg", "jpeg": "image/jpeg"
-            case "gif": "image/gif"
-            case "svg": "image/svg+xml"
-            case "webp": "image/webp"
-            default: "application/octet-stream"
-            }
+            mimeTypes[ext.lowercased()] ?? "application/octet-stream"
         }
     }
 }

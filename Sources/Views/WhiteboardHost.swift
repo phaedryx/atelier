@@ -75,6 +75,19 @@ extension Whiteboard {
                 defer: false
             )
             offscreenWindow.isExcludedFromWindowsMenu = true
+            // **`close()` must not release this window, because ARC owns it.**
+            //
+            // `NSWindow.isReleasedWhenClosed` defaults to true, and it is a
+            // contract from the days before ARC: the window releases *itself*
+            // on close, on the assumption that nothing else holds a strong
+            // reference. `offscreenWindow` is a strong `let` on this class, so
+            // it is held twice and released twice — `teardown` returns
+            // normally and the process segfaults in the next autorelease pool
+            // pop, which is what made this look like a crash somewhere else
+            // entirely. Both archive paths reach `teardown` through
+            // `removeWhiteboardHost`, so archiving or purging a workstream
+            // whose board had ever been opened was enough.
+            offscreenWindow.isReleasedWhenClosed = false
 
             let config = WKWebViewConfiguration()
             config.setURLSchemeHandler(
@@ -415,10 +428,30 @@ extension Whiteboard {
 
         /// Posts one operation into the page and answers with the ids it moved.
         ///
+        /// What one applied operation produced.
+        ///
+        /// **`note` is a write that landed and is still not what was asked
+        /// for**, which is neither a success worth reporting plainly nor a
+        /// refusal. So far there is exactly one: a mermaid diagram of a type
+        /// the converter *should* expand, degraded by its own `try`/`catch`
+        /// into a single flat image, so the board holds a picture where the
+        /// tool promised editable boxes.
+        ///
+        /// It rides on the **result** rather than being fetched separately,
+        /// because a second accessor is one a caller can forget — and a caller
+        /// forgetting it is precisely the bug this closes, where the note
+        /// reached Swift and died there while the agent was told "Added 1
+        /// element". A caller that does not care writes `.ids`; there is no
+        /// variant of this call that silently drops it.
+        struct Applied: Equatable {
+            let ids: [String]
+            let note: String?
+        }
+
         /// The page applies it and saves through the same debounced `save()` a
         /// user edit takes — one save path, which is what keeps exactly one
         /// place regenerating the digest and re-rendering the PNG.
-        func apply(_ op: [String: Any]) async throws -> [String] {
+        func apply(_ op: [String: Any]) async throws -> Applied {
             try await waitUntilReady()
             guard let payload = (try? JSONSerialization.data(withJSONObject: op))
                 .flatMap({ String(data: $0, encoding: .utf8) })
@@ -453,8 +486,16 @@ extension Whiteboard {
             guard result["ok"] as? Bool == true else {
                 throw WriteFailure.refused(result["reason"] as? String ?? "no reason given")
             }
+            // A write that landed and is still not what was asked for — see
+            // `Applied.note`. Logged as well as returned, because the one
+            // caller that cannot report it is `captureToBoard`, where the user
+            // pressed a button and there is no answer to carry a sentence.
+            let note = result["note"] as? String
+            if let note {
+                logger.warning("whiteboard write landed with a note: \(note, privacy: .public)")
+            }
             // The ids that really landed, not the ids that were asked for.
-            return result["ids"] as? [String] ?? []
+            return Applied(ids: result["ids"] as? [String] ?? [], note: note)
         }
 
         /// **`callAsyncJavaScript`, never `evaluateJavaScript`.**

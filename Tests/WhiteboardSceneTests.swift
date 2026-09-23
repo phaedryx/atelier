@@ -121,15 +121,19 @@ final class WhiteboardSceneTests: XCTestCase {
     }
 
     func test_anUnknownTypeKeepsItsOwnName_ratherThanBeingCalledABox() throws {
+        // `frame` used to stand here, and it is a known kind now — an element a
+        // mermaid class diagram really draws, which is why it was promoted out
+        // of `.other`. `magicframe` is Excalidraw's own and this reader has
+        // never heard of it, so it plays the part without being invented.
         let json = """
         {"type":"excalidraw","elements":[
-        {"id":"f","type":"frame","x":0,"y":0,"width":10,"height":10,"isDeleted":false}
+        {"id":"f","type":"magicframe","x":0,"y":0,"width":10,"height":10,"isDeleted":false}
         ]}
         """
         let scene = try loaded(json)
         let element = try XCTUnwrap(scene.elements.first)
         XCTAssertEqual(element.kind, .other)
-        XCTAssertEqual(element.rawType, "frame")
+        XCTAssertEqual(element.rawType, "magicframe")
     }
 
     // MARK: - The three load cases
@@ -209,5 +213,71 @@ final class WhiteboardSceneTests: XCTestCase {
         XCTAssertEqual(scene.elements.count, 1)
         XCTAssertEqual(scene.elements.first?.kind, .note)
         XCTAssertEqual(scene.elements.first?.text, "check the TTL")
+    }
+
+    /// **A label whose container is gone is still on the canvas.**
+    ///
+    /// The fold is an optimisation over a `containerId`, which is a claim
+    /// about another element rather than a guarantee — a scene edited outside
+    /// Atelier, an older file, or a delete that took a container without its
+    /// label all leave one behind. Skipped unconditionally it vanished from
+    /// the digest while Excalidraw went on drawing it, which is the digest
+    /// reporting less than the picture holds.
+    func test_aLabelWhoseContainerIsGoneIsReportedRatherThanFoldedIntoNothing() {
+        guard case let .loaded(scene) = Whiteboard.SceneLoad.parse("""
+        {"elements":[
+          {"id":"n1","type":"rectangle","x":0,"y":0,"width":200,"height":80},
+          {"id":"t1","type":"text","containerId":"gone","text":"orphaned words"}]}
+        """) else { return XCTFail("expected a loaded scene") }
+        XCTAssertEqual(scene.elements.count, 2)
+        let orphan = scene.elements.first { $0.id == "t1" }
+        XCTAssertEqual(orphan?.kind, .text)
+        XCTAssertEqual(orphan?.text, "orphaned words")
+    }
+
+    /// **A frame carries its words in `name`.**
+    ///
+    /// Excalidraw labels a frame that way and nothing else, and a mermaid class
+    /// diagram with a `namespace` block draws one per namespace. Read through
+    /// `text` alone the digest printed a bare `frame` with its dimensions and
+    /// nothing saying which namespace it was — an element on the canvas
+    /// carrying a word the digest could not see.
+    func test_aFrameIsNamedByItsNameRatherThanRenderedWordless() {
+        guard case let .loaded(scene) = Whiteboard.SceneLoad.parse("""
+        {"elements":[
+          {"id":"f1","type":"frame","name":"Auth","x":0,"y":0,"width":400,"height":300}]}
+        """) else { return XCTFail("expected a loaded scene") }
+        let frame = try? XCTUnwrap(scene.elements.first)
+        XCTAssertEqual(frame?.text, "Auth")
+        // A kind of its own rather than `.other`: a frame is an ordinary
+        // inhabitant of a board, not a type this build has never heard of.
+        XCTAssertEqual(frame?.kind, .frame)
+        XCTAssertEqual(frame?.rawType, "frame")
+    }
+
+    /// `name` is honoured for a frame and nowhere else — the same rule the note
+    /// promotion follows, for the same reason: a board must not be able to
+    /// rename its own shapes out from under the reader.
+    func test_aNameOnSomethingThatIsNotAFrameIsIgnored() {
+        guard case let .loaded(scene) = Whiteboard.SceneLoad.parse("""
+        {"elements":[
+          {"id":"r1","type":"rectangle","name":"not a label","x":0,"y":0,
+           "width":10,"height":10}]}
+        """) else { return XCTFail("expected a loaded scene") }
+        XCTAssertNil(scene.elements.first?.text)
+    }
+
+    /// A container that is present but *deleted* is gone for this purpose too:
+    /// `parse` filters `isDeleted` before anything else, so the label has no
+    /// container to be folded into and must be reported.
+    func test_aLabelWhoseContainerIsDeletedIsReportedToo() {
+        guard case let .loaded(scene) = Whiteboard.SceneLoad.parse("""
+        {"elements":[
+          {"id":"n1","type":"rectangle","x":0,"y":0,"width":200,"height":80,
+           "isDeleted":true},
+          {"id":"t1","type":"text","containerId":"n1","text":"orphaned words"}]}
+        """) else { return XCTFail("expected a loaded scene") }
+        XCTAssertEqual(scene.elements.map(\.id), ["t1"])
+        XCTAssertEqual(scene.elements.first?.text, "orphaned words")
     }
 }

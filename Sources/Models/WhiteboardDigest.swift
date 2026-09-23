@@ -255,6 +255,9 @@ extension Whiteboard {
             case .text: "text"
             case .stroke: "stroke"
             case .image: "image"
+            // Its name rides in the text slot, so a namespace frame renders as
+            // `frame  "Auth"  at …` through the default arm of `line(for:)`.
+            case .frame: "frame"
             // Its own name rather than the nearest thing this build knows: a
             // kind it has never heard of must say so, not be reported as a box.
             case .other: identifier(element.rawType)

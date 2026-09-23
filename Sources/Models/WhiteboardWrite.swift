@@ -285,8 +285,17 @@ extension Whiteboard {
         /// questions: `elements` is a batch Swift has fully validated and the
         /// page merely expands, while `mermaid` is a definition Swift cannot
         /// read and the page has to parse, size and place.
+        /// The elements arm carries **only** the skeletons, and deliberately no
+        /// second id list. It had one and nothing read it:
+        /// `WorkspaceActions.whiteboardAdd` bound it to `_` and answered with
+        /// the ids the *page* reports really landed — which for the mermaid arm
+        /// is the only source there is, and for this one is the same list read
+        /// off what was really stored rather than what was asked for. It was in
+        /// any case `skeletons.map(\.id)`, a second copy of a fact the
+        /// skeletons already carry, and two copies of one list is how they
+        /// eventually differ.
         enum Add: Equatable {
-            case elements(ids: [String], skeletons: [Skeleton])
+            case elements(skeletons: [Skeleton])
             case mermaid(Mermaid)
         }
 
@@ -352,8 +361,7 @@ extension Whiteboard {
         ) throws -> Add {
             let mermaidEntries = raw.filter { kind(of: $0) == .mermaid }
             guard !mermaidEntries.isEmpty else {
-                let (ids, skeletons) = try addPlan(from: raw, live: live, mint: mint)
-                return .elements(ids: ids, skeletons: skeletons)
+                return try .elements(skeletons: addPlan(from: raw, live: live, mint: mint))
             }
             guard raw.count == 1, let entry = raw.first as? [String: Any] else {
                 throw Failure.mermaidStandsAlone
@@ -361,8 +369,28 @@ extension Whiteboard {
             return try .mermaid(mermaidPlan(from: entry, live: live))
         }
 
+        /// Whether an entry really asked for a field.
+        ///
+        /// **A JSON `null` and an empty string are not asking.** `entry[field]
+        /// != nil` reads both as present — `JSONSerialization` hands `null`
+        /// back as `NSNull`, which is very much not nil — so a serializer that
+        /// writes every key of its struct had a mermaid entry refused for a
+        /// `color` it never set, with `mermaidFieldRefused` explaining that
+        /// colour belongs in the definition. The elements arm accepts exactly
+        /// those two from exactly that serializer: `normalizedColor` returns
+        /// nil for an empty string, and `from`/`to` are read as
+        /// `as? String, !isEmpty`. One serializer must not be refused by one
+        /// arm and accepted by the other for the same bytes.
+        private static func asks(_ entry: [String: Any], for field: String) -> Bool {
+            guard let value = entry[field], !(value is NSNull) else { return false }
+            if let text = value as? String {
+                return !text.isEmpty
+            }
+            return true
+        }
+
         private static func mermaidPlan(from entry: [String: Any], live: Live) throws -> Mermaid {
-            for field in ["color", "from", "to"] where entry[field] != nil {
+            for field in ["color", "from", "to"] where asks(entry, for: field) {
                 throw Failure.mermaidFieldRefused(field)
             }
             guard let definition = entry["text"] as? String, !definition.isEmpty else {
@@ -377,7 +405,15 @@ extension Whiteboard {
         }
 
         /// An entry's kind as written, or nil for one that names none it knows.
-        /// The same trimming and case rule `addPlan` applies before refusing.
+        ///
+        /// **The one place a kind is read.** There were three, and they did not
+        /// agree: this one trims and lowercases, while `addPlan`'s column
+        /// pre-scan only lowercased. So `"box "` passed the batch loop as a box
+        /// and was missed by the pre-scan, which then left `nextRow` above the
+        /// box rather than below it — and the next unplaced element landed on
+        /// top of it. Invisible in the digest, because both sets of coordinates
+        /// read exactly as asked, and wrong only in the picture, which is the
+        /// shape the layout scan exists to prevent.
         private static func kind(of entry: Any) -> Kind? {
             guard let entry = entry as? [String: Any] else { return nil }
             let raw = (entry["kind"] as? String)?
@@ -392,12 +428,11 @@ extension Whiteboard {
             from raw: [Any],
             live: Live,
             mint: () -> String = mintID
-        ) throws -> (ids: [String], skeletons: [Skeleton]) {
+        ) throws -> [Skeleton] {
             guard !raw.isEmpty else { throw Failure.emptyBatch }
             guard raw.count <= maxBatch else { throw Failure.batchTooLarge(raw.count) }
 
             var skeletons: [Skeleton] = []
-            var ids: [String] = []
             // Grows as the batch is walked, so an arrow may name a box created
             // earlier in the same call — but not a later one. A forward
             // reference is refused rather than resolved: resolving it would make
@@ -419,7 +454,10 @@ extension Whiteboard {
                       let at = entry["at"] as? String,
                       let placed = try? parsePosition(at)
                 else { continue }
-                let kind = Kind(rawValue: (entry["kind"] as? String)?.lowercased() ?? "")
+                // `kind(of:)`, not a second inline read: this used to lowercase
+                // without trimming, so `"box "` was a box to the loop below and
+                // not a box here, and its height was left out of the floor.
+                let kind = kind(of: entry)
                 let bottom = placed.y + (kind == .box || kind == .note ? boxSize.height : 0)
                 nextRow = max(nextRow, bottom + layoutGap)
             }
@@ -428,11 +466,8 @@ extension Whiteboard {
                 guard let entry = entry as? [String: Any] else {
                     throw Failure.malformedEntry(index)
                 }
-                let rawKind = (entry["kind"] as? String)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                    .lowercased() ?? ""
-                guard let kind = Kind(rawValue: rawKind) else {
-                    throw Failure.unknownKind(entry["kind"] as? String ?? rawKind)
+                guard let kind = kind(of: entry) else {
+                    throw Failure.unknownKind(entry["kind"] as? String ?? "")
                 }
                 // This arm draws elements; a diagram is `plan`'s to route, and
                 // one reaching here is either mixed into a batch or a direct
@@ -491,10 +526,9 @@ extension Whiteboard {
                     to: to,
                     isNote: kind == .note
                 ))
-                ids.append(id)
                 known.insert(id)
             }
-            return (ids, skeletons)
+            return skeletons
         }
 
         // MARK: - update
@@ -615,11 +649,25 @@ extension Whiteboard {
         /// A typo silently placing an element at the origin is the same class of
         /// bug as `open_editor`'s line number scrolling to the top of the file:
         /// the element really is on the board, just nowhere the agent meant.
+        ///
+        /// **Both components must be finite, and that is a crash fix rather
+        /// than tidiness.** `Double(String)` accepts `inf`, `nan` and anything
+        /// that overflows to infinity — `1e999` is the spelling an agent
+        /// reaches by arithmetic rather than by typing. A non-finite coordinate
+        /// survives every guard below it and reaches `Host.apply`, where
+        /// `JSONSerialization` raises `NSInvalidArgumentException` for a
+        /// non-finite `Double`. That is an Objective-C exception, so the `try?`
+        /// wrapped around the call cannot catch it and the app dies: one
+        /// `whiteboard_add` with `"at": "1e999,0"` was enough. Refused here, in
+        /// the one place all three callers go through — the column pre-scan in
+        /// `addPlan` reaches this under `try?`, so a guard at a call site would
+        /// have left that path carrying the value.
         static func parsePosition(_ raw: String) throws -> (x: Double, y: Double) {
             let parts = raw.split(separator: ",", omittingEmptySubsequences: false)
             guard parts.count == 2,
                   let x = Double(parts[0].trimmingCharacters(in: .whitespaces)),
-                  let y = Double(parts[1].trimmingCharacters(in: .whitespaces))
+                  let y = Double(parts[1].trimmingCharacters(in: .whitespaces)),
+                  x.isFinite, y.isFinite
             else { throw Failure.invalidPosition(raw) }
             return (x, y)
         }

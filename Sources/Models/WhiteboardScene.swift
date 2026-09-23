@@ -18,8 +18,21 @@ extension Whiteboard {
         /// has a name keeps it. `.other` keeps `rawType` rather than guessing: a
         /// board carrying a kind this build has never heard of has to say so,
         /// not be rendered as the nearest thing it does know.
+        ///
+        /// **`frame` is here because a board really holds them**, not because
+        /// the write vocabulary can make one. A mermaid class diagram with a
+        /// `namespace` block draws one frame per namespace, and the digest's
+        /// organizing principle is that an element on the board it cannot name
+        /// is the digest lying — the same failure `labels` was corrected for
+        /// when an orphaned label vanished from it.
+        ///
+        /// It names the kind and nothing more. A frame carries `children`, and
+        /// **this reader does not read them**: it reports a frame as an element
+        /// with a name and a bounding box, and says nothing about what sits
+        /// inside it. Adding containment later is a change to the *format*, not
+        /// a gap in this case.
         enum Kind: Equatable {
-            case box, note, ellipse, diamond, line, arrow, text, stroke, image, other
+            case box, note, ellipse, diamond, line, arrow, text, stroke, image, frame, other
         }
 
         /// The `customData` keys. Fixed here, in the **reader**, so that PR 3's
@@ -125,7 +138,10 @@ extension Whiteboard {
             // Built once, not per element: a board is unbounded and this is the
             // one place the whole list is walked twice.
             let bound = labels(in: live)
-            let elements = live.compactMap { element(from: $0, labels: bound) }
+            // Which containers are really here, so a label whose container is
+            // gone is not folded into nothing — see `element(from:…)`.
+            let present = Set(live.compactMap { $0["id"] as? String })
+            let elements = live.compactMap { element(from: $0, labels: bound, present: present) }
             return elements.isEmpty ? .empty : .loaded(Scene(elements: elements))
         }
 
@@ -151,14 +167,29 @@ extension Whiteboard {
 
         private static func element(
             from raw: [String: Any],
-            labels: [String: String]
+            labels: [String: String],
+            present: Set<String>
         ) -> Element? {
             guard let id = raw["id"] as? String,
                   let rawType = raw["type"] as? String
             else { return nil }
             // A bound label has already been folded into its container; listing
             // it again is the double-rendering this join exists to prevent.
-            if rawType == "text", raw["containerId"] is String {
+            //
+            // **Only when the container is really there.** A `containerId` is
+            // a claim about another element, and nothing guarantees it is
+            // still true: a scene edited outside Atelier, an older file, or a
+            // delete that removed a container without its label leaves a text
+            // element that Excalidraw draws on the canvas exactly where it sits
+            // — while this skipped it unconditionally, so it vanished from the
+            // digest. That is the digest reporting less than the picture holds,
+            // which is the one thing the two halves of the read path exist to
+            // make impossible. With the container gone there is nothing to fold
+            // it into, so it is reported as the ordinary text element it has
+            // become.
+            if rawType == "text", let container = raw["containerId"] as? String,
+               present.contains(container)
+            {
                 return nil
             }
 
@@ -171,6 +202,7 @@ extension Whiteboard {
             case "text": .text
             case "freedraw": .stroke
             case "image": .image
+            case "frame": .frame
             default: .other
             }
 
@@ -185,8 +217,21 @@ extension Whiteboard {
             // Strokes and images stay opaque: a bounding box and nothing more.
             // A caption is an agent's own transcription and is reported as one,
             // never as the element's text.
+            //
+            // **A frame's words are in `name`, not `text`.** It is the one
+            // element type Excalidraw labels that way, and a mermaid class
+            // diagram with a `namespace` block draws one per namespace. Read
+            // through `text` alone it came out as a bare `frame` with its
+            // dimensions and nothing saying *which* namespace — a real element,
+            // on the canvas, carrying a word the digest could not see.
+            //
+            // Read for `.frame` and nowhere else, which is the rule the note
+            // promotion above already follows: `name` has no meaning this
+            // reader knows on any other type, and honouring it everywhere would
+            // let a board relabel its own shapes out from under a reader.
             let text: String? = switch kind {
             case .stroke, .image: nil
+            case .frame: raw["name"] as? String
             default: labels[id] ?? raw["text"] as? String
             }
 
