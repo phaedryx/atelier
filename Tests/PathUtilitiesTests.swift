@@ -137,4 +137,29 @@ final class PathUtilitiesTests: XCTestCase {
 
         XCTAssertFalse(backup.path.isCanonicallyInside(repo.path))
     }
+
+    // MARK: - abbreviatedPath
+
+    func testAPathInsideHomeIsAbbreviated() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        XCTAssertEqual((home + "/repos/app").abbreviatedPath, "~/repos/app")
+    }
+
+    func testHomeItselfIsAbbreviatedToATilde() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        XCTAssertEqual(home.abbreviatedPath, "~")
+    }
+
+    /// The same shared-name-prefix shape as the containment test above: without a
+    /// separator check `hasPrefix(home)` swallowed the sibling's name and rendered
+    /// `/Users/name-old/repo` as `~-old/repo`, which points nowhere.
+    func testASiblingOfHomeSharingItsNamePrefixIsNotAbbreviated() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let sibling = home + "-old/repo"
+        XCTAssertEqual(sibling.abbreviatedPath, sibling)
+    }
+
+    func testAPathOutsideHomeIsUntouched() {
+        XCTAssertEqual("/opt/homebrew/bin".abbreviatedPath, "/opt/homebrew/bin")
+    }
 }
