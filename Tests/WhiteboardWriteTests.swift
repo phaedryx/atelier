@@ -723,13 +723,10 @@ final class WhiteboardWriteTests: XCTestCase {
             live: empty,
             mint: minter()
         )
-        guard case let .elements(ids, skeletons) = plan else {
+        guard case let .elements(skeletons) = plan else {
             return XCTFail("expected an elements plan, got \(plan)")
         }
         XCTAssertEqual(skeletons.map(\.id), ["id-1"])
-        // `ids` is derived from the skeletons rather than accumulated beside
-        // them, which is the only thing keeping the two from drifting.
-        XCTAssertEqual(ids, skeletons.map(\.id))
         XCTAssertEqual(skeletons.first?.label, "Auth service")
         XCTAssertEqual(skeletons.first?.x, 120)
     }
@@ -792,13 +789,10 @@ final class WhiteboardWriteTests: XCTestCase {
             live: empty,
             mint: minter()
         )
-        guard case let .elements(ids, skeletons) = plan else {
+        guard case let .elements(skeletons) = plan else {
             return XCTFail("expected an elements plan, got \(plan)")
         }
         XCTAssertEqual(skeletons.map(\.id), ["id-1"])
-        // `ids` is derived from the skeletons rather than accumulated beside
-        // them, which is the only thing keeping the two from drifting.
-        XCTAssertEqual(ids, skeletons.map(\.id))
         XCTAssertEqual(skeletons.first?.label, "Auth service")
     }
 
@@ -875,7 +869,7 @@ final class WhiteboardWriteTests: XCTestCase {
             live: empty,
             mint: minter()
         )
-        guard case let .elements(_, skeletons) = plan else {
+        guard case let .elements(skeletons) = plan else {
             return XCTFail("expected an elements plan, got \(plan)")
         }
         XCTAssertNil(skeletons.first?.strokeColor)

@@ -285,18 +285,17 @@ extension Whiteboard {
         /// questions: `elements` is a batch Swift has fully validated and the
         /// page merely expands, while `mermaid` is a definition Swift cannot
         /// read and the page has to parse, size and place.
-        /// **`elements`' `ids` is dead and is kept only because removing it
-        /// needs a file this branch does not own.** Nothing reads it:
-        /// `WorkspaceActions.whiteboardAdd` binds it to `_` and answers with
-        /// the ids the *page* reports really landed, which for the mermaid arm
-        /// is the only source there is and for this one is the same list read
-        /// off what was stored. It is derived, in one statement below, from
-        /// `skeletons.map(\.id)` rather than accumulated a second time while
-        /// the batch is walked — two copies of one list is how they eventually
-        /// differ. Deleting the payload is one line here and one line at that
-        /// call site's `case let .elements(_, skeletons)`.
+        /// The elements arm carries **only** the skeletons, and deliberately no
+        /// second id list. It had one and nothing read it:
+        /// `WorkspaceActions.whiteboardAdd` bound it to `_` and answered with
+        /// the ids the *page* reports really landed — which for the mermaid arm
+        /// is the only source there is, and for this one is the same list read
+        /// off what was really stored rather than what was asked for. It was in
+        /// any case `skeletons.map(\.id)`, a second copy of a fact the
+        /// skeletons already carry, and two copies of one list is how they
+        /// eventually differ.
         enum Add: Equatable {
-            case elements(ids: [String], skeletons: [Skeleton])
+            case elements(skeletons: [Skeleton])
             case mermaid(Mermaid)
         }
 
@@ -362,8 +361,7 @@ extension Whiteboard {
         ) throws -> Add {
             let mermaidEntries = raw.filter { kind(of: $0) == .mermaid }
             guard !mermaidEntries.isEmpty else {
-                let skeletons = try addPlan(from: raw, live: live, mint: mint)
-                return .elements(ids: skeletons.map(\.id), skeletons: skeletons)
+                return try .elements(skeletons: addPlan(from: raw, live: live, mint: mint))
             }
             guard raw.count == 1, let entry = raw.first as? [String: Any] else {
                 throw Failure.mermaidStandsAlone

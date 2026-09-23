@@ -1406,14 +1406,23 @@ extension IPC {
                 return .failure(id: request.id, error.localizedDescription)
             }
             do {
-                let ids = try await WorkspaceActions.shared.whiteboardAdd(
+                let (ids, note) = try await WorkspaceActions.shared.whiteboardAdd(
                     workstreamID: workstreamID,
                     elementsJSON: elements
                 )
                 let count = ids.count
+                // **A write can land and still not be what was asked for**, and
+                // the note is the only thing that says so. A mermaid diagram of
+                // a type the converter should expand can be degraded by its own
+                // try/catch into one flat image — the board changed, so this is
+                // not a refusal, but "Added 1 element" describes a picture as
+                // though it were the boxes this tool promises. It goes before
+                // the tab note, because it is about what is on the board rather
+                // than about where to look at it.
                 return .success(id: request.id, .text(
                     "Added \(count) element\(count == 1 ? "" : "s"): "
                         + ids.joined(separator: ", ") + "."
+                        + (note.map { " \($0)" } ?? "")
                         + Self.whiteboardTabNote
                 ))
             } catch {
