@@ -356,7 +356,7 @@ struct ProjectSidebar: View {
                         taskDescription: facts?.taskDescription,
                         prTitle: pr?.title,
                         prNumber: pr?.number,
-                        prState: pr?.state,
+                        prStatus: pr?.status,
                         isRenaming: Binding(
                             get: { renamingWorkstreamID == workstream.id },
                             set: { renamingWorkstreamID = $0 ? workstream.id : nil }
@@ -1473,7 +1473,13 @@ private struct WorkstreamRow: View {
     var taskDescription: String?
     var prTitle: String?
     var prNumber: Int?
-    var prState: String?
+    /// The PR's decoded status, never its raw `state` string.
+    ///
+    /// `GitHub.PR.status` is what folds `isDraft` in, and it is the only thing
+    /// that can: `state` is "OPEN" for a draft exactly as it is for a ready PR.
+    /// Carrying the status rather than the string is what keeps the string from
+    /// reaching the badge at all.
+    var prStatus: GitHub.PR.Status?
     /// True while the row shows the inline rename field. Owned by the
     /// sidebar so the edit survives row rebuilds and stays exclusive.
     @Binding var isRenaming: Bool
@@ -1619,16 +1625,22 @@ private struct WorkstreamRow: View {
 
                 if let subtitle {
                     HStack(spacing: 3) {
-                        if prState == "MERGED" {
-                            Image(systemName: "arrow.triangle.merge")
+                        // Colour and glyph from `GitHubPRStatusStyle`, which
+                        // `PRStatusBadge` and the Info tab already share — its
+                        // own words are "so the two PR badges and the Info tab
+                        // cannot drift apart". Deliberately *not* its `label`:
+                        // the subtitle here is a short "#123" and a word beside
+                        // it would change every row's density.
+                        if let prStatus {
+                            Image(systemName: prStatus.symbolName)
                                 .font(.system(size: 8))
-                                .foregroundStyle(.purple)
+                                .foregroundStyle(prStatus.color)
                         }
                         Text(subtitle)
                             .lineLimit(1)
                     }
                     .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(prState == "MERGED" ? AnyShapeStyle(.purple) : AnyShapeStyle(.tertiary))
+                    .foregroundStyle(prStatus.map { AnyShapeStyle($0.color) } ?? AnyShapeStyle(.tertiary))
                 }
 
                 if let statusLabel {
