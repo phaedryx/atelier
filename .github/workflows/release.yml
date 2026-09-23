@@ -15,6 +15,32 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+# One release run per ref, because a single tag push has been observed
+# dispatching this workflow twice. v0.2.6 produced runs 35893124630 and
+# 35893127937 two seconds apart: same workflow, same `push` event, same sha,
+# attempt 1 each, and two distinct check suites — so two dispatches of one ref
+# creation, not a re-run. There was one `git push`, the remote tag object is
+# byte-identical to the local one, `remote.origin` has a single push URL and no
+# hooks, and no other workflow triggers on `v*`. No repository-side cause was
+# found; the duplicate happened upstream of anything this file controls.
+#
+# Most of the job already survives that: `Create draft release` is guarded by
+# `gh release view`, the upload passes `--clobber`, and publishing is
+# idempotent. The step that does not is `Note the unsigned build in the release
+# body`, whose stacking guard reads the body and then writes it — two runs
+# reaching it together both see no note and both prepend one. That guard is
+# written for a *re-run*, which is serial; it cannot defend against a peer.
+#
+# `cancel-in-progress: true` means the NEWER run cancels the older, which reads
+# backwards and is the behaviour wanted here: whichever dispatch arrives last
+# wins and exactly one run reaches the release steps. The loser is a duplicate
+# that would have produced the same artifact, so there is nothing to preserve in
+# it. The cost is deliberate and worth stating: a `workflow_dispatch` on a ref
+# whose tag build is still running now cancels that build instead of racing it.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: macos-15
