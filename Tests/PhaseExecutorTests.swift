@@ -10,6 +10,19 @@ final class PhaseExecutorTests: XCTestCase {
     private var binary = ""
     private let workstreamID = UUID()
 
+    /// How old a socket has to be before the sweep below will take it as
+    /// abandoned. A server this file spawns lives seconds — every config here
+    /// finishes well inside the 60s `runDispose` deadline — so ten minutes is
+    /// two orders of magnitude of headroom, chosen from the side that matters:
+    /// under-waiting kills a *live* server belonging to somebody else.
+    private static let orphanedSocketAge: TimeInterval = 600
+
+    /// Sweeping is once per test *process*, not once per test. The sweep exists
+    /// to clear what an earlier, dead host left behind; repeating it before each
+    /// test would buy nothing and widen the window in which it can misfire.
+    private static let sweptOrphanedServers = NSLock()
+    private nonisolated(unsafe) static var hasSweptOrphanedServers = false
+
     override func setUpWithError() throws {
         try super.setUpWithError()
         guard let found = ProcessCompose.Settings.searchPaths.first(where: {
@@ -18,6 +31,7 @@ final class PhaseExecutorTests: XCTestCase {
             throw XCTSkip("process-compose is not installed")
         }
         binary = found
+        Self.sweepOrphanedServersOnce(binary: found)
         dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         projectDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -39,6 +53,67 @@ final class PhaseExecutorTests: XCTestCase {
         try? FileManager.default.removeItem(at: projectDir)
         try? FileManager.default.removeItem(atPath: ProcessCompose.PhaseRunner.socketPath(for: workstreamID, phase: .dispose))
         super.tearDown()
+    }
+
+    /// Shut down any phase server an earlier test host abandoned.
+    ///
+    /// `up --keep-project` outlives its processes on purpose, so a host that
+    /// never reaches `tearDown` — killed mid-run, crashed, or cancelled — leaves
+    /// a `process-compose` alive with PPID 1 holding a socket under the test
+    /// cache directory. Production self-heals twice over (`PhaseExecutor.run`
+    /// shuts the socket's server down before spawning, and `stopAllServers`
+    /// runs on quit) but neither reaches here: `stopAllServers` is guarded off
+    /// under XCTest, and `run`'s pre-spawn shutdown only ever addresses the one
+    /// socket it is about to bind. An audit found eight of these live at once,
+    /// the oldest three weeks old and two still naming a namespace that no
+    /// longer exists.
+    ///
+    /// **The age filter is the load-bearing part, not prudence.** Several test
+    /// hosts run at once on a developer's machine — that is what makes the two
+    /// known flakes in this suite flake — and every one of them resolves the
+    /// same `socketDirectory`, because `AppConstants.cacheDirectory` keys on
+    /// `isRunningXCTest()` and not on the process. An unfiltered sweep would
+    /// therefore `down` a sibling host's server mid-test, and the failure it
+    /// caused would land over there, look like a bug in the code under test, and
+    /// have nothing pointing back at this function.
+    ///
+    /// **What it cannot reach**, stated rather than papered over: a server whose
+    /// socket file is already gone. `PhaseExecutor.shutDown` removes the file
+    /// after `down` whether or not `down` succeeded, so a `down` that hits its
+    /// deadline orphans its server unreachably. The only handle left on one of
+    /// those is a machine-wide match on the command line, which is exactly the
+    /// sibling-killing this filter exists to avoid — so it is left alone, and
+    /// `pkill -f process-compose` stays a thing a human does knowingly.
+    private static func sweepOrphanedServersOnce(binary: String) {
+        sweptOrphanedServers.lock()
+        defer { sweptOrphanedServers.unlock() }
+        guard !hasSweptOrphanedServers else { return }
+        hasSweptOrphanedServers = true
+
+        // Never a literal: `socketDirectory` resolves to the test cache
+        // directory only because `isRunningXCTest()` is true in this process,
+        // and a hardcoded path would silently stop agreeing with it.
+        let directory = ProcessCompose.PhaseRunner.socketDirectory
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path) else { return }
+
+        let cutoff = Date().addingTimeInterval(-orphanedSocketAge)
+        for name in names where name.hasSuffix(".sock") {
+            let socket = directory.appendingPathComponent(name)
+            // A unix socket's mtime is set when the server binds it, so it dates
+            // the server rather than the file's creation.
+            guard let modified = try? socket.resourceValues(forKeys: [.contentModificationDateKey])
+                .contentModificationDate,
+                modified < cutoff
+            else { continue }
+
+            // The working directory only has to exist; `down` addresses the
+            // server by socket.
+            ProcessCompose.PhaseExecutor.shutDown(
+                binary: binary,
+                socketPath: socket.path,
+                workingDirectory: FileManager.default.temporaryDirectory.path
+            )
+        }
     }
 
     private func writeConfig(_ body: String) throws -> ProcessCompose.Config {
@@ -350,6 +425,60 @@ final class PhaseExecutorTests: XCTestCase {
             binary: binary, socketPath: socketPath, workingDirectory: dir.path
         )
         XCTAssertFalse(ProcessCompose.Client.isServerListening(atSocketPath: socketPath))
+    }
+
+    // MARK: - The socket is the only handle on a server
+
+    /// **A `down` that does not succeed must leave the socket file.** It used to
+    /// be removed either way, which orphans a server unreachably: the socket is
+    /// the only handle anything has on a phase server, so after a `down` that hit
+    /// its deadline neither a later `shutDown`, nor `stopAllServers` at quit, nor
+    /// the next run's pre-spawn `shutDown` could ever address it again.
+    ///
+    /// Driven with a socket file that no server is behind, because that reaches
+    /// the same branch — `down` fails — without having to wedge a real server past
+    /// its deadline. The assertion is about what `shutDown` does with a refusal,
+    /// which is identical in both cases.
+    func test_shutDown_leavesTheSocketWhenDownDoesNotSucceed() {
+        ProcessCompose.PhaseRunner.ensureSocketDirectory()
+        let socketPath = ProcessCompose.PhaseRunner.socketPath(for: UUID(), phase: .dispose)
+        FileManager.default.createFile(atPath: socketPath, contents: Data())
+        addTeardownBlock { try? FileManager.default.removeItem(atPath: socketPath) }
+
+        let confirmed = ProcessCompose.PhaseExecutor.shutDown(
+            binary: binary, socketPath: socketPath, workingDirectory: dir.path
+        )
+
+        XCTAssertFalse(confirmed, "a down against nothing must not report the server stopped")
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: socketPath),
+            "the socket was unlinked after an unconfirmed down; a live server there would now be unreachable"
+        )
+    }
+
+    /// The other direction, so the fix cannot be "never unlink": a `down` the
+    /// server acknowledges still clears the path.
+    func test_shutDown_removesTheSocketWhenTheServerStops() throws {
+        let config = try writeConfig("""
+        processes:
+          quick:
+            command: "true"
+            namespace: dispose
+        """)
+        let socketPath = ProcessCompose.PhaseRunner.socketPath(for: workstreamID, phase: .dispose)
+        _ = ProcessCompose.PhaseExecutor.run(
+            phase: .dispose, config: config, binary: binary,
+            workstreamID: workstreamID, workingDirectory: dir.path,
+            environment: [:], timeout: 20,
+            selectedProcesses: [], shutDownWhenDone: false
+        )
+
+        let confirmed = ProcessCompose.PhaseExecutor.shutDown(
+            binary: binary, socketPath: socketPath, workingDirectory: dir.path
+        )
+
+        XCTAssertTrue(confirmed)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: socketPath))
     }
 
     // `selectedProcesses` has no `PhaseExecutor` test any more, and should not get

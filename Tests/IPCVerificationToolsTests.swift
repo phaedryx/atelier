@@ -547,13 +547,30 @@ final class IPCVerificationToolsTests: XCTestCase {
         XCTAssertTrue(response.error?.contains("run_id") == true, String(describing: response.error))
     }
 
-    func test_checkVerification_forAnUnknownRun_saysRunIDsDoNotSurviveARestart() async throws {
+    /// **Nothing survives a restart**, which is what this refusal used to claim
+    /// the most recent run did. Runs live in the runner's memory and are not
+    /// persisted — what persisting one bought was a check's output, and that now
+    /// lives in a terminal surface that does not survive a relaunch either.
+    ///
+    /// It also has to cover a run in another workstream, because that is what a
+    /// caller holding a borrowed id actually gets: the production bridge's
+    /// `verificationRun(id:in:)` scopes the lookup and returns nil, so
+    /// `runBelongsElsewhere` is unreachable through it and such a caller lands
+    /// here. (The stub below answers unscoped on purpose, which is what keeps
+    /// that case covered as defence for another conformance.)
+    func test_checkVerification_forAnUnknownRun_saysRunsLastOnlyForThisSessionAndWorkstream() async throws {
         await service.setVerificationRunner(runner)
         let caller = try await register(surfaceID: UUID(), name: "builder")
 
         let response = await call(.checkVerification, ["run_id": "v0000ff"], as: caller)
 
-        XCTAssertTrue(response.error?.contains("restart") == true, String(describing: response.error))
+        let error = try XCTUnwrap(response.error)
+        XCTAssertFalse(
+            error.contains("restart"),
+            "nothing survives a restart, so the refusal must not offer one as the explanation: \(error)"
+        )
+        XCTAssertTrue(error.contains("this Atelier session"), error)
+        XCTAssertTrue(error.contains("workstream"), error)
     }
 
     /// A run id is the tool's only argument and ids are short, so a stale or

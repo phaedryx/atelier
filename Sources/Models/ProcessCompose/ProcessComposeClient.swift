@@ -202,6 +202,30 @@ extension ProcessCompose {
                 throw ClientError.transport("could not set socket timeouts")
             }
 
+            // **Without this a poll that loses the race kills the app.** Writing to
+            // a stream socket whose peer has closed raises `SIGPIPE`, whose default
+            // action is to terminate the process — and nothing in Atelier installs
+            // a handler or ignores it. The window is small and entirely ordinary:
+            // `connect` succeeds against the listen backlog, the user presses Stop
+            // (or the last process exits and process-compose shuts itself down),
+            // and the `write` microseconds later lands on a closed peer. The table
+            // polls `/processes` once a second for the life of every run, so it is
+            // the surface most likely to meet it, and the death has no log.
+            //
+            // `ProcessTableModel` already documents and handles the *mid-response*
+            // half of this race as `.malformedResponse`. That half is survivable
+            // only because it arrives as an errno; this one arrives as a signal, so
+            // asking for `EPIPE` instead is what puts the two halves on the same
+            // footing. Checked for the same reason the timeouts are: a silent
+            // failure here puts the crash back.
+            var on: Int32 = 1
+            guard setsockopt(
+                descriptor, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size)
+            ) == 0 else {
+                Darwin.close(descriptor)
+                throw ClientError.transport("could not suppress SIGPIPE on the socket")
+            }
+
             var address = sockaddr_un()
             address.sun_family = sa_family_t(AF_UNIX)
             let pathBytes = Array(socketPath.utf8)
@@ -276,6 +300,21 @@ extension ProcessCompose {
                         if errno == EAGAIN || errno == EWOULDBLOCK {
                             throw ClientError.transport("write timed out")
                         }
+                        // **A peer that closed is the absence of a server, not a
+                        // fault.** With `SO_NOSIGPIPE` set this is the errno the
+                        // suppressed signal turns into, and it is the *common* path
+                        // rather than an exotic one: every Stop, and every clean
+                        // self-shutdown when the last process exits, can land here
+                        // on the 1Hz poll. Reported as `.transport` it would put
+                        // "Could not reach the process manager: write failed" on the
+                        // Execution tab for the ordinary end of every run — trading
+                        // a rare crash for a routine error message. `.notRunning` is
+                        // what that state honestly is, and it is the case
+                        // `ProcessTableModel` already treats as "expected before
+                        // Start and after Stop".
+                        if errno == EPIPE || errno == ECONNRESET {
+                            throw ClientError.notRunning
+                        }
                         throw ClientError.transport("write failed")
                     }
                     guard n > 0 else { throw ClientError.transport("write failed") }
@@ -300,6 +339,12 @@ extension ProcessCompose {
                     }
                     if errno == EAGAIN || errno == EWOULDBLOCK {
                         throw ClientError.transport("read timed out")
+                    }
+                    // The same shutdown race, caught one syscall later: the request
+                    // went out and the server tore the connection down rather than
+                    // answering. Same reasoning as the write side.
+                    if errno == ECONNRESET {
+                        throw ClientError.notRunning
                     }
                     throw ClientError.transport("read failed")
                 }

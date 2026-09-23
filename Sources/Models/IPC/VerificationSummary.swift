@@ -61,10 +61,6 @@ extension IPC {
         /// schema asks for, and a JSON array or a space-separated list is what a
         /// plural argument invites. All three are the same intent and none of
         /// them is worth a refusal.
-        static func checks(from raw: String?) -> [String] {
-            ToolArguments.parseList(raw)
-        }
-
         // MARK: - The completion notice
 
         /// The notice posted into the calling agent's inbox when a run ends.

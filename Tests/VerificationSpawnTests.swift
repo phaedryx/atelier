@@ -206,4 +206,55 @@ final class VerificationSpawnTests: XCTestCase {
         let spawn = makeSpawn(check(command: "true"))
         XCTAssertNil(spawn.recordedStatus)
     }
+
+    // MARK: - Collecting the state files
+
+    /// **Nothing used to remove these.** `clearState` clears one check on its way
+    /// into a new run, so at the end of a workstream's life its pid and status
+    /// files were simply left behind — per workstream and per check, for the life
+    /// of the install.
+    func test_removeState_collectsEveryCheckOfOneWorkstream() throws {
+        Verification.Spawn.ensureStateDirectory()
+        let workstreamID = UUID()
+        let spawns = ["rspec", "rubocop"].map {
+            Verification.Spawn.build(
+                check: check($0, command: "exit 0"), workstreamID: workstreamID, defaultShell: "/bin/sh"
+            )
+        }
+        for spawn in spawns {
+            try execute(spawn, in: FileManager.default.temporaryDirectory)
+            XCTAssertEqual(spawn.recordedStatus, 0)
+        }
+
+        Verification.Spawn.removeState(for: workstreamID)
+
+        for spawn in spawns {
+            XCTAssertNil(spawn.recordedStatus, "a status file survived the sweep")
+            XCTAssertNil(spawn.recordedPID, "a pid file survived the sweep")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: spawn.statusPath))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: spawn.pidPath))
+        }
+    }
+
+    /// Scoped by prefix, so archiving one workstream must not disturb another's
+    /// files — including a check that is running in it right now.
+    func test_removeState_leavesAnotherWorkstreamAlone() throws {
+        Verification.Spawn.ensureStateDirectory()
+        let mineID = UUID()
+        let theirsID = UUID()
+        let mine = Verification.Spawn.build(
+            check: check(command: "exit 0"), workstreamID: mineID, defaultShell: "/bin/sh"
+        )
+        let theirs = Verification.Spawn.build(
+            check: check(command: "exit 0"), workstreamID: theirsID, defaultShell: "/bin/sh"
+        )
+        addTeardownBlock { theirs.clearState() }
+        try execute(mine, in: FileManager.default.temporaryDirectory)
+        try execute(theirs, in: FileManager.default.temporaryDirectory)
+
+        Verification.Spawn.removeState(for: mineID)
+
+        XCTAssertNil(mine.recordedStatus)
+        XCTAssertEqual(theirs.recordedStatus, 0, "another workstream's verdict was swept")
+    }
 }

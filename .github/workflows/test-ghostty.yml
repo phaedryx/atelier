@@ -1,5 +1,18 @@
 name: Test Ghostty Compatibility
 
+# Pre-flight for moving the pinned Ghostty submodule: build and test Atelier
+# against a tag it is not yet pinned to, so a bump that breaks the build is
+# found before it lands on main.
+#
+# Deliberately a near-copy of ci.yml's build-and-test job rather than a
+# hand-rolled build of its own. It was the latter, and drifted until it could
+# not pass at all: it asked zig for an `-Dxcframework-target` value ghostty's
+# own enum does not have (`pub const Target = enum { native, universal }`),
+# built with a hand-written `xcodebuild` that skipped the Monaco bundle, and
+# tested a scheme called `AtelierTests` that project.yml has never defined —
+# the only scheme is `Atelier`. Being workflow_dispatch-only is why none of
+# that was noticed. Keep it tracking ci.yml; the differences below are the
+# only ones that are on purpose.
 on:
   workflow_dispatch:
     inputs:
@@ -19,6 +32,10 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      # Pinned to what the *current* ghostty pin needs. A tag that wants a
+      # different zig fails here rather than silently building under the wrong
+      # toolchain, which is the honest answer — bump this deliberately when
+      # that is what the tag under test requires.
       - name: Install Zig
         uses: ./.github/actions/install-zig
         with:
@@ -26,37 +43,100 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
 
+      # Through the environment, never interpolated into the script body: an
+      # input is attacker-controlled text and `${{ }}` pastes it in before bash
+      # parses the line.
       - name: Update Ghostty submodule
+        env:
+          GHOSTTY_TAG_INPUT: ${{ github.event.inputs.ghostty_tag }}
         run: |
-          cd ghostty
+          # `|| exit 1` here and not in the build step below, which is ci.yml's
+          # wording untouched. A failed `cd` there runs `zig build` in the repo
+          # root, which fails loudly. Here it would run the tag resolution
+          # against the SUPERPROJECT, whose tags are also `v*` — so an empty
+          # input would resolve Atelier's own newest tag, pass the existence
+          # check, and `git checkout` Atelier at an old release. That is the
+          # silently-test-the-wrong-thing shape, the same one the missing cache
+          # would have produced.
+          cd ghostty || exit 1
           git fetch --tags
-          if [ -n "${{ github.event.inputs.ghostty_tag }}" ]; then
-            TAG="${{ github.event.inputs.ghostty_tag }}"
+          if [ -n "$GHOSTTY_TAG_INPUT" ]; then
+            TAG="$GHOSTTY_TAG_INPUT"
           else
             TAG=$(git tag -l 'v*' --sort=-v:refname | head -1)
           fi
+          if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::Ghostty has no tag $TAG"
+            exit 1
+          fi
           echo "Testing against Ghostty $TAG"
           git checkout "$TAG"
-          echo "GHOSTTY_TAG=$TAG" >> $GITHUB_ENV
+          echo "GHOSTTY_TAG=$TAG" >> "$GITHUB_ENV"
 
+      # No cache, unlike ci.yml. This job exists to build a tag the submodule
+      # is not pinned to, and ci.yml's key is the submodule's checked-out
+      # commit — which the step above has just moved. Restoring under it would
+      # serve the pinned tag's xcframework and the job would report that an
+      # untested version builds fine.
       - name: Build Ghostty xcframework
         run: |
           cd ghostty
-          zig build -Demit-xcframework=true -Dxcframework-target=aarch64-macos -Doptimize=ReleaseFast
+          zig build -Demit-xcframework=true -Demit-macos-app=false -Doptimize=ReleaseFast
 
-      - name: Build Atelier
+      - name: Verify Ghostty artifacts
         run: |
-          xcodegen generate
-          xcodebuild -project Atelier.xcodeproj -scheme Atelier -configuration Debug -destination 'generic/platform=macOS' build
+          test -d ghostty/macos/GhosttyKit.xcframework
+          test -d ghostty/zig-out/share/terminfo
+          test -d ghostty/zig-out/share/ghostty
 
-      - name: Run tests
+      # Two toolchains, for the reason ci.yml states: zig 0.15.2 cannot link
+      # against the macOS 26 SDK, so ghostty must build under the image's
+      # default Xcode, while the app needs Swift 6.2 rules the older one
+      # rejects. Switch only once the xcframework exists.
+      - name: Select newest Xcode for the Swift build
         run: |
-          xcodebuild -project Atelier.xcodeproj -scheme AtelierTests -configuration Debug -destination 'generic/platform=macOS' test
+          ls -d /Applications/Xcode_*.app
+          latest=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          echo "Selecting $latest"
+          sudo xcode-select -s "$latest"
+
+      - name: Log build environment
+        run: |
+          xcodebuild -version
+          swift --version
+
+      # PhaseExecutorTests spawn a real process-compose and XCTSkip without
+      # one, so a run missing this binary reports success having never run the
+      # end-to-end phase tests. Same reasoning, and the same three-path check,
+      # as ci.yml.
+      - name: Install process-compose
+        run: brew install f1bonacc1/tap/process-compose
+
+      - name: Verify process-compose is where the tests look
+        run: |
+          test -x /opt/homebrew/bin/process-compose \
+            || test -x /usr/local/bin/process-compose \
+            || test -x "$HOME/.local/bin/process-compose" \
+            || {
+              echo "::error::process-compose is not on ProcessCompose.Settings.searchPaths — PhaseExecutorTests would skip"
+              exit 1
+            }
+          process-compose version
+
+      # dev.sh runs xcodegen and builds the Monaco bundle itself. A hand-rolled
+      # xcodebuild here is what let this job drift out of agreement with CI.
+      - name: Build
+        run: ./scripts/dev.sh build
+
+      - name: Test
+        run: ./scripts/dev.sh test
 
       - name: Report
         if: always()
         run: |
-          echo "## Ghostty Compatibility Test" >> $GITHUB_STEP_SUMMARY
-          echo "- **Ghostty version**: ${{ env.GHOSTTY_TAG }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Current pinned**: $(cd ghostty && git describe --tags 2>/dev/null || echo 'unknown')" >> $GITHUB_STEP_SUMMARY
-          echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Ghostty Compatibility Test"
+            echo "- **Ghostty version**: ${GHOSTTY_TAG:-unresolved}"
+            echo "- **Currently pinned**: $(git -C ghostty describe --tags "$(git rev-parse HEAD:ghostty)" 2>/dev/null || echo 'unknown')"
+            echo "- **Status**: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"

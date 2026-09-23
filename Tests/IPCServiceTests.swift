@@ -902,4 +902,61 @@ final class IPCServiceTests: XCTestCase {
 
         XCTAssertNotEqual(response.error, IPC.ToolError.missingArgument("reason").errorDescription)
     }
+
+    // MARK: - Pruning contexts across the store's await
+
+    /// The ordinary case, unchanged: a context whose peer the store has expired
+    /// is dropped.
+    func test_expiredContexts_dropsAContextTheStoreNoLongerKnows() {
+        let alive = UUID()
+        let expired = UUID()
+
+        XCTAssertEqual(
+            IPC.Service.expiredContexts(observed: [alive, expired], stillAlive: [alive]),
+            [expired]
+        )
+    }
+
+    /// The bug this exists for. `listPeers` reads the store across an `await`,
+    /// and `IPC.Service` is a reentrant actor, so a `register_peer` can complete
+    /// its `contexts` write *inside* that hop — after the snapshot was taken and
+    /// before the store's answer comes back. Pruning to the store's answer alone
+    /// deleted that context while the new peer's own reply, carrying its id, was
+    /// already on its way out: the helper believed itself registered, and every
+    /// tool needing `registeredPeerID` told it to register first for the rest of
+    /// the session, with `peersBySurface` missing it so verification and task
+    /// notices addressed to it were dropped too. It is reachable from the
+    /// documented coordinator workflow verbatim — polling `list_peers` for a
+    /// spawned peer's surface id *is* a read running while that peer registers.
+    ///
+    /// Staged as the two inputs rather than as a real race, which is not
+    /// something a test can schedule: `observed` is the snapshot taken before
+    /// the await, `stillAlive` is a store answer that predates the new
+    /// registration for the same reason.
+    func test_expiredContexts_leavesAContextThatRegisteredDuringTheRead() {
+        let established = UUID()
+        let registeredMidRead = UUID()
+
+        // The caller's `contexts` now holds both; only `established` was in the
+        // snapshot, and only `established` is in the store's answer.
+        let expired = IPC.Service.expiredContexts(observed: [established], stillAlive: [established])
+
+        XCTAssertFalse(
+            expired.contains(registeredMidRead),
+            "a context younger than the read is no evidence of anything and must survive it"
+        )
+        XCTAssertEqual(expired, [])
+    }
+
+    /// And a peer the store reports that this call never observed is not a
+    /// context to invent — the prune only ever removes.
+    func test_expiredContexts_ignoresAPeerItHasNoContextFor() {
+        let known = UUID()
+        let stranger = UUID()
+
+        XCTAssertEqual(
+            IPC.Service.expiredContexts(observed: [known], stillAlive: [known, stranger]),
+            []
+        )
+    }
 }

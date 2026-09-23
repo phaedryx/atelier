@@ -405,6 +405,57 @@ final class IPCServerTests: XCTestCase {
 
     // MARK: - End to end
 
+    // MARK: - Which replies bind a peer to a connection
+
+    private func peerPayload(id: UUID) -> IPC.Payload {
+        .peer(IPC.PeerInfo(
+            id: id.uuidString,
+            name: "planner",
+            role: "writes plans",
+            workstream: "wry-amber-lexer",
+            surfaceID: UUID().uuidString,
+            lastSeenSecondsAgo: 0,
+            pendingMessages: 0,
+            lastUserPromptSecondsAgo: nil
+        ))
+    }
+
+    /// register_peer is the one call whose peer id arrives in the *reply*, so it
+    /// is the one reply that binds.
+    func test_peerToClaim_bindsARegistration() {
+        let id = UUID()
+
+        XCTAssertEqual(
+            IPC.Server.peerToClaim(tool: .registerPeer, payload: peerPayload(id: id)),
+            id.uuidString
+        )
+    }
+
+    /// The bug. `get_peer_status` answers `.peer` too, for a peer that is
+    /// somebody else's, and the claim was gated on the payload's *shape*.
+    /// `claim` normally refuses that because the owner's connection is live —
+    /// but between `forget` removing `peerOwners[P]` and the asynchronous
+    /// `retire` removing P from the store, P is ownerless and still readable. A
+    /// read in that window claimed P, and the one-connection-speaks-for-one-peer
+    /// branch then retired the *caller's own* live peer and bound its socket to
+    /// P: its next call was told to register first and its inbox was gone, for a
+    /// read it had made about somebody else.
+    func test_peerToClaim_bindsNothingForAPeerStatusRead() {
+        XCTAssertNil(IPC.Server.peerToClaim(tool: .getPeerStatus, payload: peerPayload(id: UUID())))
+    }
+
+    /// And nothing else binds either, whatever it answers with.
+    func test_peerToClaim_bindsNothingForAnyOtherReply() {
+        for tool in IPC.Tool.allCases where tool != .registerPeer {
+            XCTAssertNil(
+                IPC.Server.peerToClaim(tool: tool, payload: peerPayload(id: UUID())),
+                "\(tool.rawValue) must not bind a peer to the caller's connection"
+            )
+        }
+        XCTAssertNil(IPC.Server.peerToClaim(tool: .registerPeer, payload: .text("ok")))
+        XCTAssertNil(IPC.Server.peerToClaim(tool: .registerPeer, payload: nil))
+    }
+
     /// Two helper processes, two registered peers, one message between them —
     /// the whole feature exercised through the real binaries.
     func test_twoHelpers_exchangeAMessage() throws {
@@ -438,6 +489,75 @@ final class IPCServerTests: XCTestCase {
         XCTAssertTrue(inbox.contains("planner"), "the message should name its sender, got: \(inbox)")
 
         XCTAssertEqual(builder.callTool("receive_messages"), "No new messages.")
+
+        // `get_peer_status` rendered a shorter line than `list_peers` — it
+        // omitted `workstream=` and `surface=`, so the tool whose whole job is
+        // "tell me about this one peer" was the one that could not say which
+        // pane it is in. That is precisely what a caller holding a tab it just
+        // spawned is asking, and `surfaceID` is the only thing that tells two
+        // agents in one workstream apart. One renderer now serves both.
+        let status = try XCTUnwrap(planner.callTool("get_peer_status", ["peer_id": String(builderID)]))
+        XCTAssertTrue(status.contains("workstream=bold-crimson-parser"), status)
+        XCTAssertTrue(status.contains("surface="), status)
+        XCTAssertTrue(status.contains("id=\(builderID)"), status)
+    }
+
+    /// Every tool here declares string arguments and models send real JSON
+    /// anyway. `String(describing:)` rendered an `NSArray` as
+    /// `"(\n    security,\n    audit\n)"`, and `ToolArguments.parseList`
+    /// splits on `,[]"'` but not on parentheses — so `["security","audit"]`
+    /// arrived as `["(", "security", "audit", ")"]`. For `start_verification`
+    /// that meant the runner refusing an undeclared check named `(`; here it is
+    /// visible as two tags becoming four.
+    ///
+    /// Driven through the real binary because the coercion is a bridging fact
+    /// about what `JSONSerialization` hands back, and nothing short of a real
+    /// `tools/call` frame produces those types.
+    func test_helper_sendsRealJSONTypesThroughAsTheValuesTheyMean() throws {
+        let helper = try XCTUnwrap(MCPHelperLauncher.executableURL(), "atelier-mcp was not found in the host app bundle")
+        _ = try waitForEndpoint()
+
+        var environment = ProcessInfo.processInfo.environment
+        environment["ATELIER_PROJECT_DIR"] = "/repos/atelier"
+        environment["ATELIER_WORKSTREAM"] = "wry-amber-lexer"
+        environment["ATELIER_WORKSTREAM_ID"] = UUID().uuidString
+        environment["ATELIER_SURFACE_ID"] = UUID().uuidString
+        let agent = try MCPProcess(helper: helper, environment: environment)
+
+        let added = try XCTUnwrap(agent.callTool("add_task", json: [
+            "path": "audit/ipc",
+            "name": "read the helper",
+            "content": "a brief",
+            // A real JSON array, not the string form the schema asks for.
+            "tags": ["security", "audit"],
+        ]))
+        let tagLine = try XCTUnwrap(
+            added.split(separator: "\n").first { $0.hasPrefix("tags:") },
+            "the task rendered no tags at all: \(added)"
+        )
+        // The whole line, not `contains`: the leak shows up as extra tags named
+        // `(` and `)` around the real ones, which a containment check passes.
+        // (Scoped to this line because the rendered creator carries a peer id in
+        // parentheses of its own.)
+        XCTAssertEqual(tagLine, "tags: security, audit", added)
+
+        // A JSON null means absent, and `add_task` proves it on the wire without
+        // needing a second tool: `tags` is optional, so a null one has to
+        // disappear rather than arrive as the literal "<null>" and become a tag
+        // of that name. The refusals a null reaches — `line: null` read as
+        // "expected a whole number, got <null>" — are pinned in
+        // `IPCToolRegistryTests`, because every tool that takes an integer hops
+        // to the main actor and this harness deadlocks on that: `MCPProcess.send`
+        // blocks the test's own thread in `availableData`, which is the main
+        // thread the reply would have to be produced on.
+        let nulled = try XCTUnwrap(agent.callTool("add_task", json: [
+            "path": "audit/null",
+            "name": "a null tag list",
+            "content": "a brief",
+            "tags": NSNull(),
+        ]))
+        XCTAssertFalse(nulled.contains("<null>"), nulled)
+        XCTAssertFalse(nulled.contains("tags:"), "a null argument must read as absent, got: \(nulled)")
     }
 
     /// Atelier quitting and coming back is the common case in development: new
@@ -873,6 +993,14 @@ private final class MCPProcess {
 
     /// Calls a tool and returns the text an agent would read.
     func callTool(_ name: String, _ arguments: [String: String] = [:], timeout: TimeInterval = 10) -> String? {
+        callTool(name, json: arguments, timeout: timeout)
+    }
+
+    /// The same call with arguments of any JSON type, which is what a model
+    /// actually sends however the schema spells them — a boolean for
+    /// `bypass_permissions`, an array for `checks`. `[String: String]` cannot
+    /// express that, and it is the reason nothing pinned the coercion.
+    func callTool(_ name: String, json arguments: [String: Any], timeout: TimeInterval = 10) -> String? {
         let reply = send(method: "tools/call", params: ["name": name, "arguments": arguments], timeout: timeout)
         let result = reply?["result"] as? [String: Any]
         let content = result?["content"] as? [[String: Any]]

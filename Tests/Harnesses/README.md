@@ -218,6 +218,36 @@ same id with the same mimeType — the read side cannot tell the two apart, and
 this file's own `AssetScheme` copy serves everything but PNG as JPEG, so it could
 not be trusted to either. The name on disk is the whole of the bug.
 
+**10. The mermaid arm.** A mermaid definition is the one thing Swift hands the
+page *without* having validated it — only `parseMermaidToExcalidraw` can say
+whether a definition parses, and only the page learns how big the result is — so
+the parse, the placement and the refusal are all the page's, and every claim
+about them belongs here.
+
+Four things it pins, each for its own reason:
+
+- **A flowchart lands as its nodes, their labels and the edge between them**,
+  the edge bound at both ends to elements the same call drew, with the diagram's
+  top-left where it was asked to go. The converter has its own origin, so a
+  diagram left where it emerges lands on top of whatever is already at (0,0) —
+  which reads perfectly well in the digest.
+- **Ids are regenerated on this arm, the opposite of the `add` arm's
+  `regenerateIds: false`.** Mermaid names its nodes `A` and `B`, so the same
+  diagram added twice would collide on those ids and Excalidraw dedupes by id.
+  The check adds one flowchart twice and asserts the two sets are disjoint.
+- **A definition that does not parse is refused and the scene is byte-identical
+  afterwards.** A partial apply is the failure mode that matters here, the same
+  one section 6 pins for an arrow bound to an image.
+- **A diagram type the converter cannot express lands as one image**, its SVG in
+  `assets/` under the image's own `fileId`, and **captioned with the
+  definition** — the image carries no words on the canvas, so without the
+  caption the digest would be blind to it and a later agent could not re-read
+  what was drawn.
+
+Every node and edge carries `atelierAuthor`; bound labels carry nothing, on this
+arm as on `add`, because the converter creates them fresh from `label` and the
+digest folds a label into its container rather than reporting it on its own.
+
 ### If you change the page
 
 `./scripts/build-editor.sh` first. The harness runs the **built** bundle in
@@ -246,3 +276,9 @@ Three that have been run:
   `boundElements` is untouched — **still pass**, correctly: the old behaviour
   also created nothing. They pin that the refusal does not half-apply, which is
   a different claim from the refusal happening at all.
+
+All three recipes were measured before section 10 existed, so the totals they
+quote are a count of the file as it was then. The *number of checks each recipe
+predicts* is still right — none of them touches the mermaid arm — but the
+denominator is not, and this file has already been caught once quoting a count
+nobody re-measured. Re-measure before quoting one.

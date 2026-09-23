@@ -59,6 +59,15 @@ extension IPC {
     ///   `atelier.processSelection.<id>`: an agent narrowing a run must not
     ///   re-tick the user's checkboxes. Empty means "use the stored selection",
     ///   which is exactly what the Start button reads.
+    /// - **A named process must be one the config declares, or the call is
+    ///   refused.** `ProcessCompose.StartContextResolver.selectedProcesses`
+    ///   filters a per-call list through `runnableProcesses` alone — a
+    ///   flag-shaped-name check, not a membership one — so an undeclared name
+    ///   reached `up -n execute <name>` and the answer reported it as starting.
+    ///   The refusal names the legal set, the shape `start_verification` already
+    ///   uses for an undeclared check, so a caller that guessed is told the real
+    ///   names rather than left polling `list_processes` for something that was
+    ///   never going to appear.
     /// - **`stopExecution` must guard on `runStarted` itself.** `RunSession.stop()`
     ///   has no guard of its own — every caller today gates it externally, the
     ///   view's Stop button by rendering only when a run is up, and `close_tab`
@@ -110,6 +119,7 @@ extension IPC {
         case notAvailable
         case noProcessTable(String)
         case nothingToRun(String)
+        case unknownProcesses([String], declared: [String])
         case alreadyRunning
         case startInFlight
 
@@ -122,6 +132,13 @@ extension IPC {
                     + "list_processes reports the run's state without one."
             case let .nothingToRun(reason):
                 reason
+            case let .unknownProcesses(names, declared):
+                // Every unknown name, never just the first: naming one would
+                // leave the caller retrying into the second, the rule
+                // `Verification.Runner.Failure.alreadyRunning` already states.
+                "No such process: \(names.joined(separator: ", ")). "
+                    + "This project's execute namespace declares: \(declared.joined(separator: ", ")). "
+                    + "list_processes reports the declared set without starting anything."
             case .alreadyRunning:
                 "This workstream's dev stack is already running. Read it with list_processes, "
                     + "or stop_execution first if you mean to restart it."
