@@ -2018,11 +2018,25 @@ extension Git {
 
         /// Runs git and reports either stdout or why it did not run.
         ///
-        /// **The one spawn site.** `runWithTimeout`, `run` and `runOnWholeTree` are
-        /// all projections of this, so the deadline, `gitEnvironment`'s
-        /// `GIT_TERMINAL_PROMPT=0`/`GIT_ASKPASS` pair and the concurrent pipe drain
-        /// are decided once. Every mutator returning a `Git.Failure` gets its exit
-        /// code and stderr from here rather than re-spawning to ask.
+        /// **The spawn site for everything shaped like a read.** `runWithTimeout`,
+        /// `run` and `runOnWholeTree` are all projections of this, so the deadline,
+        /// `gitEnvironment`'s `GIT_TERMINAL_PROMPT=0`/`GIT_ASKPASS` pair and the
+        /// concurrent pipe drain are decided once. Every mutator returning a
+        /// `Git.Failure` gets its exit code and stderr from here rather than
+        /// re-spawning to ask.
+        ///
+        /// It is not the *only* spawn site, and said it was for a while.
+        /// `pushCurrentBranch` and `pullCurrentBranch` reach `ProcessRunner.capture`
+        /// directly, because both hand the user git's own words and this returns
+        /// stdout alone: git reports a push almost entirely on stderr, and a failed
+        /// pull's diagnosis is the stderr `PullResult.failure` carries. They still
+        /// take `gitEnvironment` and a `Timeout` tier, so what this decides once they
+        /// agree with — but they are two more places to change, not zero.
+        ///
+        /// `pushCurrentBranch` is also the one caller that says where to run with
+        /// `-C <path>` rather than `currentDirectory:`. Equivalent for the push
+        /// itself, and left alone deliberately: it is a network path with no test,
+        /// and a difference nothing can observe is not worth moving blind.
         ///
         /// `ProcessRunner` owns the deadline and drains both pipes concurrently,
         /// which is what makes a large `git show`/`git status` safe: git blocks
