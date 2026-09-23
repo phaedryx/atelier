@@ -466,6 +466,22 @@ extension Whiteboard {
             guard result["ok"] as? Bool == true else {
                 throw WriteFailure.refused(result["reason"] as? String ?? "no reason given")
             }
+            // A write that landed and is still not what was asked for.
+            //
+            // So far there is exactly one: a mermaid diagram of a type the
+            // converter *should* expand, which its own try/catch degraded into
+            // a single flat image. The board really did change, so this is not
+            // a refusal — but "Added 1 element" describes a picture as though
+            // it were the boxes the tool promises.
+            //
+            // **Logged here and not yet answered with.** `apply` returns the
+            // ids, and the sentence an agent reads is assembled in
+            // `WorkspaceActions.whiteboardAdd`; carrying this to that caller is
+            // a change to a file this one does not own. Until then it is at
+            // least in Console rather than nowhere.
+            if let note = result["note"] as? String {
+                logger.warning("whiteboard write landed with a note: \(note, privacy: .public)")
+            }
             // The ids that really landed, not the ids that were asked for.
             return result["ids"] as? [String] ?? []
         }

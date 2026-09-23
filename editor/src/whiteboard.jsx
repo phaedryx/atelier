@@ -517,6 +517,58 @@ const shiftLabel = (element, dx, dy) => ({
   versionNonce: nonce(),
 })
 
+// The mermaid diagram types the converter expands into real elements.
+//
+// Everything else — pie, gantt, mindmap, journey — is rendered by mermaid
+// itself and arrives as ONE image skeleton, which is the documented and wanted
+// behaviour. The problem this table exists for is that a type IN this set can
+// arrive the same way: parseMermaid wraps each per-type parser in a try/catch
+// and falls back to convertSvgToGraphImage on a throw (measured,
+// mermaid-to-excalidraw 2.2.2, parseMermaid.js), logging to the page's console
+// and telling its caller nothing. So a flowchart whose parser trips lands as a
+// flat picture while the tool's own description promises editable boxes, and
+// the answer says "Added 1 element".
+//
+// Keyed on the keyword an author writes rather than on mermaid's internal
+// diagram type, because this is read from the definition text before anything
+// has parsed it.
+const expandableMermaidKeywords = new Set([
+  'graph',
+  'flowchart',
+  'flowchart-v2',
+  'sequencediagram',
+  'classdiagram',
+  'erdiagram',
+  'statediagram',
+  'statediagram-v2',
+])
+
+// The diagram keyword a definition declares, or null when it cannot be read
+// with confidence.
+//
+// Deliberately conservative: this only ever decides whether to ADD a warning,
+// so a definition whose shape is not recognised says nothing rather than
+// guessing. Skips `---` frontmatter, `%%` comments and `%%{init}%%` directives,
+// which are the three things that legally precede the keyword.
+const mermaidKeyword = (definition) => {
+  const lines = String(definition || '').split('\n')
+  let inFrontmatter = false
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    if (trimmed === '---') {
+      inFrontmatter = !inFrontmatter
+      continue
+    }
+    if (inFrontmatter || trimmed.startsWith('%%')) continue
+    // `graph LR;` and `stateDiagram-v2` alike: the keyword runs up to the first
+    // space, semicolon or colon.
+    const word = trimmed.split(/[\s;:]/)[0]
+    return word ? word.toLowerCase() : null
+  }
+  return null
+}
+
 // A write has landed, so save NOW rather than waiting for onChange.
 //
 // `onChange` is Excalidraw's, and whether it fires for a programmatic
@@ -822,6 +874,26 @@ window.__whiteboardApply = async (op) => {
       )
       if (!skeletons.length) return { ok: false, reason: 'the definition produced no elements' }
 
+      // **A supported type that arrives as one image was degraded, not drawn.**
+      // See `expandableMermaidKeywords`: the converter swallows a per-type
+      // parser failure and renders the diagram as a flat SVG instead, so the
+      // board gets a picture where the tool promised editable boxes. Reported
+      // rather than refused — mermaid did render the definition, and throwing
+      // the rendering away would leave the caller with nothing at all. An
+      // unrecognised keyword says nothing; this note may only ever be added.
+      const keyword = mermaidKeyword(op.definition)
+      const note =
+        skeletons.length === 1 &&
+        skeletons[0].type === 'image' &&
+        keyword &&
+        expandableMermaidKeywords.has(keyword)
+          ? `mermaid could not expand this ${keyword} diagram into editable elements and ` +
+            'rendered it as a single image instead. The board carries a picture of the ' +
+            'diagram, not boxes and arrows. This usually means the definition uses syntax ' +
+            "the converter does not handle; the image's caption holds the definition."
+          : null
+      if (note) console.error('whiteboard:', note)
+
       // **Not every skeleton the converter emits carries coordinates.** A
       // class diagram with a `namespace` block emits one
       // `{type, id, name, children}` frame per namespace, with no x and no y
@@ -894,6 +966,10 @@ window.__whiteboardApply = async (op) => {
         ids: converted
           .filter((el) => !el.containerId && el.type !== 'frame')
           .map((el) => el.id),
+        // Present only when the diagram was degraded to an image. `Host.apply`
+        // logs it; putting it in front of the agent is one line in
+        // `WorkspaceActions.whiteboardAdd`, which is not this file's to write.
+        ...(note ? { note } : {}),
       }
     }
 
