@@ -699,3 +699,10 @@
 "Process" = "Process";
 "Namespace" = "Namespace";
 "Ready" = "Ready";
+
+/* Sidebar accessibility labels — VoiceOver only, no visible text */
+"Add project" = "Add project";
+"Remove workstream" = "Remove workstream";
+/* SwiftUI renders an Int interpolation as %lld, so that is the key the sidebar's
+   workstream-count label looks up. */
+"%lld workstreams" = "%lld workstreams";
