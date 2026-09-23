@@ -224,7 +224,11 @@ extension IPC {
         /// so the hop costs nothing but the suspension.
         private func resolved(for target: WorkspaceActions.ExecutionTarget) async -> ProcessCompose.Resolution {
             let resolution = resolution
-            return await Task.detached { resolution(target) }.value
+            // `.userInitiated` because an agent is blocked on the reply, the
+            // same priority `ProcessCompose.ResolutionModel.refresh` gives its
+            // own off-main pass and `AppEnvironment.defaultBranch(for:)` gives
+            // its detached probe.
+            return await Task.detached(priority: .userInitiated) { resolution(target) }.value
         }
 
         /// The names in `scope` this config does not declare, or nil when the

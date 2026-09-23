@@ -12,7 +12,7 @@ extension IPC.Service {
     /// the default branch and reads `ports.yaml`, and the main actor has no
     /// business waiting on either.
     ///
-    /// **That middle step runs here, in the actor, and not in the closures
+    /// **That middle step runs in `prepare`, not in the closures
     /// `spawnTerminalTab` calls.** Those closures take the surface id, which
     /// `WorkspaceModel.addTerminal()` mints, so they are evaluated *inside*
     /// the main-actor hop — and for one round the whole of both ran there:
@@ -22,8 +22,8 @@ extension IPC.Service {
     /// `StatusLine.Config.write`, all on the main thread, for a tool call the
     /// user did not make. Nothing in that list depends on the surface: the id
     /// reaches the environment as one `ATELIER_SURFACE_ID` entry and the
-    /// command as one `--session-id`. So both are built to completion out
-    /// here, and the closures do a dictionary write and a string build.
+    /// command as one `--session-id`. So both are built to completion before
+    /// the hop, and the closures do a dictionary write and a string build.
     ///
     /// The tab and its surface stay in **one** hop, deliberately. Minting the
     /// id in a first hop and creating the surface in a second would leave a
@@ -67,9 +67,11 @@ extension IPC.Service {
             }
 
             let startsAgent = prompt?.isEmpty == false
-            // Both built before the hop — see this method's doc comment.
-            let environmentBase = WorkspaceActions.environmentBase(for: plan)
-            let agentCommand = agentCommand(plan: plan, prompt: prompt)
+            // Built before the hop, and off this actor as well — see this
+            // method's doc comment.
+            let prepared = await Self.prepare(plan: plan, prompt: prompt)
+            let environmentBase = prepared.environment
+            let agentCommand = prepared.agent
             let surfaceID = try await MainActor.run {
                 try WorkspaceActions.shared.spawnTerminalTab(
                     workstreamID: workstreamID,
@@ -133,7 +135,32 @@ extension IPC.Service {
     /// The MCP config is the workstream's, shared deliberately: it names the
     /// helper binary and carries no identity, and the agent's identity comes
     /// from `ATELIER_SURFACE_ID` in its environment.
-    private nonisolated func agentCommand(
+    /// Everything `spawnTerminalTab` needs that does not depend on the surface,
+    /// built where it blocks neither the main actor nor this one.
+    ///
+    /// **Detached, and not merely "off the main actor".** Doing this work
+    /// inline in `openAgentTab` satisfied the doc comments — it is off the main
+    /// thread — but it then ran synchronously on `IPC.Service`'s own serial
+    /// executor, so a cold-cache `open_agent_tab` queued *every other agent's*
+    /// tool call behind several child processes and a `ports.yaml` read. The
+    /// main-actor hop it replaced at least suspended this actor and left it
+    /// free to answer them. This is the shape
+    /// `AppEnvironment.defaultBranch(for:)` already uses, for the reason its
+    /// own comment gives: the work is synchronous and blocks its thread for
+    /// the length of several child processes, so it belongs on neither actor.
+    private static func prepare(
+        plan: WorkspaceActions.AgentTabPlan,
+        prompt: String?
+    ) async -> (environment: [String: String], agent: SpawnedAgent?) {
+        await Task.detached(priority: .userInitiated) {
+            (
+                environment: WorkspaceActions.environmentBase(for: plan),
+                agent: agentCommand(plan: plan, prompt: prompt)
+            )
+        }.value
+    }
+
+    private nonisolated static func agentCommand(
         plan: WorkspaceActions.AgentTabPlan,
         prompt: String?
     ) -> SpawnedAgent? {
