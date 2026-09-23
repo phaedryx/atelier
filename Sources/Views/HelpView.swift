@@ -87,6 +87,14 @@ struct HelpView: View {
                         ShortcutRow(keys: "1-9", description: "Switch tab")
                         ShortcutRow(keys: "[", shift: true, description: "Previous tab")
                         ShortcutRow(keys: "]", shift: true, description: "Next tab")
+                        // The same two actions carry a second chord, bound on the
+                        // menu items at AtelierApp.swift:467-475 where the bracket
+                        // pair is bound in ContentView's `commandKeyAction` table.
+                        // Both are live, so both are listed: this view is the
+                        // shortcut reference, and a chord it omits is one nothing
+                        // else on screen can teach.
+                        ShortcutRow(keys: "←", option: true, description: "Previous tab")
+                        ShortcutRow(keys: "→", option: true, description: "Next tab")
                         ShortcutRow(keys: "Return", description: "Focus Coding Agent")
                         ShortcutRow(keys: "P", description: "Find File")
                         ShortcutRow(keys: "S", description: "Save (Editor)")
