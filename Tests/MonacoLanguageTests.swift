@@ -74,6 +74,17 @@ final class MonacoLanguageTests: XCTestCase {
         XCTAssertEqual(MonacoLanguage.id(for: "Dockerfile"), "dockerfile")
     }
 
+    /// The bare `Dockerfile` above is a *basename* match; `web.dockerfile` is
+    /// an *extension* match, and the table needs both because both spellings
+    /// are ordinary. The extension case arrived with the copy of this table
+    /// that `EditorView` carried, so for as long as there were two tables the
+    /// editor highlighted `*.dockerfile` and the Changes diff did not — the
+    /// drift a second copy invites, and why there is one again.
+    func testDockerfileExtensionMapsToDockerfile() {
+        XCTAssertEqual(MonacoLanguage.id(for: "web.dockerfile"), "dockerfile")
+        XCTAssertEqual(MonacoLanguage.id(for: "Web.Dockerfile"), "dockerfile")
+    }
+
     func testBasenameMatchIsCaseInsensitive() {
         XCTAssertEqual(MonacoLanguage.id(for: "MAKEFILE"), "makefile")
         XCTAssertEqual(MonacoLanguage.id(for: "dockerfile"), "dockerfile")
