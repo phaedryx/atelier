@@ -13,8 +13,18 @@
 ./scripts/dev.sh clean              # clean build artifacts
 ./scripts/release.sh <version>      # signed+notarized DMG — needs a Developer ID, unusable here
 ./scripts/set-version.sh 0.2.0      # stamp a version into project.yml (build-time only)
-./scripts/build-editor.sh           # rebuild Monaco editor bundle (auto-run by dev.sh)
+./scripts/build-editor.sh           # rebuild Monaco editor bundle (dev.sh runs it every time)
 ```
+
+`dev.sh build`, `br`, `test` and `release` call `scripts/build-editor.sh`
+**unconditionally**, and it decides for itself whether a rebuild is needed —
+about 0.02s when the bundle is current. It used to be called only when the
+bundle was **missing**, which meant an edit to `editor/src/` was never picked
+up: the suite ran against the previous bundle and passed, which is worse than
+failing, and the whiteboard tests drive a real `Whiteboard.Host` that loads it.
+Do not put an existence check back in front of that call — two staleness
+policies is how this broke, and the wrong one wins in exactly the case that
+matters.
 
 ### After code changes
 1. If you added/removed files or changed `project.yml`: run `xcodegen generate` first
