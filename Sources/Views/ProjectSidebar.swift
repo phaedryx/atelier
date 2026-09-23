@@ -72,7 +72,7 @@ struct ProjectSidebar: View {
     @State private var cloneCancellation: BareRepoClone.Cancellation?
     @State private var isDropTargeted = false
     @State private var projectToDelete: UUID?
-    @State private var workstreamToRemove: UUID?
+    @StateObject private var removeConfirmation = Workstream.RemoveConfirmation()
     /// The pending Purge, its warning and its alert copy — see
     /// `Workstream.PurgeConfirmation`. Remove above stays a plain `UUID?`: it
     /// has no warning and no button-title rule to share.
@@ -361,7 +361,7 @@ struct ProjectSidebar: View {
                             get: { renamingWorkstreamID == workstream.id },
                             set: { renamingWorkstreamID = $0 ? workstream.id : nil }
                         ),
-                        onRemove: { workstreamToRemove = workstream.id },
+                        onRemove: { removeConfirmation.confirm(workstreamID: workstream.id) },
                         onPurge: { confirmPurge(workstream) },
                         onRenameCommit: { commitRename(workstreamID: workstream.id, input: $0) }
                     )
@@ -444,23 +444,19 @@ struct ProjectSidebar: View {
                     Text(String(format: NSLocalizedString("Remove \"%@\" from the list? Files in %@ will not be deleted.", comment: ""), project.name, project.directory))
                 }
             }
-            .alert(
-                "Remove Workstream",
-                isPresented: Binding(
-                    get: { workstreamToRemove != nil },
-                    set: {
-                        if !$0 {
-                            workstreamToRemove = nil
-                        }
-                    }
-                )
-            ) {
-                Button("Cancel", role: .cancel) { workstreamToRemove = nil }
-                Button("Remove", role: .destructive) {
-                    performRemove()
-                }
-            } message: {
-                Text("Ongoing terminals and Coding Agent sessions will be killed. The worktree and its files will remain on disk.")
+            .removeConfirmationAlert(
+                removeConfirmation,
+                archiving: Workstream.ArchiveContext(
+                    projects: $projects,
+                    surfaceCache: surfaceCache,
+                    tmuxPath: appEnv.toolStatus.tmux.path,
+                    verificationRunner: verificationRunner,
+                    agentStateTracker: agentStateTracker
+                ),
+                selection: $selection
+            ) { _ in
+                rebuildIndices()
+                onProjectsChanged()
             }
             .purgeConfirmationAlert(
                 purgeConfirmation,
@@ -1083,20 +1079,6 @@ struct ProjectSidebar: View {
             return project.id
         }
         return nil
-    }
-
-    private func performRemove() {
-        guard let wsID = workstreamToRemove,
-              let pi = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
-        let projectID = projects[pi].id
-        Workstream.Archiver.remove(wsID, in: &projects[pi], surfaceCache: surfaceCache, tmuxPath: appEnv.toolStatus.tmux.path,
-                                   verificationRunner: verificationRunner, agentStateTracker: agentStateTracker)
-        rebuildIndices()
-        if case let .workstream(id) = selection, id == wsID {
-            selection = projects[pi].workstreams.first.map { .workstream($0.id) } ?? .project(projectID)
-        }
-        onProjectsChanged()
-        workstreamToRemove = nil
     }
 
     // MARK: - Project management

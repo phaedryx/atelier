@@ -7,6 +7,160 @@ import SwiftUI
 private let logger = Logger(subsystem: "atelier", category: "purge-confirmation")
 
 extension Workstream {
+    /// Everything a confirmation's `perform` needs to reach `Archiver`,
+    /// assembled by the view in its own body.
+    ///
+    /// Passed in at perform time rather than stored on the confirmation object:
+    /// a `@StateObject`'s initializer runs once, so dependencies captured there
+    /// would be the ones that existed at first render — a stale `tmuxPath` and,
+    /// worse, a `Binding` into an array the view has since replaced.
+    ///
+    /// On `Workstream` rather than nested in `PurgeConfirmation`, where it
+    /// started, because `RemoveConfirmation` needs exactly the same five values
+    /// — `remove` and `purge` take the same arguments — and a second struct
+    /// with identical fields is the kind of copy that drifts. `purge` requires a
+    /// `Verification.Runner` and `remove` merely accepts one, so the
+    /// non-optional field serves both.
+    @MainActor
+    struct ArchiveContext {
+        var projects: Binding<[Project]>
+        var surfaceCache: TerminalSurfaceCache
+        var tmuxPath: String?
+        var verificationRunner: Verification.Runner
+        var agentStateTracker: Workstream.AgentStateTracker
+
+        init(
+            projects: Binding<[Project]>,
+            surfaceCache: TerminalSurfaceCache,
+            tmuxPath: String?,
+            verificationRunner: Verification.Runner,
+            agentStateTracker: Workstream.AgentStateTracker
+        ) {
+            self.projects = projects
+            self.surfaceCache = surfaceCache
+            self.tmuxPath = tmuxPath
+            self.verificationRunner = verificationRunner
+            self.agentStateTracker = agentStateTracker
+        }
+    }
+
+    /// The owner of the *asking* half of Remove, as `PurgeConfirmation` is for
+    /// Purge.
+    ///
+    /// The Remove alert and its `performRemove` existed twice, in `ContentView`
+    /// and `ProjectSidebar`, and the copies had already drifted: only the
+    /// sidebar's moved the selection off the workstream it had just removed, so
+    /// ⌘⇧W, the menu's Archive Workstream and the palette — none of which go
+    /// through the sidebar — left `selection` naming a dead id and the detail
+    /// pane falling through to `OnboardingView`. Nothing catches that class of
+    /// divergence while the same twenty lines live in two files.
+    ///
+    /// There is no warning to compute and no second target shape, so this is
+    /// much smaller than `PurgeConfirmation`: the alert's copy is fixed,
+    /// because Remove destroys nothing.
+    @MainActor
+    final class RemoveConfirmation: ObservableObject {
+        /// What happened, handed to the caller's post-remove closure.
+        ///
+        /// Carries the project id for the reason `PurgeConfirmation.Completion`
+        /// does: the row it would have been looked up through is gone by the
+        /// time the closure runs.
+        struct Completion: Equatable {
+            var workstreamID: UUID
+            var projectID: UUID
+        }
+
+        @Published private(set) var target: UUID?
+
+        /// Settable so the modifier can bind to it; only the false direction is
+        /// honoured, as in `PurgeConfirmation`.
+        var isPresented: Bool {
+            get { target != nil }
+            set {
+                if !newValue {
+                    cancel()
+                }
+            }
+        }
+
+        func confirm(workstreamID: UUID) {
+            target = workstreamID
+        }
+
+        func cancel() {
+            target = nil
+        }
+
+        /// Archive the pending workstream, move the selection off it, then run
+        /// `then`.
+        ///
+        /// **The selection move is here, not in the callers' closures**, and
+        /// that is the whole point of the type: it is the one thing the two
+        /// copies disagreed about. The fallback is the project's first
+        /// remaining workstream, or the project itself. It is guarded on the
+        /// selection actually naming the removed workstream, so removing a row
+        /// from the context menu while looking at another one does not move the
+        /// user.
+        ///
+        /// `onChange(of:)` on the project list cannot stand in for it:
+        /// `Project`'s `==` compares `id` only, so dropping a workstream leaves
+        /// the list equal and no observer fires.
+        func perform(
+            archiving context: ArchiveContext,
+            selection: Binding<SidebarSelection?>,
+            then: (Completion) -> Void
+        ) {
+            guard let workstreamID = target else { return }
+            target = nil
+
+            var projects = context.projects.wrappedValue
+            guard let index = projects.firstIndex(where: {
+                $0.workstreams.contains(where: { $0.id == workstreamID })
+            }) else { return }
+            let projectID = projects[index].id
+            Workstream.Archiver.remove(
+                workstreamID,
+                in: &projects[index],
+                surfaceCache: context.surfaceCache,
+                tmuxPath: context.tmuxPath,
+                verificationRunner: context.verificationRunner,
+                agentStateTracker: context.agentStateTracker
+            )
+            let nextWorkstreamID = projects[index].workstreams.first?.id
+            context.projects.wrappedValue = projects
+
+            selection.wrappedValue = Self.selectionAfterRemoving(
+                workstreamID,
+                from: selection.wrappedValue,
+                projectID: projectID,
+                nextWorkstreamID: nextWorkstreamID
+            )
+            then(Completion(workstreamID: workstreamID, projectID: projectID))
+        }
+
+        /// Where the selection lands once `workstreamID` is gone.
+        ///
+        /// Pure and static because `perform` proper cannot be driven under
+        /// XCTest — it reaches `Archiver.remove`, which needs a live
+        /// `TerminalSurfaceCache`, and nothing under `Tests/` can build one
+        /// without initializing libghostty. This is the half that had actually
+        /// gone wrong, so it is the half that gets a seam.
+        static func selectionAfterRemoving(
+            _ workstreamID: UUID,
+            from selection: SidebarSelection?,
+            projectID: UUID,
+            nextWorkstreamID: UUID?
+        ) -> SidebarSelection? {
+            // Anything else stands: removing a row from the context menu while
+            // looking at a different workstream, or at Settings, must not move
+            // the user.
+            guard case let .workstream(selected) = selection, selected == workstreamID else {
+                return selection
+            }
+            return nextWorkstreamID.map { .workstream($0) } ?? .project(projectID)
+        }
+    }
+
     /// The one owner of the *asking* half of Remove and Purge.
     ///
     /// `Archiver` owns `remove`, `purge` and `purgeOrphanWorktree`; it has never
@@ -54,37 +208,11 @@ extension Workstream {
             case orphanWorktree(path: String)
         }
 
-        /// Everything `perform` needs to reach `Archiver.purge`, assembled by the
-        /// view in its own body.
+        /// The context both confirmations pass to `Archiver`.
         ///
-        /// Passed in at perform time rather than stored on this object: a
-        /// `@StateObject`'s initializer runs once, so dependencies captured there
-        /// would be the ones that existed at first render — a stale `tmuxPath`
-        /// and, worse, a `Binding` into an array the view has since replaced.
-        /// Nil for a caller that can only ever hold an orphan target; a
-        /// `.workstream` target with no context is refused rather than
-        /// half-performed.
-        struct ArchiveContext {
-            var projects: Binding<[Project]>
-            var surfaceCache: TerminalSurfaceCache
-            var tmuxPath: String?
-            var verificationRunner: Verification.Runner
-            var agentStateTracker: Workstream.AgentStateTracker
-
-            init(
-                projects: Binding<[Project]>,
-                surfaceCache: TerminalSurfaceCache,
-                tmuxPath: String?,
-                verificationRunner: Verification.Runner,
-                agentStateTracker: Workstream.AgentStateTracker
-            ) {
-                self.projects = projects
-                self.surfaceCache = surfaceCache
-                self.tmuxPath = tmuxPath
-                self.verificationRunner = verificationRunner
-                self.agentStateTracker = agentStateTracker
-            }
-        }
+        /// Spelled here as well so `Workstream.PurgeConfirmation.ArchiveContext`
+        /// goes on resolving — `View.purgeConfirmationAlert` names it that way.
+        typealias ArchiveContext = Workstream.ArchiveContext
 
         /// The `Archiver` entry points `perform` reaches, injected so a test can
         /// observe that a refused purge called none of them.

@@ -154,7 +154,7 @@ struct ContentView: View {
     @ObservedObject private var agentStateTracker = Workstream.AgentStateTracker.shared
     @ObservedObject private var channelProbe = HookChannelProbe.shared
     @State private var saveWork: DispatchWorkItem?
-    @State private var workstreamToRemove: UUID?
+    @StateObject private var removeConfirmation = Workstream.RemoveConfirmation()
     /// The pending Purge, its warning and its alert copy. See
     /// `Workstream.PurgeConfirmation` — Remove stays a plain `UUID?` above
     /// because it has no warning, no button-title rule and no destroyable
@@ -311,7 +311,7 @@ struct ContentView: View {
             ProjectOverviewView(
                 project: $projectList.items[projectIndex],
                 onSelectWorkstream: { wsID in selection = .workstream(wsID) },
-                onRemoveWorkstream: { wsID in workstreamToRemove = wsID },
+                onRemoveWorkstream: { wsID in removeConfirmation.confirm(workstreamID: wsID) },
                 onPurgeWorkstream: { wsID in confirmPurge(wsID) },
                 onProjectChanged: {
                     ProjectStore.save(projects)
@@ -364,23 +364,19 @@ struct ContentView: View {
                 syncHeadWatcher(projects: newValue)
                 syncShortcutStoryIDs(projects: newValue)
             }
-            .alert(
-                "Remove Workstream",
-                isPresented: Binding(
-                    get: { workstreamToRemove != nil },
-                    set: {
-                        if !$0 {
-                            workstreamToRemove = nil
-                        }
-                    }
-                )
-            ) {
-                Button("Cancel", role: .cancel) { workstreamToRemove = nil }
-                Button("Remove", role: .destructive) {
-                    performRemove()
-                }
-            } message: {
-                Text("Ongoing terminals and Coding Agent sessions will be killed. The worktree and its files will remain on disk.")
+            .removeConfirmationAlert(
+                removeConfirmation,
+                archiving: Workstream.ArchiveContext(
+                    projects: $projectList.items,
+                    surfaceCache: surfaceCache,
+                    tmuxPath: appEnvironment.toolStatus.tmux.path,
+                    verificationRunner: verificationRunner,
+                    agentStateTracker: agentStateTracker
+                ),
+                selection: $selection
+            ) { _ in
+                ProjectStore.save(projects)
+                syncHeadWatcher(projects: projects)
             }
             .purgeConfirmationAlert(
                 purgeConfirmation,
@@ -1046,7 +1042,7 @@ struct ContentView: View {
             cycleProject(direction: -1)
         case .archiveWorkstream:
             if let wsID = selection?.workstreamID {
-                workstreamToRemove = wsID
+                removeConfirmation.confirm(workstreamID: wsID)
             }
         case let .purgeWorkstream(wsID):
             // A nil id means "the selected workstream", which is what the
@@ -1214,32 +1210,6 @@ struct ContentView: View {
     private func confirmPurge(_ wsID: UUID) {
         guard let ws = projects.flatMap(\.workstreams).first(where: { $0.id == wsID }) else { return }
         purgeConfirmation.confirm(workstream: ws)
-    }
-
-    private func performRemove() {
-        guard let wsID = workstreamToRemove,
-              let projectIndex = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
-        let projectID = projects[projectIndex].id
-        Workstream.Archiver.remove(wsID, in: &projects[projectIndex], surfaceCache: surfaceCache, tmuxPath: appEnvironment.toolStatus.tmux.path,
-                                   verificationRunner: verificationRunner, agentStateTracker: agentStateTracker)
-        ProjectStore.save(projects)
-        syncHeadWatcher(projects: projects)
-        // The selection has to move off the workstream that no longer exists,
-        // here as much as in `ProjectSidebar.performRemove` and the purge
-        // completion, which both already do it. Missing here, ⌘⇧W — and the
-        // menu's Archive Workstream, and the palette, none of which go through
-        // the sidebar — left `selection` naming a dead id: `activeProject`
-        // resolves nil for it and `detailView` falls through to
-        // `OnboardingView` beside a populated sidebar.
-        //
-        // `onChange(of: projectList.items)` cannot rescue this. `Project`'s
-        // `==` compares `id` only, so dropping a workstream from a project does
-        // not make the list unequal and the observer does not fire.
-        if case let .workstream(id) = selection, id == wsID {
-            selection = projects[projectIndex].workstreams.first.map { .workstream($0.id) }
-                ?? .project(projectID)
-        }
-        workstreamToRemove = nil
     }
 }
 
