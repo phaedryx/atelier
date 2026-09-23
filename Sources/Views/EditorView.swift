@@ -20,6 +20,17 @@ struct EditorView: View {
     /// existing call site is unaffected.
     var initialLine: () -> Int? = { nil }
     @Binding var isDirtyState: Bool
+    /// Whether this tab's Monaco model already holds its file's contents.
+    ///
+    /// A binding onto `WorkspaceModel.editorFileLoaded`, not `@State`, and that
+    /// is the whole of the fix for the edits this view used to discard. The
+    /// editor is a `@ViewBuilder` branch of `TerminalContainerView`, which is
+    /// `.id(workstreamID)`, so leaving the tab or the workstream destroys this
+    /// view: a `@State` flag came back `false`, `onAppear` read that as "never
+    /// loaded" and reloaded the file from disk over the model the user had been
+    /// typing into. The flag has to outlive the view, so it lives where the run
+    /// session's state lives — on the object the surface cache owns.
+    @Binding var isFileLoaded: Bool
     var onFileChanged: ((String?) -> Void)?
     var onExpandFolder: ((String) -> Void)?
     /// Incremented by the workspace when the user presses Cmd+P while this
@@ -28,7 +39,6 @@ struct EditorView: View {
 
     // Current file state
     @State private var currentFilePath: String?
-    @State private var fileLoaded = false
     @State private var loadError: String?
     @State private var filePathCopied = false
 
@@ -114,10 +124,26 @@ struct EditorView: View {
             }
         }
         .onAppear {
-            if let initialFilePath, currentFilePath == nil {
-                navigateToFile(initialFilePath)
-            } else if fileLoaded {
+            if isFileLoaded, let initialFilePath {
+                // This tab has been here before: its Monaco model already holds
+                // the file, unsaved edits and all. Attach to it rather than
+                // reading the file again — `loadFile` pushes disk contents
+                // through `openFile`, whose `setValue` replaces whatever the
+                // user had typed and resets the model's clean version, taking
+                // the dirty dot and the close prompt with it.
+                //
+                // `initialFilePath` is `editorFilePaths[id]`, which every
+                // navigation and Save As keeps current, so it is the path the
+                // model is holding. The `let` is load-bearing: Save As to a file
+                // outside the worktree removes that entry and detaches the
+                // editor, and there is nowhere durable to record an absolute
+                // path, so that case deliberately falls through to the
+                // do-nothing it has always had rather than attaching underneath
+                // the opaque "Select a file to edit" placeholder.
+                currentFilePath = initialFilePath
                 bridge.switchModel(modelId: modelId)
+            } else if let initialFilePath, currentFilePath == nil {
+                navigateToFile(initialFilePath)
             }
         }
         .onDisappear {
@@ -509,7 +535,7 @@ struct EditorView: View {
     }
 
     private func navigateToFile(_ relativePath: String) {
-        // Don't toggle fileLoaded — MonacoEditorView must stay in the tree.
+        // Don't toggle isFileLoaded — MonacoEditorView must stay in the tree.
         // Just clear errors and update the path; loadFile() will push new content.
         loadError = nil
         isDirtyState = false
@@ -539,7 +565,7 @@ struct EditorView: View {
                 line: initialLine()
             )
             isDirtyState = false
-            fileLoaded = true
+            isFileLoaded = true
             loadError = nil
         } catch {
             loadError = error.localizedDescription
@@ -577,7 +603,7 @@ struct EditorView: View {
     @discardableResult
     private func saveFile() async -> SaveOutcome {
         guard isDirty else { return .nothingToSave }
-        guard let relativePath = currentFilePath, fileLoaded else {
+        guard let relativePath = currentFilePath, isFileLoaded else {
             // Dirty with nowhere to write. Save As detaches the editor when
             // it writes outside the working directory (`editedPath` returns
             // nil), so a nil path is reachable; `isDirtyState` is a binding the
@@ -616,7 +642,7 @@ struct EditorView: View {
     }
 
     private func saveFileAs() async {
-        guard fileLoaded else { return }
+        guard isFileLoaded else { return }
         guard let content = await bridge.getContent(modelId: modelId) else { return }
 
         let panel = NSSavePanel()
