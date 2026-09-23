@@ -1107,6 +1107,26 @@ wins over detection — Atelier assigned it, so there is nothing to infer. Entri
 name before allocation, so an assigned port does not move because a YAML key was reordered.
 `assigned: false` is an error rather than a no-op, because it reads like it means something.
 
+**Two sets of names are refused, for different reasons, and neither is a reversal of the
+merge-over rule below.** Six `ATELIER_*` names Atelier sets per *workstream*
+(`ATELIER_WORKTREE_DIR` and friends) were the first; `ATELIER_SURFACE_ID`, `TMUX` and
+`TMUX_PANE`, which Atelier sets per *surface*, are the second. `ATELIER_PORT` stays
+declarable, which is the documented exception and the whole of it. What made the second set
+worth refusing is that a declaration lands **inconsistently**: the surface paths assign all
+three *after* the merge — `TerminalContainerView.envVars` and `terminalEnvVars`, and
+`WorkspaceActions.environment(for:surfaceID:)` — so the line is silently inert there, while
+`ProcessCompose.PhaseEnvironment.variables` returns the merged set unchanged, so the declared
+value reaches every verification check, every `initialization.yaml` step and `dispose`
+verbatim. One line meaning two different things depending on which surface reads it is worse
+than either outcome alone. `ATELIER_SURFACE_ID` is the one that costs where it lands:
+`IPC.TaskStore` keys **claim ownership** on it, so a wrong value is a task claim attributed to
+the wrong agent. **`PATH`, `HOME`, `SHELL`, `TMPDIR`, `USER` and `LOGNAME` are deliberately
+*not* reserved** — they fail loudly in the user's own terminal, and a footgun the user can see
+is different from one they cannot; `PATH` is separately protected on the spawned-child path by
+`PhaseEnvironment.childEnvironment`. Do not widen the list one name at a time: the better shape
+is a general rule (a declared name can only ever hold a port), and
+`testTheNamesDeliberatelyLeftUnreservedAreStillAccepted` pins the scope in that direction.
+
 **A newly created project starts with one**, all comments, via `Project.seedDefaultConfigs`
 (see **Seeded config templates** above) — it loads as "declares nothing", the ordinary state
 for a project without ports, where an uncommented example would claim a real port.
