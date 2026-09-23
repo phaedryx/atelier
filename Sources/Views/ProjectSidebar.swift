@@ -1102,11 +1102,17 @@ struct ProjectSidebar: View {
     // MARK: - Project management
 
     private func deleteProject(id: UUID) {
+        // Through `Archiver`, not a hand-rolled pair of cleanup calls: deleting
+        // a project ends every workstream in it, and this used to do only two
+        // of the ten things ending one involves. See `removeAllWorkstreams`.
         if let project = projects.first(where: { $0.id == id }) {
-            for ws in project.workstreams {
-                surfaceCache.removeWorkstreamSurfaces(for: ws.id)
-                agentStateTracker.clear(workstreamID: ws.id)
-            }
+            Workstream.Archiver.removeAllWorkstreams(
+                in: project,
+                surfaceCache: surfaceCache,
+                tmuxPath: appEnv.toolStatus.tmux.path,
+                verificationRunner: verificationRunner,
+                agentStateTracker: agentStateTracker
+            )
         }
         projects.removeAll { $0.id == id }
         // The cached (project, workstream) index pairs are positional, so they have to be

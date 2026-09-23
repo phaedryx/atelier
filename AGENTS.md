@@ -322,11 +322,40 @@ a decision spelled inline in a row body is one nothing can pin.
 | | `Archiver.remove` | `Archiver.purge` |
 |---|---|---|
 | Alert | "Remove Workstream" | "Purge Workstream" |
-| Reached by | ⌘⇧W, the menu's "Archive Workstream", the palette, the sidebar context menu's "Remove" | the sidebar context menu's "Purge", and the Purge button on `WorkstreamInfoView`'s merged-PR banner |
+| Reached by | ⌘⇧W, the menu's "Archive Workstream", the palette, the sidebar context menu's "Remove" — and, per workstream through `Archiver.removeAllWorkstreams`, the three paths that delete a whole project: the sidebar's Delete, the sweep that drops a project whose directory has gone, and Clear Projects | the sidebar context menu's "Purge", and the Purge button on `WorkstreamInfoView`'s merged-PR banner |
 | Runs `dispose`? | no | yes, before the worktree goes |
 | Files on disk | **kept** | `git worktree remove`, local branch deleted, default branch re-fetched |
-| Also | kills tmux sessions, evicts surfaces (including check terminals, via `Verification.Runner.forget` — nothing else can reach them), drops `IPC.Config` and the launch log, and clears the workstream's agent state (`Workstream.AgentStateTracker.clear`, passed in the way `Verification.Runner` is — it was copied into both call sites and a third archive path would forget it) | same, plus cancels a running initialization through `Initialization.Runner.cancel`, stops the dev stack, waits out running verification checks through `Verification.Runner.stopAndWait`, then `forget`s that workstream in the runner and drops the Execution checklist's selection key and the per-check verification records |
+| Also | kills tmux sessions, releases permission holds, evicts surfaces (including check terminals, via `Verification.Runner.forget` — nothing else can reach them) and the whiteboard host, releases project task claims, drops `IPC.Config`, the status-line settings file and the launch log, clears the initialization state entry, and clears the workstream's agent state | same, plus cancels a running initialization through `Initialization.Runner.cancel`, stops the dev stack, waits out running verification checks through `Verification.Runner.stopAndWait`, then `forget`s that workstream in the runner and drops the Execution checklist's selection key and the per-check verification records |
 | Guarded by | nothing — it destroys nothing | `purgeWarning` / `destroyableWorktreePath` |
+
+**The "plus" in that last row is structural, not a promise.**
+`Archiver.detachWorkstream` is the one synchronous main-actor tail both paths
+run — permission holds, the whiteboard host and directory, the surfaces, the
+task claims, `IPC.Config`, `StatusLine.Config`, the launch log, the workstream's
+removal from the project, and `AgentStateTracker.clear` last. It exists because
+the table was false for three of those steps: they were written into `remove`
+alone, so a purge left an agent stopped on a permission banner waiting out a
+deadline nothing would service, and leaked its mcp-config and `--settings` files
+into Caches for good. A step added to that function cannot go missing from the
+other path.
+
+Two things both paths run but at *different points*, so they stay at their own
+call sites rather than joining that tail: `Verification.Runner.forget`, which
+`purge` runs awaited and only after `quiesceVerification` has watched the checks
+actually die, and `Initialization.Runner.clearState`, which `purge` must run
+after `Initialization.Runner.cancel` writes its final `.cancelled` state.
+`clearWorkstreamState` is the one that is genuinely purge-only.
+
+And the three project-deletion paths are archive paths. Each used to do
+`removeWorkstreamSurfaces` and `AgentStateTracker.clear` and nothing else —
+leaving a running check's terminal and its process alive for the session, an
+offscreen `WKWebView` and its window per workstream, tmux sessions running, and
+every per-workstream file in Caches. They go through
+`Archiver.removeAllWorkstreams`, which takes the project **by value**: each
+caller deletes the project in the same breath, and writing back per workstream
+would publish the whole `@Published` list N times for a project about to leave
+it. Nothing in that path touches the project directory on disk, which is what
+makes it safe for the missing-directory sweep to call.
 
 The naming is not self-consistent and reading it as such is the trap: the *menu*
 says "Archive", its *alert* says "Remove", and the one that actually deletes work

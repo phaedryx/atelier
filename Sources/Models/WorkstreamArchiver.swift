@@ -71,6 +71,54 @@ extension Workstream {
             )
         }
 
+        /// Archive every workstream of a project that is itself about to be
+        /// dropped from the list.
+        ///
+        /// Three paths delete a project — the sidebar's Delete, the sweep that
+        /// drops projects whose directory has gone, and Clear Projects — and all
+        /// three used to do only `removeWorkstreamSurfaces` plus
+        /// `AgentStateTracker.clear`, skipping everything else `remove` does. A
+        /// running verification check kept its terminal and its process for the
+        /// session with nothing able to reach either, an offscreen `WKWebView`
+        /// and its window leaked per workstream, permission holds were never
+        /// released, tmux sessions were left running, and the mcp-config,
+        /// `--settings` and launch-log files stayed in Caches. AGENTS.md's own
+        /// warning next to `clearAgentState` is that "a third archive path would
+        /// forget it" — there were three.
+        ///
+        /// **By value, not `inout`.** Every caller deletes the project in the
+        /// same breath, so there is nothing to write back — and the callers hold
+        /// the list as a `Binding` onto a `@Published` array, where a write per
+        /// workstream would publish the whole list N times over, each one
+        /// re-running `onChange(of: projectList.items)`, for a project that is
+        /// about to leave it anyway.
+        ///
+        /// Nothing here touches the project directory on disk, which is what
+        /// makes it safe for the missing-directory sweep to call: the worktrees
+        /// are left exactly as `remove` leaves them.
+        @MainActor
+        static func removeAllWorkstreams(
+            in project: Project,
+            surfaceCache: TerminalSurfaceCache,
+            tmuxPath: String?,
+            verificationRunner: Verification.Runner? = nil,
+            agentStateTracker: Workstream.AgentStateTracker
+        ) {
+            var project = project
+            // Over a snapshot of the ids: `remove` drops each one from
+            // `project.workstreams` as it goes.
+            for workstreamID in project.workstreams.map(\.id) {
+                remove(
+                    workstreamID,
+                    in: &project,
+                    surfaceCache: surfaceCache,
+                    tmuxPath: tmuxPath,
+                    verificationRunner: verificationRunner,
+                    agentStateTracker: agentStateTracker
+                )
+            }
+        }
+
         /// Everything both archive paths do to end a workstream in the app,
         /// synchronously and on the main actor.
         ///

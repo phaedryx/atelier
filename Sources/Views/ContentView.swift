@@ -425,12 +425,20 @@ struct ContentView: View {
                 logger.warning("[Atelier] missingProjectIDs changed: \(missing.count, privacy: .public) missing, \(projects.count, privacy: .public) total projects")
                 let names = projects.filter { missing.contains($0.id) }.map(\.name)
                 logger.warning("[Atelier] removing projects: \(names, privacy: .public)")
+                // Through `Archiver`, not a hand-rolled pair of cleanup calls.
+                // The project's directory is gone, but its worktrees may be
+                // elsewhere and its checks, terminals and tmux sessions are
+                // certainly still running — `removeAllWorkstreams` is what ends
+                // them, and it touches nothing on disk.
                 for id in missing {
                     if let project = projects.first(where: { $0.id == id }) {
-                        for ws in project.workstreams {
-                            surfaceCache.removeWorkstreamSurfaces(for: ws.id)
-                            agentStateTracker.clear(workstreamID: ws.id)
-                        }
+                        Workstream.Archiver.removeAllWorkstreams(
+                            in: project,
+                            surfaceCache: surfaceCache,
+                            tmuxPath: appEnvironment.toolStatus.tmux.path,
+                            verificationRunner: verificationRunner,
+                            agentStateTracker: agentStateTracker
+                        )
                     }
                 }
                 projects.removeAll { missing.contains($0.id) }
@@ -1083,11 +1091,18 @@ struct ContentView: View {
     }
 
     private func clearProjects() {
+        // Through `Archiver`, for the reason the two paths above go through it:
+        // clearing the list ends every workstream in every project, and a
+        // hand-rolled pair of cleanup calls did two of the ten things that
+        // involves. See `removeAllWorkstreams`.
         for project in projects {
-            for ws in project.workstreams {
-                surfaceCache.removeWorkstreamSurfaces(for: ws.id)
-                agentStateTracker.clear(workstreamID: ws.id)
-            }
+            Workstream.Archiver.removeAllWorkstreams(
+                in: project,
+                surfaceCache: surfaceCache,
+                tmuxPath: appEnvironment.toolStatus.tmux.path,
+                verificationRunner: verificationRunner,
+                agentStateTracker: agentStateTracker
+            )
         }
         projects.removeAll()
         selectionBeforeSettings = nil
