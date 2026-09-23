@@ -86,6 +86,21 @@ api.openFile('B', 'foo contents', 'swift', '/w/foo.swift', null)
 check('a later tab opening foo.swift sees foo', editorState.model.getValue() === 'foo contents', editorState.model.getValue())
 check('...and not a disposed model', !editorState.model.disposed)
 
+// --- B2c: one model per FILE must survive a navigation ---
+// The dedupe exists so the TypeScript worker sees one model per file. A
+// navigation used to break that without creating a duplicate Uri, which is why
+// it went unnoticed: tab A's model kept `foo.swift`'s Uri while holding bar's
+// text, so a tab opening bar.swift found no `fileModels` entry for it and made
+// a SECOND model — two models carrying bar's source, one of them registered to
+// the worker under foo.swift's name.
+console.log('B2c: one model per file across a navigation')
+api.openFile('N1', 'foo text', 'swift', '/w/n-foo.swift', null)
+api.openFile('N1', 'bar text', 'swift', '/w/n-bar.swift', null)
+const navigated = editorState.model
+api.openFile('N2', 'bar text', 'swift', '/w/n-bar.swift', null)
+check('a tab opening the navigated-to file shares its model', editorState.model === navigated)
+check('...and that model names the file it holds', navigated.uri.toString() === 'file:///w/n-bar.swift')
+
 // --- B2b: a model another tab still holds must survive a navigation ---
 console.log('B2b: shared model survives one holder navigating away')
 api.openFile('C', 'shared contents', 'swift', '/w/shared.swift', null)
