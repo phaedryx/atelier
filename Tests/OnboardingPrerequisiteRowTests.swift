@@ -9,10 +9,16 @@ final class OnboardingPrerequisiteRowTests: XCTestCase {
     /// Regression for the bug this replaces. `ToolRow` was fixed to branch on
     /// `isAuthenticated`; the onboarding row was not, and went on computing
     /// `detail != "Not authenticated"` — so rewording or localizing that phrase
-    /// turned the dot green for a `gh` that is not authenticated. Both rows now
-    /// resolve the colour through the one pure function, so a row whose
-    /// `detail` literally reads "Not authenticated" while the flag is true —
-    /// and the reverse — comes out of the flag alone.
+    /// turned the dot green for a `gh` that is not authenticated.
+    ///
+    /// What this pins is narrow, and worth stating rather than overclaiming:
+    /// that the row *carries* the flag independently of the wording of
+    /// `detail`. What actually keeps the two rows from diverging again is
+    /// structural — the body resolves the colour through the one shared
+    /// `ToolRow.authenticationDotColor` instead of deciding for itself — and a
+    /// body that went back to comparing the string would still pass here.
+    /// Pinning that would need to inspect the rendered view, which this suite
+    /// has no way to do.
     func test_dotColor_ignoresDetailWording_followsFlagInstead() {
         let authenticatedButOldSentinelWording = PrerequisiteRow(
             name: "gh",
