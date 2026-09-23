@@ -1038,7 +1038,15 @@ struct TerminalContainerView: View {
                 workstreamName: workstreamName,
                 worktreePath: workingDirectory,
                 projectDirectory: projectDirectory,
-                defaultBranch: Git.Operations.defaultBranch(at: workingDirectory),
+                // The resolved `@State`, not a fresh probe. Resolving here ran
+                // up to six sequential git spawns on the main actor inside a
+                // button handler — and against the *worktree* path, so
+                // `Git.Operations`' per-directory cache missed once per
+                // worktree instead of once per repository. The `.task` above
+                // already resolves this through `AppEnvironment.defaultBranch`,
+                // which is the route AGENTS.md requires of a `@MainActor`
+                // caller, and `verificationTarget` reads the same copy.
+                defaultBranch: defaultBranch,
                 checks: [name]
             )
         } catch {
@@ -1453,8 +1461,19 @@ struct TerminalContainerView: View {
     /// `ProcessCompose.RunSession.closingTabStopsRun`.
     private func startRunIfNeeded() {
         guard sessionMode != .waitingForTools, !appEnv.isDetecting else { return }
+        // Asked before the port status, because the port status cannot answer
+        // it. `Port.Status` stays `.none` whenever `RunLauncher.executableURL()`
+        // is nil — the missing-helper state the Execution tab already warns
+        // about — and for the whole window before `atelier-run` writes its first
+        // snapshot. So a live run reads as "nothing is serving this", and every
+        // New Browser killed the dev stack and relaunched it.
+        guard !session.runStarted else { return }
         guard portDetector.status == .none else { return }
-        restartRun()
+        // `startRun`, not `restartRun`: with a run already excluded the two are
+        // the same call — `RunSession.restart` only stops what is running — and
+        // naming the one that can happen is what keeps a reader from concluding
+        // this path is allowed to stop a run.
+        startRun()
     }
 
     /// The cheap half of `restore`'s preconditions, asked before the expensive
@@ -1721,7 +1740,12 @@ struct TerminalContainerView: View {
     }
 
     private func confirmCloseEditor(tab: WorkspaceTab, id: UUID) {
-        let fileName = (model.editorFilePaths[id] as? NSString)?.lastPathComponent ?? "file"
+        // The fallback is localized and the expression stays a `String`: it is
+        // substituted into the `%@` of the `NSLocalizedString` format below, so
+        // the surrounding sentence was already localized and this was the one
+        // unlocalized half of it.
+        let fileName = (model.editorFilePaths[id] as? NSString)?.lastPathComponent
+            ?? NSLocalizedString("file", comment: "Stand-in for a file name in the unsaved-changes alert")
         let alert = NSAlert()
         alert.messageText = String(
             format: NSLocalizedString("Do you want to save changes to \"%@\"?", comment: ""),
@@ -1913,7 +1937,11 @@ struct TerminalContainerView: View {
         }
     }
 
-    private func terminalLoadingView(message: String) -> some View {
+    /// `LocalizedStringKey`, not `String`: a `String` binds `Text`'s
+    /// `StringProtocol` overload, which renders verbatim, so the three literals
+    /// the call sites pass never reached the strings file however they were
+    /// spelled there.
+    private func terminalLoadingView(message: LocalizedStringKey) -> some View {
         VStack(spacing: 12) {
             ProgressView()
                 .controlSize(.regular)
@@ -2093,16 +2121,30 @@ private struct GitHubActionMenu: View {
     let hasGitHubRemote: Bool
     let branchPR: GitHub.PR?
 
-    private var prState: String? {
-        branchPR?.state
+    /// Read through `GitHub.PR.status`, never off `state` — the raw string is
+    /// case-sensitive where `status` folds case, and folding `isDraft` in is
+    /// what stops a draft being answered as an ordinary open PR anywhere it
+    /// matters. `PRStatusBadge` already takes the colour and symbol from it.
+    private var prStatus: GitHub.PR.Status? {
+        branchPR?.status
     }
 
+    /// A draft counts, deliberately: it is open, and the work it needs next —
+    /// commit, push — is the work an open PR needs. Only the *badge* draws the
+    /// two differently, which is the distinction `GitHubPRStatusStyle` exists
+    /// for.
     private var hasOpenPR: Bool {
-        prState == "OPEN"
+        prStatus == .open || prStatus == .draft
     }
 
     private var isMerged: Bool {
-        prState == "MERGED"
+        prStatus == .merged
+    }
+
+    /// Whether this branch has no pull request at all, which is what gates
+    /// Create PR — distinct from having one that is closed or merged.
+    private var hasNoPR: Bool {
+        branchPR == nil
     }
 
     /// The most relevant next action to move the workflow forward.
@@ -2126,7 +2168,7 @@ private struct GitHubActionMenu: View {
                 return .push
             }
         }
-        if prState == nil, hasGitHubRemote, worktreeState.hasBranchCommits {
+        if hasNoPR, hasGitHubRemote, worktreeState.hasBranchCommits {
             return .createPR
         }
         if worktreeState.hasUncommittedChanges {
@@ -2149,7 +2191,7 @@ private struct GitHubActionMenu: View {
         if worktreeState.hasUnpushedCommits, worktreeState.hasRemote {
             actions.append(.push)
         }
-        if prState == nil, hasGitHubRemote, worktreeState.hasBranchCommits {
+        if hasNoPR, hasGitHubRemote, worktreeState.hasBranchCommits {
             actions.append(.createPR)
         }
         if hasOpenPR {
@@ -2562,11 +2604,11 @@ final class TerminalSurfaceCache: ObservableObject {
 
     func surface(for id: UUID, app: ghostty_app_t, workingDirectory: String, command: String? = nil, initialInput: String? = nil, environmentVars: [String: String] = [:]) -> TerminalView {
         if let existing = surfaces[id] {
-            existing.workstreamID = id
+            register(existing, as: id)
             return existing
         }
         let view = TerminalView(app: app, workingDirectory: workingDirectory, command: command, initialInput: initialInput, environmentVars: environmentVars)
-        view.workstreamID = id
+        register(view, as: id)
         surfaces[id] = view
         surfaceParams[id] = SurfaceParams(workingDirectory: workingDirectory, command: command, initialInput: initialInput, environmentVars: environmentVars)
         if view.surface == nil {
@@ -2653,7 +2695,7 @@ final class TerminalSurfaceCache: ObservableObject {
         {
             return existing
         }
-        if let stale = surfaces[id] {
+        if surfaces[id] != nil {
             logger.info("Replacing surface \(id) — command changed")
             respawnableIDs.remove(id)
             removeSurface(for: id)
@@ -2666,6 +2708,40 @@ final class TerminalSurfaceCache: ObservableObject {
             initialInput: initialInput,
             environmentVars: environmentVars
         )
+    }
+
+    /// Gives a freshly made view its surface id and its activity resolution.
+    ///
+    /// One call rather than two assignments at each of the three construction
+    /// sites, because the pair must not drift: a view whose `workstreamID` is
+    /// set but whose owner is not posts activity that both receivers drop.
+    private func register(_ view: TerminalView, as id: UUID) {
+        view.workstreamID = id
+        view.activityOwner = { [weak self] in self?.workstreamID(owningSurface: id) }
+    }
+
+    /// The workstream that owns `surfaceID`, or nil if nothing here claims it.
+    ///
+    /// Asked at the moment activity is reported rather than recorded when the
+    /// surface is made, because the caller that made it need not know: three of
+    /// the four creation paths are outside this file, and `open_agent_tab`'s is
+    /// outside any view. A surface id is `derivedUUID(from:salt:)` of its
+    /// workstream's and cannot be inverted, so the three things that hold one
+    /// are asked instead — a workstream's own id is its Coding Agent surface, a
+    /// terminal tab names its surface, and a run session names the generation it
+    /// is on. A verification check's surface is deliberately unclaimed: it is
+    /// read-only, so `keyDown` returns before reporting anything.
+    func workstreamID(owningSurface surfaceID: UUID) -> UUID? {
+        if workspaceModels[surfaceID] != nil {
+            return surfaceID
+        }
+        if let owner = workspaceModels.first(where: { $0.value.tabs.contains(.terminal(surfaceID)) }) {
+            return owner.key
+        }
+        if let owner = runSessions.first(where: { $0.value.runID == surfaceID }) {
+            return owner.key
+        }
+        return nil
     }
 
     /// The surfaces that currently exist. Feeds `WorkspaceModel.reconcile`, which
@@ -2684,7 +2760,7 @@ final class TerminalSurfaceCache: ObservableObject {
         }
         failedSurfaces.removeValue(forKey: id)
         let view = TerminalView(app: app, workingDirectory: params.workingDirectory, command: params.command, initialInput: params.initialInput, environmentVars: params.environmentVars)
-        view.workstreamID = id
+        register(view, as: id)
         surfaces[id] = view
         if view.surface == nil {
             logger.error("Surface retry failed for \(id)")
@@ -2959,7 +3035,7 @@ final class TerminalSurfaceCache: ObservableObject {
                 oldView.destroy()
             }
             let newView = TerminalView(app: app, workingDirectory: params.workingDirectory, command: params.command, initialInput: params.initialInput, environmentVars: params.environmentVars)
-            newView.workstreamID = id
+            register(newView, as: id)
             surfaces[id] = newView
             respawning.remove(id)
             if newView.surface == nil {

@@ -719,3 +719,13 @@
    the user through the save prompt ("Do you want to save changes to ...?") and
    as the Save As panel's default name. */
 "file" = "file";
+
+/* Terminal container - loading states while tools are detected and the agent is spawned */
+"Checking terminal tools..." = "Checking terminal tools...";
+"Preparing Coding Agent..." = "Preparing Coding Agent...";
+/* Terminal container - a surface whose process could not be started */
+"Terminal failed to start" = "Terminal failed to start";
+/* Terminal container - stand-in for a file name in the unsaved-changes alert */
+"file" = "file";
+/* Terminal - desktop notification body when a terminal rings the bell */
+"Terminal bell" = "Terminal bell";

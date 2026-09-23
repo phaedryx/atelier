@@ -57,7 +57,23 @@ final class TerminalView: NSView {
     /// the registry's — the clipboard callbacks reach the main thread
     /// synchronously, so nothing can free the surface underneath them.
     private(set) nonisolated(unsafe) var surface: ghostty_surface_t?
+    /// The id of the *surface* this view hosts, which is the workstream's id
+    /// only for the Coding Agent tab — every other surface is derived from it.
+    ///
+    /// `.terminalTitleChanged` posts this value and its receiver keys tab titles
+    /// by surface id, so the field has to keep meaning that. Activity needs the
+    /// *workstream*, which is what `activityOwner` is for.
     var workstreamID: UUID?
+    /// Resolves the workstream that owns this surface, for `.terminalActivity`.
+    ///
+    /// Set by `TerminalSurfaceCache`, which is the only thing that makes a
+    /// `TerminalView` and the only thing that can answer the question: a surface
+    /// id is derived from its workstream's (`derivedUUID`) and cannot be
+    /// inverted. Both receivers of `.terminalActivity` key by *workstream* id —
+    /// the sidebar's Recent ordering and the container's worktree-state
+    /// refresh — so posting `workstreamID` matched nothing but the Coding Agent
+    /// tab, and an hour's work in a terminal tab moved nothing.
+    var activityOwner: (@MainActor () -> UUID?)?
     /// Last logical (point) size reported to the surface. Stored so
     /// `viewDidChangeBackingProperties` can re-report the correct framebuffer
     /// size after a scale factor change.
@@ -414,10 +430,15 @@ final class TerminalView: NSView {
     }
 
     /// Debounced activity notification (at most once per 30 seconds).
+    ///
+    /// Posts the *workstream* id. The surface id stands in when `activityOwner`
+    /// claims nothing, which is the state the two receivers already ignore — and
+    /// it is what keeps the Coding Agent surface reporting before its workstream
+    /// has a model, since there the two ids are the same one.
     private func reportActivity() {
-        guard let workstreamID else { return }
+        guard let target = activityOwner?() ?? workstreamID else { return }
         guard activityDebounceWork == nil else { return }
-        NotificationCenter.default.post(name: .terminalActivity, object: workstreamID)
+        NotificationCenter.default.post(name: .terminalActivity, object: target)
         let work = DispatchWorkItem { [weak self] in
             self?.activityDebounceWork = nil
         }

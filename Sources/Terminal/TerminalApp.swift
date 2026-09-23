@@ -91,7 +91,15 @@ private func handleTerminalAction(
         sendDesktopNotification(title: title, body: body, suppressWhenActive: false)
         return true
     case GHOSTTY_ACTION_RING_BELL:
-        sendDesktopNotification(title: AppConstants.appName, body: "Terminal bell", suppressWhenActive: true)
+        // `NSLocalizedString`, not a bare literal: `body` is a `String` handed
+        // to `UNMutableNotificationContent`, which is AppKit-side and has no
+        // `LocalizedStringKey` to resolve it — the rule AGENTS.md's
+        // Localization section states for every non-SwiftUI API.
+        sendDesktopNotification(
+            title: AppConstants.appName,
+            body: NSLocalizedString("Terminal bell", comment: "Desktop notification body when a terminal rings the bell"),
+            suppressWhenActive: true
+        )
         return true
     default:
         return false
