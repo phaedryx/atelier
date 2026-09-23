@@ -2554,11 +2554,11 @@ final class TerminalSurfaceCache: ObservableObject {
 
     func surface(for id: UUID, app: ghostty_app_t, workingDirectory: String, command: String? = nil, initialInput: String? = nil, environmentVars: [String: String] = [:]) -> TerminalView {
         if let existing = surfaces[id] {
-            existing.workstreamID = id
+            register(existing, as: id)
             return existing
         }
         let view = TerminalView(app: app, workingDirectory: workingDirectory, command: command, initialInput: initialInput, environmentVars: environmentVars)
-        view.workstreamID = id
+        register(view, as: id)
         surfaces[id] = view
         surfaceParams[id] = SurfaceParams(workingDirectory: workingDirectory, command: command, initialInput: initialInput, environmentVars: environmentVars)
         if view.surface == nil {
@@ -2660,6 +2660,40 @@ final class TerminalSurfaceCache: ObservableObject {
         )
     }
 
+    /// Gives a freshly made view its surface id and its activity resolution.
+    ///
+    /// One call rather than two assignments at each of the three construction
+    /// sites, because the pair must not drift: a view whose `workstreamID` is
+    /// set but whose owner is not posts activity that both receivers drop.
+    private func register(_ view: TerminalView, as id: UUID) {
+        view.workstreamID = id
+        view.activityOwner = { [weak self] in self?.workstreamID(owningSurface: id) }
+    }
+
+    /// The workstream that owns `surfaceID`, or nil if nothing here claims it.
+    ///
+    /// Asked at the moment activity is reported rather than recorded when the
+    /// surface is made, because the caller that made it need not know: three of
+    /// the four creation paths are outside this file, and `open_agent_tab`'s is
+    /// outside any view. A surface id is `derivedUUID(from:salt:)` of its
+    /// workstream's and cannot be inverted, so the three things that hold one
+    /// are asked instead — a workstream's own id is its Coding Agent surface, a
+    /// terminal tab names its surface, and a run session names the generation it
+    /// is on. A verification check's surface is deliberately unclaimed: it is
+    /// read-only, so `keyDown` returns before reporting anything.
+    func workstreamID(owningSurface surfaceID: UUID) -> UUID? {
+        if workspaceModels[surfaceID] != nil {
+            return surfaceID
+        }
+        if let owner = workspaceModels.first(where: { $0.value.tabs.contains(.terminal(surfaceID)) }) {
+            return owner.key
+        }
+        if let owner = runSessions.first(where: { $0.value.runID == surfaceID }) {
+            return owner.key
+        }
+        return nil
+    }
+
     /// The surfaces that currently exist. Feeds `WorkspaceModel.reconcile`, which
     /// drops terminal tabs whose surface is gone.
     func liveSurfaceIDs() -> Set<UUID> {
@@ -2676,7 +2710,7 @@ final class TerminalSurfaceCache: ObservableObject {
         }
         failedSurfaces.removeValue(forKey: id)
         let view = TerminalView(app: app, workingDirectory: params.workingDirectory, command: params.command, initialInput: params.initialInput, environmentVars: params.environmentVars)
-        view.workstreamID = id
+        register(view, as: id)
         surfaces[id] = view
         if view.surface == nil {
             logger.error("Surface retry failed for \(id)")
@@ -2951,7 +2985,7 @@ final class TerminalSurfaceCache: ObservableObject {
                 oldView.destroy()
             }
             let newView = TerminalView(app: app, workingDirectory: params.workingDirectory, command: params.command, initialInput: params.initialInput, environmentVars: params.environmentVars)
-            newView.workstreamID = id
+            register(newView, as: id)
             surfaces[id] = newView
             respawning.remove(id)
             if newView.surface == nil {

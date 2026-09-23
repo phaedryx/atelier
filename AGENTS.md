@@ -179,6 +179,20 @@ it receives only the `X.Y.Z` core; the suffix naming the commit rides on
 - **Projects/workstreams** stored in UserDefaults (`atelier.projects`), accessed via `ProjectStore`. Wrapped in `ProjectList: ObservableObject` for reference-type semantics.
 - **Settings** use `@AppStorage` (UserDefaults), keyed as `atelier.*`
 - **Terminal surfaces** cached in `TerminalSurfaceCache` (keyed by UUID)
+- **`TerminalView.workstreamID` is a *surface* id**, and only the Coding Agent tab's is also a
+  workstream id — every other surface is `derivedUUID(from: workstreamID, salt:)`.
+  `.terminalTitleChanged` posts that field and its receiver keys tab titles by surface id, so the
+  name is wrong and the meaning is load-bearing: do not repurpose it. `.terminalActivity` needs the
+  other thing, because **both** its receivers key by workstream id — `ProjectSidebar`'s Recent
+  ordering and `TerminalContainerView`'s worktree-state refresh — so posting the field meant
+  nothing but the Coding Agent tab ever counted as activity, and an hour's work in a terminal tab
+  moved no row and refreshed no quick-action state. `TerminalSurfaceCache.workstreamID(owningSurface:)`
+  resolves it at post time, through `TerminalView.activityOwner`, and resolving *there* rather than
+  recording an owner at creation is what makes it hold for surfaces this file does not create —
+  `open_agent_tab`'s terminal tab has no view at all. A derivation cannot be inverted, so it asks the
+  three things that hold a surface: a workstream's own id, a terminal tab, and a run session's
+  current generation. An unclaimed surface falls back to the surface id, which is what the receivers
+  already ignore — and is what keeps the agent surface reporting before its `WorkspaceModel` exists.
 - **Git repo info** cached in `AppEnvironment`, refreshed async every 15s
 - **What is known about a worktree is one value, `Worktree.Facts`**, keyed by worktree path
   and read through `AppEnvironment.facts(for:)`. It replaced five path-keyed dictionaries —
