@@ -254,14 +254,84 @@ final class IPCToolRegistryTests: XCTestCase {
     }
 
     /// One list parser now, where there were three byte-identical copies.
-    /// `VerificationSummary.checks(from:)` and `TaskSummary.tags(from:)` are the
-    /// other two entry points and both call this one.
+    /// `VerificationSummary.checks(from:)` and `TaskSummary.tags(from:)` were
+    /// the other two entry points; once they became one-line delegations with no
+    /// production caller they were deleted, and their tests moved onto the
+    /// reader their tools really use.
     func test_listParsingIsOneImplementation() {
         let arguments = IPC.ToolArguments(tool: .startVerification, raw: ["checks": #"["rspec", "rubocop", "rspec"]"#])
         XCTAssertEqual(arguments.list("checks"), ["rspec", "rubocop"])
-        XCTAssertEqual(IPC.VerificationSummary.checks(from: #"["rspec", "rubocop", "rspec"]"#), ["rspec", "rubocop"])
-        XCTAssertEqual(IPC.TaskSummary.tags(from: #"["rspec", "rubocop", "rspec"]"#), ["rspec", "rubocop"])
         XCTAssertEqual(arguments.list("absent"), [])
+    }
+
+    // MARK: - The JSON boundary
+
+    /// Decodes an arguments object the way the helper's `tools/call` arm does,
+    /// so these assert against the exact Foundation types `JSONSerialization`
+    /// produces rather than against Swift literals that merely look alike. The
+    /// bug being pinned *is* a bridging fact — `__NSCFBoolean` renders as "1"
+    /// through `String(describing:)` — and a hand-built `[String: Any]` of Swift
+    /// values would not reproduce it.
+    private func coerced(_ json: String) throws -> [String: String] {
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any]
+        )
+        return IPC.ToolArguments.strings(fromJSON: object)
+    }
+
+    /// A real JSON boolean reached `boolean(_:)` as "1" and was refused,
+    /// reporting the agent's own `true` back to it as `received "1"`.
+    func test_aJSONBoolean_readsAsTheFlagTheAgentMeant() throws {
+        let arguments = try coerced(#"{"bypass_permissions": true, "quiet": false}"#)
+        XCTAssertEqual(arguments["bypass_permissions"], "true")
+        XCTAssertEqual(arguments["quiet"], "false")
+
+        let typed = IPC.ToolArguments(tool: .createWorkstream, raw: arguments)
+        XCTAssertTrue(try typed.boolean("bypass_permissions"))
+        XCTAssertFalse(try typed.boolean("quiet"))
+    }
+
+    /// `NSNumber`'s boolean-ness is a CoreFoundation type id, not `is Bool`,
+    /// which answers true for `NSNumber(1)` as well — so the check that spells
+    /// `true` must not also spell `tail: 1` as `"true"`.
+    func test_aJSONNumber_isNotMistakenForAFlag() throws {
+        let arguments = try coerced(#"{"tail": 1, "zero": 0, "fraction": 2.5}"#)
+        XCTAssertEqual(arguments["tail"], "1")
+        XCTAssertEqual(arguments["zero"], "0")
+        XCTAssertEqual(arguments["fraction"], "2.5")
+        XCTAssertEqual(try IPC.ToolArguments(tool: .readProcessLogs, raw: arguments).integer("tail"), 1)
+    }
+
+    /// `NSArray`'s description is `"(\n    rspec,\n    rubocop\n)"`, and
+    /// `parseList` splits on `,[]"'` but not on parentheses — so a real JSON
+    /// array reached the runner as `["(", "rspec", ")"]` and was refused for an
+    /// undeclared check named `(`.
+    func test_aJSONArray_readsAsTheListTheAgentMeant() throws {
+        let arguments = try coerced(#"{"checks": ["rspec", "rubocop"]}"#)
+        XCTAssertEqual(IPC.ToolArguments(tool: .startVerification, raw: arguments).list("checks"), ["rspec", "rubocop"])
+        XCTAssertFalse(arguments["checks"]?.contains("(") ?? true, "the NSArray description leaked: \(arguments)")
+    }
+
+    /// Elements go through the same rules, so a mixed array does not reacquire
+    /// the bug one level down.
+    func test_arrayElements_areRenderedByTheSameRules() throws {
+        let arguments = try coerced(#"{"tags": [1, true, "audit", null]}"#)
+        XCTAssertEqual(IPC.ToolArguments(tool: .addTask, raw: arguments).list("tags"), ["1", "true", "audit"])
+    }
+
+    /// `null` became the literal "<null>", so `line: null` was refused as
+    /// "expected a whole number, got <null>". A null argument means absent, and
+    /// every optional read here already treats absent and empty alike.
+    func test_aJSONNull_isDroppedRatherThanSpelled() throws {
+        let arguments = try coerced(#"{"path": "a/b", "line": null}"#)
+        XCTAssertNil(arguments["line"])
+        XCTAssertEqual(arguments["path"], "a/b")
+        XCTAssertNil(try IPC.ToolArguments(tool: .openEditor, raw: arguments).integer("line"))
+    }
+
+    /// Strings are untouched, which is the whole of what used to work.
+    func test_aJSONString_isUnchanged() throws {
+        XCTAssertEqual(try coerced(#"{"content": "hello, world"}"#)["content"], "hello, world")
     }
 
     // MARK: - Shared vocabulary

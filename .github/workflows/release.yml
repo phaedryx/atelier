@@ -262,6 +262,16 @@ jobs:
           # gets "Atelier is damaged" needs this before the commit list, not
           # under it.
           BODY=$(gh release view "$TAG_NAME" --json body -q .body)
+
+          # A re-run of a partially failed workflow reaches this step against a
+          # body that already carries the note, and an unguarded prepend stacks
+          # a second copy. The marker is a sentence from the note itself rather
+          # than a hidden comment, so it cannot drift away from what is written
+          # below: change that sentence and you must change this one.
+          if printf '%s' "$BODY" | grep -qF 'This build is not notarized.'; then
+            echo "The release body already carries the unsigned-build note; leaving it alone."
+            exit 0
+          fi
           NOTE=$(cat <<'MARKDOWN'
           > **Apple Silicon only.** This DMG is an arm64 build. It will not run
           > on an Intel Mac, even though the deployment target (macOS 14) is one

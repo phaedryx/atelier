@@ -62,7 +62,7 @@ extension IPC {
 
         func executionState(in workstreamID: UUID) async throws -> ExecutionInfo {
             let target = try target(workstreamID)
-            let resolved = resolution(target)
+            let resolved = await resolved(for: target)
             let session = runSession(workstreamID)
             let state = Self.state(
                 plan: resolved.plan,
@@ -146,8 +146,11 @@ extension IPC {
             // would be a press that did nothing at all.
             guard !session.isReclaimingSocket else { throw ExecutionFailure.startInFlight }
 
-            let resolved = resolution(target)
+            let resolved = await resolved(for: target)
             let scope = processes.isEmpty ? nil : processes
+            if let scope, let unknown = Self.undeclared(scope, in: resolved), !unknown.isEmpty {
+                throw ExecutionFailure.unknownProcesses(unknown, declared: resolved.declaredExecuteProcesses)
+            }
             guard let context = ProcessCompose.StartContextResolver.context(
                 resolution: resolved,
                 inputs: Self.inputs(for: target),
@@ -201,6 +204,69 @@ extension IPC {
                     "This workstream runs the user's own dev command, which has no process manager."
                 )
             }
+        }
+
+        /// The resolution, off the main actor.
+        ///
+        /// `ProcessCompose.ResolutionModel.resolve` locates and parses
+        /// `execution.process-compose.yaml` and probes three directories for the
+        /// process-compose binary — file IO, and `ResolutionModel` is already
+        /// built to run off the main actor for exactly that reason (its own first
+        /// pass is the only synchronous one, and only because a pane with nothing
+        /// resolved is not neutral). This type is `@MainActor` because
+        /// `ProcessCompose.RunSession` and the target lookup are, so calling the
+        /// closure inline ran that IO on the main thread — once per
+        /// `list_processes`, and twice per `read_process_logs` or `*_process`,
+        /// since `requireProcessTable` reads the state again before every one.
+        /// An agent polling the process table is not a reason to stall the UI.
+        ///
+        /// The seam is already `@Sendable` and `ExecutionTarget` is `Sendable`,
+        /// so the hop costs nothing but the suspension.
+        private func resolved(for target: WorkspaceActions.ExecutionTarget) async -> ProcessCompose.Resolution {
+            let resolution = resolution
+            // `.userInitiated` because an agent is blocked on the reply, the
+            // same priority `ProcessCompose.ResolutionModel.refresh` gives its
+            // own off-main pass and `AppEnvironment.defaultBranch(for:)` gives
+            // its detached probe.
+            return await Task.detached(priority: .userInitiated) { resolution(target) }.value
+        }
+
+        /// The names in `scope` this config does not declare, or nil when the
+        /// question cannot honestly be asked.
+        ///
+        /// Ordered **after** the plan is resolved and **before** the context is
+        /// built, and both halves of that matter:
+        ///
+        /// - Nil for anything but `.phaseScoped`. A `.literal` plan is the user's
+        ///   own typed dev command, which has no namespace and no process names;
+        ///   a `.nothing` plan has no run at all, and the honest answer there is
+        ///   `startUnavailableReason` through the existing `nothingToRun` path,
+        ///   not "no such process".
+        /// - Nil for a `.phaseScoped` plan that declares nothing, which is
+        ///   reachable only for a config Yams could not decode —
+        ///   `RunCommandPlan` turns a genuinely `.empty` execute namespace into
+        ///   `.nothing`. Refusing there would report "this project declares:
+        ///   nothing" as a fact about the user's file when what actually happened
+        ///   is that Atelier could not read it.
+        ///
+        /// `declaredExecuteProcesses` is already `runnableProcesses`-filtered, so
+        /// membership subsumes the flag-shaped-name check too: a `-web` is
+        /// refused *as undeclared* rather than silently filtered out and then
+        /// reported as an empty checklist, which is what the `nothingToRun`
+        /// fallback used to say for a start nobody's checklist was involved in.
+        ///
+        /// **This is not the checklist gate moving into the plan.** The selection
+        /// store is untouched here and `RunCommandPlan` is not consulted for it —
+        /// this asks only whether the names the *caller* supplied exist, which is
+        /// the same question `Verification.Runner.start` asks of a check name.
+        /// `nonisolated` because it is pure — this type is `@MainActor` only
+        /// because the run session and the target lookup are, and a question
+        /// about two lists needs neither.
+        nonisolated static func undeclared(_ scope: [String], in resolution: ProcessCompose.Resolution) -> [String]? {
+            guard case .phaseScoped = resolution.plan else { return nil }
+            let declared = Set(resolution.declaredExecuteProcesses)
+            guard !declared.isEmpty else { return nil }
+            return scope.filter { !declared.contains($0) }
         }
 
         /// The run's environment and wrapping, from the target alone.

@@ -482,7 +482,30 @@ extension Workstream {
             let now = Date()
             var list = rosters[wsID] ?? []
 
-            func upsert(_ agentId: String, name: String? = nil, isMain: Bool = true, mutate: (inout AgentRun) -> Void = { _ in }) {
+            // **`isMain` is derived, not defaulted.** It used to default to `true`,
+            // and two of the three call sites below took that default — so a
+            // subagent whose `SubagentStart` never arrived was minted as a *main*
+            // agent by its first tool event. That loss is ordinary rather than
+            // exotic: `atelier-hook` posts with `curl --max-time 1` and drops
+            // silently by design, so any hook event can simply not arrive.
+            //
+            // The consequences were all silent. `isMain` is a `let`, so the late
+            // `SubagentStart` could only refine the *name* — the run stayed main
+            // for the rest of its life. Two runs called "Claude" then sorted first
+            // in the sidebar, and `sweepForStalls` painted the whole row `.stalled`
+            // off a subagent going quiet, which is exactly the delegation case the
+            // sweep is written to leave alone.
+            //
+            // The override survives for `.agentCreated`, which knows a created run
+            // is a subagent whatever its id: the mapper's `isSubagent` guard means
+            // production can never send one called "main", and stating it here
+            // keeps that independent of the mapper.
+            func upsert(
+                _ agentId: String,
+                name: String? = nil,
+                isMain: Bool? = nil,
+                mutate: (inout AgentRun) -> Void = { _ in }
+            ) {
                 if let idx = list.firstIndex(where: { $0.id == agentId }) {
                     mutate(&list[idx])
                     // A later event may refine the display name once the harness
@@ -495,7 +518,7 @@ extension Workstream {
                     var run = AgentRun(
                         id: agentId,
                         name: name ?? "Claude",
-                        isMain: isMain,
+                        isMain: isMain ?? (agentId == "main"),
                         state: .working,
                         activity: nil,
                         startedAt: now,

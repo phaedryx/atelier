@@ -557,6 +557,12 @@ extension Verification {
                 surfaces?.disposeSurface(id: surface)
             }
             startedSurfaces[workstreamID] = nil
+            // The wrapper's pid and status files outlive everything above: they
+            // are only ever replaced by the next run of the same check, so
+            // without this they accumulate for the life of the install. This is
+            // the one place that can collect them — both archive paths call
+            // `forget`, and by here every check has been quiesced.
+            Verification.Spawn.removeState(for: workstreamID)
         }
 
         // MARK: - Completion

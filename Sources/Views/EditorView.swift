@@ -20,6 +20,17 @@ struct EditorView: View {
     /// existing call site is unaffected.
     var initialLine: () -> Int? = { nil }
     @Binding var isDirtyState: Bool
+    /// Whether this tab's Monaco model already holds its file's contents.
+    ///
+    /// A binding onto `WorkspaceModel.editorFileLoaded`, not `@State`, and that
+    /// is the whole of the fix for the edits this view used to discard. The
+    /// editor is a `@ViewBuilder` branch of `TerminalContainerView`, which is
+    /// `.id(workstreamID)`, so leaving the tab or the workstream destroys this
+    /// view: a `@State` flag came back `false`, `onAppear` read that as "never
+    /// loaded" and reloaded the file from disk over the model the user had been
+    /// typing into. The flag has to outlive the view, so it lives where the run
+    /// session's state lives — on the object the surface cache owns.
+    @Binding var isFileLoaded: Bool
     var onFileChanged: ((String?) -> Void)?
     var onExpandFolder: ((String) -> Void)?
     /// Incremented by the workspace when the user presses Cmd+P while this
@@ -28,7 +39,6 @@ struct EditorView: View {
 
     // Current file state
     @State private var currentFilePath: String?
-    @State private var fileLoaded = false
     @State private var loadError: String?
     @State private var filePathCopied = false
 
@@ -67,8 +77,25 @@ struct EditorView: View {
         isDirtyState
     }
 
+    /// The current file's name, or a placeholder when the editor is not
+    /// pointing at one.
+    ///
+    /// The placeholder goes through `NSLocalizedString` rather than being a
+    /// bare literal, and the reason is that nothing else here localizes it.
+    /// SwiftUI's automatic `LocalizedStringKey` treatment applies to string
+    /// *literals* written at a `Text`'s call site; this is a `String` by the
+    /// time it gets there, so the alert's `Text(String(format:...))` binds
+    /// `Text<S: StringProtocol>` and renders whatever it is handed. The Save As
+    /// panel's `nameFieldStringValue` is AppKit and never had that treatment at
+    /// all.
     private var currentFileName: String {
-        guard let path = currentFilePath else { return "file" }
+        guard let path = currentFilePath else {
+            return NSLocalizedString(
+                "file",
+                comment: "Stand-in filename in the save prompt and the Save As panel, "
+                    + "for an editor not pointing at a file"
+            )
+        }
         return (path as NSString).lastPathComponent
     }
 
@@ -114,10 +141,26 @@ struct EditorView: View {
             }
         }
         .onAppear {
-            if let initialFilePath, currentFilePath == nil {
-                navigateToFile(initialFilePath)
-            } else if fileLoaded {
+            if isFileLoaded, let initialFilePath {
+                // This tab has been here before: its Monaco model already holds
+                // the file, unsaved edits and all. Attach to it rather than
+                // reading the file again — `loadFile` pushes disk contents
+                // through `openFile`, whose `setValue` replaces whatever the
+                // user had typed and resets the model's clean version, taking
+                // the dirty dot and the close prompt with it.
+                //
+                // `initialFilePath` is `editorFilePaths[id]`, which every
+                // navigation and Save As keeps current, so it is the path the
+                // model is holding. The `let` is load-bearing: Save As to a file
+                // outside the worktree removes that entry and detaches the
+                // editor, and there is nowhere durable to record an absolute
+                // path, so that case deliberately falls through to the
+                // do-nothing it has always had rather than attaching underneath
+                // the opaque "Select a file to edit" placeholder.
+                currentFilePath = initialFilePath
                 bridge.switchModel(modelId: modelId)
+            } else if let initialFilePath, currentFilePath == nil {
+                navigateToFile(initialFilePath)
             }
         }
         .onDisappear {
@@ -126,8 +169,7 @@ struct EditorView: View {
         .onChange(of: fileFinderRequest) { _, _ in
             openFileFinder()
         }
-        .onChange(of: finderQuery) { _, newQuery in
-            print("[Atelier] query -> \(newQuery)")
+        .onChange(of: finderQuery) { _, _ in
             refreshFinderResults()
         }
         .alert(
@@ -336,17 +378,6 @@ struct EditorView: View {
                     finderRow(path: path, isSelected: isSelected)
                 }
             }
-            // Debug telemetry: makes the query/results state visible so any
-            // divergence between what is typed and what is searched is obvious.
-            Text("'\(finderQuery)' -> \(finderResults.count) results" +
-                (finderResults.first.map { " | \($0)" } ?? ""))
-                .font(.system(size: 9))
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 10)
-                .padding(.bottom, 4)
         }
         .frame(width: 480)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
@@ -462,7 +493,6 @@ struct EditorView: View {
             DispatchQueue.main.async {
                 fileIndex = visible
                 isScanningFiles = false
-                print("[Atelier] scan done: \(visible.count) files")
                 refreshFinderResults()
             }
         }
@@ -475,7 +505,6 @@ struct EditorView: View {
         let results = FileFinder.results(matching: finderQuery, in: fileIndex)
         finderResults = results
         finderSelection = results.first
-        print("[Atelier] refresh(\(finderQuery)) -> \(results.prefix(3).map { ($0 as NSString).lastPathComponent }.joined(separator: ", "))")
     }
 
     private func moveFinderSelection(_ delta: Int) {
@@ -509,7 +538,7 @@ struct EditorView: View {
     }
 
     private func navigateToFile(_ relativePath: String) {
-        // Don't toggle fileLoaded — MonacoEditorView must stay in the tree.
+        // Don't toggle isFileLoaded — MonacoEditorView must stay in the tree.
         // Just clear errors and update the path; loadFile() will push new content.
         loadError = nil
         isDirtyState = false
@@ -530,7 +559,7 @@ struct EditorView: View {
         do {
             let content = try String(contentsOf: url, encoding: .utf8)
             let fileName = (relativePath as NSString).lastPathComponent
-            let langId = Self.monacoLanguageId(for: fileName)
+            let langId = MonacoLanguage.id(for: fileName)
             bridge.openFile(
                 modelId: modelId,
                 text: content,
@@ -539,7 +568,7 @@ struct EditorView: View {
                 line: initialLine()
             )
             isDirtyState = false
-            fileLoaded = true
+            isFileLoaded = true
             loadError = nil
         } catch {
             loadError = error.localizedDescription
@@ -577,7 +606,7 @@ struct EditorView: View {
     @discardableResult
     private func saveFile() async -> SaveOutcome {
         guard isDirty else { return .nothingToSave }
-        guard let relativePath = currentFilePath, fileLoaded else {
+        guard let relativePath = currentFilePath, isFileLoaded else {
             // Dirty with nowhere to write. Save As detaches the editor when
             // it writes outside the working directory (`editedPath` returns
             // nil), so a nil path is reachable; `isDirtyState` is a binding the
@@ -616,7 +645,7 @@ struct EditorView: View {
     }
 
     private func saveFileAs() async {
-        guard fileLoaded else { return }
+        guard isFileLoaded else { return }
         guard let content = await bridge.getContent(modelId: modelId) else { return }
 
         let panel = NSSavePanel()
@@ -643,7 +672,7 @@ struct EditorView: View {
                 bridge.openFile(
                     modelId: modelId,
                     text: content,
-                    languageId: Self.monacoLanguageId(for: url.lastPathComponent),
+                    languageId: MonacoLanguage.id(for: url.lastPathComponent),
                     filePath: url.path
                 )
             }
@@ -671,56 +700,5 @@ struct EditorView: View {
         guard saved.hasPrefix(boundary) else { return nil }
         let relative = String(saved.dropFirst(boundary.count))
         return relative.isEmpty ? nil : relative
-    }
-
-    // MARK: - Language Detection
-
-    private static func monacoLanguageId(for fileName: String) -> String {
-        let ext = (fileName as NSString).pathExtension.lowercased()
-        switch ext {
-        case "swift": return "swift"
-        case "js", "mjs", "cjs": return "javascript"
-        case "ts", "mts", "cts": return "typescript"
-        case "tsx": return "typescriptreact"
-        case "jsx": return "javascriptreact"
-        case "py": return "python"
-        case "rs": return "rust"
-        case "go": return "go"
-        case "rb": return "ruby"
-        case "json": return "json"
-        case "jsonc": return "jsonc"
-        case "yaml", "yml": return "yaml"
-        case "toml": return "toml"
-        case "md", "markdown": return "markdown"
-        case "html", "htm": return "html"
-        case "css": return "css"
-        case "scss": return "scss"
-        case "less": return "less"
-        case "sh", "bash", "zsh": return "shellscript"
-        case "xml", "plist": return "xml"
-        case "sql": return "sql"
-        case "c", "h": return "c"
-        case "cpp", "cc", "cxx", "hpp": return "cpp"
-        case "m": return "objective-c"
-        case "java": return "java"
-        case "kt", "kts": return "kotlin"
-        case "php": return "php"
-        case "r": return "r"
-        case "lua": return "lua"
-        case "dart": return "dart"
-        case "dockerfile": return "dockerfile"
-        case "diff", "patch": return "diff"
-        case "ini", "cfg": return "ini"
-        case "bat", "cmd": return "bat"
-        case "ps1": return "powershell"
-        case "graphql", "gql": return "graphql"
-        default:
-            let name = fileName.lowercased()
-            switch name {
-            case "makefile", "gnumakefile": return "makefile"
-            case "dockerfile": return "dockerfile"
-            default: return "plaintext"
-            }
-        }
     }
 }

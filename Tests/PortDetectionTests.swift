@@ -58,6 +58,36 @@ final class PortDetectionTests: XCTestCase {
         XCTAssertEqual(second.selectedPort, 40001)
     }
 
+    /// **This branch was unreachable in production until `atelier-run` stopped
+    /// cancelling its timer on selection.** The only thing that could ever have
+    /// exercised it was the poll, and the poll stopped the moment a port was
+    /// selected — so a dev server that restarted on a different port left the
+    /// state file frozen, the browser pointed at the dead port, and
+    /// `Port.Detector.status` stuck on `.running`.
+    func testASelectedPortThatStopsListeningIsCleared() {
+        var tracker = RunState.PortSelectionTracker(expectedPort: 40001)
+        _ = tracker.update(listeningPorts: [5173])
+        XCTAssertEqual(tracker.update(listeningPorts: [5173]).selectedPort, 5173)
+
+        let gone = tracker.update(listeningPorts: [])
+
+        XCTAssertNil(gone.selectedPort, "a port that is no longer listening must not stay selected")
+        XCTAssertEqual(gone.detectedPorts, [])
+    }
+
+    /// The restart case: the old port goes, a new one appears, and the tracker
+    /// settles on the new one. `Port.Detector` reads the nil in between as
+    /// `.starting`, which is what puts the "Starting dev server…" overlay back up
+    /// rather than leaving the browser on a port nothing is serving.
+    func testASelectedPortIsReplacedWhenTheServerRestartsElsewhere() {
+        var tracker = RunState.PortSelectionTracker(expectedPort: 40001)
+        _ = tracker.update(listeningPorts: [5173])
+        XCTAssertEqual(tracker.update(listeningPorts: [5173]).selectedPort, 5173)
+
+        XCTAssertNil(tracker.update(listeningPorts: [5174]).selectedPort)
+        XCTAssertEqual(tracker.update(listeningPorts: [5174]).selectedPort, 5174)
+    }
+
     func testMultiplePortsWithoutExpectedPortDoNotAutoSelect() {
         var tracker = RunState.PortSelectionTracker(expectedPort: 40001)
         _ = tracker.update(listeningPorts: [3000, 5173])

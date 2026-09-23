@@ -509,7 +509,10 @@ private struct DirectoryActionButton: View {
     var icon: String = ""
     var assetIcon: String?
     var color: Color?
-    let tooltip: String
+    /// `LocalizedStringKey`, not `String`: the `String` overloads of `.help` and
+    /// `.accessibilityLabel` do not localize, so a plain parameter type would
+    /// silently keep every call site's tooltip out of the strings file.
+    let tooltip: LocalizedStringKey
     let action: () -> Void
 
     @State private var isHovering = false

@@ -42,21 +42,19 @@ struct OnboardingView: View {
                     Form {
                         PrerequisiteRow(
                             name: "claude",
-                            label: "Claude Code",
                             status: toolStatus.claude,
                             version: toolStatus.claudeVersion,
                             installURL: URL(string: "https://docs.anthropic.com/en/docs/claude-code/overview")
                         )
                         PrerequisiteRow(
                             name: "gh",
-                            label: "GitHub CLI",
                             status: toolStatus.gh,
                             version: toolStatus.ghVersion,
-                            detail: toolStatus.ghAuthDetail
+                            detail: toolStatus.ghAuthDetail,
+                            isAuthenticated: toolStatus.ghAuthenticated
                         )
                         PrerequisiteRow(
                             name: "git",
-                            label: "Git",
                             status: toolStatus.git,
                             version: toolStatus.gitVersion
                         )
@@ -76,14 +74,12 @@ struct OnboardingView: View {
                         // about whether there is a binary.
                         PrerequisiteRow(
                             name: "process-compose",
-                            label: "Process Compose",
                             status: toolStatus.processCompose,
                             version: toolStatus.processComposeVersion,
                             installURL: URL(string: "https://f1bonacc1.github.io/process-compose/installation/")
                         )
                         PrerequisiteRow(
                             name: "tmux",
-                            label: "tmux",
                             status: toolStatus.tmux,
                             version: toolStatus.tmuxVersion,
                             optional: true
@@ -175,12 +171,16 @@ struct OnboardingView: View {
     }
 }
 
-private struct PrerequisiteRow: View {
+/// Internal, not private, so the flag-versus-string decision below can be
+/// pinned by a test — the same reason `ToolRow` is.
+struct PrerequisiteRow: View {
     let name: String
-    let label: String
     let status: BinaryStatus
     var version: String?
+    /// Display-only, and free to be reworded — `isAuthenticated` is the flag
+    /// this row branches on. See `ToolStatus.ghAuthDetail`.
     var detail: String?
+    var isAuthenticated: Bool = false
     var optional: Bool = false
     var installURL: URL?
 
@@ -208,15 +208,15 @@ private struct PrerequisiteRow: View {
 
             if status.isInstalled {
                 if let detail {
-                    let isAuth = detail != "Not authenticated"
                     HStack(spacing: 4) {
                         Circle()
-                            .fill(isAuth ? .green : .orange)
+                            .fill(ToolRow.authenticationDotColor(isAuthenticated: isAuthenticated))
                             .frame(width: 6, height: 6)
+                            .accessibilityLabel(isAuthenticated ? "Authenticated" : "Not authenticated")
                         Text(detail)
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        if !isAuth {
+                        if !isAuthenticated {
                             Text("Run: gh auth login")
                                 .font(.system(size: 10, design: .monospaced))
                                 .foregroundStyle(.tertiary)

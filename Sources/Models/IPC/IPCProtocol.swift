@@ -127,10 +127,10 @@ extension IPC {
         case openAgentTab = "open_agent_tab"
         /// Opens a file in the workstream's editor, optionally at a line.
         case openEditor = "open_editor"
-        /// Opens one of the workstream's singleton tabs — Changes, Execution or
-        /// Verification — without taking the selection.
+        /// Opens one of the workstream's singleton tabs — Changes, Execution,
+        /// Verification or Whiteboard — without taking the selection.
         ///
-        /// Those three start *closed*: `startupWorkspaceTabState` seeds Info and
+        /// All four start *closed*: `startupWorkspaceTabState` seeds Info and
         /// Agent alone. So a tool an agent already has could produce something
         /// with no visible surface to read it in — `start_verification` spawns a
         /// terminal per check, and no output crosses IPC, so "look at the
@@ -363,7 +363,9 @@ extension IPC {
     /// terminal tabs have one; a browser or editor tab has no shell and no
     /// agent, and reports nil rather than an id that addresses nothing.
     struct TabInfo: Codable {
-        /// "agent", "terminal", "browser", "editor", "changes", "environment", "info".
+        /// "agent", "terminal", "browser", "editor", "changes", "execution",
+        /// "verification", "whiteboard", "info" — `WorkspaceTabKind.id`, which
+        /// `IPC.Vocabulary.TabKind` mirrors for the kinds `open_tab` opens.
         let kind: String
         let surfaceID: String?
         /// The tab's label, when it has one distinct from its kind.

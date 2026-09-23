@@ -87,6 +87,14 @@ struct HelpView: View {
                         ShortcutRow(keys: "1-9", description: "Switch tab")
                         ShortcutRow(keys: "[", shift: true, description: "Previous tab")
                         ShortcutRow(keys: "]", shift: true, description: "Next tab")
+                        // The same two actions carry a second chord, bound on the
+                        // menu items at AtelierApp.swift:467-475 where the bracket
+                        // pair is bound in ContentView's `commandKeyAction` table.
+                        // Both are live, so both are listed: this view is the
+                        // shortcut reference, and a chord it omits is one nothing
+                        // else on screen can teach.
+                        ShortcutRow(keys: "←", option: true, description: "Previous tab")
+                        ShortcutRow(keys: "→", option: true, description: "Next tab")
                         ShortcutRow(keys: "Return", description: "Focus Coding Agent")
                         ShortcutRow(keys: "P", description: "Find File")
                         ShortcutRow(keys: "S", description: "Save (Editor)")
@@ -128,9 +136,12 @@ struct HelpView: View {
     }
 }
 
+/// `LocalizedStringKey`, not `String`: `Text(String)` and `LabeledContent(String)`
+/// bind the `StringProtocol` overloads, which do not localize — so a `String`
+/// parameter here kept the whole shortcut table out of the strings file.
 private struct ShortcutSectionHeader: View {
-    let title: String
-    let description: String
+    let title: LocalizedStringKey
+    let description: LocalizedStringKey
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -143,12 +154,14 @@ private struct ShortcutSectionHeader: View {
 }
 
 private struct ShortcutRow: View {
+    /// The key glyph itself, and deliberately not localized — `Text(verbatim:)`
+    /// says so rather than leaving it to the `String` overload to do silently.
     let keys: String
     var ctrl: Bool = false
     var option: Bool = false
     var shift: Bool = false
     var cmd: Bool = true
-    let description: String
+    let description: LocalizedStringKey
 
     var body: some View {
         LabeledContent(description) {
@@ -165,7 +178,7 @@ private struct ShortcutRow: View {
                 if shift {
                     Image(systemName: "shift")
                 }
-                Text(keys)
+                Text(verbatim: keys)
             }
             .font(.system(size: 12, design: .monospaced))
             .foregroundStyle(.secondary)

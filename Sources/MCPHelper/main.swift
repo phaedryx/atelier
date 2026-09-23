@@ -51,6 +51,19 @@ final class IPCTransport {
         var sendTimeout = timeval(tv_sec: 15, tv_usec: 0)
         setsockopt(socketFD, SOL_SOCKET, SO_SNDTIMEO, &sendTimeout, socklen_t(MemoryLayout<timeval>.size))
 
+        // Without this a `send` to a socket the app has already RST'd raises
+        // SIGPIPE, whose default action is to terminate — and this process
+        // installs no handler, so the helper *dies* instead of taking the
+        // `.closed` → reconnect path `call(tool:arguments:)` exists for. It is
+        // reachable any time the app is killed uncleanly between two tool
+        // calls, which is the case the reconnect was written for, so the whole
+        // recovery was unreachable exactly when it was needed. Per socket
+        // rather than a process-wide `signal(SIGPIPE, SIG_IGN)`: the failure
+        // then arrives as `EPIPE` on this write, which `roundTrip` already
+        // reads as `.closed`.
+        var noSignalPipe: Int32 = 1
+        setsockopt(socketFD, SOL_SOCKET, SO_NOSIGPIPE, &noSignalPipe, socklen_t(MemoryLayout<Int32>.size))
+
         fd = socketFD
         return true
     }
@@ -176,7 +189,7 @@ open_tab opens this workstream's Changes, Execution, Verification or Whiteboard 
 
 open_agent_tab opens a terminal tab in your workstream, and with a prompt it starts another agent there. That agent shares your worktree, so give it work that collaborates on the change you are already making — a reviewer, a test-writer, a second pair of hands on the same branch. Work that belongs on its own branch needs its own workstream, not a tab. Poll list_tabs for the new surface's peer id before trying to message it.
 
-close_tab is open_agent_tab's counterpart: once a peer you spawned has finished a bounded job, close its tab by the surface_id you got back rather than leaving it for the user to close by hand. It also closes a singleton pane by kind — Changes, Verification, or Execution, and closing Execution STOPS the running dev stack, so reach for it only when you mean to. Info and Agent are permanent and cannot be closed this way.
+close_tab is open_agent_tab's counterpart: once a peer you spawned has finished a bounded job, close its tab by the surface_id you got back rather than leaving it for the user to close by hand. It also closes a singleton pane by kind — \(IPC.Vocabulary.quotedCloseableTabKinds) — and closing Execution STOPS the running dev stack, so reach for it only when you mean to. Info and Agent are permanent and cannot be closed this way.
 
 create_workstream is the exception to that: it makes a NEW workstream, with its own worktree and its own branch, and with a prompt it starts an agent in that workstream's Coding Agent tab. Reach for it when the work needs a branch of its own, and for open_agent_tab when it belongs on yours.
 
@@ -214,21 +227,31 @@ func lastUserPromptText(_ secondsAgo: Int?) -> String {
     secondsAgo.map { "\($0)s-ago" } ?? "never"
 }
 
+/// One peer as the line an agent reads.
+///
+/// **One renderer for both payloads.** `list_peers` and `get_peer_status` were
+/// written separately and drifted: the single-peer line omitted `workstream=`
+/// and `surface=`, so the tool whose whole job is "tell me about this one peer"
+/// was the one that could not say which pane it is in — which is exactly what a
+/// caller that has just spawned a tab is asking. `surfaceID` is the only thing
+/// that distinguishes two agents in one workstream, so leaving it out of the
+/// narrower answer inverted the two tools' usefulness.
+func renderPeer(_ peer: IPC.PeerInfo) -> String {
+    "\(peer.name) [\(peer.role)] id=\(peer.id)"
+        + (peer.workstream.map { " workstream=\($0)" } ?? "")
+        + (peer.surfaceID.map { " surface=\($0)" } ?? "")
+        + " last-seen=\(peer.lastSeenSecondsAgo)s-ago pending=\(peer.pendingMessages)"
+        + " last-user-prompt=\(lastUserPromptText(peer.lastUserPromptSecondsAgo))"
+}
+
 /// Renders a payload as the plain text an agent reads.
 func renderText(_ payload: IPC.Payload?) -> String {
     switch payload {
     case let .peers(peers):
         guard !peers.isEmpty else { return "No other agents are registered in this project." }
-        return peers.map { peer in
-            "\(peer.name) [\(peer.role)] id=\(peer.id)"
-                + (peer.workstream.map { " workstream=\($0)" } ?? "")
-                + (peer.surfaceID.map { " surface=\($0)" } ?? "")
-                + " last-seen=\(peer.lastSeenSecondsAgo)s-ago pending=\(peer.pendingMessages)"
-                + " last-user-prompt=\(lastUserPromptText(peer.lastUserPromptSecondsAgo))"
-        }.joined(separator: "\n")
+        return peers.map(renderPeer).joined(separator: "\n")
     case let .peer(peer):
-        return "\(peer.name) [\(peer.role)] id=\(peer.id) last-seen=\(peer.lastSeenSecondsAgo)s-ago pending=\(peer.pendingMessages)"
-            + " last-user-prompt=\(lastUserPromptText(peer.lastUserPromptSecondsAgo))"
+        return renderPeer(peer)
     case let .messages(messages):
         guard !messages.isEmpty else { return "No new messages." }
         return messages.map { message in
@@ -757,12 +780,13 @@ while let line = readLine(strippingNewline: true) {
             reply(id: id, code: -32602, message: "Unknown tool: \(params?["name"] as? String ?? "")")
             continue
         }
-        // Every tool in this surface takes string arguments only; anything else
-        // is rendered rather than rejected, so a stray number still reaches the app.
-        var arguments: [String: String] = [:]
-        for (key, value) in params?["arguments"] as? [String: Any] ?? [:] {
-            arguments[key] = value as? String ?? String(describing: value)
-        }
+        // Every tool in this surface declares string arguments, and models send
+        // real JSON regardless — a boolean for `bypass_permissions`, an array
+        // for `checks`. `ToolArguments.strings(fromJSON:)` gives each JSON type
+        // the spelling this surface's own readers parse; it is shared with the
+        // app rather than spelled here so it is testable, and its doc comment
+        // carries what the `String(describing:)` it replaced did to each type.
+        let arguments = IPC.ToolArguments.strings(fromJSON: params?["arguments"] as? [String: Any] ?? [:])
 
         switch bridge.call(tool: tool, arguments: arguments) {
         case let .ok(payload):

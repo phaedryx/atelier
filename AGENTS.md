@@ -13,8 +13,18 @@
 ./scripts/dev.sh clean              # clean build artifacts
 ./scripts/release.sh <version>      # signed+notarized DMG — needs a Developer ID, unusable here
 ./scripts/set-version.sh 0.2.0      # stamp a version into project.yml (build-time only)
-./scripts/build-editor.sh           # rebuild Monaco editor bundle (auto-run by dev.sh)
+./scripts/build-editor.sh           # rebuild Monaco editor bundle (dev.sh runs it every time)
 ```
+
+`dev.sh build`, `br`, `test` and `release` call `scripts/build-editor.sh`
+**unconditionally**, and it decides for itself whether a rebuild is needed —
+about 0.02s when the bundle is current. It used to be called only when the
+bundle was **missing**, which meant an edit to `editor/src/` was never picked
+up: the suite ran against the previous bundle and passed, which is worse than
+failing, and the whiteboard tests drive a real `Whiteboard.Host` that loads it.
+Do not put an existence check back in front of that call — two staleness
+policies is how this broke, and the wrong one wins in exactly the case that
+matters.
 
 ### After code changes
 1. If you added/removed files or changed `project.yml`: run `xcodegen generate` first
@@ -179,6 +189,20 @@ it receives only the `X.Y.Z` core; the suffix naming the commit rides on
 - **Projects/workstreams** stored in UserDefaults (`atelier.projects`), accessed via `ProjectStore`. Wrapped in `ProjectList: ObservableObject` for reference-type semantics.
 - **Settings** use `@AppStorage` (UserDefaults), keyed as `atelier.*`
 - **Terminal surfaces** cached in `TerminalSurfaceCache` (keyed by UUID)
+- **`TerminalView.workstreamID` is a *surface* id**, and only the Coding Agent tab's is also a
+  workstream id — every other surface is `derivedUUID(from: workstreamID, salt:)`.
+  `.terminalTitleChanged` posts that field and its receiver keys tab titles by surface id, so the
+  name is wrong and the meaning is load-bearing: do not repurpose it. `.terminalActivity` needs the
+  other thing, because **both** its receivers key by workstream id — `ProjectSidebar`'s Recent
+  ordering and `TerminalContainerView`'s worktree-state refresh — so posting the field meant
+  nothing but the Coding Agent tab ever counted as activity, and an hour's work in a terminal tab
+  moved no row and refreshed no quick-action state. `TerminalSurfaceCache.workstreamID(owningSurface:)`
+  resolves it at post time, through `TerminalView.activityOwner`, and resolving *there* rather than
+  recording an owner at creation is what makes it hold for surfaces this file does not create —
+  `open_agent_tab`'s terminal tab has no view at all. A derivation cannot be inverted, so it asks the
+  three things that hold a surface: a workstream's own id, a terminal tab, and a run session's
+  current generation. An unclaimed surface falls back to the surface id, which is what the receivers
+  already ignore — and is what keeps the agent surface reporting before its `WorkspaceModel` exists.
 - **Git repo info** cached in `AppEnvironment`, refreshed async every 15s
 - **What is known about a worktree is one value, `Worktree.Facts`**, keyed by worktree path
   and read through `AppEnvironment.facts(for:)`. It replaced five path-keyed dictionaries —
@@ -231,7 +255,17 @@ it receives only the `X.Y.Z` core; the suffix naming the commit rides on
   prompt replaces the banner rather than stacking one, and withdraws it when the block clears.
   Clicking it goes back through `AppDelegate`'s `didReceive` as `.focusWorkstream`, which selects
   that workstream. Gated by `atelier.notifyOnPermission`, which **defaults on**.
-- **Tool detection** runs at startup in `AppEnvironment.refresh()`
+- **Tool detection** runs at startup in `AppEnvironment.refresh()`, and `ToolStatus`,
+  `BinaryStatus` and `AppInfo` live in `Sources/Models/ToolStatus.swift`. They spawn child
+  processes and `AppEnvironment`, `OnboardingView`, `TerminalContainerView` and the IPC layer
+  all read them, so they are model types; they sat in `SettingsView.swift` because Settings was
+  the first thing to render them. `ToolRow` and `PrerequisiteRow` are the two views that do,
+  and **both resolve the auth dot through `ToolRow.authenticationDotColor`** rather than
+  re-deriving it — `ghAuthDetail` is display-only and free to be reworded, and each view in
+  turn shipped a `detail != "Not authenticated"` comparison that turned the dot green for an
+  unauthenticated `gh`. The process-compose row is fed by
+  `ProcessCompose.Settings.resolveBinary()` and never by `ToolStatus.findBinary`, for the
+  reason **Detected Tools** gives at length above.
 - **Sidebar state** (selection, expanded sections) stored in UserDefaults (`atelier.selection`, `atelier.expandedProjects`)
 - **Process-compose approval is gone**, with `ScriptTrust` and `ConfigApprovalView`.
   `atelier.approvedConfigFiles` held a SHA-256 of every repository-provided file a config would
@@ -1107,6 +1141,26 @@ wins over detection — Atelier assigned it, so there is nothing to infer. Entri
 name before allocation, so an assigned port does not move because a YAML key was reordered.
 `assigned: false` is an error rather than a no-op, because it reads like it means something.
 
+**Two sets of names are refused, for different reasons, and neither is a reversal of the
+merge-over rule below.** Six `ATELIER_*` names Atelier sets per *workstream*
+(`ATELIER_WORKTREE_DIR` and friends) were the first; `ATELIER_SURFACE_ID`, `TMUX` and
+`TMUX_PANE`, which Atelier sets per *surface*, are the second. `ATELIER_PORT` stays
+declarable, which is the documented exception and the whole of it. What made the second set
+worth refusing is that a declaration lands **inconsistently**: the surface paths assign all
+three *after* the merge — `TerminalContainerView.envVars` and `terminalEnvVars`, and
+`WorkspaceActions.environment(for:surfaceID:)` — so the line is silently inert there, while
+`ProcessCompose.PhaseEnvironment.variables` returns the merged set unchanged, so the declared
+value reaches every verification check, every `initialization.yaml` step and `dispose`
+verbatim. One line meaning two different things depending on which surface reads it is worse
+than either outcome alone. `ATELIER_SURFACE_ID` is the one that costs where it lands:
+`IPC.TaskStore` keys **claim ownership** on it, so a wrong value is a task claim attributed to
+the wrong agent. **`PATH`, `HOME`, `SHELL`, `TMPDIR`, `USER` and `LOGNAME` are deliberately
+*not* reserved** — they fail loudly in the user's own terminal, and a footgun the user can see
+is different from one they cannot; `PATH` is separately protected on the spawned-child path by
+`PhaseEnvironment.childEnvironment`. Do not widen the list one name at a time: the better shape
+is a general rule (a declared name can only ever hold a port), and
+`testTheNamesDeliberatelyLeftUnreservedAreStillAccepted` pins the scope in that direction.
+
 **A newly created project starts with one**, all comments, via `Project.seedDefaultConfigs`
 (see **Seeded config templates** above) — it loads as "declares nothing", the ordinary state
 for a project without ports, where an uncommented example would claim a real port.
@@ -1211,6 +1265,29 @@ never meaningfully did — it is a seed, not a store, and `WorkspaceStateStore` 
 active tab. What made run state survive navigation was always that the cache owns the object
 holding it. Across a *launch* no surface exists and a restored command string would be a lie, so
 `restore`'s tmux probe is the only thing that carries a run over a relaunch.
+
+**The editor tab answers the same question the same way, and it cost unsaved work to learn.**
+`EditorView` is a `@ViewBuilder` branch of `TerminalContainerView`, so the rule above applies to
+it unchanged: anything an editor tab needs to survive navigation belongs on `WorkspaceModel`,
+which `TerminalSurfaceCache` owns, and not in view `@State`. `fileLoaded` was view `@State` — it
+means "this tab's Monaco model already holds its file's contents" — so a fresh view read it as
+`false`, `onAppear` read *that* as "never loaded", and reloaded the file from disk through
+`openFile`, whose `model.setValue(text)` replaced whatever the user had been typing and reset the
+model's clean version. Typing in a file and pressing ⌘⏎ lost the edits, the dirty dot and the ⌘W
+save prompt together. It is now `WorkspaceModel.editorFileLoaded`, and `onAppear` calls
+`switchModel` rather than reloading — which also keeps the undo stack, cursor and scroll position
+across a switch on a clean tab. `currentFilePath` did **not** have to move: it is already durable
+as `editorFilePaths[id]`, arrives as `initialFilePath`, and is kept current by `onFileChanged`.
+
+Three things about it are load-bearing. The flag is **not** `@Published`, for the reason
+`hasBeenPresented` and `editorInitialLines` give — nothing renders from it and it is written
+inside a load the view is already performing. It is cleared in `removeTab` beside
+`editorDirtyState`, and deliberately kept out of `WorkspaceTabSnapshot`, which carries no live
+model state. And the attach branch is **gated on `initialFilePath` being present**: Save As to a
+file outside the worktree removes that entry and detaches the editor, and there is nowhere
+durable to record an absolute path, so that case keeps the do-nothing it has always had rather
+than attaching the model underneath the opaque "Select a file to edit" placeholder. That gap is
+known and open — a detached editor still loses its association across a navigation.
 
 ### Port detection
 Run scripts are wrapped in the `atelier-run` launcher binary (bundled at `Contents/Helpers/atelier-run`).
@@ -1479,6 +1556,21 @@ Facts worth keeping:
   nothing. The sweep calls through `AgentStateTracker.onProlongedSilence` rather than the
   singleton, so the sweep stays testable and the tracker keeps knowing nothing about how the
   channel gets checked.
+- **A listener that ends rebuilds itself, because nothing else would.** `AtelierApp` calls
+  `HookEventReceiver.start()` exactly once, at launch, and `setupListener` guards on
+  `listener == nil` to stay idempotent — so when `.failed` cancelled the listener and left that
+  property pointing at the dead object, every later `start()` was a no-op and hook delivery was
+  over for the session. The probe reported "No Signal" correctly and nothing could act on it.
+  `listenerEnded` clears the property on both terminal states and re-listens, bounded at five
+  attempts backing off 1s→16s and reset on every `.ready`: a listener that cannot bind loopback
+  will not start working because it was asked a hundredth time, and an unbounded timer is worse
+  than the honest "No Signal". Three things hold it together — it is **identity-guarded**, since
+  `stop()` clears the property itself and a `start()` may already have installed a replacement
+  by the time the old listener's `.cancelled` lands; it releases the port file **before**
+  clearing `currentPort`, the order `stop()` takes, because `removePortFile` only removes a file
+  still naming this instance's port; and `wantsListener` separates a deliberate `stop()` from a
+  listener ending on its own, so a retry scheduled just before a quit cannot take the rendezvous
+  from an instance that is still running.
 
 **Two surfaces, not one, and the second is not redundant.** `HookChannelBanner` sits in the
 sidebar's bottom bar, gated on the probe's verdict and *nothing else*. A row only draws a status
@@ -1784,6 +1876,44 @@ argument. That collapsed three ad-hoc list/bool parsers applied unevenly —
 `Workstream.Launcher.parseBool` (deleted, along with the now-unreachable
 `Launcher.Failure.invalidArgument`), `VerificationSummary.checks(from:)` and
 `TaskSummary.tags(from:)` (both now delegating to `ToolArguments.parseList`).
+
+**Every argument is declared a string, and models send real JSON anyway — so the helper
+coerces rather than renders, in `ToolArguments.strings(fromJSON:)`.** That is a shared
+function rather than a literal in `main.swift` for the reason `IPC.Vocabulary` is one: it
+lives in `IPCToolRegistry.swift`, which is one of the two files compiled into `AtelierMCP`,
+so the helper calls it and the app's tests assert it. The rule is that each JSON type gets
+the spelling this surface's own readers already parse — a boolean becomes `"true"`/`"false"`,
+an array becomes the comma-separated form `parseList` takes (elements by the same rules), an
+object becomes compact JSON, and **null is dropped**, because "absent" is what a null
+argument means and every optional read here treats absent and empty alike. It replaced
+`value as? String ?? String(describing: value)`, whose comment claimed a non-string was
+"rendered rather than rejected"; only numbers survived that. `JSONSerialization` returns
+`__NSCFBoolean` for a JSON boolean and `String(describing:)` renders it **"1"**, which
+`boolean(_:)` then refused as `received "1"` for an argument the agent spelled `true`; an
+`NSArray` rendered with parentheses, which `parseList` does not split on, so
+`start_verification(checks: ["rspec"])` reached the runner as `["(", "rspec", ")"]` and was
+refused for an undeclared check named `(`; `NSNull` became the literal `"<null>"`. The
+boolean test is `CFGetTypeID(… as CFTypeRef) == CFBooleanGetTypeID()` and not `is Bool`,
+which answers true for `NSNumber(1)` and would spell a genuine `tail: 1` as `"true"`.
+
+**And `IPC.Service` is a reentrant actor, so `list_peers` prunes only what it observed.**
+`pruneContexts` takes the `contexts` keys snapshotted *before* the `store.listPeers()` await
+and drops only ids in that snapshot the store no longer reports. Pruning to the store's
+answer alone deleted a context written by a `register_peer` that completed inside the hop:
+the new peer's reply carried its id, so its helper believed itself registered, while
+`registeredPeerID` answered nil for the rest of the session — `send_message`,
+`receive_messages` and `broadcast` all told it to register first, and `peersBySurface` missed
+it so verification and task notices addressed to it were dropped. `touch` cannot repair that,
+because its own guard needs a context to exist. It is reachable from the coordinator workflow
+this document recommends, verbatim: polling `list_peers` for a spawned peer's surface id *is*
+a read running while that peer registers.
+
+**Only a `register_peer` reply binds a peer to a connection** (`IPC.Server.peerToClaim`).
+The gate is the tool, never the payload's shape: `get_peer_status` answers `.peer` too, for a
+peer that is somebody else's, and in the window between `forget` removing `peerOwners[P]` and
+the *asynchronous* `retire` removing P from the store, P is ownerless and still readable — so
+a read in that window claimed P, and the one-connection-speaks-for-one-peer branch retired
+the caller's **own** live peer and bound its socket to P.
 
 **`IPC.ToolError` unifies the *type* that crosses into a `Response`, not every wording.**
 `missingArgument`/`invalidArgument`/`notInWorkstream` moved off `WorkspaceActions.Failure`,
@@ -2818,15 +2948,42 @@ When adding, removing, or changing keyboard shortcuts:
 3. Update `HelpView.swift` (shortcut reference)
 4. Update the shortcut table in `README.md`
 5. Update the list below
+6. Check the **two key monitors**, because half the real bindings are not in
+   the menu at all: `AppDelegate`'s `NSEvent.addLocalMonitorForEvents`
+   (Cmd+1-9, Cmd+L) and `ContentView.commandKeyAction` (Cmd+[/], Cmd+Shift+{/},
+   Cmd+W). A chord one of those swallows never reaches a menu item, so adding it
+   to the menu alone does nothing.
+
+**`HelpView.swift` is the list to reconcile against.** It is the one a user can
+read, and every other list here has drifted from it at least once — this section
+and README's table were both missing Cmd+N, Cmd+Shift+N and Cmd+comma, and this
+one was also missing Cmd+T. The exception is Cmd+Option+←/→, which the menu
+binds and *no* list carried, HelpView's included.
 
 Current shortcuts:
+
+Global — available everywhere:
+- **Cmd+comma**: Settings
+- **Cmd+/**: Help
+- **Cmd+N**: New workstream, or new project when none is selected. The absent
+  payload means "the `atelier.bypassPermissions` default" — see `AppCommand`.
+- **Cmd+Shift+N**: New project, always
+- **Cmd+Shift+C**: Toggle sidebar
+- **Cmd+Shift+P**: Command Palette
+
+Workstream — when a workstream is active:
 - **Cmd+I**: Info
 - **Cmd+1-9**: Switch tab (all tabs in display order). Positional, so no
   number reaches a closed tab — and Changes, Execution and Verification start
   closed. Open them from the tab bar's quick-add buttons or the command
   palette; nothing is bound to them by name.
 - **Cmd+Shift+[/]**: Cycle tabs
+- **Cmd+Option+Left/Right**: Cycle tabs, the menu's own binding for the same
+  two commands. `AtelierApp.swift`'s "Previous Tab" / "Next Tab" items carry it
+  because `ContentView.commandKeyAction` reads the bracket chords off a monitor
+  and a menu item cannot be given a chord a monitor swallows.
 - **Cmd+Return**: Focus Coding Agent
+- **Cmd+T**: New terminal tab
 - **Cmd+P**: Find File (Editor)
 - **Cmd+S**: Save (Editor)
 - **Cmd+Shift+S**: Save As (Editor)
@@ -2835,14 +2992,15 @@ Current shortcuts:
 - **Cmd+Shift+W**: Archive workstream
 - **Cmd+L**: Address bar (browser)
 - **Cmd+Shift+Return**: Start/Rerun
+
+Navigation:
 - **Cmd+[/]**: Cycle workstreams
 - **Cmd+Up/Down**: Cycle projects
 - **Cmd+0**: Back to project
-- **Cmd+Shift+C**: Toggle sidebar
-- **Cmd+Shift+P**: Command Palette
+
+External apps — open the current workstream's directory:
 - **Cmd+Option+B**: External browser
 - **Cmd+Option+T**: External terminal
-- **Cmd+/**: Help
 
 ## Naming
 - The app is "Atelier". Internal ID is `atelier` (no hyphen).

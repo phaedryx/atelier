@@ -157,9 +157,25 @@ extension IPC {
             case .notAvailable:
                 "Verification is not available: Atelier has no check runner wired up."
             case let .unknownRun(id):
-                "No verification run with id \(id). Only a workstream's most recent run survives an Atelier restart; "
-                    + "older ids are gone. Start a new run."
+                // **Nothing survives a restart**, which is what this used to
+                // say the most recent run did. Runs live in the runner's memory
+                // and are not persisted: what persisting one bought was a
+                // check's output, and that now lives in a terminal surface that
+                // does not survive a relaunch either.
+                //
+                // It also has to cover a run in *another* workstream, because
+                // that is what a caller holding a mistyped or borrowed id
+                // actually gets: `VerificationRunnerBridge.verificationRun(id:in:)`
+                // returns nil for one, so `runBelongsElsewhere` below is
+                // unreachable through the production bridge and such a caller
+                // arrives here. Naming only the restart sent it looking for a
+                // cause that does not exist.
+                "No verification run with id \(id) in this workstream. Runs last only as long as this Atelier "
+                    + "session, and only in the workstream they were started in. Start a new run."
             case .runBelongsElsewhere:
+                // Kept as a guard for a conformance that answers with another
+                // workstream's run; the production bridge scopes the lookup
+                // itself, so this is defence rather than a reachable path.
                 "That verification run belongs to a different workstream. You can only read runs in your own."
             }
         }
