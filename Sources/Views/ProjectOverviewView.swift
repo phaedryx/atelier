@@ -210,7 +210,7 @@ struct ProjectOverviewView: View {
                                 branchName: facts?.branch,
                                 prTitle: pr?.title,
                                 prNumber: pr?.number,
-                                prState: pr?.state,
+                                prStatus: pr?.status,
                                 prURL: pr?.url,
                                 onSelect: { onSelectWorkstream(workstream.id) },
                                 onRemove: { onRemoveWorkstream(workstream.id) },
@@ -681,7 +681,7 @@ private struct WorkstreamRow: View {
     var branchName: String?
     var prTitle: String?
     var prNumber: Int?
-    var prState: String?
+    var prStatus: GitHub.PR.Status?
     var prURL: String?
     let onSelect: () -> Void
     let onRemove: () -> Void
@@ -743,8 +743,8 @@ private struct WorkstreamRow: View {
                                 .font(.system(size: 6))
                                 .foregroundStyle(.green)
                         }
-                        if let prNumber, let prState {
-                            PRBadge(number: prNumber, state: prState, url: prURL)
+                        if let prNumber, let prStatus {
+                            PRBadge(number: prNumber, status: prStatus, url: prURL)
                         }
                     }
                     if let subtitle {
@@ -970,34 +970,30 @@ private struct FileChangeRow: View {
     }
 }
 
+/// The workstream row's PR badge.
+///
+/// Colour and symbol come from `GitHub.PR.Status` through the shared style, which is
+/// what `WorktreeInfoRow` above already does: this switched on the raw `state` string,
+/// so a **draft** PR — `state == "OPEN"`, `isDraft` true — rendered identically to an
+/// open one, green, in the same pane that drew it grey two sections up. A closed
+/// unmerged PR moves with it, from the open-PR symbol to `xmark.circle`.
+///
+/// The style's `label` is deliberately not taken: this badge is `#123` and nothing
+/// else, and a word would change the row's density. The font sizes stay local for the
+/// same reason — the drift being fixed is colour and symbol, not geometry.
 private struct PRBadge: View {
     let number: Int
-    let state: String
+    let status: GitHub.PR.Status
     var url: String?
-
-    private var color: Color {
-        switch state {
-        case "MERGED": .purple
-        case "CLOSED": .red
-        default: .green
-        }
-    }
-
-    private var icon: String {
-        switch state {
-        case "MERGED": "arrow.triangle.merge"
-        default: "arrow.triangle.pull"
-        }
-    }
 
     var body: some View {
         let label = HStack(spacing: 3) {
-            Image(systemName: icon)
+            Image(systemName: status.symbolName)
                 .font(.system(size: 9))
             Text(verbatim: "#\(number)")
                 .font(.system(size: 11))
         }
-        .foregroundStyle(color)
+        .foregroundStyle(status.color)
 
         if let url, let dest = URL(string: url) {
             Link(destination: dest) { label }
