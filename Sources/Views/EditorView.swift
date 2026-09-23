@@ -77,8 +77,25 @@ struct EditorView: View {
         isDirtyState
     }
 
+    /// The current file's name, or a placeholder when the editor is not
+    /// pointing at one.
+    ///
+    /// The placeholder goes through `NSLocalizedString` rather than being a
+    /// bare literal, and the reason is that nothing else here localizes it.
+    /// SwiftUI's automatic `LocalizedStringKey` treatment applies to string
+    /// *literals* written at a `Text`'s call site; this is a `String` by the
+    /// time it gets there, so the alert's `Text(String(format:...))` binds
+    /// `Text<S: StringProtocol>` and renders whatever it is handed. The Save As
+    /// panel's `nameFieldStringValue` is AppKit and never had that treatment at
+    /// all.
     private var currentFileName: String {
-        guard let path = currentFilePath else { return "file" }
+        guard let path = currentFilePath else {
+            return NSLocalizedString(
+                "file",
+                comment: "Stand-in filename in the save prompt and the Save As panel, "
+                    + "for an editor not pointing at a file"
+            )
+        }
         return (path as NSString).lastPathComponent
     }
 
