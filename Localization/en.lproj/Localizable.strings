@@ -714,3 +714,8 @@
 
 /* Execution tab - Start button while the previous run's control socket is being reclaimed */
 "Reclaiming…" = "Reclaiming…";
+
+/* Editor - stand-in filename when the editor is not pointing at a file. Reaches
+   the user through the save prompt ("Do you want to save changes to ...?") and
+   as the Save As panel's default name. */
+"file" = "file";

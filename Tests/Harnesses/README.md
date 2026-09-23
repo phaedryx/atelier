@@ -5,6 +5,7 @@
 ```bash
 ./scripts/build-editor.sh                        # required first — see below
 swift Tests/Harnesses/whiteboard-harness.swift
+node Tests/Harnesses/editor-model-harness.mjs editor/src/main.js
 ```
 
 Exit 0 and a `PASS` line means every check passed; a non-zero exit names each
@@ -29,6 +30,20 @@ They need two things this project's XCTest host cannot give them:
 So the split is: anything pure — digest rendering, vocabulary validation,
 scheme-handler containment, caption validation — is XCTest and belongs there.
 Anything that is a claim about the *page* is here.
+
+## The editor model harness is the exception, and it says so
+
+`editor-model-harness.mjs` runs under `node` against a *fake* Monaco, which is
+the opposite of the rule above. The distinction is what is being claimed. The
+whiteboard harness asserts things about Excalidraw's behaviour, so mocking
+Excalidraw would mock the thing under test. This asserts things about
+`main.js`'s own bookkeeping — which tab points at which model, when `setValue`
+is the right answer, who may dispose a shared model — and the Monaco surface
+that rests on is six methods wide, none of which any assertion is about. It
+loads the real source rather than a copy, so it cannot drift from what ships.
+
+If an assertion here ever needs to be about what *Monaco* does, it belongs in a
+`WKWebView` harness beside the whiteboard one instead.
 
 ## Why they are committed
 
