@@ -465,6 +465,60 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertEqual(statuses["new.txt"], .modified)
     }
 
+    /// Without `-z` git C-quotes a non-ASCII path — `café.txt` arrives as
+    /// `"caf\303\251.txt"` — and the file tree looks its badge up by the spelling
+    /// `contentsOfDirectory` returned, which that never matches. Every non-ASCII
+    /// file therefore showed no modified and no untracked badge at all.
+    func testFileStatusesSpellsNonASCIIPathsAsTheyAreOnDisk() throws {
+        let repoDir = tempDir.appendingPathComponent("status-non-ascii")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: repoDir)
+
+        let tracked = repoDir.appendingPathComponent("café.txt")
+        try "original".write(to: tracked, atomically: true, encoding: .utf8)
+        git(["add", "café.txt"], in: repoDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "-m", "init"], in: repoDir)
+        try "changed".write(to: tracked, atomically: true, encoding: .utf8)
+        try "new".write(
+            to: repoDir.appendingPathComponent("ünt racked.txt"),
+            atomically: true, encoding: .utf8
+        )
+
+        let statuses = Git.Operations.fileStatuses(at: repoDir.path)
+
+        XCTAssertEqual(statuses["café.txt"], .modified)
+        XCTAssertEqual(statuses["ünt racked.txt"], .untracked)
+    }
+
+    /// Under `-z` a rename spends two records — destination first, then origin — and
+    /// the origin has to be consumed. Left in the stream it is read as an entry whose
+    /// first two characters happen to look like a status, so `old.txt` would add a
+    /// phantom `.txt` key and everything after it would be one record out of step.
+    func testFileStatusesDropsTheOriginHalfOfARename() throws {
+        let repoDir = tempDir.appendingPathComponent("status-rename-origin")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        git(["init", "-b", "main"], in: repoDir)
+
+        try "content".write(
+            to: repoDir.appendingPathComponent("old.txt"),
+            atomically: true, encoding: .utf8
+        )
+        git(["add", "old.txt"], in: repoDir)
+        git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+             "commit", "-m", "init"], in: repoDir)
+
+        git(["mv", "old.txt", "café name.txt"], in: repoDir)
+
+        let statuses = Git.Operations.fileStatuses(at: repoDir.path)
+
+        XCTAssertEqual(statuses["café name.txt"], .modified)
+        XCTAssertEqual(
+            Set(statuses.keys), ["café name.txt"],
+            "the origin path must not survive as an entry of its own"
+        )
+    }
+
     // MARK: - registeredWorktrees
 
     /// The cheap listing behind stranded-workstream repair: one
@@ -2205,31 +2259,73 @@ final class GitOperationsTests: XCTestCase {
         XCTAssertFalse(detail.changesUnavailable)
     }
 
-    // MARK: - Porcelain rename parsing
-
-    /// `worktreeDetail` used to keep the whole `old -> new` field as the path, so the
-    /// worktree detail sheet listed a renamed file as the literal string
-    /// "old.swift -> new.swift" while `fileStatuses` — parsing the same output —
-    /// recorded just "new.swift".
-    func testRenamedDestinationTakesTheNewPath() {
-        XCTAssertEqual(Git.Operations.renamedDestination(in: "old.swift -> new.swift"), "new.swift")
-    }
-
-    func testRenamedDestinationLeavesABarePathAlone() {
-        XCTAssertEqual(Git.Operations.renamedDestination(in: "Sources/App.swift"), "Sources/App.swift")
-    }
-
-    func testRenamedDestinationHandlesQuotedPathsWithSpaces() {
-        XCTAssertEqual(
-            Git.Operations.renamedDestination(in: "\"old name.swift\" -> \"new name.swift\""),
-            "\"new name.swift\""
+    /// The other half of the quoting fix: the changes popover rendered the C-quoted
+    /// spelling git prints without `-z`, so a user saw `"caf\303\251.txt"` where the
+    /// file is called `café.txt`.
+    func testWorktreeDetailReportsANonASCIIPathUnquoted() throws {
+        let repoDir = tempDir.appendingPathComponent("non-ascii-detail")
+        try FileManager.default.createDirectory(at: repoDir, withIntermediateDirectories: true)
+        XCTAssertTrue(git(["init", "-b", "main"], in: repoDir))
+        XCTAssertTrue(git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+                           "commit", "--allow-empty", "-m", "init"], in: repoDir))
+        try "hello".write(
+            to: repoDir.appendingPathComponent("café.txt"),
+            atomically: true, encoding: .utf8
         )
+
+        let detail = Git.Operations.worktreeDetail(at: repoDir.path)
+
+        XCTAssertEqual(detail.changes.map(\.path), ["café.txt"])
+        XCTAssertFalse(detail.changesUnavailable)
     }
 
-    /// Git writes the separator once, so the first arrow is the separator. A path
-    /// odd enough to contain " -> " itself is quoted by git, which keeps it on one side.
-    func testRenamedDestinationSplitsOnTheFirstArrow() {
-        XCTAssertEqual(Git.Operations.renamedDestination(in: "a.swift -> b -> c.swift"), "b -> c.swift")
+    // MARK: - parsePorcelainStatus
+
+    /// The destination comes first under `-z`: git drops the `->` and reverses the
+    /// order, so this is the path that exists on disk now.
+    func testParsePorcelainStatusTakesTheDestinationOfARename() {
+        let entries = Git.Operations.parsePorcelainStatus("R  new.swift\0old.swift\0")
+
+        XCTAssertEqual(entries.map(\.path), ["new.swift"])
+        XCTAssertEqual(entries.first?.xy, "R ")
+    }
+
+    /// The origin record has to be consumed, not skipped over by the status guard —
+    /// `old.swift` is four characters long and would parse as an entry of its own.
+    func testParsePorcelainStatusKeepsItsPlaceAfterARename() {
+        let entries = Git.Operations.parsePorcelainStatus("R  new.swift\0old.swift\0?? added.swift\0")
+
+        XCTAssertEqual(entries.map(\.path), ["new.swift", "added.swift"])
+        XCTAssertEqual(entries.last?.xy, "??")
+    }
+
+    /// A copy is the other two-record status.
+    func testParsePorcelainStatusConsumesTheOriginOfACopy() {
+        let entries = Git.Operations.parsePorcelainStatus("C  copy.swift\0source.swift\0 M other.swift\0")
+
+        XCTAssertEqual(entries.map(\.path), ["copy.swift", "other.swift"])
+    }
+
+    /// Everything else spends one record, and the path arrives as the bytes it is on
+    /// disk — no quotes, whatever is in the name.
+    func testParsePorcelainStatusLeavesOrdinaryEntriesAlone() {
+        let entries = Git.Operations.parsePorcelainStatus(" M café.txt\0?? ünt racked.txt\0!! build/\0")
+
+        XCTAssertEqual(entries.map(\.path), ["café.txt", "ünt racked.txt", "build/"])
+        XCTAssertEqual(entries.map(\.xy), [" M", "??", "!!"])
+    }
+
+    /// A work-tree `R` is not a status git emits — it does not detect renames in the
+    /// work tree — so it must not consume the record after it. Treating either column
+    /// as a pair marker would put every entry after this one out of step.
+    func testParsePorcelainStatusDoesNotPairOnTheWorkTreeColumn() {
+        let entries = Git.Operations.parsePorcelainStatus(" R odd.swift\0?? next.swift\0")
+
+        XCTAssertEqual(entries.map(\.path), ["odd.swift", "next.swift"])
+    }
+
+    func testParsePorcelainStatusIsEmptyForNoOutput() {
+        XCTAssertTrue(Git.Operations.parsePorcelainStatus("").isEmpty)
     }
 
     // MARK: - truncatedForAlert

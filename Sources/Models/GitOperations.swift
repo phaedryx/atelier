@@ -1355,42 +1355,85 @@ extension Git {
             return !status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
 
-        /// The destination half of a `git status --porcelain` path field.
+        /// One entry of `git status --porcelain -z`: the two status columns and the path
+        /// they describe.
+        struct StatusEntry: Equatable {
+            /// The index column and the work-tree column, always exactly two characters.
+            let xy: String
+            let path: String
+
+            var indexStatus: Character {
+                xy.first ?? " "
+            }
+
+            var workTreeStatus: Character {
+                xy.last ?? " "
+            }
+        }
+
+        /// Split `git status --porcelain -z` output into entries. Shared so the two
+        /// parsers of this output cannot drift apart.
         ///
-        /// Renames and copies are reported as `old -> new`; every other status reports a
-        /// bare path. Callers want the path that exists on disk now, which is the
-        /// destination. Shared so the two parsers of this output cannot drift apart.
-        static func renamedDestination(in pathField: String) -> String {
-            guard let arrow = pathField.range(of: " -> ") else { return pathField }
-            return String(pathField[arrow.upperBound...]).trimmingCharacters(in: .whitespaces)
+        /// **`-z`, for the reason the diff listings take it** (see `parseNameStatus`):
+        /// without it git C-quotes any path holding a space-adjacent quote, a backslash
+        /// or a non-ASCII byte, so `café.txt` arrives as `"caf\303\251.txt"` — a
+        /// spelling that names no file on disk. `fileStatuses`' keys are looked up
+        /// against paths the file tree read straight out of `contentsOfDirectory`, so
+        /// every non-ASCII file silently lost its modified and untracked badge, and
+        /// `worktreeDetail` rendered the quoted spelling in the changes popover.
+        ///
+        /// Under `-z` each entry is its own NUL-terminated record, spelled `XY <path>`.
+        /// A rename or a copy spends **two**: git drops the `->` and reverses the order,
+        /// so the destination comes first and the origin follows as its own record. The
+        /// origin is consumed and dropped — callers want the path that exists on disk
+        /// now, which is the destination. That consumption is why this is one parser and
+        /// not two: an origin record left in the stream is read as an entry whose first
+        /// two characters happened to look like a status.
+        ///
+        /// The pair is detected on the **index column alone**, which is the only column
+        /// git puts an `R` or a `C` in — it does not detect renames in the work tree, so
+        /// ` R` is not a status it emits. Accepting one in either column would consume a
+        /// record git never paired and put every entry after it out of step, which is a
+        /// worse failure than the quoting this fixes.
+        static func parsePorcelainStatus(_ output: String) -> [StatusEntry] {
+            var entries: [StatusEntry] = []
+            let records = output.split(separator: "\0", omittingEmptySubsequences: true)
+            var index = 0
+            while index < records.count {
+                let record = records[index]
+                index += 1
+                // "XY " plus at least one character of path.
+                guard record.count >= 4 else { continue }
+                let xy = String(record.prefix(2))
+                entries.append(StatusEntry(xy: xy, path: String(record.dropFirst(3))))
+                if xy.hasPrefix("R") || xy.hasPrefix("C") {
+                    index += 1
+                }
+            }
+            return entries
         }
 
         /// Get the uncommitted file changes in a worktree.
         static func worktreeDetail(at worktreePath: String) -> Worktree.Detail {
             var changes: [Worktree.Detail.FileChange] = []
 
-            let status = run(args: ["status", "--porcelain"], in: worktreePath)
+            let status = run(args: ["status", "--porcelain", "-z"], in: worktreePath)
             if let status {
-                for line in status.components(separatedBy: "\n") where !line.isEmpty {
-                    let trimmed = line
-                    guard trimmed.count >= 3 else { continue }
+                for entry in parsePorcelainStatus(status) {
+                    // A rename's path is the destination, which is the one that exists on
+                    // disk and the one `fileStatuses` records, so both readers of this
+                    // output agree on it.
+                    let filePath = entry.path
 
-                    let indexStatus = trimmed[trimmed.startIndex]
-                    let workTreeStatus = trimmed[trimmed.index(after: trimmed.startIndex)]
-                    // Renames and copies render as "R  old -> new". The destination is
-                    // the path that exists on disk and the one `fileStatuses` records,
-                    // so both parsers of this output agree on it.
-                    let filePath = renamedDestination(in: String(trimmed.dropFirst(3)))
-
-                    if indexStatus == "?" {
+                    if entry.indexStatus == "?" {
                         changes.append(.init(status: .untracked, path: filePath, isStaged: false))
                     } else {
-                        if indexStatus != " " {
-                            let status = parseStatus(indexStatus)
+                        if entry.indexStatus != " " {
+                            let status = parseStatus(entry.indexStatus)
                             changes.append(.init(status: status, path: filePath, isStaged: true))
                         }
-                        if workTreeStatus != " " {
-                            let status = parseStatus(workTreeStatus)
+                        if entry.workTreeStatus != " " {
+                            let status = parseStatus(entry.workTreeStatus)
                             changes.append(.init(status: status, path: filePath, isStaged: false))
                         }
                     }
@@ -1780,7 +1823,7 @@ extension Git {
         /// Returns an empty dictionary on failure so the tree degrades gracefully.
         static func fileStatuses(at path: String) -> [String: Git.FileStatus] {
             guard let output = runWithTimeout(
-                args: ["status", "--porcelain", "--ignored", "--ignore-submodules=dirty"],
+                args: ["status", "--porcelain", "--ignored", "--ignore-submodules=dirty", "-z"],
                 in: path,
                 timeout: 3
             ) else {
@@ -1788,21 +1831,20 @@ extension Git {
             }
 
             var result: [String: Git.FileStatus] = [:]
-            for line in output.components(separatedBy: "\n") {
-                guard line.count >= 4 else { continue }
-                let xy = String(line.prefix(2))
-                var filePath = String(line.dropFirst(3))
+            for entry in parsePorcelainStatus(output) {
+                var filePath = entry.path
 
-                if xy == "!!" {
+                if entry.xy == "!!" {
                     // Ignored — strip trailing slash for directories
                     if filePath.hasSuffix("/") {
                         filePath = String(filePath.dropLast())
                     }
                     result[filePath] = .ignored
-                } else if xy == "??" {
+                } else if entry.xy == "??" {
                     result[filePath] = .untracked
                 } else {
-                    result[renamedDestination(in: filePath)] = .modified
+                    // Already the destination half of a rename — see `parsePorcelainStatus`.
+                    result[filePath] = .modified
                 }
             }
             return result
