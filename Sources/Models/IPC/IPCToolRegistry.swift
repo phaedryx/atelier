@@ -422,11 +422,11 @@ extension IPC.Tool {
                 isSafeToReplay: true,
                 description: """
                 Open one of this workstream's panes: "changes" (the diff and the user's
-                review comments), "execution" (the dev stack) or "verification" (the
-                checks and each one's terminal). They start CLOSED, so a thing you set
-                running may have no pane the user can watch it in — most of all
-                verification, whose output lives only in those terminals and never
-                reaches you.
+                review comments), "execution" (the dev stack), "verification" (the
+                checks and each one's terminal) or "whiteboard" (the shared board).
+                They start CLOSED, so a thing you set running may have no pane the user
+                can watch it in — most of all verification, whose output lives only in
+                those terminals and never reaches you.
 
                 It does NOT switch the user's view. The tab appears in the strip behind
                 whatever they are working in, which is the point: opening a pane is not a

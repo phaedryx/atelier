@@ -489,6 +489,17 @@ final class IPCServerTests: XCTestCase {
         XCTAssertTrue(inbox.contains("planner"), "the message should name its sender, got: \(inbox)")
 
         XCTAssertEqual(builder.callTool("receive_messages"), "No new messages.")
+
+        // `get_peer_status` rendered a shorter line than `list_peers` — it
+        // omitted `workstream=` and `surface=`, so the tool whose whole job is
+        // "tell me about this one peer" was the one that could not say which
+        // pane it is in. That is precisely what a caller holding a tab it just
+        // spawned is asking, and `surfaceID` is the only thing that tells two
+        // agents in one workstream apart. One renderer now serves both.
+        let status = try XCTUnwrap(planner.callTool("get_peer_status", ["peer_id": String(builderID)]))
+        XCTAssertTrue(status.contains("workstream=bold-crimson-parser"), status)
+        XCTAssertTrue(status.contains("surface="), status)
+        XCTAssertTrue(status.contains("id=\(builderID)"), status)
     }
 
     /// Every tool here declares string arguments and models send real JSON

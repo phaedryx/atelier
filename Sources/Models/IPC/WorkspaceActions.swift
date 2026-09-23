@@ -451,6 +451,12 @@ final class WorkspaceActions {
     /// your own surface immediately, the same as a user's `⌘W`; you will not
     /// see the reply.
     func closeTab(workstreamID: UUID, kind: String?, surfaceID: String?) throws -> (kind: String?, wasOpen: Bool) {
+        // Not redundant with `ToolArguments.optional`, which reads a
+        // present-but-empty argument as absent before the IPC handler ever gets
+        // here: this is a `WorkspaceActions` API in its own right, and
+        // `""` naming a real (empty) kind rather than no kind is a mistake it
+        // has to refuse on its own account. `WorkspaceActionsCloseTabTests`
+        // pins that contract against this method, not against the tool.
         let kind = kind.flatMap { $0.isEmpty ? nil : $0 }
         let surfaceID = surfaceID.flatMap { $0.isEmpty ? nil : $0 }
 

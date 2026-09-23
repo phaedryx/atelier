@@ -254,13 +254,13 @@ final class IPCToolRegistryTests: XCTestCase {
     }
 
     /// One list parser now, where there were three byte-identical copies.
-    /// `VerificationSummary.checks(from:)` and `TaskSummary.tags(from:)` are the
-    /// other two entry points and both call this one.
+    /// `VerificationSummary.checks(from:)` and `TaskSummary.tags(from:)` were
+    /// the other two entry points; once they became one-line delegations with no
+    /// production caller they were deleted, and their tests moved onto the
+    /// reader their tools really use.
     func test_listParsingIsOneImplementation() {
         let arguments = IPC.ToolArguments(tool: .startVerification, raw: ["checks": #"["rspec", "rubocop", "rspec"]"#])
         XCTAssertEqual(arguments.list("checks"), ["rspec", "rubocop"])
-        XCTAssertEqual(IPC.VerificationSummary.checks(from: #"["rspec", "rubocop", "rspec"]"#), ["rspec", "rubocop"])
-        XCTAssertEqual(IPC.TaskSummary.tags(from: #"["rspec", "rubocop", "rspec"]"#), ["rspec", "rubocop"])
         XCTAssertEqual(arguments.list("absent"), [])
     }
 

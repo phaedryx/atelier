@@ -647,8 +647,8 @@ extension IPC {
             }
         }
 
-        /// Opens one of the caller's singleton tabs — Changes, Execution or
-        /// Verification — without taking the selection.
+        /// Opens one of the caller's singleton tabs — Changes, Execution,
+        /// Verification or Whiteboard — without taking the selection.
         ///
         /// **The answer must never imply the user is now looking at it.** The tab
         /// is opened behind whatever they have in front of them, on purpose, so
@@ -684,9 +684,9 @@ extension IPC {
 
         /// Closes one of the caller's tabs — a singleton pane by `kind`, or a
         /// terminal tab by `surface_id`. See `WorkspaceActions.closeTab` for
-        /// the full contract: exactly one of the two arguments, why Execution
-        /// is refused rather than closed, and why an id nothing currently
-        /// owns is success rather than an error.
+        /// the full contract: exactly one of the two arguments, why closing
+        /// Execution stops the dev stack on its way out, and why an id nothing
+        /// currently owns is success rather than an error.
         private func closeTab(for request: Request) async -> Response {
             let arguments = ToolArguments(request)
             guard let workstreamID = callerWorkstreamID(request) else {
@@ -1855,10 +1855,12 @@ extension IPC {
                 let prefix = arguments.optional("path_prefix")
                 let tagList = arguments.list("tags")
                 let found = await fetch(project, prefix, tagList)
-                var infos: [TaskInfo] = []
-                for task in found {
-                    await infos.append(info(for: task))
-                }
+                // Resolved once for the whole listing, not per task.
+                // `info(for:)`'s own lookup is a `store.listPeers()` hop, so a
+                // fifty-task listing made fifty of them to answer one question
+                // whose answer cannot change inside the loop.
+                let peers = await peersBySurface()
+                let infos = found.map { info(for: $0, peers: peers) }
                 return .success(id: request.id, .tasks(infos))
             } catch {
                 return .failure(id: request.id, error.localizedDescription)
@@ -1936,7 +1938,12 @@ extension IPC {
         /// resolving display names live — never storing them — the same
         /// pattern `MessageInfo.fromName` and the verification notices use.
         private func info(for task: ProjectTask) async -> TaskInfo {
-            let peers = await peersBySurface()
+            await info(for: task, peers: peersBySurface())
+        }
+
+        /// The same projection against a map the caller already holds, so a
+        /// listing resolves the peers once rather than once per task.
+        private func info(for task: ProjectTask, peers: [UUID: (id: String, name: String)]) -> TaskInfo {
             func resolved(_ surfaceID: String?) -> (id: String?, name: String?) {
                 guard let surfaceID, let uuid = UUID(uuidString: surfaceID), let peer = peers[uuid] else { return (nil, nil) }
                 return (peer.id, peer.name)
