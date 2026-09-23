@@ -72,6 +72,38 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         XCTAssertTrue(runs.isEmpty)
     }
 
+    /// **A lost `SubagentStart` must not mint a main agent.** `atelier-hook`
+    /// posts with `curl --max-time 1` and drops silently by design, so a
+    /// subagent's first *tool* event arriving with no `created` before it is an
+    /// ordinary case, not a corrupt one. Minted as main it sorted first in the
+    /// sidebar as a second "Claude", and — because `isMain` is a `let` that the
+    /// late `SubagentStart` could not correct — it stayed that way for the rest
+    /// of the run.
+    func testToolStartFromAnUnannouncedSubagentIsNotAMainRun() {
+        handle(.toolStart(agentId: "sub-lost", tool: "Read", activity: "Reading Foo.swift"))
+
+        let runs = tracker.runs(for: wsID)
+        XCTAssertEqual(runs.count, 1)
+        XCTAssertFalse(runs[0].isMain)
+    }
+
+    /// The other half of the same loss: the row must not stall off a subagent.
+    /// `sweepForStalls` paints the workstream `.stalled` only when a *main* run
+    /// has gone quiet, so a mis-minted subagent took the whole row down with it.
+    func testAnUnannouncedSubagentGoingQuietDoesNotStallTheRow() {
+        handle(.waiting(agentId: "main"))
+        handle(.toolStart(agentId: "sub-lost", tool: "Bash", activity: "Running tests"))
+        tracker._backdateRun(
+            agentId: "sub-lost",
+            workstreamID: wsID,
+            lastEventAt: Date().addingTimeInterval(-(Workstream.AgentStateTracker.wedgeThreshold + 10))
+        )
+
+        tracker.sweepForStalls(now: Date())
+
+        XCTAssertFalse(tracker.runs(for: wsID).contains { $0.isMain && $0.state == .stalled })
+    }
+
     func testDuplicateSubagentStartDoesNotDuplicateRun() {
         handle(.created(agentId: "sub-1", name: "Explore"))
         handle(.created(agentId: "sub-1", name: "Explore"))
