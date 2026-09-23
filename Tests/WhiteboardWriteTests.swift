@@ -39,8 +39,8 @@ final class WhiteboardWriteTests: XCTestCase {
             live: empty,
             mint: minter()
         )
-        XCTAssertEqual(plan.ids, ["id-1"])
-        let skeleton = try XCTUnwrap(plan.skeletons.first)
+        XCTAssertEqual(plan.map(\.id), ["id-1"])
+        let skeleton = try XCTUnwrap(plan.first)
         XCTAssertEqual(skeleton.type, "rectangle")
         XCTAssertEqual(skeleton.label, "Auth service")
         XCTAssertEqual(skeleton.x, 120)
@@ -59,7 +59,7 @@ final class WhiteboardWriteTests: XCTestCase {
             live: empty,
             mint: minter()
         )
-        let skeleton = try XCTUnwrap(plan.skeletons.first)
+        let skeleton = try XCTUnwrap(plan.first)
         XCTAssertEqual(skeleton.type, "rectangle")
         XCTAssertTrue(skeleton.isNote)
         XCTAssertEqual(skeleton.backgroundColor, Write.noteBackground)
@@ -74,7 +74,7 @@ final class WhiteboardWriteTests: XCTestCase {
         // The reader promotes a rectangle to a note on this key alone, so a box
         // that carried it would read back as a note.
         let plan = try Write.addPlan(from: [["kind": "box"]], live: empty, mint: minter())
-        let customData = try XCTUnwrap(plan.skeletons.first?.json["customData"] as? [String: Any])
+        let customData = try XCTUnwrap(plan.first?.json["customData"] as? [String: Any])
         XCTAssertNil(customData[Whiteboard.Element.kindKey])
     }
 
@@ -84,7 +84,7 @@ final class WhiteboardWriteTests: XCTestCase {
             live: empty,
             mint: minter()
         )
-        let skeleton = try XCTUnwrap(plan.skeletons.first)
+        let skeleton = try XCTUnwrap(plan.first)
         XCTAssertEqual(skeleton.type, "text")
         XCTAssertNil(skeleton.width)
         XCTAssertNil(skeleton.height)
@@ -100,9 +100,9 @@ final class WhiteboardWriteTests: XCTestCase {
             live: empty,
             mint: minter()
         )
-        let label = try XCTUnwrap(plan.skeletons.first?.json["label"] as? [String: Any])
+        let label = try XCTUnwrap(plan.first?.json["label"] as? [String: Any])
         XCTAssertEqual(label["text"] as? String, "Auth service")
-        XCTAssertNil(plan.skeletons.first?.json["text"])
+        XCTAssertNil(plan.first?.json["text"])
     }
 
     func test_anUnknownKindIsRefusedAndNamesTheLegalKinds() {
@@ -119,7 +119,7 @@ final class WhiteboardWriteTests: XCTestCase {
 
     func test_aKindIsReadCaseInsensitivelyAndTrimmed() throws {
         let plan = try Write.addPlan(from: [["kind": "  BOX "]], live: empty, mint: minter())
-        XCTAssertEqual(plan.skeletons.first?.type, "rectangle")
+        XCTAssertEqual(plan.first?.type, "rectangle")
     }
 
     func test_aMissingKindIsRefused() {
@@ -136,7 +136,7 @@ final class WhiteboardWriteTests: XCTestCase {
 
     func test_anUnlabelledBoxIsFine() throws {
         let plan = try Write.addPlan(from: [["kind": "box"]], live: empty, mint: minter())
-        XCTAssertNil(plan.skeletons.first?.label)
+        XCTAssertNil(plan.first?.label)
     }
 
     // MARK: - Arrows
@@ -148,12 +148,12 @@ final class WhiteboardWriteTests: XCTestCase {
             ["kind": "box", "text": "B"],
             ["kind": "arrow", "from": "id-1", "to": "id-2", "text": "issues"],
         ], live: empty, mint: minter())
-        let arrow = try XCTUnwrap(plan.skeletons.last)
+        let arrow = try XCTUnwrap(plan.last)
         XCTAssertEqual(arrow.type, "arrow")
         XCTAssertEqual(arrow.from, "id-1")
         XCTAssertEqual(arrow.to, "id-2")
         XCTAssertEqual(arrow.label, "issues")
-        XCTAssertEqual(plan.ids, ["id-1", "id-2", "id-3"])
+        XCTAssertEqual(plan.map(\.id), ["id-1", "id-2", "id-3"])
     }
 
     func test_anArrowMayNameAnElementAlreadyOnTheBoard() throws {
@@ -162,8 +162,8 @@ final class WhiteboardWriteTests: XCTestCase {
             live: live("old-1", "old-2"),
             mint: minter()
         )
-        XCTAssertEqual(plan.skeletons.first?.from, "old-1")
-        XCTAssertEqual(plan.skeletons.first?.to, "old-2")
+        XCTAssertEqual(plan.first?.from, "old-1")
+        XCTAssertEqual(plan.first?.to, "old-2")
     }
 
     func test_anArrowEndpointThatDoesNotExistIsRefusedAndNamesTheID() {
@@ -225,9 +225,9 @@ final class WhiteboardWriteTests: XCTestCase {
             ["kind": "box", "text": "A"],
             ["kind": "box", "text": "B"],
         ], live: live("old-1"), mint: minter())
-        XCTAssertEqual(plan.skeletons[0].x, 40)
-        XCTAssertEqual(plan.skeletons[0].y, 500)
-        XCTAssertEqual(plan.skeletons[1].y, 500 + Write.rowStep)
+        XCTAssertEqual(plan[0].x, 40)
+        XCTAssertEqual(plan[0].y, 500)
+        XCTAssertEqual(plan[1].y, 500 + Write.rowStep)
     }
 
     func test_theColumnStartsBelowWhatTheSameBatchPlacesByHand() throws {
@@ -239,8 +239,8 @@ final class WhiteboardWriteTests: XCTestCase {
             ["kind": "box", "text": "placed", "at": "120,80"],
             ["kind": "note", "text": "stacked"],
         ], live: empty, mint: minter())
-        XCTAssertEqual(plan.skeletons[0].y, 80)
-        XCTAssertEqual(plan.skeletons[1].y, 80 + Write.boxSize.height + Write.layoutGap)
+        XCTAssertEqual(plan[0].y, 80)
+        XCTAssertEqual(plan[1].y, 80 + Write.boxSize.height + Write.layoutGap)
     }
 
     func test_theColumnIsScannedUpFront_soOrderInTheBatchDoesNotChangeIt() throws {
@@ -250,7 +250,30 @@ final class WhiteboardWriteTests: XCTestCase {
             ["kind": "note", "text": "stacked"],
             ["kind": "box", "text": "placed", "at": "120,80"],
         ], live: empty, mint: minter())
-        XCTAssertEqual(plan.skeletons[0].y, 80 + Write.boxSize.height + Write.layoutGap)
+        XCTAssertEqual(plan[0].y, 80 + Write.boxSize.height + Write.layoutGap)
+    }
+
+    /// **The column scan and the batch loop have to read a kind the same way.**
+    ///
+    /// They did not: the loop trimmed and lowercased, the scan only lowercased.
+    /// So `"box "` was a box to the loop and nothing to the scan, whose floor
+    /// then left out the box's own height — and the next unplaced element
+    /// landed on top of it. Invisible in the digest, because both sets of
+    /// coordinates read exactly as asked, and wrong only in the picture: the
+    /// half of the read path that exists to corroborate the other, and the
+    /// exact failure the up-front scan was written to prevent.
+    func test_thePaddedKindRaisesTheColumnFloorTheSameWayATrimmedOneDoes() throws {
+        for spelling in ["box", "box ", " BOX", "\tnote\n"] {
+            let plan = try Write.addPlan(from: [
+                ["kind": spelling, "text": "placed", "at": "120,80"],
+                ["kind": "box", "text": "stacked"],
+            ], live: empty, mint: minter())
+            XCTAssertEqual(
+                plan[1].y,
+                80 + Write.boxSize.height + Write.layoutGap,
+                "kind = \(spelling.debugDescription)"
+            )
+        }
     }
 
     func test_theBoardsOwnExtentStillWinsWhenItIsLower() throws {
@@ -259,7 +282,7 @@ final class WhiteboardWriteTests: XCTestCase {
             ["kind": "box", "text": "stacked"],
         ], live: live("old-1"), mint: minter())
         // live()'s layout says 500, which is below the placed box's bottom.
-        XCTAssertEqual(plan.skeletons[1].y, 500)
+        XCTAssertEqual(plan[1].y, 500)
     }
 
     func test_anExplicitPositionDoesNotConsumeAColumnSlot() throws {
@@ -269,11 +292,11 @@ final class WhiteboardWriteTests: XCTestCase {
             ["kind": "box", "text": "placed", "at": "900,900"],
             ["kind": "box", "text": "stacked"],
         ], live: empty, mint: minter())
-        XCTAssertEqual(plan.skeletons[0].x, 900)
-        XCTAssertEqual(plan.skeletons[0].y, 900)
+        XCTAssertEqual(plan[0].x, 900)
+        XCTAssertEqual(plan[0].y, 900)
         // One column slot, not two: the placed element took none of them. Its
         // own extent still raises the floor, which is a different rule.
-        XCTAssertEqual(plan.skeletons[1].y, 900 + Write.boxSize.height + Write.layoutGap)
+        XCTAssertEqual(plan[1].y, 900 + Write.boxSize.height + Write.layoutGap)
     }
 
     func test_aMalformedPositionIsRefusedRatherThanReadAsTheOrigin() {
@@ -297,8 +320,8 @@ final class WhiteboardWriteTests: XCTestCase {
             live: empty,
             mint: minter()
         )
-        XCTAssertEqual(plan.skeletons.first?.x, -40)
-        XCTAssertEqual(plan.skeletons.first?.y, -12.5)
+        XCTAssertEqual(plan.first?.x, -40)
+        XCTAssertEqual(plan.first?.y, -12.5)
     }
 
     // MARK: - Colours
@@ -311,7 +334,7 @@ final class WhiteboardWriteTests: XCTestCase {
             live: empty,
             mint: minter()
         )
-        XCTAssertEqual(plan.skeletons.first?.strokeColor, Write.palette["red"])
+        XCTAssertEqual(plan.first?.strokeColor, Write.palette["red"])
     }
 
     func test_aHexColourIsAcceptedAndLowercased() throws {
@@ -320,7 +343,7 @@ final class WhiteboardWriteTests: XCTestCase {
             live: empty,
             mint: minter()
         )
-        XCTAssertEqual(plan.skeletons.first?.strokeColor, "#aabbcc")
+        XCTAssertEqual(plan.first?.strokeColor, "#aabbcc")
     }
 
     func test_aShortHexIsExpanded() throws {
@@ -329,7 +352,7 @@ final class WhiteboardWriteTests: XCTestCase {
             live: empty,
             mint: minter()
         )
-        XCTAssertEqual(plan.skeletons.first?.strokeColor, "#00aaff")
+        XCTAssertEqual(plan.first?.strokeColor, "#00aaff")
     }
 
     func test_anOutOfRangeColourIsRefusedAndNamesTheValueAndTheNames() {
@@ -357,14 +380,14 @@ final class WhiteboardWriteTests: XCTestCase {
             live: empty,
             mint: minter()
         )
-        XCTAssertEqual(plan.skeletons.first?.strokeColor, Write.palette["red"])
-        XCTAssertEqual(plan.skeletons.first?.backgroundColor, Write.noteBackground)
+        XCTAssertEqual(plan.first?.strokeColor, Write.palette["red"])
+        XCTAssertEqual(plan.first?.backgroundColor, Write.noteBackground)
     }
 
     func test_noColourLeavesExcalidrawsOwnDefault() throws {
         let plan = try Write.addPlan(from: [["kind": "box"]], live: empty, mint: minter())
-        XCTAssertNil(plan.skeletons.first?.strokeColor)
-        XCTAssertNil(plan.skeletons.first?.json["strokeColor"])
+        XCTAssertNil(plan.first?.strokeColor)
+        XCTAssertNil(plan.first?.json["strokeColor"])
     }
 
     // MARK: - The batch itself
@@ -703,7 +726,10 @@ final class WhiteboardWriteTests: XCTestCase {
         guard case let .elements(ids, skeletons) = plan else {
             return XCTFail("expected an elements plan, got \(plan)")
         }
-        XCTAssertEqual(ids, ["id-1"])
+        XCTAssertEqual(skeletons.map(\.id), ["id-1"])
+        // `ids` is derived from the skeletons rather than accumulated beside
+        // them, which is the only thing keeping the two from drifting.
+        XCTAssertEqual(ids, skeletons.map(\.id))
         XCTAssertEqual(skeletons.first?.label, "Auth service")
         XCTAssertEqual(skeletons.first?.x, 120)
     }
@@ -769,7 +795,10 @@ final class WhiteboardWriteTests: XCTestCase {
         guard case let .elements(ids, skeletons) = plan else {
             return XCTFail("expected an elements plan, got \(plan)")
         }
-        XCTAssertEqual(ids, ["id-1"])
+        XCTAssertEqual(skeletons.map(\.id), ["id-1"])
+        // `ids` is derived from the skeletons rather than accumulated beside
+        // them, which is the only thing keeping the two from drifting.
+        XCTAssertEqual(ids, skeletons.map(\.id))
         XCTAssertEqual(skeletons.first?.label, "Auth service")
     }
 

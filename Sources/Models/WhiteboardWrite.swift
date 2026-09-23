@@ -285,6 +285,16 @@ extension Whiteboard {
         /// questions: `elements` is a batch Swift has fully validated and the
         /// page merely expands, while `mermaid` is a definition Swift cannot
         /// read and the page has to parse, size and place.
+        /// **`elements`' `ids` is dead and is kept only because removing it
+        /// needs a file this branch does not own.** Nothing reads it:
+        /// `WorkspaceActions.whiteboardAdd` binds it to `_` and answers with
+        /// the ids the *page* reports really landed, which for the mermaid arm
+        /// is the only source there is and for this one is the same list read
+        /// off what was stored. It is derived, in one statement below, from
+        /// `skeletons.map(\.id)` rather than accumulated a second time while
+        /// the batch is walked — two copies of one list is how they eventually
+        /// differ. Deleting the payload is one line here and one line at that
+        /// call site's `case let .elements(_, skeletons)`.
         enum Add: Equatable {
             case elements(ids: [String], skeletons: [Skeleton])
             case mermaid(Mermaid)
@@ -352,8 +362,8 @@ extension Whiteboard {
         ) throws -> Add {
             let mermaidEntries = raw.filter { kind(of: $0) == .mermaid }
             guard !mermaidEntries.isEmpty else {
-                let (ids, skeletons) = try addPlan(from: raw, live: live, mint: mint)
-                return .elements(ids: ids, skeletons: skeletons)
+                let skeletons = try addPlan(from: raw, live: live, mint: mint)
+                return .elements(ids: skeletons.map(\.id), skeletons: skeletons)
             }
             guard raw.count == 1, let entry = raw.first as? [String: Any] else {
                 throw Failure.mermaidStandsAlone
@@ -397,7 +407,15 @@ extension Whiteboard {
         }
 
         /// An entry's kind as written, or nil for one that names none it knows.
-        /// The same trimming and case rule `addPlan` applies before refusing.
+        ///
+        /// **The one place a kind is read.** There were three, and they did not
+        /// agree: this one trims and lowercases, while `addPlan`'s column
+        /// pre-scan only lowercased. So `"box "` passed the batch loop as a box
+        /// and was missed by the pre-scan, which then left `nextRow` above the
+        /// box rather than below it — and the next unplaced element landed on
+        /// top of it. Invisible in the digest, because both sets of coordinates
+        /// read exactly as asked, and wrong only in the picture, which is the
+        /// shape the layout scan exists to prevent.
         private static func kind(of entry: Any) -> Kind? {
             guard let entry = entry as? [String: Any] else { return nil }
             let raw = (entry["kind"] as? String)?
@@ -412,12 +430,11 @@ extension Whiteboard {
             from raw: [Any],
             live: Live,
             mint: () -> String = mintID
-        ) throws -> (ids: [String], skeletons: [Skeleton]) {
+        ) throws -> [Skeleton] {
             guard !raw.isEmpty else { throw Failure.emptyBatch }
             guard raw.count <= maxBatch else { throw Failure.batchTooLarge(raw.count) }
 
             var skeletons: [Skeleton] = []
-            var ids: [String] = []
             // Grows as the batch is walked, so an arrow may name a box created
             // earlier in the same call — but not a later one. A forward
             // reference is refused rather than resolved: resolving it would make
@@ -439,7 +456,10 @@ extension Whiteboard {
                       let at = entry["at"] as? String,
                       let placed = try? parsePosition(at)
                 else { continue }
-                let kind = Kind(rawValue: (entry["kind"] as? String)?.lowercased() ?? "")
+                // `kind(of:)`, not a second inline read: this used to lowercase
+                // without trimming, so `"box "` was a box to the loop below and
+                // not a box here, and its height was left out of the floor.
+                let kind = kind(of: entry)
                 let bottom = placed.y + (kind == .box || kind == .note ? boxSize.height : 0)
                 nextRow = max(nextRow, bottom + layoutGap)
             }
@@ -448,11 +468,8 @@ extension Whiteboard {
                 guard let entry = entry as? [String: Any] else {
                     throw Failure.malformedEntry(index)
                 }
-                let rawKind = (entry["kind"] as? String)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                    .lowercased() ?? ""
-                guard let kind = Kind(rawValue: rawKind) else {
-                    throw Failure.unknownKind(entry["kind"] as? String ?? rawKind)
+                guard let kind = kind(of: entry) else {
+                    throw Failure.unknownKind(entry["kind"] as? String ?? "")
                 }
                 // This arm draws elements; a diagram is `plan`'s to route, and
                 // one reaching here is either mixed into a batch or a direct
@@ -511,10 +528,9 @@ extension Whiteboard {
                     to: to,
                     isNote: kind == .note
                 ))
-                ids.append(id)
                 known.insert(id)
             }
-            return (ids, skeletons)
+            return skeletons
         }
 
         // MARK: - update
