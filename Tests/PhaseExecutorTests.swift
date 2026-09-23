@@ -427,6 +427,60 @@ final class PhaseExecutorTests: XCTestCase {
         XCTAssertFalse(ProcessCompose.Client.isServerListening(atSocketPath: socketPath))
     }
 
+    // MARK: - The socket is the only handle on a server
+
+    /// **A `down` that does not succeed must leave the socket file.** It used to
+    /// be removed either way, which orphans a server unreachably: the socket is
+    /// the only handle anything has on a phase server, so after a `down` that hit
+    /// its deadline neither a later `shutDown`, nor `stopAllServers` at quit, nor
+    /// the next run's pre-spawn `shutDown` could ever address it again.
+    ///
+    /// Driven with a socket file that no server is behind, because that reaches
+    /// the same branch — `down` fails — without having to wedge a real server past
+    /// its deadline. The assertion is about what `shutDown` does with a refusal,
+    /// which is identical in both cases.
+    func test_shutDown_leavesTheSocketWhenDownDoesNotSucceed() {
+        ProcessCompose.PhaseRunner.ensureSocketDirectory()
+        let socketPath = ProcessCompose.PhaseRunner.socketPath(for: UUID(), phase: .dispose)
+        FileManager.default.createFile(atPath: socketPath, contents: Data())
+        addTeardownBlock { try? FileManager.default.removeItem(atPath: socketPath) }
+
+        let confirmed = ProcessCompose.PhaseExecutor.shutDown(
+            binary: binary, socketPath: socketPath, workingDirectory: dir.path
+        )
+
+        XCTAssertFalse(confirmed, "a down against nothing must not report the server stopped")
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: socketPath),
+            "the socket was unlinked after an unconfirmed down; a live server there would now be unreachable"
+        )
+    }
+
+    /// The other direction, so the fix cannot be "never unlink": a `down` the
+    /// server acknowledges still clears the path.
+    func test_shutDown_removesTheSocketWhenTheServerStops() throws {
+        let config = try writeConfig("""
+        processes:
+          quick:
+            command: "true"
+            namespace: dispose
+        """)
+        let socketPath = ProcessCompose.PhaseRunner.socketPath(for: workstreamID, phase: .dispose)
+        _ = ProcessCompose.PhaseExecutor.run(
+            phase: .dispose, config: config, binary: binary,
+            workstreamID: workstreamID, workingDirectory: dir.path,
+            environment: [:], timeout: 20,
+            selectedProcesses: [], shutDownWhenDone: false
+        )
+
+        let confirmed = ProcessCompose.PhaseExecutor.shutDown(
+            binary: binary, socketPath: socketPath, workingDirectory: dir.path
+        )
+
+        XCTAssertTrue(confirmed)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: socketPath))
+    }
+
     // `selectedProcesses` has no `PhaseExecutor` test any more, and should not get
     // one back. It now applies to `execute` alone — `PhaseRunner.command` narrowed
     // to that phase when `verify` was removed — and `execute` is the interactive

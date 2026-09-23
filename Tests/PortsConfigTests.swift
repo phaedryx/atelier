@@ -190,6 +190,47 @@ final class PortsConfigTests: XCTestCase {
         XCTAssertEqual(config.entries.map(\.name), ["ATELIER_PORT"])
     }
 
+    /// The three names Atelier assigns per *surface*. One test per name, because
+    /// this set is a deliberate carve-out and a later well-meaning edit dropping
+    /// one of them should fail here rather than in production.
+    ///
+    /// What makes them worth refusing is that a declaration lands
+    /// **inconsistently**: the surface paths assign all three after the merge, so
+    /// the line is silently inert there, while `PhaseEnvironment.variables` does
+    /// not, so it reaches every verification check, every initialization step and
+    /// `dispose` verbatim. `ATELIER_SURFACE_ID` is the one that costs — `IPC.TaskStore`
+    /// keys claim ownership on it.
+    func testADeclarationCannotShadowAPerSurfaceNameAtelierSets() throws {
+        for name in ["ATELIER_SURFACE_ID", "TMUX", "TMUX_PANE"] {
+            try write("ports:\n  \(name): { assigned: true }")
+
+            XCTAssertThrowsError(try ProcessCompose.PortsConfig.load(from: dir.path), "\(name) must be refused") { error in
+                guard case let .invalidEntry(rejected, _) = error as? ProcessCompose.PortsConfig.LoadError else {
+                    return XCTFail("expected invalidEntry for \(name), got \(error)")
+                }
+                XCTAssertEqual(rejected, name)
+            }
+        }
+    }
+
+    /// **The scope of that carve-out, pinned in the other direction.** `PATH`,
+    /// `HOME`, `SHELL`, `TMPDIR`, `USER` and `LOGNAME` were considered and
+    /// deliberately left declarable: they break loudly and visibly in the user's
+    /// own terminal, and a footgun the user can see is different from one they
+    /// cannot. Reserving them is a decision for whoever wants it, not something to
+    /// arrive by a well-meaning widening of the list above.
+    func testTheNamesDeliberatelyLeftUnreservedAreStillAccepted() throws {
+        for name in ["PATH", "HOME", "SHELL", "TMPDIR", "USER", "LOGNAME"] {
+            try write("ports:\n  \(name): { assigned: true }")
+
+            let config = try XCTUnwrap(
+                try ProcessCompose.PortsConfig.load(from: dir.path),
+                "\(name) is deliberately not reserved and must still load"
+            )
+            XCTAssertEqual(config.entries.map(\.name), [name])
+        }
+    }
+
     func testAnFFDeclarationIsRejected() throws {
         try write("ports:\n  FF_PORT: { assigned: true }")
 

@@ -333,4 +333,53 @@ final class ProcessComposeClientTests: XCTestCase {
 
         XCTAssertFalse(ProcessCompose.Client.isServerListening(atSocketPath: path))
     }
+
+    // MARK: - The peer that closes mid-request
+
+    /// **Without `SO_NOSIGPIPE` this test does not fail — it kills the whole test
+    /// process**, which is precisely what it is here to pin. A write to a stream
+    /// socket whose peer has closed raises `SIGPIPE`, and nothing in Atelier
+    /// installs a handler for it, so in production the same race terminates the
+    /// app with no log while the process table polls once a second.
+    ///
+    /// The race is made deterministic rather than waited for: the server accepts
+    /// and never reads, so a request larger than the socket buffers blocks in
+    /// `write`, and the peer then closes underneath it. `ioTimeout` is five
+    /// seconds and the close lands in about a tenth of one, so `EPIPE` wins the
+    /// race against the send timeout every time.
+    func test_aPeerThatClosesMidWrite_isReportedAsNotRunningRatherThanKillingTheProcess() async throws {
+        let path = socketPath()
+        let listener = try makeListeningSocket(at: path)
+        defer { closeListeningSocket(listener, at: path) }
+
+        let accepted = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            let connection = Darwin.accept(listener, nil, nil)
+            accepted.signal()
+            guard connection >= 0 else { return }
+            // Deliberately never read: the client's write has to block against a
+            // full buffer so the close below lands underneath it.
+            Thread.sleep(forTimeInterval: 0.1)
+            Darwin.close(connection)
+        }
+
+        let client = ProcessCompose.Client(socketPath: path)
+        // Long enough to overrun the unix-domain send and receive buffers
+        // (8 KB apiece by default), so the write cannot complete in one go.
+        let oversizedName = String(repeating: "a", count: 512 * 1024)
+
+        do {
+            _ = try await client.logs(name: oversizedName, tail: 1)
+            XCTFail("expected the closed peer to surface as an error")
+        } catch let error as ProcessCompose.Client.ClientError {
+            // `.notRunning` and never `.transport`: a peer that closed is the
+            // absence of a server, and `ProcessTableModel` treats that case as
+            // expected before Start and after Stop. Reported as `.transport` it
+            // would put an error on the Execution tab for the ordinary end of
+            // every run.
+            XCTAssertEqual(error, .notRunning)
+        }
+
+        XCTAssertEqual(accepted.wait(timeout: .now() + 5), .success)
+    }
 }
