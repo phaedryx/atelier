@@ -829,7 +829,17 @@ window.__whiteboardApply = async (op) => {
       // Each file's dataURL is a real `data:` URL, so save()'s loop posts it to
       // assets/ the way a pasted image's bytes are posted.
       if (fileList.length) api.addFiles(fileList)
-      api.updateScene({ elements: [...existing, ...converted] })
+      // **Re-read, because this arm is the only one that awaits.** Every other
+      // op is synchronous between the `existing` snapshot at the top of this
+      // function and its `updateScene`, so nothing can land in between. This
+      // one awaits a dynamic import and then `parseMermaidToExcalidraw`, which
+      // does real DOM layout and takes hundreds of milliseconds to seconds — a
+      // user stroke, a drag, a capture or another agent's write landing in that
+      // window would be replaced wholesale by the stale snapshot, and
+      // `saveNow()` below persists the loss after the caller has already been
+      // answered `ok`. The snapshot above is still right for everything before
+      // the await; this is the one read that has to be taken at write time.
+      api.updateScene({ elements: [...api.getSceneElements(), ...converted] })
       await saveNow()
       return { ok: true, ids: converted.filter((el) => !el.containerId).map((el) => el.id) }
     }
