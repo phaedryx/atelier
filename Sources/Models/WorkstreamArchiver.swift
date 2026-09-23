@@ -105,6 +105,8 @@ extension Workstream {
             agentStateTracker: Workstream.AgentStateTracker
         ) {
             var project = project
+            let projectName = project.name
+            let workstreamNames = project.workstreams.map(\.name)
             // Over a snapshot of the ids: `remove` drops each one from
             // `project.workstreams` as it goes.
             for workstreamID in project.workstreams.map(\.id) {
@@ -112,10 +114,33 @@ extension Workstream {
                     workstreamID,
                     in: &project,
                     surfaceCache: surfaceCache,
-                    tmuxPath: tmuxPath,
+                    // Deliberately nil, and the tmux kill is done once below
+                    // instead. `remove` kills its workstream's sessions from a
+                    // `Task.detached`, and `killWorkstreamSessions` is two
+                    // `ProcessRunner` spawns — each blocking its thread for the
+                    // child's whole life. One of those is the shape `remove`
+                    // has always had; *N at once* is the documented production
+                    // failure this codebase measured, where fourteen of
+                    // fourteen cooperative threads parked in `capture` and
+                    // every child was killed at its deadline, `tmux -V` blowing
+                    // a 120s bound among them. Clearing a list of a dozen
+                    // workstreams would have reached it directly.
+                    tmuxPath: nil,
                     verificationRunner: verificationRunner,
                     agentStateTracker: agentStateTracker
                 )
+            }
+            guard let tmuxPath, !workstreamNames.isEmpty else { return }
+            // One queue, one thread, the kills serialized on it — rather than
+            // `Task.detached`, which is the cooperative pool the paragraph above
+            // is about. The names were snapshotted before the loop, because
+            // `remove` has emptied `project.workstreams` by now.
+            DispatchQueue.global(qos: .utility).async {
+                for workstreamName in workstreamNames {
+                    TmuxSession.killWorkstreamSessions(
+                        tmuxPath: tmuxPath, project: projectName, workstream: workstreamName
+                    )
+                }
             }
         }
 
