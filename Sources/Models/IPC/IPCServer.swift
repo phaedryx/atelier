@@ -216,12 +216,35 @@ extension IPC {
                 // register_peer is the one call whose peer id arrives in the reply
                 // rather than the request, and an agent that registers and then
                 // exits is exactly the case that would otherwise leave a ghost.
-                if case let .peer(peer) = response.payload {
-                    self?.queue.async { _ = self?.claim(peer.id, for: connection) }
+                if let claimed = Self.peerToClaim(tool: request.tool, payload: response.payload) {
+                    self?.queue.async { _ = self?.claim(claimed, for: connection) }
                 }
                 self?.send(response, on: connection)
             }
             return true
+        }
+
+        /// The peer a *reply* binds to its connection, or nil for a reply that
+        /// binds nothing.
+        ///
+        /// **Gated on the tool, not on the payload's shape.** `get_peer_status`
+        /// answers `.peer` too, for a peer that is somebody else's, and matching
+        /// on the case alone let one agent's read rebind its own socket to
+        /// another agent's identity. Normally `claim` refuses that because the
+        /// owner's connection is still live — but between `forget` removing
+        /// `peerOwners[P]` and the *asynchronous* `retire` removing P from the
+        /// store, P is ownerless and still readable. A `get_peer_status(P)` in
+        /// that window claims P; the one-connection-speaks-for-one-peer branch
+        /// below then retires the caller's **own** live peer and binds its socket
+        /// to P. Its next call is told to register first and its inbox is gone,
+        /// for a read it made about somebody else.
+        ///
+        /// The comment above has always said register_peer is the only reply
+        /// that carries a peer id; this is that sentence made true by the
+        /// compiler rather than by the payload happening to be unique.
+        static func peerToClaim(tool: Tool, payload: Payload?) -> String? {
+            guard tool == .registerPeer, case let .peer(peer) = payload else { return nil }
+            return peer.id
         }
 
         /// Binds a peer to this connection, or refuses if a live connection already

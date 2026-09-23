@@ -212,8 +212,12 @@ extension IPC {
         }
 
         private func listPeers(for request: Request) async -> Response {
+            // Snapshotted **before** the await, and the prune is scoped to it —
+            // see `pruneContexts(observed:stillAlive:)` for the registration
+            // this would otherwise delete out from under a peer mid-hop.
+            let observed = Set(contexts.keys)
             let peers = await store.listPeers()
-            pruneContexts(keeping: peers.map(\.id))
+            pruneContexts(observed: observed, stillAlive: peers.map(\.id))
 
             let visible = peers.filter { isVisible($0.id, to: request.client) && $0.id.uuidString != request.client.peerID }
             let counts = await store.inboxCounts(for: visible.map(\.id))
@@ -493,9 +497,39 @@ extension IPC {
 
         /// Contexts outlive their peers otherwise: the store expires peers lazily
         /// and never tells anyone which ones it dropped.
-        private func pruneContexts(keeping aliveIDs: [UUID]) {
-            let alive = Set(aliveIDs)
-            contexts = contexts.filter { alive.contains($0.key) }
+        ///
+        /// **Only a context this call already knew about may be dropped.** The
+        /// store's answer is read across an `await`, and this actor is reentrant,
+        /// so a registration can land *inside* that hop: `registerPeer` writes
+        /// `contexts[A]` and then suspends on `store.pin`, and a `list_peers`
+        /// resuming with a snapshot taken before A existed would delete A's
+        /// context while A's own reply — carrying its peer id — was already on
+        /// the way out. The helper then believes itself registered while
+        /// `registeredPeerID` answers nil for the rest of the session:
+        /// `send_message`, `receive_messages` and `broadcast` all tell it to
+        /// register first, `list_peers` cannot see it, `peersBySurface` misses it
+        /// so verification and task notices addressed to it are dropped, and
+        /// `touch` cannot repair it because its own guard needs a context to
+        /// exist. That is reachable from the documented coordinator workflow
+        /// verbatim — "poll list_peers until a peer reports that surface id" is a
+        /// `list_peers` loop running while a spawned peer registers.
+        ///
+        /// Scoping to `observed` makes the prune answer only the question it can
+        /// answer: of the contexts that existed when the read began, which ones
+        /// has the store since expired. Anything younger than the read is not
+        /// evidence of anything, and is left for the next call.
+        private func pruneContexts(observed: Set<UUID>, stillAlive: [UUID]) {
+            let expired = Self.expiredContexts(observed: observed, stillAlive: stillAlive)
+            guard !expired.isEmpty else { return }
+            for id in expired {
+                contexts.removeValue(forKey: id)
+            }
+        }
+
+        /// The decision above, as a pure function so the reentrancy rule is
+        /// assertable — a race is not otherwise something a test can stage.
+        nonisolated static func expiredContexts(observed: Set<UUID>, stillAlive: [UUID]) -> Set<UUID> {
+            observed.subtracting(stillAlive)
         }
 
         private func info(for peer: Peer) async -> PeerInfo {
@@ -688,6 +722,26 @@ extension IPC {
         /// the default branch and reads `ports.yaml`, and the main actor has no
         /// business waiting on either.
         ///
+        /// **That middle step runs here, in the actor, and not in the closures
+        /// `spawnTerminalTab` calls.** Those closures take the surface id, which
+        /// `WorkspaceModel.addTerminal()` mints, so they are evaluated *inside*
+        /// the main-actor hop — and for one round the whole of both ran there:
+        /// `Git.Operations.defaultBranch` (up to six sequential git spawns on a
+        /// cold cache), `ProcessCompose.PhaseEnvironment.variables` (a `ports.yaml`
+        /// read plus a liveness probe per declared port), `IPC.Config.write` and
+        /// `StatusLine.Config.write`, all on the main thread, for a tool call the
+        /// user did not make. Nothing in that list depends on the surface: the id
+        /// reaches the environment as one `ATELIER_SURFACE_ID` entry and the
+        /// command as one `--session-id`. So both are built to completion out
+        /// here, and the closures do a dictionary write and a string build.
+        ///
+        /// The tab and its surface stay in **one** hop, deliberately. Minting the
+        /// id in a first hop and creating the surface in a second would leave a
+        /// terminal tab on the strip with no surface behind it for the length of
+        /// this work — and `SingleTerminalView` creates a surface on a miss, so a
+        /// user looking at that workstream would get a plain shell where the
+        /// agent was supposed to be.
+        ///
         /// The agent is started by *creating the surface already running it*,
         /// never by typing into a shell. There is no paste, no synthetic Return,
         /// and no question of whether the pane was interruptible — the tab does
@@ -723,15 +777,18 @@ extension IPC {
                 }
 
                 let startsAgent = prompt?.isEmpty == false
+                // Both built before the hop — see this method's doc comment.
+                let environmentBase = WorkspaceActions.environmentBase(for: plan)
+                let agentCommand = agentCommand(plan: plan, prompt: prompt)
                 let surfaceID = try await MainActor.run {
                     try WorkspaceActions.shared.spawnTerminalTab(
                         workstreamID: workstreamID,
                         title: title.isEmpty ? nil : title,
                         command: { surfaceID in
-                            agentCommand(plan: plan, prompt: prompt, surfaceID: surfaceID)
+                            agentCommand?.command(surfaceID: surfaceID)
                         },
                         environment: { surfaceID in
-                            WorkspaceActions.environment(for: plan, surfaceID: surfaceID)
+                            WorkspaceActions.environment(base: environmentBase, surfaceID: surfaceID)
                         }
                     )
                 }
@@ -746,22 +803,50 @@ extension IPC {
             }
         }
 
-        /// The command a spawned tab runs, or nil for a plain shell.
+        /// Everything a spawned agent's command line needs except the surface it
+        /// will run on.
         ///
-        /// **The session id is the surface's, never the workstream's.** The
-        /// workstream id is the Coding Agent tab's own Claude session; a second
-        /// agent handed it would fight that tab over one transcript. The surface
-        /// id is unique per tab by construction, so it is the right session
-        /// identity — which is also why this is built per surface rather than once.
+        /// The split exists so the two config files are written and the system
+        /// prompt assembled off the main actor; `openAgentTab`'s doc comment has
+        /// the rest of that argument. What is left here is a `CommandBuilder`
+        /// run, which is string work.
+        private struct SpawnedAgent: Sendable {
+            let claudePath: String
+            let bypassPermissions: Bool
+            let systemPrompt: String?
+            let mcpConfigPath: String?
+            let settingsPath: String?
+            let initialPrompt: String
+
+            /// **The session id is the surface's, never the workstream's.** The
+            /// workstream id is the Coding Agent tab's own Claude session; a
+            /// second agent handed it would fight that tab over one transcript.
+            /// The surface id is unique per tab by construction, so it is the
+            /// right session identity — which is why this one field, and only
+            /// this one, is applied per surface.
+            func command(surfaceID: UUID) -> String {
+                Workstream.AgentCommand.fresh(
+                    claudePath: claudePath,
+                    sessionID: surfaceID.uuidString.lowercased(),
+                    sessionName: nil,
+                    bypassPermissions: bypassPermissions,
+                    systemPrompt: systemPrompt,
+                    mcpConfigPath: mcpConfigPath,
+                    settingsPath: settingsPath,
+                    initialPrompt: initialPrompt
+                )
+            }
+        }
+
+        /// What a spawned tab will run, or nil for a plain shell.
         ///
         /// The MCP config is the workstream's, shared deliberately: it names the
         /// helper binary and carries no identity, and the agent's identity comes
         /// from `ATELIER_SURFACE_ID` in its environment.
         private nonisolated func agentCommand(
             plan: WorkspaceActions.AgentTabPlan,
-            prompt: String?,
-            surfaceID: UUID
-        ) -> String? {
+            prompt: String?
+        ) -> SpawnedAgent? {
             guard let prompt, !prompt.isEmpty, let claudePath = plan.claudePath else { return nil }
             let mcpConfigPath = IPC.AgentSettings.isEnabled ? IPC.Config.write(for: plan.workstreamID) : nil
             let systemPrompt = Workstream.AgentCommand.systemPrompt(
@@ -778,12 +863,8 @@ extension IPC {
                 for: plan.workstreamID,
                 cwd: plan.workingDirectory
             )
-            return Workstream.AgentCommand.fresh(
+            return SpawnedAgent(
                 claudePath: claudePath,
-                // The surface's id, never the workstream's: see this method's
-                // doc comment.
-                sessionID: surfaceID.uuidString.lowercased(),
-                sessionName: nil,
                 bypassPermissions: plan.bypassPermissions,
                 systemPrompt: systemPrompt,
                 mcpConfigPath: mcpConfigPath,

@@ -661,21 +661,28 @@ final class WorkspaceActions {
         )
     }
 
-    /// The environment a spawned tab's shell gets. Call off the main actor.
+    /// The environment a spawned tab's shell gets, minus the one value that
+    /// depends on which surface it lands on. **Call off the main actor.**
     ///
     /// Built from `ProcessCompose.PhaseEnvironment.variables`, which is the one
     /// place that assembles the full `ATELIER_*` set plus `ports.yaml` for a
     /// caller with no plan to hand over — the same problem the unattended phases
-    /// had. Then two corrections, both of which the Coding Agent tab's own
-    /// `terminalEnvVars` makes for the same reasons:
+    /// had. Then one correction, which the Coding Agent tab's own
+    /// `terminalEnvVars` makes for the same reason: `TMUX`/`TMUX_PANE` are
+    /// cleared, so a tab spawned while tmux mode is on does not inherit the
+    /// Agent's session and try to nest.
     ///
-    /// - `TMUX`/`TMUX_PANE` are cleared, so a tab spawned while tmux mode is on
-    ///   does not inherit the Agent's session and try to nest.
-    /// - `ATELIER_SURFACE_ID` is *this* surface's, so the agent that starts here
-    ///   registers as its own peer and is nudged in its own pane. Inheriting the
-    ///   Agent tab's id is the exact misdelivery the per-surface marker exists to
-    ///   prevent.
-    nonisolated static func environment(for plan: AgentTabPlan, surfaceID: UUID) -> [String: String] {
+    /// **Split from the surface-dependent half on purpose.** This is the
+    /// expensive part — `ports.yaml` is read and each declared port is probed
+    /// for liveness, and `Git.Operations.defaultBranch` is up to six sequential
+    /// git spawns on a cold cache — and none of it depends on the surface. It
+    /// used to run inside `spawnTerminalTab`'s `MainActor.run`, because the
+    /// surface id is minted by `addTerminal()` and the environment was a closure
+    /// over it, so the whole of it ran on the main thread for a tool call the
+    /// user did not make. Taking the id out of the only value that needs it lets
+    /// the caller do this in its own isolation domain and hop to the main actor
+    /// holding a finished dictionary.
+    nonisolated static func environmentBase(for plan: AgentTabPlan) -> [String: String] {
         var vars = ProcessCompose.PhaseEnvironment.variables(
             workstreamID: plan.workstreamID,
             projectName: plan.projectName,
@@ -686,6 +693,18 @@ final class WorkspaceActions {
         )
         vars["TMUX"] = ""
         vars["TMUX_PANE"] = ""
+        return vars
+    }
+
+    /// `environmentBase`, addressed to one surface. A dictionary write, so it is
+    /// cheap enough to run inside the main-actor hop that mints the id.
+    ///
+    /// `ATELIER_SURFACE_ID` is *this* surface's, so the agent that starts here
+    /// registers as its own peer and is nudged in its own pane. Inheriting the
+    /// Agent tab's id is the exact misdelivery the per-surface marker exists to
+    /// prevent.
+    nonisolated static func environment(base: [String: String], surfaceID: UUID) -> [String: String] {
+        var vars = base
         vars["ATELIER_SURFACE_ID"] = surfaceID.uuidString
         return vars
     }

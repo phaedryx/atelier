@@ -51,6 +51,19 @@ final class IPCTransport {
         var sendTimeout = timeval(tv_sec: 15, tv_usec: 0)
         setsockopt(socketFD, SOL_SOCKET, SO_SNDTIMEO, &sendTimeout, socklen_t(MemoryLayout<timeval>.size))
 
+        // Without this a `send` to a socket the app has already RST'd raises
+        // SIGPIPE, whose default action is to terminate — and this process
+        // installs no handler, so the helper *dies* instead of taking the
+        // `.closed` → reconnect path `call(tool:arguments:)` exists for. It is
+        // reachable any time the app is killed uncleanly between two tool
+        // calls, which is the case the reconnect was written for, so the whole
+        // recovery was unreachable exactly when it was needed. Per socket
+        // rather than a process-wide `signal(SIGPIPE, SIG_IGN)`: the failure
+        // then arrives as `EPIPE` on this write, which `roundTrip` already
+        // reads as `.closed`.
+        var noSignalPipe: Int32 = 1
+        setsockopt(socketFD, SOL_SOCKET, SO_NOSIGPIPE, &noSignalPipe, socklen_t(MemoryLayout<Int32>.size))
+
         fd = socketFD
         return true
     }
@@ -757,12 +770,13 @@ while let line = readLine(strippingNewline: true) {
             reply(id: id, code: -32602, message: "Unknown tool: \(params?["name"] as? String ?? "")")
             continue
         }
-        // Every tool in this surface takes string arguments only; anything else
-        // is rendered rather than rejected, so a stray number still reaches the app.
-        var arguments: [String: String] = [:]
-        for (key, value) in params?["arguments"] as? [String: Any] ?? [:] {
-            arguments[key] = value as? String ?? String(describing: value)
-        }
+        // Every tool in this surface declares string arguments, and models send
+        // real JSON regardless — a boolean for `bypass_permissions`, an array
+        // for `checks`. `ToolArguments.strings(fromJSON:)` gives each JSON type
+        // the spelling this surface's own readers parse; it is shared with the
+        // app rather than spelled here so it is testable, and its doc comment
+        // carries what the `String(describing:)` it replaced did to each type.
+        let arguments = IPC.ToolArguments.strings(fromJSON: params?["arguments"] as? [String: Any] ?? [:])
 
         switch bridge.call(tool: tool, arguments: arguments) {
         case let .ok(payload):
