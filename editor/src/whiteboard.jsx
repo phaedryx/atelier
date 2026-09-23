@@ -192,6 +192,16 @@ const renderPng = async (rev) => {
 // The vocabulary is Excalidraw's own image table (`MIME_TYPES`, 0.18.1), so
 // anything it will accept as a paste has an extension here and the refusal below
 // is unreachable rather than merely unlikely.
+//
+// THERE IS A THIRD READER, IN SWIFT: `Whiteboard.AssetSchemeHandler.mimeTypes`
+// turns the extension a file landed under back into the `Content-Type` it is
+// served with. It was written independently and knew only png/jpg/gif/svg/webp,
+// so the four entries below that it lacked — bmp, ico, avif, jfif — were served
+// as `application/octet-stream` and re-inlined under the wrong type after a
+// relaunch. A scheme handler answers a network request, so there is no op for
+// this vocabulary to travel on the way a `captionKey` does: it is hand-mirrored,
+// `WhiteboardAssetSchemeHandlerTests` pins the whole set, and a change here is a
+// change there.
 const assetExtensions = {
   'image/png': 'png',
   'image/jpeg': 'jpg',
