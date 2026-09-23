@@ -18,8 +18,21 @@ extension Whiteboard {
         /// has a name keeps it. `.other` keeps `rawType` rather than guessing: a
         /// board carrying a kind this build has never heard of has to say so,
         /// not be rendered as the nearest thing it does know.
+        ///
+        /// **`frame` is here because a board really holds them**, not because
+        /// the write vocabulary can make one. A mermaid class diagram with a
+        /// `namespace` block draws one frame per namespace, and the digest's
+        /// organizing principle is that an element on the board it cannot name
+        /// is the digest lying — the same failure `labels` was corrected for
+        /// when an orphaned label vanished from it.
+        ///
+        /// It names the kind and nothing more. A frame carries `children`, and
+        /// **this reader does not read them**: it reports a frame as an element
+        /// with a name and a bounding box, and says nothing about what sits
+        /// inside it. Adding containment later is a change to the *format*, not
+        /// a gap in this case.
         enum Kind: Equatable {
-            case box, note, ellipse, diamond, line, arrow, text, stroke, image, other
+            case box, note, ellipse, diamond, line, arrow, text, stroke, image, frame, other
         }
 
         /// The `customData` keys. Fixed here, in the **reader**, so that PR 3's
@@ -189,6 +202,7 @@ extension Whiteboard {
             case "text": .text
             case "freedraw": .stroke
             case "image": .image
+            case "frame": .frame
             default: .other
             }
 
@@ -209,19 +223,15 @@ extension Whiteboard {
             // diagram with a `namespace` block draws one per namespace. Read
             // through `text` alone it came out as a bare `frame` with its
             // dimensions and nothing saying *which* namespace — a real element,
-            // on the canvas, carrying a word the digest could not see. Scoped
-            // to `frame` rather than added to the general fallback: `name` is
-            // not a field this reader knows the meaning of anywhere else, and
-            // honouring it everywhere would be the "relabel any element" rule
-            // the note promotion above refuses for the same reason.
+            // on the canvas, carrying a word the digest could not see.
             //
-            // The kind still reports itself as `frame` through `.other`'s
-            // `rawType`. This adds the word, and deliberately does **not** add
-            // a `frame` case to the vocabulary: that would be a claim about how
-            // a frame's children relate to it, which nothing here reads.
+            // Read for `.frame` and nowhere else, which is the rule the note
+            // promotion above already follows: `name` has no meaning this
+            // reader knows on any other type, and honouring it everywhere would
+            // let a board relabel its own shapes out from under a reader.
             let text: String? = switch kind {
             case .stroke, .image: nil
-            case .other where rawType == "frame": raw["name"] as? String
+            case .frame: raw["name"] as? String
             default: labels[id] ?? raw["text"] as? String
             }
 

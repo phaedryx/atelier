@@ -121,15 +121,19 @@ final class WhiteboardSceneTests: XCTestCase {
     }
 
     func test_anUnknownTypeKeepsItsOwnName_ratherThanBeingCalledABox() throws {
+        // `frame` used to stand here, and it is a known kind now — an element a
+        // mermaid class diagram really draws, which is why it was promoted out
+        // of `.other`. `magicframe` is Excalidraw's own and this reader has
+        // never heard of it, so it plays the part without being invented.
         let json = """
         {"type":"excalidraw","elements":[
-        {"id":"f","type":"frame","x":0,"y":0,"width":10,"height":10,"isDeleted":false}
+        {"id":"f","type":"magicframe","x":0,"y":0,"width":10,"height":10,"isDeleted":false}
         ]}
         """
         let scene = try loaded(json)
         let element = try XCTUnwrap(scene.elements.first)
         XCTAssertEqual(element.kind, .other)
-        XCTAssertEqual(element.rawType, "frame")
+        XCTAssertEqual(element.rawType, "magicframe")
     }
 
     // MARK: - The three load cases
@@ -245,10 +249,9 @@ final class WhiteboardSceneTests: XCTestCase {
         """) else { return XCTFail("expected a loaded scene") }
         let frame = try? XCTUnwrap(scene.elements.first)
         XCTAssertEqual(frame?.text, "Auth")
-        // Still `.other`, which names itself from `rawType`. Adding a `frame`
-        // case would be a claim about how its children relate to it, and
-        // nothing here reads that.
-        XCTAssertEqual(frame?.kind, .other)
+        // A kind of its own rather than `.other`: a frame is an ordinary
+        // inhabitant of a board, not a type this build has never heard of.
+        XCTAssertEqual(frame?.kind, .frame)
         XCTAssertEqual(frame?.rawType, "frame")
     }
 
