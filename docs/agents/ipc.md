@@ -66,7 +66,9 @@ that the helper really advertises what the registry says).
 argument. That collapsed three ad-hoc list/bool parsers applied unevenly —
 `Workstream.Launcher.parseBool` (deleted, along with the now-unreachable
 `Launcher.Failure.invalidArgument`), `VerificationSummary.checks(from:)` and
-`TaskSummary.tags(from:)` (both now delegating to `ToolArguments.parseList`).
+`TaskSummary.tags(from:)`, both since deleted — once they were one-line delegations with no
+production caller there was nothing left to keep, and their tools read `ToolArguments.list(_:)`
+directly.
 
 **Every argument is declared a string, and models send real JSON anyway — so the helper
 coerces rather than renders, in `ToolArguments.strings(fromJSON:)`.** That is a shared
