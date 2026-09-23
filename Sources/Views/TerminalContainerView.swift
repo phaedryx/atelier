@@ -1445,8 +1445,19 @@ struct TerminalContainerView: View {
     /// `ProcessCompose.RunSession.closingTabStopsRun`.
     private func startRunIfNeeded() {
         guard sessionMode != .waitingForTools, !appEnv.isDetecting else { return }
+        // Asked before the port status, because the port status cannot answer
+        // it. `Port.Status` stays `.none` whenever `RunLauncher.executableURL()`
+        // is nil — the missing-helper state the Execution tab already warns
+        // about — and for the whole window before `atelier-run` writes its first
+        // snapshot. So a live run reads as "nothing is serving this", and every
+        // New Browser killed the dev stack and relaunched it.
+        guard !session.runStarted else { return }
         guard portDetector.status == .none else { return }
-        restartRun()
+        // `startRun`, not `restartRun`: with a run already excluded the two are
+        // the same call — `RunSession.restart` only stops what is running — and
+        // naming the one that can happen is what keeps a reader from concluding
+        // this path is allowed to stop a run.
+        startRun()
     }
 
     /// The cheap half of `restore`'s preconditions, asked before the expensive
