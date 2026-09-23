@@ -615,11 +615,25 @@ extension Whiteboard {
         /// A typo silently placing an element at the origin is the same class of
         /// bug as `open_editor`'s line number scrolling to the top of the file:
         /// the element really is on the board, just nowhere the agent meant.
+        ///
+        /// **Both components must be finite, and that is a crash fix rather
+        /// than tidiness.** `Double(String)` accepts `inf`, `nan` and anything
+        /// that overflows to infinity — `1e999` is the spelling an agent
+        /// reaches by arithmetic rather than by typing. A non-finite coordinate
+        /// survives every guard below it and reaches `Host.apply`, where
+        /// `JSONSerialization` raises `NSInvalidArgumentException` for a
+        /// non-finite `Double`. That is an Objective-C exception, so the `try?`
+        /// wrapped around the call cannot catch it and the app dies: one
+        /// `whiteboard_add` with `"at": "1e999,0"` was enough. Refused here, in
+        /// the one place all three callers go through — the column pre-scan in
+        /// `addPlan` reaches this under `try?`, so a guard at a call site would
+        /// have left that path carrying the value.
         static func parsePosition(_ raw: String) throws -> (x: Double, y: Double) {
             let parts = raw.split(separator: ",", omittingEmptySubsequences: false)
             guard parts.count == 2,
                   let x = Double(parts[0].trimmingCharacters(in: .whitespaces)),
-                  let y = Double(parts[1].trimmingCharacters(in: .whitespaces))
+                  let y = Double(parts[1].trimmingCharacters(in: .whitespaces)),
+                  x.isFinite, y.isFinite
             else { throw Failure.invalidPosition(raw) }
             return (x, y)
         }

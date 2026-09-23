@@ -452,6 +452,58 @@ final class WhiteboardWriteTests: XCTestCase {
         ) { XCTAssertEqual($0 as? Write.Failure, .invalidPosition("nope")) }
     }
 
+    // MARK: - Positions that are numbers and still not coordinates
+
+    /// **A non-finite coordinate is a crash, not a misplacement.**
+    ///
+    /// `Double(String)` accepts all three of these, and the value then survives
+    /// every guard between here and `Host.apply`, where `JSONSerialization`
+    /// raises `NSInvalidArgumentException` for a non-finite `Double` — an
+    /// Objective-C exception no `try?` on the Swift side can catch, so the app
+    /// dies rather than refusing. `1e999` is the one an agent reaches without
+    /// meaning to, by arithmetic rather than by typing a word.
+    func test_aNonFinitePositionIsRefusedRatherThanReachingJSONSerialization() {
+        for raw in ["inf", "nan", "1e999", "-inf", "infinity"] {
+            for spelling in ["\(raw),0", "0,\(raw)", "\(raw),\(raw)"] {
+                XCTAssertThrowsError(
+                    try Write.parsePosition(spelling),
+                    "expected \(spelling) to be refused"
+                ) { XCTAssertEqual($0 as? Write.Failure, .invalidPosition(spelling)) }
+            }
+        }
+    }
+
+    /// Through `plan`, because the column pre-scan in `addPlan` reads `at`
+    /// under `try?` — a guard at a call site rather than inside `parsePosition`
+    /// would have left that path carrying the value into `nextRow`.
+    func test_aNonFinitePositionIsRefusedThroughTheWholeAddPath() {
+        XCTAssertThrowsError(
+            try Write.plan(
+                from: [["kind": "box", "text": "Auth", "at": "1e999,0"]],
+                live: empty,
+                mint: minter()
+            )
+        ) { XCTAssertEqual($0 as? Write.Failure, .invalidPosition("1e999,0")) }
+    }
+
+    func test_aNonFinitePositionIsRefusedOnAMermaidEntryToo() {
+        XCTAssertThrowsError(
+            try Write.plan(
+                from: [["kind": "mermaid", "text": flowchart, "at": "0,nan"]],
+                live: empty,
+                mint: minter()
+            )
+        ) { XCTAssertEqual($0 as? Write.Failure, .invalidPosition("0,nan")) }
+    }
+
+    func test_anOrdinaryLargeCoordinateIsStillAccepted() throws {
+        // The guard is on finiteness and nothing else: a board really can be
+        // scrolled a long way from the origin.
+        let position = try Write.parsePosition("1e30,-1e30")
+        XCTAssertEqual(position.x, 1e30)
+        XCTAssertEqual(position.y, -1e30)
+    }
+
     // MARK: - update: captions
 
     func test_updateCarriesACaptionForAnImage() throws {
