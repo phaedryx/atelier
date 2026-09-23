@@ -699,3 +699,6 @@
 "Process" = "Process";
 "Namespace" = "Namespace";
 "Ready" = "Ready";
+
+/* Execution tab - Start button while the previous run's control socket is being reclaimed */
+"Reclaiming…" = "Reclaiming…";
