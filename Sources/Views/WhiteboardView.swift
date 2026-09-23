@@ -53,9 +53,15 @@ struct WhiteboardTabView: View {
 
     /// The button does nothing visible when the user cancels, which is the
     /// ordinary outcome of pressing Escape — there is nothing to report, and an
-    /// alert saying "you cancelled" is worse than silence. A capture that fails
-    /// for want of Screen Recording permission is reported by macOS itself, in
-    /// its own alert, naming the setting to change.
+    /// alert saying "you cancelled" is worse than silence.
+    ///
+    /// This used to add that a capture refused for want of Screen Recording
+    /// permission is reported by macOS in its own alert, naming the setting to
+    /// change. `Whiteboard.Capture.run` explicitly retracts that claim as
+    /// unmeasured — what was measured is that `screencapture` exits 1 and
+    /// writes no file, not what the user sees — so the sentence is gone rather
+    /// than restated here, where it would read as a second, independent
+    /// observation of something nobody has observed.
     private func capture() {
         isCapturing = true
         Task {
