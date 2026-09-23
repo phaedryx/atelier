@@ -224,19 +224,6 @@ extension GitHub.PR.ChecksRollup {
 
 extension GitHub {
     enum Operations {
-        /// Resolved once per process. `CommandLineTools.path(for:)` stats each PATH
-        /// entry until it hits, and `listWorktreesWithInfo` spawns three git
-        /// processes per worktree — a 12-worktree project paid that lookup ~37
-        /// times per render. A `static let` is lazy and thread-safe, and matches
-        /// `CommandLineTools`' own once-per-process shell PATH cache: git moving
-        /// mid-session is not a case either of them tries to follow — nor is git
-        /// appearing after a launch that could not find it, which is the direction
-        /// this actually changes: the computed property re-checked every call, so a
-        /// nil could recover. Installing git while the app runs is the only way to
-        /// reach that, and a stale answer either way is worth the ~37 lookups a
-        /// render this removes.
-        private static let gitPath: String? = CommandLineTools.path(for: "git")
-
         /// The `--json` field set every PR query requests. Kept in one place so a field added for
         /// one call site cannot silently go missing from another and decode as its default.
         private static let prFields = "number,title,state,headRefName,url,isDraft,reviewDecision,statusCheckRollup"
@@ -250,7 +237,7 @@ extension GitHub {
         /// nothing the sidebar draws calls `gh`, so a project could have a GitHub remote and
         /// no GitHub URL at the same time for a whole session.
         static func githubRemoteURL(at path: String) -> String? {
-            guard let gitPath,
+            guard let gitPath = Git.Operations.gitPath,
                   let remote = run(gitPath, args: ["remote", "get-url", "origin"], in: path),
                   remote.contains("github.com") else { return nil }
             return remote

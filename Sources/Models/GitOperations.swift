@@ -414,7 +414,12 @@ extension Git {
         /// nil could recover. Installing git while the app runs is the only way to
         /// reach that, and a stale answer either way is worth the ~37 lookups a
         /// render this removes.
-        private static let gitPath: String? = CommandLineTools.path(for: "git")
+        ///
+        /// Not private, because `GitHub.Operations` ran git too and carried a verbatim
+        /// copy of this — its own `static let`, its own cache, and this comment with it,
+        /// citing a `listWorktreesWithInfo` that lives here and not there. One lookup,
+        /// one answer.
+        static let gitPath: String? = CommandLineTools.path(for: "git")
 
         /// Check if a directory is a git repository.
         static func isGitRepo(at path: String) -> Bool {
