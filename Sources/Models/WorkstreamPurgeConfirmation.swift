@@ -109,6 +109,16 @@ extension Workstream {
         @Published private(set) var target: Target?
         @Published private(set) var warning: String?
 
+        /// The warning probe `confirm` has in flight, or nil.
+        ///
+        /// Stored for two things that are one mechanism. `cancel()` has to stop
+        /// a probe that would otherwise publish a target the user has already
+        /// dismissed — an alert raising itself again, seconds later, naming a
+        /// purge nobody asked for a second time. And a test needs somewhere to
+        /// await, since `confirm` no longer publishes anything by the time it
+        /// returns.
+        private(set) var pendingWarning: Task<Void, Never>?
+
         private let operations: Operations
 
         init(operations: Operations = .live) {
@@ -161,18 +171,68 @@ extension Workstream {
         // MARK: - Asking
 
         func confirm(workstream: Workstream) {
-            warning = Archiver.purgeWarning(for: workstream)
-            target = .workstream(id: workstream.id, name: workstream.name)
+            let worktreePath = workstream.worktreePath
+            present(.workstream(id: workstream.id, name: workstream.name)) {
+                Archiver.purgeWarning(forWorktreeAt: worktreePath)
+            }
         }
 
         func confirm(orphanWorktree path: String, projectDirectory: String, checkoutDirectory: String? = nil) {
-            warning = Archiver.orphanPurgeWarning(at: path)
-            target = .orphanWorktree(
-                path: path, projectDirectory: projectDirectory, checkoutDirectory: checkoutDirectory
-            )
+            present(
+                .orphanWorktree(
+                    path: path, projectDirectory: projectDirectory, checkoutDirectory: checkoutDirectory
+                )
+            ) {
+                Archiver.orphanPurgeWarning(at: path)
+            }
+        }
+
+        /// Compute the warning off the main actor, then publish it **with** the
+        /// target.
+        ///
+        /// Both warnings spawn git — `status --porcelain`, `log
+        /// @{upstream}..HEAD` and a fallback `log -1` — through `ProcessRunner`,
+        /// which blocks its calling thread for the child's whole life. Run on
+        /// the main actor, as this was, a large repository froze the whole UI
+        /// before the alert had been drawn: the user pressed Purge and the app
+        /// stopped redrawing with nothing on screen to say why. It goes to a
+        /// `DispatchQueue`, never `Task.detached` — a blocking child on the
+        /// cooperative pool is the documented way to park every thread in it.
+        ///
+        /// **`warning` first, then `target`, and never the other way round.**
+        /// `isPresented` reads `target`, and `confirmButtonTitle` and `message`
+        /// read `warning`: publishing the target first would raise the alert
+        /// offering a plain "Purge" over the generic "nothing would be lost"
+        /// sentence, for a worktree the probe is about to report has uncommitted
+        /// work. The user-visible sequence is otherwise exactly what it was —
+        /// the alert still appears only once the probe has answered; what
+        /// changed is that the app goes on drawing while it does.
+        ///
+        /// The signature stays synchronous deliberately. The callers are plain
+        /// SwiftUI actions in three views, one of which (`ProjectOverviewView`)
+        /// belongs to nothing in this file's story; making them `await` would
+        /// spread an implementation detail of the probe across all of them.
+        private func present(_ target: Target, warning probe: @escaping @Sendable () -> String?) {
+            // A second confirmation while the first is still probing: the older
+            // answer must not land after the newer one.
+            pendingWarning?.cancel()
+            pendingWarning = Task { [weak self] in
+                let warning = await withCheckedContinuation { continuation in
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        continuation.resume(returning: probe())
+                    }
+                }
+                guard !Task.isCancelled else { return }
+                self?.warning = warning
+                self?.target = target
+            }
         }
 
         func cancel() {
+            // Before clearing, or an in-flight probe publishes the target back
+            // after the user has dismissed it.
+            pendingWarning?.cancel()
+            pendingWarning = nil
             target = nil
             warning = nil
         }

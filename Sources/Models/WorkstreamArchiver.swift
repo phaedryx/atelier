@@ -215,7 +215,18 @@ extension Workstream {
         /// Check if purging a workstream would lose work. Returns a warning message
         /// describing what would be lost, or nil if it is safe to purge.
         static func purgeWarning(for workstream: Workstream) -> String? {
-            guard let path = workstream.worktreePath else { return nil }
+            purgeWarning(forWorktreeAt: workstream.worktreePath)
+        }
+
+        /// The same decision against a bare path.
+        ///
+        /// Split out so the probe can be handed to a background queue carrying
+        /// only a `String`: this runs `git status --porcelain` and
+        /// `git log @{upstream}..HEAD` through `ProcessRunner`, which blocks its
+        /// thread for the child's whole life, and `Workstream` is not what needs
+        /// to cross that boundary. See `PurgeConfirmation.present`.
+        static func purgeWarning(forWorktreeAt path: String?) -> String? {
+            guard let path else { return nil }
             // A probe that did not run must not read as "nothing here": this warning
             // is the only thing between the user and a --force removal.
             guard let uncommitted = Git.Operations.hasUncommittedChanges(at: path) else {
@@ -362,8 +373,6 @@ extension Workstream {
                 let standardizedPath = URL(fileURLWithPath: worktreePath ?? projectDir).standardizedFileURL.path
                 let wsName = ws.name
                 let projName = project.name
-                // Capture the branch name before the worktree is removed
-                let branchName = worktreePath.flatMap { Git.Operations.currentBranch(at: $0) }
                 archivingPaths.insert(standardizedPath)
                 NotificationCenter.default.post(name: archivingDidStart, object: nil)
                 Task.detached {
@@ -428,6 +437,18 @@ extension Workstream {
                     await withCheckedContinuation { continuation in
                         DispatchQueue.global(qos: .utility).async {
                             if let worktreePath {
+                                // Read before anything below removes the
+                                // worktree, and read *here* rather than on the
+                                // main actor where it used to be: this goes
+                                // through `ProcessRunner`, which blocks its
+                                // thread for the child's whole life, so on a
+                                // large repository it froze the UI before the
+                                // confirmation alert had even been answered.
+                                // This queue, not the enclosing `Task.detached`,
+                                // for the reason the comment above it gives —
+                                // a blocking child on the cooperative pool is
+                                // the documented way to park every thread in it.
+                                let branchName = Git.Operations.currentBranch(at: worktreePath)
                                 // Before the worktree is removed: dispose runs
                                 // in it.
                                 runDispose(
@@ -659,7 +680,6 @@ extension Workstream {
         @MainActor
         static func purgeOrphanWorktree(projectDirectory: String, worktreePath: String) {
             let standardizedPath = URL(fileURLWithPath: worktreePath).standardizedFileURL.path
-            let branchName = Git.Operations.currentBranch(at: worktreePath)
             archivingPaths.insert(standardizedPath)
             NotificationCenter.default.post(name: archivingDidStart, object: nil)
             Task.detached {
@@ -669,21 +689,34 @@ extension Workstream {
                         NotificationCenter.default.post(name: archivingDidComplete, object: nil)
                     }
                 }
-                // Same as `purge`: git's stderr is the only account of why an
-                // orphan could not be removed, and nothing downstream can recover it.
-                if case let .failure(failure) = Git.Operations.removeWorktree(
-                    projectPath: projectDirectory, worktreePath: worktreePath
-                ) {
-                    logger.error("[Atelier] orphan purge could not remove the worktree: \(failure.description, privacy: .public)")
+                // Every git call below blocks its thread for the child's whole
+                // life, so they go to a utility queue rather than staying on the
+                // cooperative pool this detached task runs on — the same bridge
+                // `purge` uses, and for the reason stated there. `currentBranch`
+                // in particular used to run on the *main actor*, before the
+                // caller's confirmation alert had been drawn.
+                await withCheckedContinuation { continuation in
+                    DispatchQueue.global(qos: .utility).async {
+                        // Before the worktree is removed out from under it.
+                        let branchName = Git.Operations.currentBranch(at: worktreePath)
+                        // Same as `purge`: git's stderr is the only account of why an
+                        // orphan could not be removed, and nothing downstream can recover it.
+                        if case let .failure(failure) = Git.Operations.removeWorktree(
+                            projectPath: projectDirectory, worktreePath: worktreePath
+                        ) {
+                            logger.error("[Atelier] orphan purge could not remove the worktree: \(failure.description, privacy: .public)")
+                        }
+                        if let branchName,
+                           case let .failure(failure) = Git.Operations.deleteLocalBranch(
+                               at: projectDirectory, branchName: branchName
+                           )
+                        {
+                            logger.error("[Atelier] orphan purge could not delete branch \(branchName, privacy: .public): \(failure.description, privacy: .public)")
+                        }
+                        Git.Operations.fetchDefaultBranch(at: projectDirectory)
+                        continuation.resume()
+                    }
                 }
-                if let branchName,
-                   case let .failure(failure) = Git.Operations.deleteLocalBranch(
-                       at: projectDirectory, branchName: branchName
-                   )
-                {
-                    logger.error("[Atelier] orphan purge could not delete branch \(branchName, privacy: .public): \(failure.description, privacy: .public)")
-                }
-                Git.Operations.fetchDefaultBranch(at: projectDirectory)
             }
         }
     }
