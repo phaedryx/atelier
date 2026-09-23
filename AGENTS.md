@@ -1479,6 +1479,21 @@ Facts worth keeping:
   nothing. The sweep calls through `AgentStateTracker.onProlongedSilence` rather than the
   singleton, so the sweep stays testable and the tracker keeps knowing nothing about how the
   channel gets checked.
+- **A listener that ends rebuilds itself, because nothing else would.** `AtelierApp` calls
+  `HookEventReceiver.start()` exactly once, at launch, and `setupListener` guards on
+  `listener == nil` to stay idempotent — so when `.failed` cancelled the listener and left that
+  property pointing at the dead object, every later `start()` was a no-op and hook delivery was
+  over for the session. The probe reported "No Signal" correctly and nothing could act on it.
+  `listenerEnded` clears the property on both terminal states and re-listens, bounded at five
+  attempts backing off 1s→16s and reset on every `.ready`: a listener that cannot bind loopback
+  will not start working because it was asked a hundredth time, and an unbounded timer is worse
+  than the honest "No Signal". Three things hold it together — it is **identity-guarded**, since
+  `stop()` clears the property itself and a `start()` may already have installed a replacement
+  by the time the old listener's `.cancelled` lands; it releases the port file **before**
+  clearing `currentPort`, the order `stop()` takes, because `removePortFile` only removes a file
+  still naming this instance's port; and `wantsListener` separates a deliberate `stop()` from a
+  listener ending on its own, so a retry scheduled just before a quit cannot take the rendezvous
+  from an instance that is still running.
 
 **Two surfaces, not one, and the second is not redundant.** `HookChannelBanner` sits in the
 sidebar's bottom bar, gated on the probe's verdict and *nothing else*. A row only draws a status
