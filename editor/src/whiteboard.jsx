@@ -8,6 +8,7 @@ import {
   serializeAsJSON,
   exportToBlob,
   convertToExcalidrawElements,
+  getSceneVersion,
 } from '@excalidraw/excalidraw'
 import '@excalidraw/excalidraw/index.css'
 
@@ -45,7 +46,66 @@ let revision = 0
 // rAF-driven debounce would stop saving the moment the tab is closed, with no
 // error and no timeout — a promise that simply never settles. See
 // Whiteboard.Host.
+// Everything about the board that a save actually writes.
+//
+// `serializeAsJSON(elements, appState, {}, 'local')` runs its appState through
+// Excalidraw's `cleanAppStateForExport`, which keeps exactly four keys
+// (0.18.1): gridModeEnabled, viewBackgroundColor, gridSize, gridStep. Scroll,
+// zoom and selection are NOT persisted, which is what makes gating on this
+// signature safe rather than a way to lose the user's place.
+//
+// HAND-MIRRORED, and the bound on being wrong is stated rather than assumed: if
+// a later Excalidraw persists a fifth appState key, a change to that key alone
+// would not schedule a save. It cannot cost anything drawn — every element goes
+// through `getSceneVersion` above it — so the worst case is a preference that
+// does not survive a relaunch, not a lost stroke.
+//
+// `getSceneVersion` is `elements.reduce((acc, el) => acc + el.version, 0)` (read
+// from 0.18.1's own build), and `version` is bumped on every mutation — it is
+// the function Excalidraw's collaboration uses to decide a scene has moved. The
+// residual is a sum that coincides: a delete of an element at version V landing
+// in the same change as exactly V of bumps elsewhere. That would skip one
+// debounce, not the next one, and nothing else in this file depends on it.
+const saveSignature = () => {
+  const appState = api.getAppState()
+  return [
+    getSceneVersion(api.getSceneElements()),
+    appState.gridModeEnabled,
+    appState.viewBackgroundColor,
+    appState.gridSize,
+    appState.gridStep,
+  ].join('|')
+}
+
+// The signature of the last save that was scheduled or performed.
+let savedSignature = null
+
+// setTimeout, deliberately, and NOT requestAnimationFrame.
+//
+// The webview spends most of its life parked in an offscreen window, which is
+// NSWindowOcclusionState-occluded — and rAF is the one thing an occluded window
+// loses. Measured: setTimeout, MessageChannel, document.fonts.ready,
+// canvas.toBlob and OffscreenCanvas all keep firing there; rAF does not. A
+// rAF-driven debounce would stop saving the moment the tab is closed, with no
+// error and no timeout — a promise that simply never settles. See
+// Whiteboard.Host.
+//
+// **Excalidraw fires onChange for APP STATE, not only for elements** — every
+// pan, every zoom step, every selection and every pointer move that changes a
+// hovered id. Each one used to arm a full save, and a save is not cheap: a
+// scene serialise, then a PNG export that re-fetches every asset over the
+// asset scheme and base64-encodes it, then a main-actor digest re-parse of the
+// whole file. Panning a board with three screenshots on it did all of that
+// repeatedly for a board nobody had changed.
+//
+// So this compares what a save would actually write. It is the gate on
+// SCHEDULING only: `saveNow()` on the agent write path calls `save()` directly
+// and is deliberately not gated, because that path has just changed the scene
+// and must persist it whatever any comparison says.
 const scheduleSave = () => {
+  const signature = saveSignature()
+  if (signature === savedSignature) return
+  savedSignature = signature
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = setTimeout(save, 800)
 }
@@ -229,6 +289,12 @@ const writtenAssets = new Set()
 const save = () => {
   if (!api) return
   const rev = ++revision
+  // Whatever brought us here, this is now what is on disk. At a debounce fire
+  // scheduleSave has already recorded it; this is for `saveNow()`, which is
+  // ungated and would otherwise leave the gate one write behind — costing a
+  // redundant full save 800ms after every agent write, when Excalidraw's own
+  // onChange for that write arrived.
+  savedSignature = saveSignature()
   const files = api.getFiles() || {}
 
   // Image bytes are written to assets/ and kept out of the scene file — the
