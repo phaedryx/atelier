@@ -22,7 +22,11 @@ extension RunState {
 }
 
 extension RunState {
-    struct Snapshot: Codable {
+    /// `Equatable` so `atelier-run` can write only when something moved. It
+    /// scans once a second for the whole life of a run, and comparing the
+    /// snapshot is what keeps that from being a file write per second — and from
+    /// waking the app's FSEvents watcher for a poll that changed nothing.
+    struct Snapshot: Codable, Equatable {
         let pid: Int32
         let status: Status
         let detectedPorts: [Int]
