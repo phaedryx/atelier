@@ -570,15 +570,39 @@ window.__whiteboardApply = async (op) => {
         }
       }
 
+      // **An endpoint that does not resolve refuses the WHOLE op**, the rule
+      // the update arm's missing label target already states, and for the same
+      // reason: an arrow handed to the converter naming nothing arrives with
+      // startBinding and endBinding both null — drawn, floating and attached
+      // to nothing, exactly as measured above — and the call answered `ok`
+      // with its id, so the digest reported an arrow the agent believed was
+      // connected.
+      //
+      // Swift already refuses an endpoint that is not on the board, but it
+      // reads `live.ids` in a SEPARATE `liveState()` call before this one:
+      // between the two, a user or another agent can delete the very box the
+      // arrow names. This page holds the only copy of the truth at write time,
+      // which is why the check belongs here as well rather than only there.
+      const resolve = (id) => byID.get(id) || op.elements.find((c) => c.id === id) || null
+      const unresolved = []
+      for (const el of op.elements) {
+        if (el.type !== 'arrow') continue
+        for (const ref of [el.start?.id, el.end?.id]) {
+          if (ref && !resolve(ref) && !unresolved.includes(ref)) unresolved.push(ref)
+        }
+      }
+      // `unknown` rather than `reason`: these are ids, and Whiteboard.Host
+      // turns that key into the refusal that names each one and points at
+      // read_whiteboard. Nothing below this line runs, so the scene is
+      // untouched.
+      if (unresolved.length) return { ok: false, unknown: unresolved }
+
       // Arrow geometry, resolved against whatever the endpoints really are —
       // in this batch or already on the board. See edgePoints.
       const positioned = op.elements.map((el) => {
         if (el.type !== 'arrow' || !el.start?.id || !el.end?.id) return el
-        const resolve = (id) =>
-          byID.get(id) || op.elements.find((c) => c.id === id) || null
         const a = resolve(el.start.id)
         const b = resolve(el.end.id)
-        if (!a || !b) return el
         const { start, end } = edgePoints(a, b)
         return {
           ...el,
