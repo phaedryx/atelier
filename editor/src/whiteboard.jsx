@@ -942,6 +942,23 @@ window.__whiteboardApply = async (op) => {
       // Before the scene, so the image has bytes to draw the moment it lands.
       // Each file's dataURL is a real `data:` URL, so save()'s loop posts it to
       // assets/ the way a pasted image's bytes are posted.
+      //
+      // **These fileIds are the converter's nanoids, NOT a SHA-1 of the bytes,
+      // and that is a documented exception rather than an oversight.** The
+      // capture button names its file by the lowercase hex SHA-1 of its bytes
+      // because that is Excalidraw's own convention — but Excalidraw's own
+      // `generateIdFromFile` says of itself "generates SHA-1 digest from
+      // supplied file (if not supported, falls back to a 40-char base64 random
+      // id)", so even a pasted image is not guaranteed to be content-named.
+      // The invariant that actually matters is unchanged and is about the
+      // JOIN, not the hash: the stem of a file in assets/ IS the fileId on its
+      // image element, and a nanoid satisfies that as well as a digest does.
+      //
+      // What is lost is only deduplication — the same diagram added twice
+      // writes two identical SVGs into assets/. Hashing here would mean
+      // `crypto.subtle` in a custom-scheme page that may not be a secure
+      // context, with a silent random-id fallback when it is not: two naming
+      // rules where there is currently one join, to save a few kilobytes.
       if (fileList.length) api.addFiles(fileList)
       // **Re-read, because this arm is the only one that awaits.** Every other
       // op is synchronous between the `existing` snapshot at the top of this
