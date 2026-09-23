@@ -798,12 +798,29 @@ window.__whiteboardApply = async (op) => {
       )
       if (!skeletons.length) return { ok: false, reason: 'the definition produced no elements' }
 
+      // **Not every skeleton the converter emits carries coordinates.** A
+      // class diagram with a `namespace` block emits one
+      // `{type, id, name, children}` frame per namespace, with no x and no y
+      // (measured: `mermaid-to-excalidraw` 2.2.2, converter/types/class.js) —
+      // Excalidraw derives a frame's bounds from the children it names. Read
+      // through `el.x || 0` such a skeleton clamped `minX` and `minY` to zero,
+      // so `dx`/`dy` were computed against an origin no element is at and the
+      // whole diagram landed offset from the `at` the tool promises to place
+      // its top-left corner on. Translating one is equally meaningless: it
+      // would stamp a bare `dx`/`dy` onto a shape whose geometry comes from
+      // elsewhere.
+      const isPlaceable = (el) => typeof el.x === 'number' && typeof el.y === 'number'
+      const placeable = skeletons.filter(isPlaceable)
       // Placed by translating the whole diagram so its top-left lands where
       // Swift said. The converter lays out from its own origin, and a diagram
       // left there lands on top of whatever the user has near (0,0) — which
       // reads perfectly well in the digest, since the coordinates are real.
-      const minX = Math.min(...skeletons.map((el) => el.x || 0))
-      const minY = Math.min(...skeletons.map((el) => el.y || 0))
+      //
+      // A diagram of nothing but frames cannot happen — a namespace frame
+      // names the classes it contains — but a zero-length `Math.min` answers
+      // `Infinity`, so the guard is written rather than argued.
+      const minX = placeable.length ? Math.min(...placeable.map((el) => el.x)) : 0
+      const minY = placeable.length ? Math.min(...placeable.map((el) => el.y)) : 0
       const dx = op.x - minX
       const dy = op.y - minY
       const placed = skeletons.map((el) => {
@@ -815,7 +832,8 @@ window.__whiteboardApply = async (op) => {
         // It carries no words on the canvas, so the definition is its caption;
         // the key travels with the op because this page cannot spell it.
         if (el.type === 'image' && op.captionKey) data[op.captionKey] = op.definition
-        return { ...el, x: (el.x || 0) + dx, y: (el.y || 0) + dy, customData: data }
+        if (!isPlaceable(el)) return { ...el, customData: data }
+        return { ...el, x: el.x + dx, y: el.y + dy, customData: data }
       })
 
       // Regenerated ids, deliberately — the opposite of the add arm. Mermaid
@@ -841,7 +859,18 @@ window.__whiteboardApply = async (op) => {
       // the await; this is the one read that has to be taken at write time.
       api.updateScene({ elements: [...api.getSceneElements(), ...converted] })
       await saveNow()
-      return { ok: true, ids: converted.filter((el) => !el.containerId).map((el) => el.id) }
+      // A frame is left out for the same reason a bound label is: it is not an
+      // element of the vocabulary this tool answers in. A namespace frame is a
+      // grouping Excalidraw derives from the classes it contains, and handing
+      // its id back invites an agent to move or delete it as though it were a
+      // box. Filtered on the converted type rather than on which skeleton it
+      // came from, because `regenerateIds: true` has already remapped the ids.
+      return {
+        ok: true,
+        ids: converted
+          .filter((el) => !el.containerId && el.type !== 'frame')
+          .map((el) => el.id),
+      }
     }
 
     if (op.kind === 'delete') {
