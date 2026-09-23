@@ -138,6 +138,8 @@ struct VerificationTabView: View {
     /// state cannot disagree with what `start` will refuse.
     let unavailableReason: String?
     @ObservedObject var runner: Verification.Runner
+    /// For `defaultBranch(for:)` alone — see `run(_:)`.
+    @EnvironmentObject private var appEnv: AppEnvironment
 
     /// `Git.Operations.diffFingerprint` computed just now, or nil before the
     /// first computation lands.
@@ -318,24 +320,48 @@ struct VerificationTabView: View {
 
     // MARK: - Actions
 
+    /// **Two things about the branch resolution here, and the key is the one that
+    /// matters.**
+    ///
+    /// It was `Git.Operations.defaultBranch(at: worktreePath)`, called inline on
+    /// the main actor. That is up to six sequential `ProcessRunner.capture`
+    /// probes at the 60s `local` tier, so a repository whose `origin/HEAD` is not
+    /// fetched froze the UI for the length of all of them on a button press.
+    /// `AppEnvironment.defaultBranch(for:)` runs the same resolution off the main
+    /// actor and de-duplicates concurrent asks.
+    ///
+    /// The **key** is the larger half. `Git.Operations.defaultBranch` caches per
+    /// directory, so keying by the *worktree* missed once per worktree where the
+    /// answer is a property of the repository — verified identical here across
+    /// the container, its checkout and a linked worktree, all `origin/main`.
+    /// Keying by the project resolves it once for every workstream in it.
+    ///
+    /// `start` itself stays synchronous, which is deliberate: `IPC.VerificationRunnerBridge`
+    /// documents that nothing may `await` between `start` returning and its
+    /// `onFinish` being registered, and making `start` async would open exactly
+    /// that window. Only the value it is *handed* is resolved asynchronously, and
+    /// the `Task` hop is why `startError` is cleared before it rather than after.
     private func run(_ name: String) {
         startError = nil
-        do {
-            try runner.start(
-                workstreamID: workstreamID,
-                projectName: projectName,
-                workstreamName: workstreamName,
-                worktreePath: worktreePath,
-                projectDirectory: projectDirectory,
-                defaultBranch: Git.Operations.defaultBranch(at: worktreePath),
-                checks: [name]
-            )
-            // A check that has just started has nothing to show yet, but the user
-            // pressed the button to watch it — so opening the group is the act
-            // they were reaching for, not an extra one.
-            expandedChecks.insert(name)
-        } catch {
-            startError = error.localizedDescription
+        Task { @MainActor in
+            let defaultBranch = await appEnv.defaultBranch(for: projectDirectory)
+            do {
+                try runner.start(
+                    workstreamID: workstreamID,
+                    projectName: projectName,
+                    workstreamName: workstreamName,
+                    worktreePath: worktreePath,
+                    projectDirectory: projectDirectory,
+                    defaultBranch: defaultBranch,
+                    checks: [name]
+                )
+                // A check that has just started has nothing to show yet, but the
+                // user pressed the button to watch it — so opening the group is
+                // the act they were reaching for, not an extra one.
+                expandedChecks.insert(name)
+            } catch {
+                startError = error.localizedDescription
+            }
         }
     }
 
