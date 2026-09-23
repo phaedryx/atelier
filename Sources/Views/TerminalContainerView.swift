@@ -1030,7 +1030,15 @@ struct TerminalContainerView: View {
                 workstreamName: workstreamName,
                 worktreePath: workingDirectory,
                 projectDirectory: projectDirectory,
-                defaultBranch: Git.Operations.defaultBranch(at: workingDirectory),
+                // The resolved `@State`, not a fresh probe. Resolving here ran
+                // up to six sequential git spawns on the main actor inside a
+                // button handler — and against the *worktree* path, so
+                // `Git.Operations`' per-directory cache missed once per
+                // worktree instead of once per repository. The `.task` above
+                // already resolves this through `AppEnvironment.defaultBranch`,
+                // which is the route AGENTS.md requires of a `@MainActor`
+                // caller, and `verificationTarget` reads the same copy.
+                defaultBranch: defaultBranch,
                 checks: [name]
             )
         } catch {
@@ -2656,7 +2664,7 @@ final class TerminalSurfaceCache: ObservableObject {
         {
             return existing
         }
-        if let stale = surfaces[id] {
+        if surfaces[id] != nil {
             logger.info("Replacing surface \(id) — command changed")
             respawnableIDs.remove(id)
             removeSurface(for: id)
