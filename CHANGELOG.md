@@ -4,6 +4,407 @@ Atelier was forked from [Factory Floor](https://github.com/alltuner/factoryfloor
 at v0.1.79. Everything below that release is Factory Floor's history; those links
 point at the upstream repository.
 
+## [0.2.6](https://github.com/phaedryx/atelier/compare/v0.2.5...v0.2.6) (2026-09-23)
+
+### Features
+
+* **whiteboard:** a per-workstream **Whiteboard** tab — an embedded Excalidraw
+  canvas the user draws on. A fourth closeable singleton beside Changes,
+  Execution and Verification: it opens from the tab bar's quick-add button or
+  an agent's `open_tab`, starts closed, closes and reorders like the others,
+  and has no keyboard shortcut. The board persists to the cache directory and dies
+  with the workstream, on both archive paths. Its `WKWebView` is owned by
+  `TerminalSurfaceCache` and parked in an offscreen window, never by a view, so
+  a board goes on saving and answering while the user is looking at another
+  workstream — the rule `ProcessCompose.RunSession` already exists for. A
+  toolbar button captures a screen region straight onto the board, named by the
+  SHA-1 of its bytes, which is Excalidraw's own `fileId` convention.
+* **whiteboard:** an agent can see the board. `read_whiteboard` answers with a
+  capped PNG render and a structured text digest, both produced by the save
+  path the tab already had — no second render site. The digest names each
+  element, its kind, its position and its words, so an agent can re-read what it
+  drew; strokes and images are not transcribed, and the closing line says so
+  only when there is a picture to open. Every identifier column is held to a
+  character class and a byte bound, so nothing on the board can forge a column
+  or inject a line into the read path.
+* **whiteboard:** an agent can draw on it. `whiteboard_add`,
+  `whiteboard_update` and `whiteboard_delete` take a narrow vocabulary — box,
+  note, text and arrow — which Swift validates and normalizes and the page
+  expands through Excalidraw's own `convertToExcalidrawElements`. Swift mints
+  the ids and Excalidraw keeps them, so the ids an agent gets back are the ones
+  the digest reports and `whiteboard_update` takes: no mapping table and no
+  second vocabulary. `add` takes a list so a whole diagram is one call, and an
+  arrow may name a box created beside it. The invariants the two halves have to
+  keep are the ones a picture and a digest can silently disagree about: an
+  arrow binds to its endpoints and is moved to them, moving an element drags the
+  arrows attached to it, deleting one unbinds the arrows that named it, and an
+  arrow whose endpoint does not resolve is refused whole rather than drawn
+  floating. The tab opens only once a write has landed, so a refusal does not
+  leave a pane behind for a change that never happened, and opening it never
+  takes the user's selection — pair it with `request_attention` for that.
+* **whiteboard:** `whiteboard_add` takes a fifth kind, `mermaid`. An agent hands
+  over a mermaid definition and the board draws it as real boxes, arrows and
+  labels through the converter Excalidraw already ships. A mermaid entry stands
+  alone in its call, because its height is not known until it is drawn and a
+  column laid out after it would be a guess. A diagram type the converter cannot
+  express lands as one SVG image whose caption is the definition, so the digest
+  is not blind to it — and when the converter silently degrades a type it does
+  support into a flat picture, the answer says so rather than promising editable
+  boxes.
+* **whiteboard:** image transcription. A `caption` on `whiteboard_update` writes
+  into an image's `customData`, which the digest has rendered since the read
+  path was written — the agent is the OCR, opening the `board.png` that
+  `read_whiteboard` names and recording what it says. A caption is refused for
+  anything that is not an image and `text` is refused on an image, and each
+  refusal names the other's field: a transcription on a box would be a second,
+  invisible text channel, and reaching for `text` to describe a screenshot used
+  to answer "Updated i1." having changed nothing.
+* **ipc:** seven execution tools, giving an agent the Execution tab's
+  capabilities as the verification tools give it the Verification tab's:
+  `list_processes`, `read_process_logs`, `start_process`, `stop_process`,
+  `restart_process`, `start_execution` and `stop_execution`. Work that depends
+  on a running stack previously waited for the user or guessed.
+  `list_processes` answers four states rather than one silence — no config, not
+  started, running without a control socket, running — because "nothing is
+  running" misleads in three of them, and it carries
+  `Resolution.startUnavailableReason` verbatim so an agent and the Execution tab
+  say the same thing about the same file. Logs are bounded twice, by line count
+  and by a byte budget trimmed oldest-first, and say when they cut. There are
+  no completion notices: a dev server is meant to stay up, so agents poll, and
+  `start_execution`'s answer says so.
+* **ipc:** `create_shortcut_workstream`, the tool equivalent of the sidebar's
+  Shortcut button, so a workstream an agent creates carries its story — an Info
+  card, and "Open in Shortcut" in the palette. It takes the same bare-id, `sc-`
+  and pasted-URL spellings the sheet does. The name-and-collision decision is
+  now one shared function rather than a copy per surface, refusing in a fixed
+  order — an invalid branch name, the story already having a workstream, the
+  rendered name being taken — with the wording chosen per consumer, since user
+  copy and an instruction to an agent are different artifacts.
+* **ipc:** `get_initialization_state` and `get_shortcut_story`. The Info tab was
+  the one pane with no IPC read at all, and of what it shows only two things are
+  Atelier's alone — a branch is `git`, dirtiness is `git`, a pull request is
+  `gh`. Setup state in particular has no other route: it lives only in
+  `Initialization.Runner`'s memory, so an agent whose build failed because
+  initialization never finished had no way to find that out. The Setup row's
+  sentences moved onto `Initialization.State.detail`, so the tab and the tool
+  read one string. `get_shortcut_story` fetches rather than reading the cache
+  the Info tab fills, marks a story `isStale` when the fetch failed and the
+  cached copy is what came back, and distinguishes the four ways to have no
+  story — none linked, no token, a token the keychain would not release, and a
+  fetch that failed.
+
+### Bug Fixes
+
+* **ipc:** every non-string tool argument a model sent was mangled. `tools/call`
+  coerced with `String(describing:)`, which only numbers survive:
+  `JSONSerialization` returns `__NSCFBoolean` for a JSON boolean and renders it
+  `"1"`, so `bypass_permissions: true` was refused reporting a value the agent
+  had not sent; an `NSArray` rendered with parentheses, so
+  `start_verification(checks: ["rspec"])` reached the runner as
+  `["(", "rspec", ")"]` and was refused for an undeclared check named `(`; and
+  `NSNull` became the literal `"<null>"`. Each JSON type now gets the spelling
+  this surface's own readers already parse, and null is dropped, because absent
+  is what a null argument means. The coercion lives in a file the helper and the
+  app's tests both compile, which is how the old copy survived untested.
+* **ipc:** `list_peers` could prune a peer that was mid-registration. The prune
+  kept only the ids the store's answer named, and that answer is read across an
+  `await` on a reentrant actor — so a `register_peer` that landed inside the hop
+  was deleted while its own reply, carrying its peer id, was already on the way
+  out. Its helper believed itself registered while the app answered nil for the
+  rest of the session: send, receive and broadcast all told it to register
+  first, and verification and task notices addressed to it were dropped. It is
+  reachable from the coordinator workflow the docs recommend, verbatim — polling
+  `list_peers` for a spawned peer *is* a read running while that peer registers.
+* **ipc:** a `get_peer_status` reply could rebind a connection to another
+  agent's peer. The post-response claim was gated on the payload's shape, and
+  that tool answers a peer too — somebody else's. In the window between a
+  connection being forgotten and its peer being retired, that peer is ownerless
+  and still readable, so a read in it claimed the peer and the
+  one-connection-speaks-for-one-peer rule then retired the caller's **own** live
+  peer and bound its socket to the stranger. Its next call was told to register
+  first and its inbox was gone, for a read it had made about somebody else. Only
+  a `register_peer` reply binds a peer now, which is what the comment beside it
+  always claimed.
+* **ipc:** the MCP helper died on `SIGPIPE` instead of reconnecting. Only a send
+  timeout was set on its socket, so a write to a socket the app had already
+  reset raised a signal nothing handles — the reconnect path was unreachable
+  exactly when it was needed, whenever the app was killed uncleanly between two
+  calls. `SO_NOSIGPIPE`, per socket rather than a process-wide ignore, so the
+  failure arrives as the `EPIPE` the round trip already reads as a closed
+  connection.
+* **ipc:** `open_agent_tab` no longer freezes the window while it resolves git
+  and `ports.yaml` for a tool call the user did not make. Both reads ran inside
+  a main-actor hop, against their own doc comments, because the surface id they
+  needed was minted there. The surface-independent work is hoisted and runs
+  detached, so it blocks neither the main actor nor the IPC actor — the first
+  fix took it off the main thread and onto `IPC.Service`'s own serial executor,
+  which would have queued every other agent's tool call behind several git
+  spawns.
+* **ipc:** a long check name in a verification notice is cut on a grapheme
+  boundary, not a byte one. The cut stripped trailing UTF-8 continuation bytes
+  and left the orphaned lead byte in place, so it produced a replacement
+  character and overshot the budget in exactly the case it was written to
+  prevent, under a comment claiming the opposite.
+* **execution:** pressing Stop at the wrong moment killed Atelier outright, with
+  no log. `ProcessCompose.Client` writes to a raw control socket with no
+  `SO_NOSIGPIPE` and nothing ignoring `SIGPIPE`, and the process table polls
+  that socket once a second for the life of every run — so the window between a
+  connection succeeding on the listen backlog and the write landing is ordinary
+  rather than exotic. Setting the option alone would have relocated the symptom,
+  turning a rare crash into "Could not reach the process manager" at the
+  ordinary end of every run, so a peer that has closed now maps to the same
+  not-running state the table already treats as expected before Start and after
+  Stop.
+* **execution:** a `down` that did not confirm no longer orphans its server
+  unreachably. The socket was unlinked whether or not `down` succeeded, and the
+  socket is the only handle anything has on a phase server — so a `down` that
+  hit its deadline, precisely when the server is most likely still alive, left
+  it beyond every route. Leaving the file is what lets the next run of that
+  phase rebind over it and ask the orphan to leave.
+* **editor:** typing in a file and pressing ⌘⏎ no longer discards the edits.
+  `fileLoaded` was view `@State` under a container keyed on the workstream, so
+  leaving the tab destroyed it, a fresh view read the flag as "never loaded",
+  and the file was reloaded from disk over the user's unsaved work — taking the
+  dirty dot and the ⌘W save prompt with it. The flag lives on the model
+  `TerminalSurfaceCache` owns now, and re-entering a tab attaches its existing
+  buffer rather than reloading, which also keeps the undo stack, cursor and
+  scroll position across a switch.
+* **editor:** one Monaco model could alias two files and save over the wrong
+  one. A tab navigating from `foo.swift` to `bar.swift` overwrote the model it
+  already held, so that model's Uri went on saying `foo.swift` while it carried
+  bar's text — and the next tab to open `foo.swift` adopted it, displayed bar's
+  contents, and saving from it wrote bar's text over foo. There was no duplicate
+  Uri anywhere in the table, which is why it went unnoticed: the divergence was
+  content against Uri. A Uri mismatch is a navigation now — the tab releases its
+  old model and resolves the new path's own.
+* **editor:** adopting a buffer another tab had open and dirty no longer marks
+  those edits clean. The adopting tab re-stamped the model's clean baseline, so
+  an agent calling `open_editor` on a file the user was editing silently made
+  the dirty dot and the ⌘W prompt disappear over real unsaved work. An adopted
+  buffer is no longer stamped or overwritten, and the adopting tab is told the
+  dirty state it inherited.
+* **editor:** a debug row under the ⌘P file finder, rendering the query and the
+  first matching path, is gone from release builds along with three
+  keystroke-frequency `print` calls. `EditorView` also had a byte-for-byte copy
+  of the shared language table; deleting it gives the Changes diff the
+  `.dockerfile` extension that only the copy carried, so `foo.dockerfile` no
+  longer highlights in one surface and renders as plaintext in the other.
+* **git:** `git status --porcelain` was parsed without `-z` in two places, so no
+  non-ASCII filename has ever shown a modified or untracked badge in the file
+  tree — git C-quotes the path, `café.txt` arrives as `"caf\303\251.txt"`, and
+  the tree looks a badge up by what the directory listing returned. The changes
+  popover rendered the quoted spelling. Both go through one parser now, which
+  also consumes the second record git spends on a rename (and reverses, so the
+  destination comes first): left in the stream it parses as an entry whose first
+  two characters look like a status, and everything after it is one record out
+  of step.
+* **git:** the repository's default branch is what git says it is. A
+  `development` branch was probed ahead of `origin/HEAD`, so a repository whose
+  real default is `main` but which merely *carries* a long-lived `development`
+  answered `development` to every caller — and the answer is cached per
+  directory, so one wrong resolution was wrong everywhere for the session: the
+  base new worktrees are cut from, the Changes tab's diff base, the ahead count,
+  the exported `ATELIER_DEFAULT_BRANCH`, and prune's clean decision, which is
+  the one with teeth — a branch merged to `development` but not to `main` read
+  as clean and was *offered for deletion*. `origin/HEAD` now wins wherever git
+  has set it; the `development` preference is kept immediately below it rather
+  than deleted, for a repository whose default really is that.
+* **git:** a relative clone remote is refused where it is typed. `./foo` and
+  `../foo` were passed through, but `git clone --bare` runs with the
+  just-created empty container as its working directory, so the path resolved
+  against a directory the user never named — what they saw was a clone that
+  built a container, failed, removed it, and reported a git error naming a path
+  that appeared nowhere in what they typed.
+* **git:** `~` abbreviation no longer produces a path pointing nowhere. A bare
+  prefix test with no separator rendered `/Users/<name>-old/repo` as
+  `~-old/repo`.
+* **github:** a draft pull request renders as a draft. The project overview
+  switched on the raw state string, so a draft drew green two sections below the
+  same pane drawing it grey, and a closed-unmerged PR took the open symbol. The
+  sidebar was worse in a different way: it drew a glyph only for a merged PR, so
+  draft, open and closed were all identical tertiary text and an open PR could
+  not be told from a closed one. Both rows now carry the status value rather
+  than the string, with colour and symbol from the one shared style — which
+  makes an open PR louder in the sidebar than it was, and is what makes draft
+  distinguishable from open.
+* **archive:** purging a workstream ran three cleanup steps fewer than removing
+  one. Releasing permission holds and dropping the mcp-config and `--settings`
+  files were written into `remove` alone, so a purge left an agent stopped on a
+  permission banner waiting out a deadline nothing would service, and leaked
+  both files into Caches for good. Both paths now run one shared tail, so a step
+  added to it cannot go missing from the other — and `remove` gained the
+  initialization-state clear it never had, which had been growing by one entry
+  per archive for the life of the process.
+* **archive:** deleting a project tore down its workstreams. Its three paths —
+  the sidebar's Delete, the sweep that drops a project whose directory has gone,
+  and Clear Projects — each evicted surfaces and cleared agent state and nothing
+  else, so a running verification check's terminal *and its process* survived
+  the session (nothing but the verification runner can reach that surface), an
+  offscreen webview and its window leaked per workstream, tmux sessions kept
+  running, and every per-workstream file stayed in Caches. All three go through
+  the archiver now, which also serializes the tmux kills rather than firing one
+  blocking child per workstream at the cooperative thread pool.
+* **archive:** archiving from ⌘⇧W, the menu or the palette no longer drops the
+  user on the onboarding screen beside a full sidebar. That path never moved the
+  selection off the workstream it had just removed; it now moves to a sibling,
+  or to the project when nothing is left. The sidebar's own removal already did
+  this, which is how the two copies came to differ.
+* **archive:** pressing Purge no longer freezes the window before the
+  confirmation alert can draw. The warning probe ran `git status` and a
+  `@{upstream}..HEAD` log inline on the main actor, through a runner that blocks
+  its thread for the child's whole life. It runs off the main actor now, on a
+  dispatch queue rather than the cooperative pool, and publishes the warning
+  before the target so the alert cannot come up offering a plain "Purge" over
+  "nothing would be lost" for a worktree the probe is about to report dirty.
+* **terminal:** working in a terminal tab counts as activity. `.terminalActivity`
+  was posted with the *surface* id, and only the Coding Agent tab's surface id
+  is also a workstream id — while both receivers key by workstream id. So an
+  hour's work in a terminal tab moved no row in Recent order and refreshed no
+  commit/push quick-action state. The owner is resolved at post time, by asking
+  the three things that hold a surface, so the fix covers surfaces no view
+  creates; neither receiver changed.
+* **terminal:** opening a new browser tab no longer kills and relaunches a live
+  dev stack. The guard asked the port detector rather than the run, and the
+  detector reports nothing whenever the `atelier-run` helper is missing — which
+  is the state the Execution tab already warns about — so with the helper gone,
+  every New Browser stopped the stack and started it again.
+* **agents:** a subagent whose start event was dropped no longer appears as a
+  second main agent. The roster's upsert defaulted to main, and hook delivery
+  fails silently by construction — `atelier-hook` posts with a one-second
+  timeout and exits 0 when the port file is missing — so a lost `SubagentStart`
+  made a subagent a main run for its whole life: sorted first in the sidebar as
+  a second "Claude", and painted stalled by the sweep, which is exactly the
+  delegation case the sweep is written to leave alone. It is derived from the
+  agent id now.
+* **hooks:** a hook listener that reaches a terminal state rebuilds itself.
+  `setupListener` guards on the listener being nil to stay idempotent and
+  neither terminal state cleared it, so a failed listener made every later
+  start a no-op and hook delivery was over for the session — the probe correctly
+  reporting "No Signal" with nothing able to repair it, since the app starts the
+  listener exactly once. The rebuild is bounded at five attempts backing off to
+  16s and reset on every ready, is identity-guarded against a start that has
+  already installed a replacement, releases the port file before clearing the
+  port, and separates a deliberate stop from a listener ending on its own, so a
+  retry scheduled just before a quit cannot take the rendezvous from an instance
+  that is still running.
+* **ports:** the embedded browser retargets when a dev server restarts on a
+  different port. The `atelier-run` launcher cancelled its scanner once a port
+  was selected and dropped to a 60-second cadence after sixty polls, so a Vite
+  server falling to the next free port left the browser on the dead one and the
+  "Starting dev server…" overlay up for up to a minute. What that bought was
+  write volume rather than scan cost, so the snapshot is now compared before it
+  is written and the scan runs for the life of the run: two reads a second and
+  no I/O in steady state.
+* **ports:** a `ports.yaml` declaration cannot shadow `ATELIER_SURFACE_ID`,
+  `TMUX` or `TMUX_PANE`. Those three are assigned per surface *after* the merge,
+  so a declaration was silently inert in every terminal, while the unattended
+  phases return the merged set unchanged and passed the declared value verbatim
+  to every verification check, every initialization step and `dispose`. One line
+  meaning two different things depending on which surface reads it is worse than
+  either outcome alone. `PATH`, `HOME`, `SHELL`, `TMPDIR`, `USER` and `LOGNAME`
+  are deliberately still accepted — they fail loudly in the user's own terminal.
+* **verification:** a workstream's leftover pid and status files are swept when
+  the runner forgets it, which is the one place that can do it — they had
+  accumulated in Caches for the life of every install.
+* **localization:** three components took their copy as `String`, which binds
+  the overloads that do not localize, so roughly fifty user-facing strings never
+  reached the strings table however carefully they were maintained there — every
+  directory action button's tooltip and VoiceOver label, eleven settings toggles
+  and their descriptions, and the entire keyboard shortcut table. All 558
+  existing entries were parsed for key-value drift before the flip, so no
+  visible text changed; twelve genuinely missing keys were added. Separately,
+  the onboarding screen decided `gh` authentication by comparing a *localized
+  display string*, so any rewording would have turned the dot green and hidden
+  the "Run: gh auth login" hint for a `gh` that is not authenticated; it
+  resolves through the same shared function the settings row already used.
+* **localization:** the sidebar's workstream count is a real plural. It was a
+  bare format key, which yields "1 workstreams"; this adds the project's first
+  `Localizable.stringsdict`.
+
+### Performance
+
+* **whiteboard:** panning and zooming a board no longer re-saves and re-exports
+  it. Excalidraw fires its change callback for view state as well as elements —
+  every pan, zoom step, selection and hover — and each one armed a full scene
+  serialise, a PNG export that re-fetches and base64-encodes every asset, and a
+  digest re-parse. Scheduling now compares what a save would actually write;
+  the agent write path stays ungated, because it has just changed the scene.
+* **verification:** the Verification tab's Run button no longer makes up to six
+  sequential git calls on the main actor, and keys the answer by the project
+  rather than by the worktree, so the cache misses once per repository instead
+  of once per worktree.
+
+### Refactoring
+
+* **workspace:** one git surface, in the toolbar. The PR status badge moves out
+  of the tab bar's trailing cluster to sit beside the GitHub action menu, so the
+  state of a branch and the next thing to do about it are read in one place. It
+  goes in as a sibling of the GitHub repo button rather than inside it, because
+  that lookup is keyed by the project's checkout and gating anything on it hides
+  it outright for every container-layout project. With the badge two points
+  away, "Open #3306" comes out of the action menu — an open PR over a clean tree
+  now shows the badge alone, and Close PR is reached from the command palette,
+  which carries every quick action regardless of repo state.
+* **ipc:** `IPCService.swift` is split into one file per tool group, matching the
+  four tool surfaces the enum already names. It was 2132 lines; the actor, its
+  state, its exhaustive dispatch and its lifecycle stay behind at 482. None of
+  it compiles into the MCP helper, so the split costs that binary nothing.
+* **settings:** tool detection moved to `Sources/Models/ToolStatus.swift`. It
+  spawns child processes and is read by the environment, onboarding, the
+  workspace and the IPC layer; it sat in `SettingsView.swift` only because
+  Settings was the first surface to render it.
+
+### Build System
+
+* **setup:** `scripts/setup.sh` is the single copy of worktree setup, with one
+  subcommand per phase (`ghostty`, `editor`, `hooks`, `build`). The orphaned
+  worktree-create hook three documents credited with doing this had not run for
+  anyone, which is why a new worktree arrived with an empty `ghostty/`, no
+  build-artifact symlinks and no Monaco bundle. `docs/worktree-setup.md` carries
+  the `initialization.yaml` that has to be placed by hand to wire it up, since
+  that file lives outside every worktree by design.
+* **setup:** the ghostty step no longer prints a green tick over artifacts that
+  are not there. `ln -sfn` succeeds over a missing target and the tick was
+  unconditional; it probes the result and exits non-zero with an actionable
+  message.
+* **ci:** `dev.sh` always delegates to `build-editor.sh` rather than calling it
+  only when the bundle is missing. `build-editor.sh`'s own staleness check is
+  the only thing that looks at `editor/src/`, so anyone editing the editor and
+  running the suite was testing the previous bundle — it passed and told them
+  nothing, which is worse than failing, and the whiteboard tests drive a real
+  host that loads it.
+* **ci:** `test-ghostty.yml` can pass. It named a value ghostty's option does
+  not accept, a scheme the project has never defined, and skipped xcodegen and
+  the Monaco bundle — none of it noticed because the workflow is dispatch-only.
+  It now tracks `ci.yml`, deliberately without that workflow's Ghostty cache,
+  whose key is the submodule commit this job has just moved. A shell injection
+  in the tag input is closed along with it.
+* **ci:** the unsigned-build note on a release body no longer stacks when a
+  partially failed workflow is re-run.
+* **test:** the suite stops leaking process-compose servers and stops killing
+  other worktrees' test processes. Eight orphaned phase servers were found live
+  with the oldest three weeks old; the phase tests now sweep them, age-filtered
+  so a concurrent test host's live server is not taken down mid-test. Separately,
+  the process-runner test's sentinel was a shared constant matching any
+  concurrent suite's child, and its cleanup asserted a count immediately after
+  `pkill` returned, which is not the signalled processes having been reaped —
+  the first made every parallel worktree sabotage the others, the second was a
+  race inside a single run. The sentinel is per-test-instance now and both
+  checks poll with a bound.
+
+### Documentation
+
+* **agent-roster:** six claims the code no longer supports are corrected, and
+  one stale strings key the app can never look up is removed. The calibration
+  that shaped the audit is that this codebase deliberately keeps unused things
+  and writes down why, so the job was to separate deliberate retention from
+  stale assertion.
+* **shortcuts:** the keyboard shortcut lists in `CLAUDE.md` and `README.md` are
+  reconciled with the bindings that actually exist, and the update procedure
+  gains the step it was missing: half the real bindings live in one of two key
+  monitors rather than in the menu, so following the old five-file list for a
+  monitor chord produced a menu item that does nothing.
+
 ## [0.2.5](https://github.com/phaedryx/atelier/compare/v0.2.4...v0.2.5) (2026-09-18)
 
 ### Features
