@@ -42,32 +42,45 @@ final class IPCVerificationSummaryTests: XCTestCase {
 
     // MARK: - Parsing the `checks` argument
 
-    /// Every argument on this surface is a string — `IPC.Request.arguments` is
-    /// `[String: String]` — so a list of checks arrives as text however the model
-    /// spells it.
+    /// Through the reader `startVerification` actually calls.
+    ///
+    /// `VerificationSummary.checks(from:)` was a one-line delegation to
+    /// `ToolArguments.parseList` with no production caller left, kept alive only
+    /// by these tests; the cases it covered are the ones a model really sends,
+    /// so they moved onto the real path rather than going with it.
+    private func checks(_ raw: String?) -> [String] {
+        IPC.ToolArguments(
+            tool: .startVerification,
+            raw: raw.map { ["checks": $0] } ?? [:]
+        ).list("checks")
+    }
+
+    /// Every argument on this surface is declared a string, so a list of checks
+    /// arrives as text however the model spells it.
     func test_checks_parsesACommaSeparatedList() {
-        XCTAssertEqual(IPC.VerificationSummary.checks(from: "rspec,rubocop"), ["rspec", "rubocop"])
-        XCTAssertEqual(IPC.VerificationSummary.checks(from: "rspec, rubocop"), ["rspec", "rubocop"])
-        XCTAssertEqual(IPC.VerificationSummary.checks(from: " rspec , rubocop "), ["rspec", "rubocop"])
+        XCTAssertEqual(checks("rspec,rubocop"), ["rspec", "rubocop"])
+        XCTAssertEqual(checks("rspec, rubocop"), ["rspec", "rubocop"])
+        XCTAssertEqual(checks(" rspec , rubocop "), ["rspec", "rubocop"])
     }
 
     func test_checks_acceptsTheShapesAModelActuallySends() {
-        // A JSON array that reached the helper as a value it had to render, and a
-        // whitespace-separated list. Both are what a plural argument named
-        // `checks` invites, and neither is worth a refusal.
-        XCTAssertEqual(IPC.VerificationSummary.checks(from: #"["rspec", "rubocop"]"#), ["rspec", "rubocop"])
-        XCTAssertEqual(IPC.VerificationSummary.checks(from: "rspec rubocop"), ["rspec", "rubocop"])
+        // A JSON array the model wrote out as text, and a whitespace-separated
+        // list. Both are what a plural argument named `checks` invites, and
+        // neither is worth a refusal. (A *real* JSON array is now flattened to
+        // the comma form before it gets here — see `IPCToolRegistryTests`.)
+        XCTAssertEqual(checks(#"["rspec", "rubocop"]"#), ["rspec", "rubocop"])
+        XCTAssertEqual(checks("rspec rubocop"), ["rspec", "rubocop"])
     }
 
     func test_checks_absentOrEmptyMeansAllOfThem() {
-        XCTAssertEqual(IPC.VerificationSummary.checks(from: nil), [])
-        XCTAssertEqual(IPC.VerificationSummary.checks(from: ""), [])
-        XCTAssertEqual(IPC.VerificationSummary.checks(from: "   "), [])
-        XCTAssertEqual(IPC.VerificationSummary.checks(from: ",,"), [])
+        XCTAssertEqual(checks(nil), [])
+        XCTAssertEqual(checks(""), [])
+        XCTAssertEqual(checks("   "), [])
+        XCTAssertEqual(checks(",,"), [])
     }
 
     func test_checks_dropsDuplicatesAndKeepsTheOrderAsked() {
-        XCTAssertEqual(IPC.VerificationSummary.checks(from: "rspec,rubocop,rspec"), ["rspec", "rubocop"])
+        XCTAssertEqual(checks("rspec,rubocop,rspec"), ["rspec", "rubocop"])
     }
 
     // MARK: - The completion notice

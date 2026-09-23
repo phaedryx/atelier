@@ -145,6 +145,32 @@ extension Verification.Spawn {
         )
     }
 
+    /// Remove every pid and status file belonging to one workstream.
+    ///
+    /// `clearState` only ever clears the *one* check it belongs to, and only on
+    /// the way into a new run of it, so nothing removed these at the end of a
+    /// workstream's life: `Runner.forget` dropped the in-memory rows and neither
+    /// archive path touched the files. They are small, but they are written per
+    /// workstream and per check and never collected, so the directory grows for
+    /// as long as the install lives.
+    ///
+    /// Swept by prefix, because `forget` cannot enumerate the checks that ever
+    /// ran — `verification.yaml` may have changed, and files from previous
+    /// sessions are exactly the ones nothing else will ever reach. The prefix is
+    /// the first eight hex characters of the workstream's UUID, so two
+    /// workstreams could in principle share one; that needs a 32-bit collision,
+    /// and the cost if it happened is bounded — the other workstream's *running*
+    /// check would lose its pid file and be recorded `.failed(-1)` once its
+    /// startup grace expired, exactly as a check that died does.
+    static func removeState(for workstreamID: UUID) {
+        let prefix = "\(workstreamID.uuidString.prefix(8).lowercased())-"
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: stateDirectory.path)) ?? []
+        for name in names where name.hasPrefix(prefix) {
+            guard name.hasSuffix(".pid") || name.hasSuffix(".status") else { continue }
+            try? FileManager.default.removeItem(at: stateDirectory.appendingPathComponent(name))
+        }
+    }
+
     /// Remove any leftovers from an earlier run of this check.
     ///
     /// Before every spawn, because the status file is the completion signal: a

@@ -297,4 +297,89 @@ final class IPCExecutionToolsTests: XCTestCase {
         let listed = await controller.listedWorkstreams
         XCTAssertTrue(listed.isEmpty, "the controller must not be reached at all")
     }
+
+    // MARK: - A named process has to be one the config declares
+
+    private func resolution(
+        plan: ProcessCompose.RunCommandPlan,
+        declared: [String] = []
+    ) -> ProcessCompose.Resolution {
+        var resolution = ProcessCompose.Resolution()
+        resolution.plan = plan
+        resolution.declaredExecuteProcesses = declared
+        return resolution
+    }
+
+    private var phaseScoped: ProcessCompose.RunCommandPlan {
+        .phaseScoped(
+            config: ProcessCompose.Config(path: "/repos/atelier/execution.process-compose.yaml"),
+            binary: "/opt/homebrew/bin/process-compose"
+        )
+    }
+
+    /// The bug. `StartContextResolver.selectedProcesses` filters a per-call list
+    /// through `runnableProcesses` — a flag-shaped-name check — and never
+    /// against what the config declares, so `start_execution(processes: "typo")`
+    /// ran `up -n execute typo` and answered "Starting typo… poll
+    /// list_processes" for something that was never going to appear.
+    func test_undeclared_namesAProcessTheConfigDoesNotDeclare() {
+        XCTAssertEqual(
+            IPC.ExecutionBridge.undeclared(["web", "typo"], in: resolution(plan: phaseScoped, declared: ["web", "api"])),
+            ["typo"]
+        )
+    }
+
+    func test_undeclared_isEmptyWhenEveryNameIsDeclared() {
+        XCTAssertEqual(
+            IPC.ExecutionBridge.undeclared(["api"], in: resolution(plan: phaseScoped, declared: ["web", "api"])),
+            []
+        )
+    }
+
+    /// The other half of the same finding, and why one guard covers both.
+    /// `declaredExecuteProcesses` is already `runnableProcesses`-filtered, so a
+    /// flag-shaped name cannot be in it — it is refused *as undeclared* rather
+    /// than silently filtered out and then reported through the `nothingToRun`
+    /// fallback, which told the agent "the user's Execution checklist has every
+    /// process unticked" about a start no checklist was involved in.
+    func test_undeclared_catchesAFlagShapedNameAsUndeclared() {
+        XCTAssertEqual(
+            IPC.ExecutionBridge.undeclared(["--verbose"], in: resolution(plan: phaseScoped, declared: ["web"])),
+            ["--verbose"]
+        )
+    }
+
+    /// A `.literal` plan is the user's own typed dev command: it has no
+    /// namespace and no process names, so there is no set to check against and
+    /// nothing to refuse.
+    func test_undeclared_declinesToJudgeALiteralPlan() {
+        XCTAssertNil(IPC.ExecutionBridge.undeclared(["web"], in: resolution(plan: .literal("bin/dev"))))
+    }
+
+    /// `.nothing` has no run at all, and the honest answer is the plan's own
+    /// `startUnavailableReason` through the existing `nothingToRun` path — not
+    /// "no such process".
+    func test_undeclared_declinesToJudgeWhenThereIsNoRun() {
+        XCTAssertNil(IPC.ExecutionBridge.undeclared(["web"], in: resolution(plan: .nothing)))
+    }
+
+    /// `.phaseScoped` with nothing declared is reachable only for a config Yams
+    /// could not decode: `RunCommandPlan` turns a genuinely `.empty` execute
+    /// namespace into `.nothing`. Refusing here would report "this project
+    /// declares: nothing" as a fact about the user's file when what actually
+    /// happened is that Atelier could not read it.
+    func test_undeclared_declinesToJudgeAConfigItCouldNotRead() {
+        XCTAssertNil(IPC.ExecutionBridge.undeclared(["web"], in: resolution(plan: phaseScoped, declared: [])))
+    }
+
+    /// The refusal names the whole legal set and every unknown name, the shape
+    /// `Verification.Runner.Failure.unknownChecks` already uses — naming only
+    /// the first would leave the caller retrying into the second.
+    func test_theRefusal_namesEveryUnknownNameAndTheLegalSet() throws {
+        let message = try XCTUnwrap(
+            IPC.ExecutionFailure.unknownProcesses(["typo", "othertypo"], declared: ["web", "api"]).errorDescription
+        )
+        XCTAssertTrue(message.contains("typo, othertypo"), message)
+        XCTAssertTrue(message.contains("web, api"), message)
+    }
 }

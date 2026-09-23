@@ -56,6 +56,24 @@ const fileModels = new Map()
 let activeModelId = null
 let contentChangedListener = null
 
+// Dispose a model only once no tab points at it any more.
+//
+// Tabs share one model per file, so the last holder is the only one that may
+// free it, and the `fileModels` entry has to go with it — left behind, the
+// next tab to open that path adopts a disposed model. Shared by `closeModel`
+// and by a tab navigating to a different file: both are "this tab stops
+// pointing at this model", and the answer to "may it go?" is the same one.
+function disposeIfUnreferenced(model) {
+  if (!model) return
+  for (const m of models.values()) {
+    if (m === model) return
+  }
+  model.dispose()
+  for (const [path, m] of fileModels) {
+    if (m === model) { fileModels.delete(path); break }
+  }
+}
+
 window.editorAPI = {
   // Create or update a model and switch the editor to it.
   // filePath gives the model a file:// URI so the TypeScript worker can
@@ -70,31 +88,69 @@ window.editorAPI = {
     if (contentChangedListener) contentChangedListener.dispose()
     contentChangedListener = null
 
-    let model = models.get(modelId)
+    const wantedUri = filePath ? monaco.Uri.file(filePath).toString() : null
+    const previous = models.get(modelId)
+    // A model this tab already owns that no longer names the file being opened
+    // is a *navigation*, not a reload, and `setValue` was the wrong answer to
+    // it: it left a model whose Uri said `foo.swift` holding `bar.swift`'s
+    // text, with `fileModels` still mapping `foo.swift` to it — so the next tab
+    // to open `foo.swift` adopted that model, showed bar's contents, and saved
+    // them over foo. It also defeats the dedupe's own purpose, which is that
+    // the TypeScript worker can trust a model's Uri to name its contents.
+    const isNavigation = Boolean(previous && wantedUri && previous.uri.toString() !== wantedUri)
+
+    let model = isNavigation ? undefined : previous
+    // Whether this tab attached to a buffer some other tab already had open,
+    // which may be carrying that tab's unsaved edits.
+    let adopted = false
+
     if (!model) {
       // Reuse existing model for the same file (e.g. same file in two tabs).
       // Uses our own map instead of monaco.editor.getModel(uri) which can fail
       // with VS Code service overrides, creating duplicate models that confuse
       // the TypeScript language service ("Duplicate identifier" errors).
       if (filePath) model = fileModels.get(filePath)
-      if (!model) {
+      if (model) {
+        // Deliberately no `setValue` and no `_cleanVersionId` stamp. `text` is
+        // a fresh read from disk, and this buffer may hold another tab's
+        // unsaved work: replacing it would discard that work, and stamping it
+        // clean told that tab its edits were already saved — it kept its dirty
+        // dot from Swift's own per-tab state while the model reported clean,
+        // so ⌘W stopped offering to save them.
+        adopted = true
+      } else {
         const uri = filePath ? monaco.Uri.file(filePath) : undefined
         model = monaco.editor.createModel(text, languageId, uri)
+        model._cleanVersionId = model.getAlternativeVersionId()
         if (filePath) fileModels.set(filePath, model)
       }
-      models.set(modelId, model)
     } else {
+      // This tab's own model, still naming this same file: `text` is a re-read
+      // of it, so replacing the contents is exactly what was asked for.
       model.setValue(text)
       monaco.editor.setModelLanguage(model, languageId)
+      model._cleanVersionId = model.getAlternativeVersionId()
     }
+
+    // Remapped before the outgoing model is offered for disposal, so the scan
+    // sees this tab's new claim and frees the old model only if no *other* tab
+    // still holds it.
+    models.set(modelId, model)
     editor.setModel(model)
     activeModelId = modelId
-    // Track dirty state via version IDs
-    model._cleanVersionId = model.getAlternativeVersionId()
+    if (isNavigation) disposeIfUnreferenced(previous)
+
     contentChangedListener = model.onDidChangeContent(() => {
       const dirty = model.getAlternativeVersionId() !== model._cleanVersionId
       postToSwift({ type: 'contentChanged', modelId, dirty })
     })
+    if (adopted && model.getAlternativeVersionId() !== model._cleanVersionId) {
+      // Swift marks a tab clean when it asks for a file, and the listener above
+      // only fires on the *next* edit — so a buffer adopted already dirty has
+      // to say so now, or this tab shows no dirty dot over unsaved work and
+      // closes without offering to keep it.
+      postToSwift({ type: 'contentChanged', modelId, dirty: true })
+    }
     if (line) {
       // Clamp: the caller's line came from outside and the file may have
       // changed since. Monaco throws on an out-of-range line.
@@ -142,18 +198,7 @@ window.editorAPI = {
     if (activeModelId === modelId) {
       activeModelId = null
     }
-    if (model) {
-      let stillReferenced = false
-      for (const m of models.values()) {
-        if (m === model) { stillReferenced = true; break }
-      }
-      if (!stillReferenced) {
-        model.dispose()
-        for (const [path, m] of fileModels) {
-          if (m === model) { fileModels.delete(path); break }
-        }
-      }
-    }
+    disposeIfUnreferenced(model)
   },
 
   // Force a layout pass (call after reparenting the WKWebView into a new container).

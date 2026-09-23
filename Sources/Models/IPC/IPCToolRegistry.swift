@@ -422,11 +422,11 @@ extension IPC.Tool {
                 isSafeToReplay: true,
                 description: """
                 Open one of this workstream's panes: "changes" (the diff and the user's
-                review comments), "execution" (the dev stack) or "verification" (the
-                checks and each one's terminal). They start CLOSED, so a thing you set
-                running may have no pane the user can watch it in — most of all
-                verification, whose output lives only in those terminals and never
-                reaches you.
+                review comments), "execution" (the dev stack), "verification" (the
+                checks and each one's terminal) or "whiteboard" (the shared board).
+                They start CLOSED, so a thing you set running may have no pane the user
+                can watch it in — most of all verification, whose output lives only in
+                those terminals and never reaches you.
 
                 It does NOT switch the user's view. The tab appears in the strip behind
                 whatever they are working in, which is the point: opening a pane is not a
@@ -1519,6 +1519,87 @@ extension IPC {
                 }
             }
             return result
+        }
+
+        // MARK: - The JSON boundary
+
+        /// Flattens one `tools/call` argument object into the `[String: String]`
+        /// this surface speaks.
+        ///
+        /// **Every tool here declares string arguments, and models send real
+        /// JSON anyway** — `bypass_permissions: true` as a boolean,
+        /// `checks: ["rspec"]` as an array. That is not a caller mistake to be
+        /// punished: a schema saying "string" is advice, and an agent that sent
+        /// the value it meant should get the behaviour it meant.
+        ///
+        /// It used to be `value as? String ?? String(describing: value)`, whose
+        /// comment claimed a non-string was "rendered rather than rejected, so a
+        /// stray number still reaches the app". Only numbers survived that.
+        /// `JSONSerialization` hands back `__NSCFBoolean` for a JSON boolean, and
+        /// `String(describing:)` renders it **"1"** — which `boolean(_:)` then
+        /// refuses, reporting `received "1"` for an argument the agent spelled
+        /// `true`. An `NSArray` rendered as `"(\n    rspec,\n    rubocop\n)"`,
+        /// and `parseList` splits on `,[]"'` but not on parentheses, so
+        /// `start_verification(checks: ["rspec"])` reached the runner as
+        /// `["(", "rspec", ")"]` and was refused for an undeclared check named
+        /// `(`. `NSNull` became the literal `"<null>"`, so `line: null` came back
+        /// as "expected a whole number, got <null>".
+        ///
+        /// So each JSON type is given the spelling this surface's own readers
+        /// already parse, and the one type with no such spelling — null — is
+        /// **dropped**, since "absent" is exactly what a null argument means and
+        /// every optional read here treats absent and empty alike.
+        ///
+        /// Lives on `ToolArguments` rather than in the helper because
+        /// `IPCToolRegistry.swift` is one of the two files `project.yml` compiles
+        /// into `AtelierMCP` (`:208-209`), so the helper can call it and the app's
+        /// tests can assert it. A copy in `main.swift` would be untestable, which
+        /// is how the old one survived.
+        static func strings(fromJSON arguments: [String: Any]) -> [String: String] {
+            var result: [String: String] = [:]
+            for (key, value) in arguments {
+                guard let rendered = render(value) else { continue }
+                result[key] = rendered
+            }
+            return result
+        }
+
+        /// One JSON value as a string, or nil for one that means "absent".
+        ///
+        /// An array becomes the comma-separated form `list(_:)` already parses,
+        /// rather than `NSArray`'s description. Its elements are rendered by the
+        /// same rules, so `[1, true]` is `"1,true"` and a null element is
+        /// dropped rather than spelled `<null>` in the middle of a list.
+        private static func render(_ value: Any) -> String? {
+            if value is NSNull {
+                return nil
+            }
+            if let string = value as? String {
+                return string
+            }
+            // `is Bool` is not reliable for the bridged `__NSCFBoolean`
+            // `JSONSerialization` produces — it answers true for `NSNumber(1)`
+            // too, which would spell a genuine `tail: 1` as `"true"`. The
+            // CoreFoundation type id is the only exact test.
+            if let number = value as? NSNumber {
+                return CFGetTypeID(number as CFTypeRef) == CFBooleanGetTypeID()
+                    ? (number.boolValue ? "true" : "false")
+                    : number.stringValue
+            }
+            if let array = value as? [Any] {
+                return array.compactMap(render).joined(separator: ",")
+            }
+            // No tool declares an object argument, so there is no spelling to
+            // match. Compact JSON at least round-trips and is readable in the
+            // refusal the reader will produce; `String(describing:)` gave a
+            // multi-line `NSDictionary` dump.
+            if JSONSerialization.isValidJSONObject(value),
+               let data = try? JSONSerialization.data(withJSONObject: value),
+               let json = String(data: data, encoding: .utf8)
+            {
+                return json
+            }
+            return String(describing: value)
         }
 
         /// A required UUID.

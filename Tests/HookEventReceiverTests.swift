@@ -31,6 +31,47 @@ final class HookEventReceiverTests: XCTestCase {
         return port
     }
 
+    /// Blocks until the listener reports *no* port, or the deadline passes.
+    private func waitForNoBoundPort(timeout: TimeInterval = 10) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if receiver.boundPort == nil {
+                return true
+            }
+            usleep(20_000)
+        }
+        return false
+    }
+
+    // MARK: - Surviving a listener that ends
+
+    /// **A listener that reaches a terminal state used to end hook delivery for
+    /// the whole session.** `setupListener` guards on `listener == nil` to stay
+    /// idempotent, and neither `.failed` nor `.cancelled` cleared the property —
+    /// so the receiver held a dead listener forever and every later `start()`
+    /// returned immediately. That is exactly the "No Signal" the probe reports,
+    /// with nothing in the app able to repair it.
+    ///
+    /// Driven through a cancel rather than a real failure because the two share
+    /// `listenerEnded`, and a bind failure cannot be provoked on demand.
+    func test_aListenerThatEndsOnItsOwn_isRebuiltRatherThanEndingTheSession() throws {
+        receiver.start()
+        let first = try XCTUnwrap(waitForBoundPort(), "hook receiver did not bind a port")
+
+        receiver._testCancelListenerWithoutStopping()
+        XCTAssertTrue(waitForNoBoundPort(), "the cancelled listener never let go of its port")
+
+        // No second `start()`: the receiver is expected to repair itself, because
+        // nothing in the app retries. `AtelierApp` calls `start()` exactly once,
+        // at launch.
+        let rebuilt = try XCTUnwrap(
+            waitForBoundPort(),
+            "the receiver never rebuilt its listener; hook delivery is dead for the session"
+        )
+        XCTAssertGreaterThan(rebuilt, 0)
+        _ = first
+    }
+
     // MARK: - Isolation from the machine
 
     /// This suite binds a *real* listener. `hook-port` is the single rendezvous

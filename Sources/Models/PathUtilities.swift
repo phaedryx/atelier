@@ -48,9 +48,21 @@ extension UUID: @retroactive Identifiable {
 
 extension String {
     /// Replaces the home directory prefix with ~ for compact display.
+    ///
+    /// The separator is the whole of it, the same rule `isCanonicallyInside` states
+    /// below: a bare `hasPrefix(home)` makes `/Users/name-old/repo` a child of
+    /// `/Users/name` and renders it as `~-old/repo`, a path that points nowhere. The
+    /// home directory itself is still abbreviated, to a bare `~`.
+    ///
+    /// Textual only — deliberately not `isCanonicallyInside`, which resolves symlinks
+    /// and stats every missing component. This draws in table rows on a fifteen-second
+    /// refresh, and a display helper must not go to disk.
     var abbreviatedPath: String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        if hasPrefix(home) {
+        if self == home {
+            return "~"
+        }
+        if hasPrefix(home + "/") {
             return "~" + dropFirst(home.count)
         }
         return self

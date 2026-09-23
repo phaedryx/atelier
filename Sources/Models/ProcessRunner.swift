@@ -33,11 +33,16 @@ private let logger = Logger(subsystem: "atelier", category: "process")
 /// blocked for the child's whole life, so this belongs off the main actor and off
 /// any pool whose width is small enough to matter.
 ///
-/// Two spawn sites deliberately stay outside this type, and say so where they
-/// spawn: `BareRepoClone.run` and `QuickAction.Runner.runShellCommand`. Both run
-/// work with no honest deadline — a clone, or the user's own command — and both
-/// already offer the better answer, a cancellation the user drives. Everything
-/// else that spawns a child goes through here.
+/// Three spawn sites deliberately stay outside this type, and say so where they
+/// spawn: `BareRepoClone.run`, `QuickAction.Runner.runShellCommand` and
+/// `Whiteboard.Capture.run`. All three run work with no honest deadline — a
+/// clone, the user's own command, or a human dragging a selection — and all
+/// three already offer the better answer, a cancellation the user drives.
+/// The third one's cancel is *in band*: `screencapture -i`'s overlay owns the
+/// screen, so Escape in the system's own UI is the cancel rather than anything
+/// Atelier had to provide. Everything else that spawns a child goes through
+/// here, and a fourth exemption needs the same two properties and the same
+/// comment.
 enum ProcessRunner {
     /// How long to let a terminated child wind down before escalating to SIGKILL.
     private static let terminationGrace: TimeInterval = 2

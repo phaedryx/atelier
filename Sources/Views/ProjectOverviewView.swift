@@ -64,7 +64,14 @@ struct ProjectOverviewView: View {
                                     HStack(spacing: 4) {
                                         Image(systemName: "arrow.triangle.branch")
                                             .font(.caption)
-                                        Text(info.branch ?? "unknown")
+                                        // The `??` makes this a String, which binds
+                                        // Text's StringProtocol init — right for a
+                                        // branch name, which must never be localized,
+                                        // but it means the fallback has to localize
+                                        // itself rather than being a LocalizedStringKey.
+                                        Text(info.branch ?? NSLocalizedString(
+                                            "unknown", comment: "Repository branch name could not be read"
+                                        ))
                                     }
                                     .foregroundStyle(.secondary)
 
@@ -210,7 +217,7 @@ struct ProjectOverviewView: View {
                                 branchName: facts?.branch,
                                 prTitle: pr?.title,
                                 prNumber: pr?.number,
-                                prState: pr?.state,
+                                prStatus: pr?.status,
                                 prURL: pr?.url,
                                 onSelect: { onSelectWorkstream(workstream.id) },
                                 onRemove: { onRemoveWorkstream(workstream.id) },
@@ -550,8 +557,13 @@ private struct WorktreeInfoRow: View {
                 .frame(width: 20, alignment: .top)
                 .padding(.top, 4)
             VStack(alignment: .leading, spacing: 2) {
-                Text(worktree.branch ?? "detached")
-                    .font(.system(.body, design: .monospaced))
+                // Same shape as the Repository section's branch line: the `??` makes
+                // this a String, so the fallback localizes itself and the branch name
+                // stays verbatim.
+                Text(worktree.branch ?? NSLocalizedString(
+                    "detached", comment: "Worktree is on a detached HEAD, so it has no branch name"
+                ))
+                .font(.system(.body, design: .monospaced))
                 Text(worktree.path.abbreviatedPath)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
@@ -623,7 +635,12 @@ private struct WorktreeInfoRow: View {
             .frame(minHeight: 36, alignment: .leading)
             Spacer()
             if worktree.isMain {
-                Text("main")
+                // A role label, not a branch name — it is gated on `isMain` and the
+                // main worktree's branch may be `master`, `trunk` or anything else,
+                // so this would read "main" regardless. The branch itself is the
+                // monospaced line above. Hence a key of its own: a bare "main" would
+                // be a short, generic key for one specific label to collide over.
+                Text("Main worktree label")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else if !isWorkstream, !isPurging {
@@ -681,7 +698,7 @@ private struct WorkstreamRow: View {
     var branchName: String?
     var prTitle: String?
     var prNumber: Int?
-    var prState: String?
+    var prStatus: GitHub.PR.Status?
     var prURL: String?
     let onSelect: () -> Void
     let onRemove: () -> Void
@@ -743,8 +760,8 @@ private struct WorkstreamRow: View {
                                 .font(.system(size: 6))
                                 .foregroundStyle(.green)
                         }
-                        if let prNumber, let prState {
-                            PRBadge(number: prNumber, state: prState, url: prURL)
+                        if let prNumber, let prStatus {
+                            PRBadge(number: prNumber, status: prStatus, url: prURL)
                         }
                     }
                     if let subtitle {
@@ -970,34 +987,30 @@ private struct FileChangeRow: View {
     }
 }
 
+/// The workstream row's PR badge.
+///
+/// Colour and symbol come from `GitHub.PR.Status` through the shared style, which is
+/// what `WorktreeInfoRow` above already does: this switched on the raw `state` string,
+/// so a **draft** PR — `state == "OPEN"`, `isDraft` true — rendered identically to an
+/// open one, green, in the same pane that drew it grey two sections up. A closed
+/// unmerged PR moves with it, from the open-PR symbol to `xmark.circle`.
+///
+/// The style's `label` is deliberately not taken: this badge is `#123` and nothing
+/// else, and a word would change the row's density. The font sizes stay local for the
+/// same reason — the drift being fixed is colour and symbol, not geometry.
 private struct PRBadge: View {
     let number: Int
-    let state: String
+    let status: GitHub.PR.Status
     var url: String?
-
-    private var color: Color {
-        switch state {
-        case "MERGED": .purple
-        case "CLOSED": .red
-        default: .green
-        }
-    }
-
-    private var icon: String {
-        switch state {
-        case "MERGED": "arrow.triangle.merge"
-        default: "arrow.triangle.pull"
-        }
-    }
 
     var body: some View {
         let label = HStack(spacing: 3) {
-            Image(systemName: icon)
+            Image(systemName: status.symbolName)
                 .font(.system(size: 9))
             Text(verbatim: "#\(number)")
                 .font(.system(size: 11))
         }
-        .foregroundStyle(color)
+        .foregroundStyle(status.color)
 
         if let url, let dest = URL(string: url) {
             Link(destination: dest) { label }
