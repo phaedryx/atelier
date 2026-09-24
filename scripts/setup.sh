@@ -4,7 +4,7 @@
 set -euo pipefail
 
 # This script is the *only* copy of what a new worktree needs. It is what
-# CONTRIBUTING.md tells a human to run and what the project's
+# the README tells a human to run and what the project's
 # `initialization.yaml` runs behind a new workstream, one subcommand per step —
 # see docs/worktree-setup.md. The subcommands exist so those steps are named and
 # bounded individually on the Info tab, not so the logic can live in two places:
@@ -104,11 +104,10 @@ setup_ghostty() {
     # See docs/ghostty-xcframework-build.md.
     #
     # Relinked on every run, outside the init guard above: `git submodule update
-    # --init` is listed as a prerequisite in CONTRIBUTING.md, so a contributor
-    # who follows it arrives here with `ghostty/include` present and no links at
-    # all. Gating these on the init would skip them in silence and fail the build
-    # with `ld: library 'ghostty' not found` — the same shape as the bug this
-    # replaced.
+    # --init` is something a contributor may well have run already, arriving here
+    # with `ghostty/include` present and no links at all. Gating these on the
+    # init would skip them in silence and fail the build with
+    # `ld: library 'ghostty' not found` — the same shape as the bug this replaced.
     if [ -d "$REPO_ROOT/.shared" ]; then
         ln -sfn "$REPO_ROOT/.shared/GhosttyKit.xcframework" ghostty/macos/GhosttyKit.xcframework
         ln -sfn "$REPO_ROOT/.shared/zig-out" ghostty/zig-out
@@ -237,7 +236,7 @@ setup_build() {
 
     # `dev.sh build` runs xcodegen itself, so this is a second run of it. Kept
     # deliberately: it is what reports "✓ Xcode project generated" and what
-    # CONTRIBUTING.md says this script does, and it fails fast on a broken
+    # the README says this script does, and it fails fast on a broken
     # `project.yml` instead of a minute into xcodebuild's startup. Pre-existing,
     # and not folded away here because that is a change to what the script
     # prints rather than to worktree setup.
