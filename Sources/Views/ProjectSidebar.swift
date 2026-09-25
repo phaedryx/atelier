@@ -8,6 +8,33 @@ import UniformTypeIdentifiers
 
 private let logger = Logger(subsystem: "atelier", category: "sidebar")
 
+/// The ids a sidebar `ForEach` should emit rows for, given a cached sort order and
+/// the ids that actually exist right now.
+///
+/// The caches `rebuildSortOrder` fills are **always one frame behind**: `onChange` runs
+/// after the body that already observed the mutated `projects`, so every add, remove
+/// and purge renders once against a cache that disagrees with the model. That window
+/// used to be invisible because the rows only *looked* the same — but rows were keyed
+/// by a cached id and their content and `.tag` came from a positional lookup, so in
+/// that frame a row could be keyed `X` and tagged `Y`, and two rows could carry the
+/// same tag. `List(selection:)` does not survive a duplicate tag: it highlights both,
+/// and clicking elsewhere hands the selection straight back to the stale twin.
+///
+/// So the cache supplies **order and nothing else**. Membership is reconciled against
+/// the live ids every render: ids the cache still carries but the model has dropped go
+/// away, and ids the model has that the cache has not seen yet are appended in model
+/// order, which is what makes a freshly created workstream appear in the frame it is
+/// created rather than the one after. The result is duplicate-free, so no two rows can
+/// ever share a tag.
+func sidebarRowOrder(cached: [UUID]?, actual: [UUID]) -> [UUID] {
+    guard let cached else { return actual }
+    var seen = Set<UUID>()
+    let present = Set(actual)
+    var order = cached.filter { present.contains($0) && seen.insert($0).inserted }
+    order.append(contentsOf: actual.filter { !seen.contains($0) })
+    return order
+}
+
 func expandedProjectIDs(afterSelecting selection: SidebarSelection?, current: Set<UUID>, projectIDByWorkstreamID: [UUID: UUID]) -> Set<UUID> {
     guard let selection else { return current }
     var expanded = current
@@ -80,8 +107,6 @@ struct ProjectSidebar: View {
     @State private var expandedProjects: Set<UUID> = SidebarState.loadExpanded()
     @State private var cachedSortedIDs: [UUID] = []
     @State private var cachedSortedWorkstreamIDs: [UUID: [UUID]] = [:]
-    @State private var cachedProjectIndex: [UUID: Int] = [:]
-    @State private var cachedWorkstreamIndex: [UUID: (Int, Int)] = [:]
     @State private var showWorktreeError = false
     @State private var showNotGitRepoError = false
     @State private var showingNewWorkstreamName = false
@@ -129,17 +154,19 @@ struct ProjectSidebar: View {
             .map(\.id)
     }
 
-    private func rebuildIndices() {
-        cachedProjectIndex = Dictionary(uniqueKeysWithValues: projects.enumerated().map { ($1.id, $0) })
-        var wsIndex: [UUID: (Int, Int)] = [:]
+    /// Recompute the per-project workstream sort order.
+    ///
+    /// This is a cache of *order only*. It used to also hold a `[workstreamID: (Int, Int)]`
+    /// pair per workstream, which rows and `.terminalActivity` both indexed into — and a
+    /// positional pair into a two-level array is stale for one frame after every mutation
+    /// and points at a real, wrong workstream rather than at nothing. `sidebarRowOrder`
+    /// makes the display side immune to a stale order; nothing resolves a workstream by
+    /// position any more. Do not reintroduce the index.
+    private func rebuildSortOrder() {
         var sortedWS: [UUID: [UUID]] = [:]
-        for (pi, project) in projects.enumerated() {
-            for (wi, ws) in project.workstreams.enumerated() {
-                wsIndex[ws.id] = (pi, wi)
-            }
+        for project in projects {
             sortedWS[project.id] = workstreamSortOrder.sorted(project.workstreams).map(\.id)
         }
-        cachedWorkstreamIndex = wsIndex
         cachedSortedWorkstreamIDs = sortedWS
     }
 
@@ -147,29 +174,14 @@ struct ProjectSidebar: View {
         projects.reduce(0) { $0 + $1.workstreams.count }
     }
 
-    private func projectBinding(for id: UUID) -> Binding<Project> {
-        Binding(
-            get: {
-                if let idx = cachedProjectIndex[id], idx < projects.count {
-                    return projects[idx]
-                }
-                return projects.first(where: { $0.id == id }) ?? Project(name: "", directory: "")
-            },
-            set: { newValue in
-                if let idx = cachedProjectIndex[id], idx < projects.count {
-                    projects[idx] = newValue
-                }
-            }
-        )
-    }
-
     private func projectIDByWorkstreamIDSnapshot() -> [UUID: UUID] {
-        Dictionary(
-            uniqueKeysWithValues: cachedWorkstreamIndex.compactMap { workstreamID, index in
-                guard projects.indices.contains(index.0) else { return nil }
-                return (workstreamID, projects[index.0].id)
+        var map: [UUID: UUID] = [:]
+        for project in projects {
+            for workstream in project.workstreams {
+                map[workstream.id] = project.id
             }
-        )
+        }
+        return map
     }
 
     private func deferSelectionExpansion(_ selected: SidebarSelection, projectIDByWorkstreamID: [UUID: UUID], scrollProxy: ScrollViewProxy) {
@@ -216,35 +228,40 @@ struct ProjectSidebar: View {
     /// here — `ChangesFileTreeSidebar` shipped exactly that shape and only moved to
     /// `.plain` later, for the vibrancy reason its own comment gives.
     private func projectRows() -> some View {
-        ForEach(cachedSortedIDs, id: \.self) { projectID in
-            let projectBind = projectBinding(for: projectID)
-            let project = projectBind.wrappedValue
-            let hasChildren = !project.workstreams.isEmpty
-            let isFirst = projectID == cachedSortedIDs.first
+        let rowIDs = sidebarRowOrder(cached: cachedSortedIDs, actual: projects.map(\.id))
+        return ForEach(rowIDs, id: \.self) { projectID in
+            // An id the model cannot resolve emits no row. It used to resolve to a
+            // synthesized `Project(name: "", directory: "")`, whose `id` was a fresh
+            // UUID on every evaluation — a blank, untitled row whose selection tag
+            // changed identity each render.
+            if let project = projects.first(where: { $0.id == projectID }) {
+                let hasChildren = !project.workstreams.isEmpty
+                let isFirst = projectID == rowIDs.first
 
-            if hasChildren {
-                DisclosureGroup(
-                    isExpanded: Binding(
-                        get: { expandedProjects.contains(projectID) },
-                        set: { on in
-                            withAnimation(.easeInOut(duration: 0.15)) {
-                                if on {
-                                    expandedProjects.insert(projectID)
-                                } else {
-                                    expandedProjects.remove(projectID)
+                if hasChildren {
+                    DisclosureGroup(
+                        isExpanded: Binding(
+                            get: { expandedProjects.contains(projectID) },
+                            set: { on in
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    if on {
+                                        expandedProjects.insert(projectID)
+                                    } else {
+                                        expandedProjects.remove(projectID)
+                                    }
                                 }
                             }
-                        }
-                    )
-                ) {
-                    workstreamRows(project: project)
-                } label: {
+                        )
+                    ) {
+                        workstreamRows(project: project)
+                    } label: {
+                        projectHeaderRow(project: project, isFirst: isFirst)
+                            .tag(SidebarSelection.project(project.id))
+                    }
+                } else {
                     projectHeaderRow(project: project, isFirst: isFirst)
                         .tag(SidebarSelection.project(project.id))
                 }
-            } else {
-                projectHeaderRow(project: project, isFirst: isFirst)
-                    .tag(SidebarSelection.project(project.id))
             }
         }
     }
@@ -322,13 +339,16 @@ struct ProjectSidebar: View {
     /// segments are given a negative vertical padding so they overlap into their
     /// neighbours and read as one continuous line.
     private func workstreamRows(project: Project) -> some View {
-        let sortedWorkstreamIDs = cachedSortedWorkstreamIDs[project.id] ?? project.workstreams.map(\.id)
-        return ForEach(sortedWorkstreamIDs, id: \.self) { workstreamID in
-            if let (pIdx, wIdx) = cachedWorkstreamIndex[workstreamID],
-               projects.indices.contains(pIdx),
-               projects[pIdx].workstreams.indices.contains(wIdx)
-            {
-                let workstream = projects[pIdx].workstreams[wIdx]
+        let rowIDs = sidebarRowOrder(
+            cached: cachedSortedWorkstreamIDs[project.id],
+            actual: project.workstreams.map(\.id)
+        )
+        return ForEach(rowIDs, id: \.self) { workstreamID in
+            // Resolved by id, from this project's own workstreams — never by a cached
+            // `(project, workstream)` index pair. A positional pair is global, so a stale
+            // one could make one project's group render another's rows while that project
+            // rendered them too, and tag both copies alike.
+            if let workstream = project.workstreams.first(where: { $0.id == workstreamID }) {
                 let facts = appEnv.facts(for: workstream.worktreePath)
                 let pr = appEnv.pullRequest(forWorktree: workstream.worktreePath, in: project.directory)
                 let wsRuns = agentStateTracker.runs(for: workstream.id)
@@ -455,7 +475,7 @@ struct ProjectSidebar: View {
                 ),
                 selection: $selection
             ) { _ in
-                rebuildIndices()
+                rebuildSortOrder()
                 onProjectsChanged()
             }
             .purgeConfirmationAlert(
@@ -469,10 +489,12 @@ struct ProjectSidebar: View {
                 )
             ) { completion in
                 guard case let .workstream(wsID, projectID) = completion else { return }
-                rebuildIndices()
+                rebuildSortOrder()
                 if case let .workstream(id) = selection, id == wsID {
-                    selection = projects.first(where: { $0.id == projectID })?
-                        .workstreams.first.map { .workstream($0.id) } ?? .project(projectID)
+                    // The first row the user can see, which under `.recent` is not
+                    // `workstreams.first` — that is storage order.
+                    selection = cachedSortedWorkstreamIDs[projectID]?.first
+                        .map { SidebarSelection.workstream($0) } ?? .project(projectID)
                 }
                 onProjectsChanged()
             }
@@ -663,9 +685,8 @@ struct ProjectSidebar: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .terminalActivity)) { notification in
             guard let wsID = notification.object as? UUID else { return }
-            guard let (pi, wi) = cachedWorkstreamIndex[wsID],
-                  projects.indices.contains(pi),
-                  projects[pi].workstreams.indices.contains(wi)
+            guard let pi = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }),
+                  let wi = projects[pi].workstreams.firstIndex(where: { $0.id == wsID })
             else { return }
             let now = Date()
             projects[pi].lastAccessedAt = now
@@ -683,16 +704,16 @@ struct ProjectSidebar: View {
         }
         .onAppear {
             cachedSortedIDs = recomputeSortedIDs()
-            rebuildIndices()
+            rebuildSortOrder()
         }
         .onChange(of: expandedProjects) { _, newValue in SidebarState.saveExpanded(newValue) }
-        .onChange(of: workstreamSortOrder) { _, _ in rebuildIndices() }
+        .onChange(of: workstreamSortOrder) { _, _ in rebuildSortOrder() }
         .onChange(of: projects.count) { _, _ in
             cachedSortedIDs = recomputeSortedIDs()
-            rebuildIndices()
+            rebuildSortOrder()
         }
         .onChange(of: totalWorkstreamCount()) { _, _ in
-            rebuildIndices()
+            rebuildSortOrder()
         }
         .overlay {
             if isDropTargeted {
@@ -978,7 +999,7 @@ struct ProjectSidebar: View {
     /// This function used to *be* that sequence, on its own `DispatchQueue`,
     /// with its own rollback. What is left is what only a mounted view can do:
     /// expanding the project's row so the optimistic workstream is visible, and
-    /// raising the alert when the launch refuses. `rebuildIndices()` is no
+    /// raising the alert when the launch refuses. `rebuildSortOrder()` is no
     /// longer called here and is not lost — the `.onChange(of:
     /// totalWorkstreamCount())` and `.onChange(of: projects.count)` handlers
     /// above fire in the same update cycle, and the explicit call was already
@@ -1072,7 +1093,7 @@ struct ProjectSidebar: View {
         onProjectsChanged()
         // Projects are ordered A-Z, so a rename can move this row.
         cachedSortedIDs = recomputeSortedIDs()
-        rebuildIndices()
+        rebuildSortOrder()
     }
 
     private func commitRename(workstreamID: UUID, input: String) {
@@ -1081,7 +1102,7 @@ struct ProjectSidebar: View {
         projects[pi].workstreams[wi].applyRename(input)
         onProjectsChanged()
         // `.alphabetical` sorts on `label`, which this just changed.
-        rebuildIndices()
+        rebuildSortOrder()
     }
 
     /// Begin an inline rename of the selected workstream (⌘⇧R / palette),
@@ -1116,11 +1137,12 @@ struct ProjectSidebar: View {
             )
         }
         projects.removeAll { $0.id == id }
-        // The cached (project, workstream) index pairs are positional, so they have to be
-        // rebuilt here rather than left to `onChange(of: projects.count)`: a `.terminalActivity`
-        // notification arriving in between would index into the array with a stale pair.
+        // Eagerly, not left to `onChange(of: projects.count)`, so the rows settle in
+        // this frame rather than the next. Nothing indexes positionally any more, so a
+        // late rebuild is now only a cosmetic ordering lag rather than a stale
+        // `(project, workstream)` pair pointing at the wrong workstream.
         cachedSortedIDs = recomputeSortedIDs()
-        rebuildIndices()
+        rebuildSortOrder()
         if case let .project(pid) = selection, pid == id {
             selection = nil
         }

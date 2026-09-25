@@ -85,6 +85,38 @@ keyboard shortcut tables that have to be reconciled by hand.
   `ProcessCompose.Settings.resolveBinary()` and never by `ToolStatus.findBinary`, for the
   reason **Detected Tools** gives at length in `docs/agents/execution-and-config.md`.
 - **Sidebar state** (selection, expanded sections) stored in UserDefaults (`atelier.selection`, `atelier.expandedProjects`)
+- **No sidebar row is ever resolved by position.** `ProjectSidebar` caches a sort
+  order per project (`cachedSortedWorkstreamIDs`) and a project order
+  (`cachedSortedIDs`), and both are **one frame behind by construction**: they are
+  refilled from `onChange`, which runs after the body that already saw the mutated
+  `projects`. Every add, remove, purge and project deletion therefore renders once
+  against a cache that disagrees with the model.
+  That was survivable until the cache was also used to resolve *content*. A
+  `[workstreamID: (projectIndex, workstreamIndex)]` pair — rebuilt beside the sort
+  order, so stale in lockstep with it — meant a row keyed by a purged id indexed
+  into the slot that id used to occupy and rendered **whichever workstream had
+  shifted into it**, tagging itself `.workstream(thatOtherID)`. The ForEach key and
+  the `.tag` were different values, and two rows ended up carrying the same tag.
+  `List(selection:)` does not survive that: both rows highlight, and clicking a third
+  row hands the selection straight back to the stale twin — a phantom duplicate row
+  that steals focus. Because the pair was global, a stale `projectIndex` could also
+  make one project's group render another project's workstreams while that project
+  rendered them too.
+  The rule now is that the caches supply **order and nothing else**.
+  `sidebarRowOrder(cached:actual:)` reconciles membership against the live ids on
+  every render — dropping ids the model no longer has, appending ids the cache has
+  not seen yet — and rows resolve their workstream by id out of the `Project` value
+  their own group was built from. The key, the content and the tag are then the same
+  id by construction, and the emitted ids are duplicate-free, so two rows cannot
+  share a tag no matter how stale the cache is. The index pair is gone; do not add
+  one back, and do not "fix" a staleness symptom by adding another `onChange`
+  trigger — the one-frame window is not closable from there.
+  Two related traps went with it. `projectBinding(for:)` returned
+  `Project(name: "", directory: "")` for an unknown id — a **fresh UUID on every
+  evaluation**, so the row's `.tag` changed identity each render; an unknown id now
+  emits no row. And `.terminalActivity` wrote `lastAccessedAt` through the same
+  positional pair, which meant a stale pair silently stamped the *wrong*
+  workstream's timestamp and reordered the sidebar around it.
 - **Process-compose approval is gone**, with `ScriptTrust` and `ConfigApprovalView`.
   `atelier.approvedConfigFiles` held a SHA-256 of every repository-provided file a config would
   load, keyed by project directory, and gated `bootstrap` and `dispose`. It gated the two
