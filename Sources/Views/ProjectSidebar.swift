@@ -625,22 +625,41 @@ struct ProjectSidebar: View {
     }
 
     private var sidebarList: some View {
-        GeometryReader { _ in
-            VStack(spacing: 0) {
-                ScrollViewReader { scrollProxy in
-                    List(selection: $selection) {
-                        projectRows()
-                    }
-                    .listStyle(.sidebar)
-                    .onChange(of: selection) { _, sel in
-                        guard let sel else { return }
-                        deferSelectionExpansion(sel, projectIDByWorkstreamID: projectIDByWorkstreamIDSnapshot(), scrollProxy: scrollProxy)
-                    }
-                } // ScrollViewReader
+        // **No `GeometryReader` around this.** One wrapped the whole sidebar
+        // here until it was removed, with its proxy discarded — the last real
+        // use, `.frame(height: max(80, geo.size.height * 0.2))`, went in #101
+        // and left the container standing.
+        //
+        // It is not free. A `GeometryReader` reports the parent's proposal as
+        // its own size and never propagates its content's size back up, and it
+        // can only hand the closure a proxy once its own size has resolved — so
+        // the children are laid out downstream of the previous pass rather than
+        // in it. `List` under `.listStyle(.sidebar)` is an `NSTableView`, which
+        // caches row rects and invalidates them on a bounds change, and across
+        // that extra hop the bounds change and the SwiftUI row updates arrive in
+        // no guaranteed order. Dragging the sidebar divider left rows painted at
+        // their pre-resize frames: a selected row's highlight capsule stranded at
+        // the old width, over rows it did not belong to, still taking content
+        // updates but no longer taking geometry.
+        //
+        // If something here needs the container's size, read it from somewhere
+        // that does not take part in layout — `.onGeometryChange(for:of:action:)`,
+        // or a `GeometryReader` inside `.background` — or express the intent with
+        // `.containerRelativeFrame(_:)`. Do not wrap the `List` again.
+        VStack(spacing: 0) {
+            ScrollViewReader { scrollProxy in
+                List(selection: $selection) {
+                    projectRows()
+                }
+                .listStyle(.sidebar)
+                .onChange(of: selection) { _, sel in
+                    guard let sel else { return }
+                    deferSelectionExpansion(sel, projectIDByWorkstreamID: projectIDByWorkstreamIDSnapshot(), scrollProxy: scrollProxy)
+                }
+            } // ScrollViewReader
 
-                // Bottom bar (always visible)
-                bottomBar
-            }
+            // Bottom bar (always visible)
+            bottomBar
         }
         .onReceive(NotificationCenter.default.publisher(for: .terminalActivity)) { notification in
             guard let wsID = notification.object as? UUID else { return }
