@@ -13,9 +13,12 @@ here is the part another change can break.
 **The cap is 32,000 and the old 8,000 rested on a claim that is false at scale.**
 The argument for 8KB was that the agent is asked to open `board.png` in the same
 breath, so the picture carries whatever the text does not. It does not: the
-render is capped at `MAX_RENDER_EDGE` (1600, `editor/src/whiteboard.jsx`) and
-real boards run 2000–2900px on their long edge, so at that scale label text in
-the picture is not legible. Both halves of the read path therefore degraded
+render is capped at `MAX_RENDER_EDGE` (1600, `editor/src/whiteboard.jsx`), which
+is below the size a board has reached by the time the digest starts cutting, so
+the picture is downscaled and its label text stops being legible. (Boards are
+*reported* at 2000–2900px on the long edge. That range is second-hand; the
+structural point does not rest on it.) Both halves of the read path therefore
+degraded
 **together**, and exactly as a board got large enough to be worth checking — a
 board of 83 elements reported 21 of them not listed. If the render cap ever
 moves, this number's argument moves with it.

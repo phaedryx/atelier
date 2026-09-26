@@ -30,9 +30,12 @@ extension Whiteboard {
         /// to open `board.png` in the same breath, so the picture carries
         /// whatever the text does not, and 8KB was already two thousand tokens
         /// spent before it had looked. But the render is capped at
-        /// `MAX_RENDER_EDGE` — 1600, `editor/src/whiteboard.jsx` — and boards in
-        /// practice run 2000–2900px on their long edge, so at that scale the
-        /// label text in the picture is not legible. Both halves of the read
+        /// `MAX_RENDER_EDGE` — 1600, `editor/src/whiteboard.jsx` — which is
+        /// below the size a board reaches by the time the digest starts
+        /// cutting, so the picture is downscaled and its label text stops being
+        /// legible (boards are *reported* at 2000–2900px on the long edge; that
+        /// range is second-hand and the structural point does not rest on
+        /// it). Both halves of the read
         /// path therefore degraded **together**, and they did it exactly as a
         /// board got large enough to be worth checking: measured, a board of 83
         /// elements reported 21 of them not listed.
@@ -313,13 +316,26 @@ extension Whiteboard {
             var spent = 0
             for index in order where !kept.contains(index) {
                 var bundle = [index]
-                for endpoint in [elements[index].from, elements[index].to] {
-                    guard let endpoint,
-                          let target = indexByID[endpoint],
-                          !kept.contains(target),
-                          !bundle.contains(target)
-                    else { continue }
-                    bundle.append(target)
+                // Transitive, because an arrow may bind to another arrow —
+                // Excalidraw allows it. Pulling `x2` in for `x1` and stopping
+                // there charges nothing for `x2`'s own endpoints, and `x2`
+                // lands in the digest printing the dangling id the bundle
+                // exists to prevent, one hop further out. Membership in
+                // `bundle` is the cycle guard, and an endpoint already in
+                // `kept` needs no check: it could only have been admitted by a
+                // bundle that closed over *its* endpoints.
+                var frontier = 0
+                while frontier < bundle.count {
+                    let element = elements[bundle[frontier]]
+                    frontier += 1
+                    for endpoint in [element.from, element.to] {
+                        guard let endpoint,
+                              let target = indexByID[endpoint],
+                              !kept.contains(target),
+                              !bundle.contains(target)
+                        else { continue }
+                        bundle.append(target)
+                    }
                 }
                 let cost = bundle.reduce(0) { $0 + costs[$1] }
                 guard spent + cost <= available else { continue }

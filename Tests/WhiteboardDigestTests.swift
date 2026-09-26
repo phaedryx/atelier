@@ -723,18 +723,53 @@ final class WhiteboardDigestTests: XCTestCase {
         // arrow goes too — un-listing it is the only answer that keeps the
         // invariant, and the alternative is printing the dangling id the whole
         // scheme exists to prevent.
+        //
+        // The arrow is labelled and first in file order, so it is the very
+        // first thing the cut reaches, and its own entry is about twenty bytes
+        // against a budget with room for a two-hundred-byte box. It is left out
+        // anyway, and that is the bundle rule rather than the arrow running out
+        // of room: `a` is listed, so there plainly was room.
         let text = digest("""
         {"type":"excalidraw","elements":[
         {"id":"x1","type":"arrow","x":0,"y":0,"width":10,"height":10,"isDeleted":false,
+         "text":"via",
          "startBinding":{"elementId":"a"},"endBinding":{"elementId":"z"}},
         {"id":"a","type":"rectangle","x":0,"y":0,"width":10,"height":10,"isDeleted":false,
          "text":"\(String(repeating: "a", count: 200))"},
         {"id":"z","type":"rectangle","x":900,"y":900,"width":10,"height":10,"isDeleted":false,
          "text":"\(String(repeating: "z", count: 200))"}]}
-        """, budget: 620)
+        """, budget: 760)
 
         XCTAssertTrue(text.contains("more elements"), text)
         XCTAssertFalse(text.contains("x1  arrow"), text)
+        XCTAssertTrue(text.contains("\na  box"), text)
+    }
+
+    func test_anArrowBoundToAnotherArrowDragsThatArrowsEndpointsInToo() {
+        // Excalidraw lets an arrow bind to an arrow, so the bundle has to be
+        // transitive. Pulling `x2` in for `x1` and stopping there charges
+        // nothing for `x2`'s own endpoints, and `x2` lands in the digest
+        // printing the dangling id the bundle exists to prevent — the same
+        // failure, one hop further out. `x1` carries the label, so it is what
+        // the cut reaches for first.
+        let padding = (0 ..< 200).map { labelledBox($0) }.joined(separator: ",")
+        let text = digest("""
+        {"type":"excalidraw","elements":[
+        {"id":"x1","type":"arrow","x":0,"y":0,"width":10,"height":10,"isDeleted":false,
+         "text":"via",
+         "startBinding":{"elementId":"a"},"endBinding":{"elementId":"x2"}},
+        \(padding),
+        {"id":"x2","type":"arrow","x":0,"y":0,"width":10,"height":10,"isDeleted":false,
+         "startBinding":{"elementId":"a"},"endBinding":{"elementId":"z"}},
+        {"id":"a","type":"rectangle","x":0,"y":0,"width":10,"height":10,"isDeleted":false},
+        {"id":"z","type":"rectangle","x":900,"y":900,"width":10,"height":10,"isDeleted":false}]}
+        """, budget: 1000)
+
+        XCTAssertTrue(text.contains("more elements"), "the board has to be cut for this to mean anything")
+        XCTAssertTrue(text.contains("x1  arrow  a → x2"), text)
+        XCTAssertTrue(text.contains("x2  arrow  a → z"), text)
+        XCTAssertTrue(text.contains("\na  box  at"), text)
+        XCTAssertTrue(text.contains("\nz  box  at"), text)
     }
 
     func test_freehandIsWhatATruncatedDigestDropsFirst() {
