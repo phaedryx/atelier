@@ -4,32 +4,6 @@ Atelier was forked from [Factory Floor](https://github.com/alltuner/factoryfloor
 at v0.1.79. Everything below that release is Factory Floor's history; those links
 point at the upstream repository.
 
-## Unreleased
-
-### Bug Fixes
-
-* **whiteboard:** an arrow can now bind to a box created in the same
-  `whiteboard_add` call, by an optional `ref` on each entry. The 0.2.6 entry
-  below says `add` takes a list so "an arrow may name a box created beside it",
-  and that was **never true for any real caller**: Swift minted every id as a
-  UUID and read none off the entry, so the id of a box created in the same call
-  could not be known until the call returned, and an arrow naming it was refused
-  — which refuses the whole call and draws nothing. It was pinned only under an
-  injected minter handing out `id-1`, `id-2`, `id-3`, a batch no agent can
-  compose. A `ref` is parse-time only and never crosses to the page, so the ids
-  an agent gets back are still the board's real ones. A forward reference stays
-  refused; a `ref` that collides with an id already on the board, and two
-  entries sharing one, are refused rather than guessed. The released entry below
-  is left as shipped — this is the correction, not a rewrite of it.
-* **whiteboard:** the refusal naming the fields a mermaid entry cannot honour no
-  longer gives advice that is false for edges. It said colour belongs in the
-  definition; measured against `@excalidraw/mermaid-to-excalidraw` 2.2.2, a
-  node's `classDef`, `style` and `class` survive the converter but `linkStyle` is
-  dropped, so an agent that wanted a red arrow was sent to write one and got a
-  black arrow with no recourse. The refusal now names what survives for a node,
-  what survives for an edge (`-.->` and `==>` — syntax, not styling), and points
-  at `whiteboard_update` for edge colour.
-
 ## [0.2.6](https://github.com/phaedryx/atelier/compare/v0.2.5...v0.2.6) (2026-09-23)
 
 ### Features
