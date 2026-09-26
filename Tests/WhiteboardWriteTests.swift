@@ -768,6 +768,51 @@ final class WhiteboardWriteTests: XCTestCase {
         XCTAssertTrue(message.contains("note"), message)
     }
 
+    /// **Where the size refusals sit in the order, pinned because an ordering
+    /// with one tested member drifts at the untested end.**
+    ///
+    /// `#230` deliberately put the whole-batch `ref` scan ahead of every
+    /// per-entry refusal, so that a collision is reported whatever order the
+    /// entries arrive in — an agent should not be able to change which
+    /// complaint it gets by shuffling the array.
+    /// `test_theRefScanIsRefusedAheadOfAnUnknownKindInTheSameBatch` pins that
+    /// against `unknownKind`. `dimension` and `sizeRefused` are two more
+    /// refusals on the same path, added afterwards and on the far side of it,
+    /// so they get the same treatment rather than being left to be discovered.
+    func test_theRefScanIsRefusedAheadOfABadSizeInTheSameBatch() {
+        XCTAssertThrowsError(
+            try Write.entries(from: [
+                ["kind": "box", "text": "bad size", "width": -10],
+                ["kind": "box", "text": "collides", "ref": "old-1"],
+            ], live: live("old-1"), mint: minter())
+        ) { XCTAssertEqual($0 as? Write.Failure, .refCollidesWithElement("old-1")) }
+    }
+
+    /// Within one entry the kind is read first, so an entry that is not a kind
+    /// this board can draw is refused for that rather than for a size it was
+    /// never going to be given.
+    func test_anUnknownKindIsRefusedAheadOfThatEntrysOwnBadSize() {
+        XCTAssertThrowsError(
+            try Write.entries(
+                from: [["kind": "cylinder", "width": -10]], live: empty, mint: minter()
+            )
+        ) { XCTAssertEqual($0 as? Write.Failure, .unknownKind("cylinder")) }
+    }
+
+    /// And the per-entry refusals stay in batch order between themselves: a bad
+    /// size late in the array does not jump ahead of a malformed entry early in
+    /// it, which is what would happen if sizes were scanned up front the way
+    /// `ref` is. They are not, deliberately — a size is a fact about one entry,
+    /// where a `ref` is a fact about the whole batch.
+    func test_aBadSizeDoesNotJumpAheadOfAnEarlierEntrysRefusal() {
+        XCTAssertThrowsError(
+            try Write.entries(from: [
+                ["kind": "text"],
+                ["kind": "box", "text": "late", "height": 0],
+            ], live: empty, mint: minter())
+        ) { XCTAssertEqual($0 as? Write.Failure, .textRequired(kind: "text")) }
+    }
+
     // MARK: - What gets measured
 
     func test_onlyLabelsThatAreDrawnAsWordsAreMeasured() throws {
