@@ -1,7 +1,84 @@
 # The whiteboard
 
-The Excalidraw-backed board: the three write tools, image transcription, and the
-capture button.
+The Excalidraw-backed board: the read path's budget, the three write tools, image
+transcription, and the capture button.
+
+### The digest's budget, and what truncation drops
+
+`read_whiteboard` answers with a text digest under a byte cap
+(`Whiteboard.Digest.maxBytes`). The cap and the cut are both decisions, and both
+are argued at length in `Sources/Models/WhiteboardDigest.swift`; what belongs
+here is the part another change can break.
+
+**The cap is 32,000 and the old 8,000 rested on a claim that is false at scale.**
+The argument for 8KB was that the agent is asked to open `board.png` in the same
+breath, so the picture carries whatever the text does not. It does not: the
+render is capped at `MAX_RENDER_EDGE` (1600, `editor/src/whiteboard.jsx`), which
+is below the size a board has reached by the time the digest starts cutting, so
+the picture is downscaled and its label text stops being legible. (Boards are
+*reported* at 2000–2900px on the long edge. That range is second-hand; the
+structural point does not rest on it.) Both halves of the read path therefore
+degraded
+**together**, and exactly as a board got large enough to be worth checking — a
+board of 83 elements reported 21 of them not listed. If the render cap ever
+moves, this number's argument moves with it.
+
+The 32,000 is measured and the table is in the source: a board of the shape this
+feature produces costs a flat ~89 bytes an entry, so the cap lists ~355 elements
+whole, or ~260 of a busier board's — past anything this feature has produced.
+**It is a ceiling and not a target**, which is the measurement the choice rests
+on: a 30-element board answers with 2,813 bytes, and every board that fitted
+inside the old 8,000 returns byte-identical output. A 4x raise therefore costs
+nothing on the hot path (`read_whiteboard` is called to draw, again to read the
+extent back, again to verify) and the whole of the cost falls on the boards that
+were previously being lied to. 16,000 was tried and rejected for that reason:
+the ceiling had already answered the cost question, so halving bought nothing
+where anyone was worried and cost completeness on boards of 180–355 elements.
+A load-bearing cut makes being truncated survivable, not free — it is not a
+reason to arrange to be truncated more often.
+
+**Truncation is a choice about value, not a leftover of position**, and the
+reason is the same one the unbind-on-delete rule exists for. Walking the scene in
+file order and keeping whatever fits can list an arrow whose endpoint it dropped:
+the digest prints `n1 → n2` with no `n2` anywhere in it — an id that appears
+nowhere else, which is the digest lying. So elements are admitted in tier order
+(words, then bare arrows, then shapes and uncaptioned images, then freehand) and
+**an arrow is admitted together with the endpoints it names or not at all**. The
+bundle is **transitive**, because Excalidraw lets an arrow bind to an arrow:
+pulling `x2` in for `x1` and stopping there charges nothing for `x2`'s own
+endpoints and leaves `x2` printing the dangling id the bundle exists to prevent,
+one hop further out.
+
+**So the read path can now say something it could not before: if an arrow is
+listed, every endpoint it names that is on the board is listed too — an agent
+can trust `n1 → n2` to resolve within the digest it is holding.** That is the
+durable result of this section and the thing to preserve; the overflow note
+states the same guarantee, scoped to exactly what the admission enforces ("No
+arrow listed above names an element the cut left out"). It deliberately does not
+promise that *every* id on the board resolves, because a binding to an element
+that was never in the scene is not a cut's to fix — that is
+`whiteboard_delete`'s unbinding rule, above. Widening the sentence past what is
+enforced would be this feature's own failure mode wearing the fix's clothes.
+
+Two of those placements are load-bearing rather than aesthetic: freehand is last
+because the overflow note sends the reader to `board.png`, and for a stroke that
+is already the only answer there was; an **uncaptioned image is not** down there
+with it, because its id is the entry point for `whiteboard_update(caption:)` and
+an image the digest leaves out is one that can never be captioned — on exactly
+the boards that arm is for.
+
+**The header carries the board's element count and extent whether or not the list
+is complete**, and the overflow note names what it left out by kind. The buckets
+are the closed `Element.Kind` set with one `other` bucket, and that is what keeps
+the reserve honest: the note's worst case is charged to the budget before a
+single entry is assembled, so a bucket named by an element's raw type would let a
+board of distinct unknown types write a note longer than the whole budget.
+
+**It is deliberately not paginated.** That is a change to the *tool* rather than
+to the digest — `read_whiteboard` takes no arguments, so an offset means a new
+argument, a cursor whose meaning survives an edit between two calls, and a second
+round trip an agent has to know to make. `Digest.text` already takes `budget:`,
+so an `offset:` beside it later is additive rather than a redesign.
 
 ### The whiteboard write tools
 

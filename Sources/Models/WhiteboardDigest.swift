@@ -22,12 +22,73 @@ extension Whiteboard {
         /// Cap on the assembled digest.
         ///
         /// Not the 64KB `IPC.Store` limit, which a digest never crosses: it
-        /// travels as a tool answer rather than as a message. The real
-        /// constraint is the reader. The agent is asked to open `board.png` in
-        /// the same breath, and 8KB is already roughly two thousand tokens spent
-        /// before it has looked at the picture — which is where an unbounded
-        /// board belongs.
-        static let maxBytes = 8_000
+        /// travels as a tool answer rather than as a message, and the cap that
+        /// really binds a tool answer is `IPC.Server.maxFrameBytes`, at 1MB.
+        ///
+        /// **It was 8,000, and that number rested on a claim that is false at
+        /// the size where it matters.** The argument was that the agent is asked
+        /// to open `board.png` in the same breath, so the picture carries
+        /// whatever the text does not, and 8KB was already two thousand tokens
+        /// spent before it had looked. But the render is capped at
+        /// `MAX_RENDER_EDGE` — 1600, `editor/src/whiteboard.jsx` — which is
+        /// below the size a board reaches by the time the digest starts
+        /// cutting, so the picture is downscaled and its label text stops being
+        /// legible (boards are *reported* at 2000–2900px on the long edge; that
+        /// range is second-hand and the structural point does not rest on
+        /// it). Both halves of the read
+        /// path therefore degraded **together**, and they did it exactly as a
+        /// board got large enough to be worth checking: measured, a board of 83
+        /// elements reported 21 of them not listed.
+        ///
+        /// **The replacement is measured.** Assembled digests of a board shaped
+        /// like the ones this feature produces — labelled diagram nodes,
+        /// labelled edges, a note every few elements, a captioned screenshot:
+        ///
+        ///     12 elements → 1,229 B      120 elements → 10,722 B
+        ///     30 elements → 2,813 B      200 elements → 17,856 B
+        ///     83 elements → 7,371 B      250 elements → 22,314 B
+        ///                                300 elements → 26,774 B
+        ///
+        /// A flat ~89 bytes an entry past the first few. (The board in the
+        /// report above ran heavier — 62 entries inside 8,000 less its reserve,
+        /// so ~123 bytes each — so treat ~89 as the shape of a clean board and
+        /// ~123 as a busy one.) At those rates 32,000 lists about 355 of the
+        /// first and about 260 of the second: past any board this feature has
+        /// produced, a mermaid flowchart's expansion included.
+        ///
+        /// **The number is settled by the ceiling property, and that is
+        /// measured too.** At this default a 30-element board answers with
+        /// 2,813 bytes and a 12-element one with 1,229. Nothing pads, and every
+        /// board that fits under the old 8,000 — which is every board of about
+        /// 80 elements or fewer — returns **byte-identical** output. So the
+        /// usual objection to a 4x raise does not apply: `read_whiteboard` is
+        /// on a hot path (draw, read back for the extent, read again to verify)
+        /// and none of those calls pay anything for it. The whole of the cost
+        /// falls on the boards that were previously being lied to.
+        ///
+        /// **Which is why the middle option was rejected.** 16,000 was tried,
+        /// on the reasoning that a well-formed board is 60–120 elements — the
+        /// skill that draws these caps concepts at 3–5 and diagram nodes at
+        /// 5–8 — so ~180 entries covers the realistic case and anything past it
+        /// is cut honestly rather than silently. Both halves of that are true
+        /// and it is still the wrong trade. The ceiling measurement had already
+        /// answered the cost question, so lowering bought nothing on the calls
+        /// anyone was worried about; what it cost was completeness on boards of
+        /// 180–355 elements, and an honest cut is still a loss of exactly the
+        /// thing this file exists to provide — a record a caller can verify its
+        /// own board against, exactly. `admitted` makes being cut survivable,
+        /// not free, and it is not a reason to arrange to be cut more often.
+        /// Against that, eight thousand tokens on an explicit read of a
+        /// 350-element board is one large file read, and half what
+        /// `IPC.ExecutionLogs.defaultBudgetBytes` already allows a single log
+        /// tail — a precedent in this same system rather than a number from
+        /// taste. `text(budget:)` takes the cap as a parameter for a caller
+        /// that needs a different one.
+        ///
+        /// Raising it does not make truncation rare enough to stop thinking
+        /// about — `admitted` is what decides which elements a board past this
+        /// size loses, and it is the load-bearing half of this pair.
+        static let maxBytes = 32_000
 
         /// What `board.png` currently is.
         ///
@@ -45,6 +106,19 @@ extension Whiteboard {
         ///   `assets/`. Passed in rather than listed here so this stays pure,
         ///   the same way `render` is. An id missing from it is reported as
         ///   having no file rather than rendered as a path that would not open.
+        ///
+        /// **Not paginated, and that is a decision rather than an omission.**
+        /// The obvious answer to a digest that cuts is to let the caller ask for
+        /// the rest, and it is a real answer — but it is a change to the *tool*,
+        /// not to this file: `read_whiteboard` takes no arguments at all
+        /// (`IPC.ToolRegistry`), so an offset would mean a new argument, a
+        /// cursor whose meaning survives a board being edited between two calls,
+        /// and a second round trip an agent has to know to make. Against that,
+        /// a budget that covers every board this feature has produced and a cut
+        /// that drops the entries `board.png` genuinely answers for costs one
+        /// call and no vocabulary. `budget` is already a parameter here, so an
+        /// `offset:` beside it later is additive and not a redesign — which is
+        /// the point of recording this rather than leaving the door unmarked.
         static func text(
             load: SceneLoad,
             render: Render,
@@ -83,7 +157,7 @@ extension Whiteboard {
             assets: [String: String],
             budget: Int
         ) -> String {
-            let header = "# Whiteboard — \(scene.elements.count) elements, updated \(updated)"
+            let header = headerLine(scene.elements, updated: updated)
             let renderLine = line(for: render)
             // Bound once and used for both the reserve and the append, so the
             // sentence that is charged to the budget is the sentence that is
@@ -95,39 +169,83 @@ extension Whiteboard {
             // `VerificationSummary.fitVerdicts` reserves its overflow note.
             // These are what a reader needs *most* when the list has been cut,
             // so they cannot be what the cut takes — and the overflow note's own
-            // length depends on the count, so the worst case is charged up front
-            // rather than discovered after assembling.
+            // length depends on what was left out, so the worst case is charged
+            // up front rather than discovered after assembling. The worst case
+            // is *every* element omitted, and that really is an upper bound:
+            // `breakdown` buckets on a closed set, so a subset of the board can
+            // name no more buckets and no larger counts than the whole of it.
             var reserved = header.utf8.count + 1
             reserved += renderLine.utf8.count + 1
             reserved += 1 // the blank line under the header
             reserved += 1 + closing.utf8.count + 1
-            reserved += overflowNote(count: scene.elements.count).utf8.count + 1
+            reserved += overflowNote(for: scene.elements).utf8.count + 1
 
-            var lines: [String] = []
-            var spent = 0
-            var omitted = 0
-            for element in scene.elements {
-                let rendered = entry(for: element, assets: assets)
-                let cost = rendered.utf8.count + 1
-                // `continue`, not `break`: the count has to be the number
-                // actually left out, and a later element may still be small
-                // enough to fit where this one was not.
-                guard spent + cost <= budget - reserved else {
-                    omitted += 1
-                    continue
-                }
-                lines.append(rendered)
-                spent += cost
-            }
+            // Rendered once. An entry's cost is its own length, and the
+            // admission below needs the cost of an element it may not reach in
+            // board order, so the two cannot be interleaved the way they were.
+            let rendered = scene.elements.map { entry(for: $0, assets: assets) }
+            let kept = admitted(
+                scene.elements,
+                costs: rendered.map { $0.utf8.count + 1 },
+                available: budget - reserved
+            )
 
             var out = [header, renderLine, ""]
-            out.append(contentsOf: lines)
-            if omitted > 0 {
-                out.append(overflowNote(count: omitted))
+            // Listed in the **board's** order, not the order the cut admitted
+            // them in. Which elements survive is a judgement about what is worth
+            // keeping; where they appear is the board's business, and a reader
+            // comparing the digest against the picture is reading positions.
+            out.append(contentsOf: scene.elements.indices.filter(kept.contains).map { rendered[$0] })
+            // Taken from the kept set at the end rather than tallied inside the
+            // admission loop. An element can be admitted as part of another
+            // element's bundle, so a per-iteration counter has two places to be
+            // wrong about the number and this has none.
+            let omitted = scene.elements.indices
+                .filter { !kept.contains($0) }
+                .map { scene.elements[$0] }
+            if !omitted.isEmpty {
+                out.append(overflowNote(for: omitted))
             }
             out.append("")
             out.append(closing)
             return out.joined(separator: "\n")
+        }
+
+        /// The header, which carries the two facts a caller needs **whether or
+        /// not** the list below it is complete: how many elements are really on
+        /// this board, and how far it extends.
+        ///
+        /// The count was always here. The extent is new, and it is here
+        /// unconditionally rather than only when something is cut: a caller
+        /// reading a complete digest still has to place what it draws next, and
+        /// a line that appears only on large boards is one an agent learns to
+        /// read only on large boards. It is also the one thing a truncated
+        /// digest can still say exactly about the part it left out — the
+        /// omitted elements are somewhere inside it.
+        private static func headerLine(_ elements: [Element], updated: String) -> String {
+            "# Whiteboard — \(elements.count) elements, \(extentText(elements)), updated \(updated)"
+        }
+
+        /// The bounding box of every element on the board, cut elements
+        /// included, because this is computed before anything is cut.
+        ///
+        /// Computed here from the scene rather than taken from
+        /// `Host.liveState`, which also carries an extent: this function is pure
+        /// and `board.md` is regenerated with no page in existence. The two
+        /// answer the same question about the same elements.
+        private static func extentText(_ elements: [Element]) -> String {
+            guard let first = elements.first else { return "no extent" }
+            var minX = first.x
+            var minY = first.y
+            var maxX = first.x + first.width
+            var maxY = first.y + first.height
+            for element in elements.dropFirst() {
+                minX = min(minX, element.x)
+                minY = min(minY, element.y)
+                maxX = max(maxX, element.x + element.width)
+                maxY = max(maxY, element.y + element.height)
+            }
+            return "extent \(rounded(minX)),\(rounded(minY)) → \(rounded(maxX)),\(rounded(maxY))"
         }
 
         private static func line(for render: Render) -> String {
@@ -173,9 +291,177 @@ extension Whiteboard {
             }
         }
 
-        private static func overflowNote(count: Int) -> String {
-            "… and \(count) more elements, not listed — this digest hit its size budget. "
-                + "The whole board is in board.png."
+        /// Which elements make it into a digest that cannot hold all of them.
+        ///
+        /// **Truncation is a choice about value, not a leftover of position.**
+        /// It used to be the assembly loop's remainder — walk the scene in file
+        /// order and keep whatever fits — which means what survives a cut is
+        /// decided by the order Excalidraw happened to write the file in. Two
+        /// things come out of that, and the second is the serious one:
+        ///
+        /// - **The cheapest entries to lose are the ones this file already
+        ///   declines to describe.** A stroke renders as a point count and a
+        ///   bounding box, and the closing line says in so many words that it is
+        ///   only in `board.png`. Dropping those first is the one drop where the
+        ///   fallback the overflow note offers is actually true — and in file
+        ///   order a stroke is exactly as likely to be kept as a labelled box.
+        /// - **A dropped element can be named by a kept one.** An arrow's entry
+        ///   is `n1 → n2`; drop `n2` and the digest prints an id that appears
+        ///   nowhere else in it. That is the same failure as an arrow left bound
+        ///   to something `whiteboard_delete` removed — the digest lying, which
+        ///   is the one thing this feature is organised around not doing — and
+        ///   positional truncation produces it on any board big enough to cut.
+        ///
+        /// So elements are admitted in `Tier` order, and an arrow is admitted
+        /// **together with the endpoints it names or not at all**. Bundling
+        /// rather than repairing afterwards: a repair pass that goes looking for
+        /// a missing endpoint can find no room left for it, and then has to
+        /// choose between un-listing an arrow already charged to the budget and
+        /// printing the dangling id anyway. Admitting the unit settles that
+        /// before anything is spent. An endpoint naming an element that is not
+        /// on this board at all is not something a cut can fix and is left
+        /// alone; `whiteboard_delete` is what keeps that from arising.
+        ///
+        /// `continue` and not `break`, as before: the count has to be the number
+        /// actually left out, and a later element may still be small enough to
+        /// fit where this one was not.
+        private static func admitted(
+            _ elements: [Element],
+            costs: [Int],
+            available: Int
+        ) -> Set<Int> {
+            var indexByID: [String: Int] = [:]
+            for (index, element) in elements.enumerated() where indexByID[element.id] == nil {
+                indexByID[element.id] = index
+            }
+            // The element's own position breaks a tie, because `sorted` is not
+            // guaranteed stable and the board's order has to survive inside a
+            // tier — an agent that drew ten boxes and got nine expects the nine
+            // it drew first.
+            let order = elements.indices.sorted {
+                let left = tier(of: elements[$0])
+                let right = tier(of: elements[$1])
+                return left == right ? $0 < $1 : left.rawValue < right.rawValue
+            }
+
+            var kept: Set<Int> = []
+            var spent = 0
+            for index in order where !kept.contains(index) {
+                var bundle = [index]
+                // Transitive, because an arrow may bind to another arrow —
+                // Excalidraw allows it. Pulling `x2` in for `x1` and stopping
+                // there charges nothing for `x2`'s own endpoints, and `x2`
+                // lands in the digest printing the dangling id the bundle
+                // exists to prevent, one hop further out. Membership in
+                // `bundle` is the cycle guard, and an endpoint already in
+                // `kept` needs no check: it could only have been admitted by a
+                // bundle that closed over *its* endpoints.
+                var frontier = 0
+                while frontier < bundle.count {
+                    let element = elements[bundle[frontier]]
+                    frontier += 1
+                    for endpoint in [element.from, element.to] {
+                        guard let endpoint,
+                              let target = indexByID[endpoint],
+                              !kept.contains(target),
+                              !bundle.contains(target)
+                        else { continue }
+                        bundle.append(target)
+                    }
+                }
+                let cost = bundle.reduce(0) { $0 + costs[$1] }
+                guard spent + cost <= available else { continue }
+                kept.formUnion(bundle)
+                spent += cost
+            }
+            return kept
+        }
+
+        /// What an element is worth when not all of them fit.
+        ///
+        /// Ordered by what is lost with it, and the order is an argument about
+        /// **which half of the read path can answer for the element**:
+        ///
+        /// - `.words` — anything carrying a label or a caption. Text is the part
+        ///   of a board that can be reasoned about exactly, which is this file's
+        ///   entire reason to exist, and on a board large enough to truncate it
+        ///   is also the part `board.png` renders too small to read.
+        /// - `.structure` — an unlabelled arrow. The relations *are* the
+        ///   diagram; a graph reported without its edges is a different graph.
+        /// - `.shape` — a bare box, and **an uncaptioned image**. It is
+        ///   tempting to put an uncaptioned image at the bottom with the
+        ///   strokes, since neither carries anything this file may transcribe.
+        ///   That would close the image-transcription arm on exactly the boards
+        ///   it exists for: an agent captions a screenshot by reading its **id**
+        ///   here, opening the picture, and calling `whiteboard_update`, so an
+        ///   image the digest leaves out is one that can never be captioned.
+        ///   Its id is actionable; a bare box's is only positional.
+        /// - `.stroke` — freehand. Last, because the note that reports the cut
+        ///   sends the reader to `board.png` and for a stroke that is not a
+        ///   consolation prize: it is already the only answer there was, stated
+        ///   in the closing line whether anything was cut or not.
+        private enum Tier: Int {
+            case words, structure, shape, stroke
+        }
+
+        private static func tier(of element: Element) -> Tier {
+            // Asked before the kind, so a labelled arrow and a captioned image
+            // are both `.words`. A stroke and an uncaptioned image reach the
+            // switch because `Element` guarantees them no text.
+            guard element.text == nil, element.caption == nil else { return .words }
+            return switch element.kind {
+            case .stroke: .stroke
+            case .arrow: .structure
+            default: .shape
+            }
+        }
+
+        /// The sentence a truncated digest ends its list with.
+        ///
+        /// Three claims, and each one is here because a reader without it would
+        /// draw a wrong conclusion: how much is missing and of what, where the
+        /// numbers describing the whole board are, and that what *is* listed is
+        /// internally complete. The last is scoped to precisely what `admitted`
+        /// enforces — no arrow above names something the cut removed. It does
+        /// not promise that every id on the board resolves, because a binding to
+        /// an element that was never in the scene is not this function's to
+        /// vouch for, and an over-broad claim here is the defect class this file
+        /// exists to prevent.
+        private static func overflowNote(for omitted: [Element]) -> String {
+            "… and \(omitted.count) more elements, not listed — this digest hit its size "
+                + "budget: \(breakdown(of: omitted)). The whole board is in board.png, and the "
+                + "header above counts it and gives its extent. No arrow listed above names an "
+                + "element the cut left out."
+        }
+
+        /// What was left out, by kind — the shape of what the caller cannot see.
+        ///
+        /// **Bucketed on the closed `Kind` set, with every unrecognised type in
+        /// one `other` bucket**, and that is what keeps the reserve honest
+        /// rather than a tidiness preference. This note's worst case is charged
+        /// to `reserved` before a single entry is assembled; if a bucket were
+        /// named by `identifier(element.rawType)` the way an entry's kind column
+        /// is, a board of distinct unknown types would give a worst case larger
+        /// than `maxBytes` itself — `budget - reserved` would go negative, the
+        /// digest would list nothing at all, and it would overshoot the very cap
+        /// it was cut to respect. Eleven buckets of at most eight characters
+        /// cannot do that.
+        ///
+        /// Largest bucket first, ties by name, so the ordering is a fact about
+        /// the board rather than about `Dictionary`'s iteration order.
+        private static func breakdown(of omitted: [Element]) -> String {
+            var counts: [String: Int] = [:]
+            for element in omitted {
+                counts[bucket(of: element), default: 0] += 1
+            }
+            return counts
+                .sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }
+                .map { "\($0.value) \($0.key)" }
+                .joined(separator: ", ")
+        }
+
+        private static func bucket(of element: Element) -> String {
+            element.kind == .other ? "other" : name(of: element)
         }
 
         /// One element's line, plus its caption indented under it when it has

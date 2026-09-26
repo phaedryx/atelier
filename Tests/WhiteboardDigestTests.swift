@@ -672,4 +672,216 @@ final class WhiteboardDigestTests: XCTestCase {
         let empty = digest(oneElement(type: "arrow", extra: #","startBinding":{"elementId":""}"#))
         XCTAssertTrue(empty.contains("(none) → ?"), empty)
     }
+
+    // MARK: - What the cut drops, and what it may never drop
+
+    /// A board of `count` elements built from the JSON each index maps to.
+    private func board(_ count: Int, _ element: (Int) -> String) -> String {
+        "{\"type\":\"excalidraw\",\"elements\":[\((0 ..< count).map(element).joined(separator: ","))]}"
+    }
+
+    private func labelledBox(_ index: Int, x: Int = 0, y: Int = 0) -> String {
+        """
+        {"id":"p\(index)","type":"rectangle","x":\(x),"y":\(y),"width":10,"height":10,
+         "isDeleted":false,"text":"padding label number \(index)"}
+        """
+    }
+
+    private func stroke(_ index: Int) -> String {
+        """
+        {"id":"s\(index)","type":"freedraw","x":0,"y":0,"width":10,"height":10,
+         "isDeleted":false,"points":[[0,0],[1,1]]}
+        """
+    }
+
+    func test_anArrowIsNeverListedWithoutTheEndpointsItNames() {
+        // The bug positional truncation produced on any board big enough to
+        // cut: the arrow fits, the box it points at does not, and the digest
+        // prints `a → z` with no `z` anywhere in it — an id that appears
+        // nowhere else, which is the same lie an arrow left bound to a deleted
+        // element tells. The endpoints are LAST in file order on purpose, which
+        // is where the old loop lost them.
+        let padding = (0 ..< 200).map { labelledBox($0) }.joined(separator: ",")
+        let text = digest("""
+        {"type":"excalidraw","elements":[
+        {"id":"x1","type":"arrow","x":0,"y":0,"width":10,"height":10,"isDeleted":false,
+         "text":"flows into",
+         "startBinding":{"elementId":"a"},"endBinding":{"elementId":"z"}},
+        \(padding),
+        {"id":"a","type":"rectangle","x":0,"y":0,"width":10,"height":10,"isDeleted":false},
+        {"id":"z","type":"rectangle","x":900,"y":900,"width":10,"height":10,"isDeleted":false}]}
+        """, budget: 1000)
+
+        XCTAssertTrue(text.contains("more elements"), "the board has to be cut for this to mean anything")
+        XCTAssertTrue(text.contains("x1  arrow  a → z"), text)
+        XCTAssertTrue(text.contains("\na  box  at"), text)
+        XCTAssertTrue(text.contains("\nz  box  at"), text)
+    }
+
+    func test_anArrowThatCannotBringItsEndpointsIsNotListedEither() {
+        // The other side of the bundle. When there is no room for the unit, the
+        // arrow goes too — un-listing it is the only answer that keeps the
+        // invariant, and the alternative is printing the dangling id the whole
+        // scheme exists to prevent.
+        //
+        // The arrow is labelled and first in file order, so it is the very
+        // first thing the cut reaches, and its own entry is about twenty bytes
+        // against a budget with room for a two-hundred-byte box. It is left out
+        // anyway, and that is the bundle rule rather than the arrow running out
+        // of room: `a` is listed, so there plainly was room.
+        let text = digest("""
+        {"type":"excalidraw","elements":[
+        {"id":"x1","type":"arrow","x":0,"y":0,"width":10,"height":10,"isDeleted":false,
+         "text":"via",
+         "startBinding":{"elementId":"a"},"endBinding":{"elementId":"z"}},
+        {"id":"a","type":"rectangle","x":0,"y":0,"width":10,"height":10,"isDeleted":false,
+         "text":"\(String(repeating: "a", count: 200))"},
+        {"id":"z","type":"rectangle","x":900,"y":900,"width":10,"height":10,"isDeleted":false,
+         "text":"\(String(repeating: "z", count: 200))"}]}
+        """, budget: 760)
+
+        XCTAssertTrue(text.contains("more elements"), text)
+        XCTAssertFalse(text.contains("x1  arrow"), text)
+        XCTAssertTrue(text.contains("\na  box"), text)
+    }
+
+    func test_anArrowBoundToAnotherArrowDragsThatArrowsEndpointsInToo() {
+        // Excalidraw lets an arrow bind to an arrow, so the bundle has to be
+        // transitive. Pulling `x2` in for `x1` and stopping there charges
+        // nothing for `x2`'s own endpoints, and `x2` lands in the digest
+        // printing the dangling id the bundle exists to prevent — the same
+        // failure, one hop further out. `x1` carries the label, so it is what
+        // the cut reaches for first.
+        let padding = (0 ..< 200).map { labelledBox($0) }.joined(separator: ",")
+        let text = digest("""
+        {"type":"excalidraw","elements":[
+        {"id":"x1","type":"arrow","x":0,"y":0,"width":10,"height":10,"isDeleted":false,
+         "text":"via",
+         "startBinding":{"elementId":"a"},"endBinding":{"elementId":"x2"}},
+        \(padding),
+        {"id":"x2","type":"arrow","x":0,"y":0,"width":10,"height":10,"isDeleted":false,
+         "startBinding":{"elementId":"a"},"endBinding":{"elementId":"z"}},
+        {"id":"a","type":"rectangle","x":0,"y":0,"width":10,"height":10,"isDeleted":false},
+        {"id":"z","type":"rectangle","x":900,"y":900,"width":10,"height":10,"isDeleted":false}]}
+        """, budget: 1000)
+
+        XCTAssertTrue(text.contains("more elements"), "the board has to be cut for this to mean anything")
+        XCTAssertTrue(text.contains("x1  arrow  a → x2"), text)
+        XCTAssertTrue(text.contains("x2  arrow  a → z"), text)
+        XCTAssertTrue(text.contains("\na  box  at"), text)
+        XCTAssertTrue(text.contains("\nz  box  at"), text)
+    }
+
+    func test_freehandIsWhatATruncatedDigestDropsFirst() {
+        // Ordering by value rather than by file position. A stroke renders as a
+        // point count and a box, and the closing line already says it is only
+        // in board.png — so it is the one entry whose loss the overflow note
+        // answers for honestly. Interleaved with the boxes so file order cannot
+        // be what produces the result. The budget is wide enough for every
+        // labelled box and only some of the strokes, so what the cut reaches
+        // for is the whole of what this observes.
+        let text = digest(board(60) { $0.isMultiple(of: 2) ? self.stroke($0) : self.labelledBox($0) },
+                          budget: 2200)
+
+        XCTAssertTrue(text.contains("more elements"), text)
+        XCTAssertTrue(text.contains("stroke"), "strokes are what should have gone")
+        for index in stride(from: 1, to: 60, by: 2) {
+            XCTAssertTrue(text.contains("\np\(index)  box"), "dropped a labelled box before a stroke")
+        }
+    }
+
+    func test_anUncaptionedImageOutranksAStroke() {
+        // Deliberately not grouped with freehand, though neither carries
+        // anything this file may transcribe. An image's id is the entry point
+        // for whiteboard_update(caption:) — the agent reads the id here, opens
+        // the picture and writes back what it says — so an image the digest
+        // leaves out is one that can never be captioned, on exactly the boards
+        // that arm is for.
+        let strokes = (0 ..< 60).map { stroke($0) }.joined(separator: ",")
+        let text = digest("""
+        {"type":"excalidraw","elements":[
+        \(strokes),
+        {"id":"i1","type":"image","x":0,"y":0,"width":10,"height":10,"isDeleted":false,
+         "fileId":"abc"}]}
+        """, budget: 900)
+
+        XCTAssertTrue(text.contains("more elements"), text)
+        XCTAssertTrue(text.contains("i1  image"), text)
+    }
+
+    // MARK: - Saying what cannot be seen
+
+    func test_theHeaderCountsTheWholeBoardAndGivesItsExtentEvenWhenCut() {
+        // The two facts that stay true of the whole board when the list below
+        // is only part of it. Without them a truncated digest says how many
+        // elements it left out and nothing about where they are.
+        let text = digest(board(200) { self.labelledBox($0, x: $0 * 10, y: $0 * 5) }, budget: 1000)
+
+        XCTAssertTrue(text.contains("# Whiteboard — 200 elements"), text)
+        XCTAssertTrue(text.contains("extent 0,0 → 2000,1005"), text)
+        XCTAssertTrue(text.contains("more elements"), text)
+    }
+
+    func test_theExtentIsThereOnABoardThatFitsWholeToo() {
+        // Unconditional on purpose. A line that appears only on large boards is
+        // one an agent learns to read only on large boards, and placing the
+        // next element is a question a complete digest gets asked as well.
+        let text = digest(oneElement())
+        XCTAssertFalse(text.contains("more elements"), text)
+        XCTAssertTrue(text.contains("extent 0,0 → 10,10"), text)
+    }
+
+    func test_theOverflowNoteNamesTheKindsItLeftOut() {
+        let text = digest(board(60) { $0.isMultiple(of: 2) ? self.stroke($0) : self.labelledBox($0) },
+                          budget: 1200)
+        XCTAssertTrue(text.contains("size budget: "), text)
+        XCTAssertTrue(text.range(of: #"budget: \d+ stroke"#, options: .regularExpression) != nil, text)
+    }
+
+    func test_theOverflowNoteBucketsUnknownKindsRatherThanNamingEachOne() {
+        // The reserve's worst case is the note with every element omitted, so a
+        // bucket named by the raw type would let a board of distinct unknown
+        // types write a note longer than the whole budget: nothing listed, and
+        // an overshoot of the cap the cut was performed to respect.
+        let text = digest(board(300) { index in
+            """
+            {"id":"u\(index)","type":"kind\(index)","x":0,"y":0,"width":10,"height":10,
+             "isDeleted":false}
+            """
+        }, budget: 1200)
+
+        XCTAssertLessThanOrEqual(text.utf8.count, 1200)
+        XCTAssertTrue(text.contains("more elements"), text)
+        XCTAssertFalse(text.contains("kind250"), "a raw type reached the breakdown")
+        XCTAssertTrue(text.range(of: #"budget: \d+ other"#, options: .regularExpression) != nil, text)
+    }
+
+    // MARK: - The raised cap
+
+    func test_aTwoHundredElementBoardIsListedWhole() {
+        // The regression the raise is for. At 8,000 this board reported its
+        // last hundred-odd elements as "not listed" and sent the reader to a
+        // board.png capped at 1,600px on its long edge — both halves of the
+        // read path degrading together, exactly as the board got big enough to
+        // be worth checking.
+        let text = digest(board(200) { self.labelledBox($0, x: $0 * 10) })
+        XCTAssertFalse(text.contains("more elements"), text)
+        XCTAssertLessThanOrEqual(text.utf8.count, Whiteboard.Digest.maxBytes)
+    }
+
+    func test_theBudgetIsACeilingAndNotATarget() {
+        // The question a 4x raise has to answer, and the measurement the whole
+        // choice of default rests on: does a small board now cost what a large
+        // one does? It does not — nothing pads, and the assembly spends exactly
+        // what the elements are worth. A thirty-element board measures under
+        // 4KB against a 32,000-byte cap, and every board that
+        // fitted inside the old 8,000 returns byte-identical output, so the
+        // raise costs those calls nothing. `read_whiteboard` is on a hot path
+        // and this is the property that keeps the raise off it.
+        let small = digest(board(30) { self.labelledBox($0, x: $0 * 260) })
+        XCTAssertFalse(small.contains("more elements"), small)
+        XCTAssertLessThan(small.utf8.count, 4_000, small)
+        // And the same board asked for under the old cap is the same bytes.
+        XCTAssertEqual(digest(board(30) { self.labelledBox($0, x: $0 * 260) }, budget: 8_000), small)
+    }
 }
