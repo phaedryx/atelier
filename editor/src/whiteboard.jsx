@@ -488,6 +488,9 @@ const boardBounds = (els) => {
 // are separate spellings of one number because neither end can import the
 // other's; they are named in both files so a change to one finds the other.
 const BOARD_GAP = 60
+// Where a label stops widening and starts wrapping, matching `Write.maxBoxWidth`
+// — the fallback only, since every label carries its own. See `wrapWidthOf`.
+const MAX_BOX_WIDTH = 400
 
 // One element's rectangle, as the scene really holds it.
 //
@@ -601,6 +604,15 @@ window.__whiteboardMeasure = async (req) => {
   // the converter appends a bound text element per container, so output order
   // is not input order, and a size handed to the wrong element is a box that
   // fits a label it does not carry.
+  // **A label with no `maxWidth` still wraps.** Swift always sends one, so a
+  // label arriving without it is a protocol error — but the failure mode of
+  // reading it as "no limit" is a box a thousand pixels wide, silently, which is
+  // the thing the clamp exists to prevent. `MAX_BOX_WIDTH` is a second spelling
+  // of `Write.maxBoxWidth` for the same reason `BOARD_GAP` is one of
+  // `Write.layoutGap`: neither end can import the other's, so both are named.
+  const wrapWidthOf = (label) =>
+    Number.isFinite(label.maxWidth) && label.maxWidth > 0 ? label.maxWidth : MAX_BOX_WIDTH
+
   const sizeByID = (skeletons) => {
     const out = {}
     for (const el of convertToExcalidrawElements(skeletons, { regenerateIds: false })) {
@@ -619,13 +631,15 @@ window.__whiteboardMeasure = async (req) => {
     // at that width — the height it gets back is the height of the box it asked
     // for, and a height measured against a wrap that never happens draws a box
     // too short for the words inside it.
-    const tooWide = boxed.filter((l) => natural[l.id] && natural[l.id].width > l.maxWidth)
+    const tooWide = boxed.filter(
+      (l) => natural[l.id] && natural[l.id].width > wrapWidthOf(l)
+    )
     const wrapped = tooWide.length
       ? sizeByID(
           tooWide.map((l) => ({
             type: 'rectangle',
             id: l.id,
-            width: l.maxWidth,
+            width: wrapWidthOf(l),
             label: { text: l.text },
           }))
         )

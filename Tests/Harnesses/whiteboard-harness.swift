@@ -1573,9 +1573,12 @@ section("12. Auto-sizing — the page measures, and every write answers with geo
 
 /// `__whiteboardMeasure`'s answer for one label, or nil.
 func measured(_ text: String, boxed: Bool, maxWidth: Double = 400) -> (w: Double, h: Double)? {
+    // `maxWidth` rides on the LABEL, not on the request: a caller that supplied
+    // a width needs its own label wrapped at that width, and a batch can mix
+    // supplied and auto widths. Sending it at the request level is how this
+    // probe silently stopped exercising wrapping at all.
     let request: [String: Any] = [
-        "labels": [["id": "m-probe", "text": text, "boxed": boxed]],
-        "maxWidth": maxWidth,
+        "labels": [["id": "m-probe", "text": text, "boxed": boxed, "maxWidth": maxWidth]],
     ]
     let payload = String(
         data: try! JSONSerialization.data(withJSONObject: request), encoding: .utf8
