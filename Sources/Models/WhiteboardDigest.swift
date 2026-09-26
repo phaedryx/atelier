@@ -231,8 +231,21 @@ extension Whiteboard {
         ///
         /// Computed here from the scene rather than taken from
         /// `Host.liveState`, which also carries an extent: this function is pure
-        /// and `board.md` is regenerated with no page in existence. The two
-        /// answer the same question about the same elements.
+        /// and `board.md` is regenerated with no page in existence.
+        ///
+        /// **The two no longer agree exactly, and that is known rather than
+        /// overlooked.** `window.__whiteboardState` uses Excalidraw's own
+        /// `getCommonBounds`, which reads an arrow's real span from its `points`
+        /// and a rotated element's from its angle; this is a min/max over
+        /// `x`/`y`/`width`/`height`, so it reads SHORT for exactly those two.
+        /// They are not reconciled, deliberately: matching would mean
+        /// reimplementing `getCommonBounds` in Swift, which is the hand-rolled
+        /// geometry the write path is organized around never writing — and this
+        /// side cannot call the page, because its whole purpose is to answer
+        /// with no page in existence. What the page reports is the one that
+        /// decides where an element is PLACED; this one is descriptive. If they
+        /// ever have to match, the answer is to carry the page's number into the
+        /// digest, not to grow a second implementation here.
         private static func extentText(_ elements: [Element]) -> String {
             guard let first = elements.first else { return "no extent" }
             var minX = first.x

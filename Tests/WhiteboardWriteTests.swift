@@ -383,7 +383,11 @@ final class WhiteboardWriteTests: XCTestCase {
         ], live: live("old-1"), mint: minter())
         XCTAssertEqual(plan[0].x, 40)
         XCTAssertEqual(plan[0].y, 500)
-        XCTAssertEqual(plan[1].y, 500 + Write.rowStep)
+        // The pitch is the element's OWN height plus the same clearance the
+        // floor uses, not a fixed `rowStep`. With no measurement these boxes sit
+        // at the `boxSize` floor, so it is 90 + 60 — and `rowStep`'s 120 would
+        // have left 30px between two boxes that are 90 tall.
+        XCTAssertEqual(plan[1].y, 500 + Write.boxSize.height + Write.layoutGap)
     }
 
     func test_theColumnStartsBelowWhatTheSameBatchPlacesByHand() throws {
@@ -453,6 +457,403 @@ final class WhiteboardWriteTests: XCTestCase {
         // One column slot, not two: the placed element took none of them. Its
         // own extent still raises the floor, which is a different rule.
         XCTAssertEqual(plan[1].y, 900 + Write.boxSize.height + Write.layoutGap)
+    }
+
+    // MARK: - Auto-sizing, and the column floor that rests on it
+
+    /// Sizes as the page would report them, keyed the way it keys them.
+    private func sizes(_ pairs: [String: (Double, Double)]) -> [String: Write.Size] {
+        pairs.mapValues { Write.Size(width: $0.0, height: $0.1) }
+    }
+
+    func test_aBoxIsDrawnAtTheSizeThePageMeasured() throws {
+        let entries = try Write.entries(
+            from: [["kind": "box", "text": "Authentication service", "at": "0,0"]],
+            live: empty,
+            mint: minter()
+        )
+        let plan = Write.skeletons(
+            entries, sizes: sizes(["id-1": (312, 45)]), live: empty
+        )
+        XCTAssertEqual(plan[0].width, 312)
+        // Floored: 45 is shorter than a box has ever been drawn.
+        XCTAssertEqual(plan[0].height, Write.boxSize.height)
+    }
+
+    /// **`boxSize` is a floor now, not a size.** Keeping it as the minimum is
+    /// what makes a short label draw at exactly the size it drew at before this
+    /// change, so the only boards that move are the ones that were already
+    /// wrong.
+    func test_aLabelSmallerThanTheOldConstantStillDrawsAtTheOldConstant() throws {
+        let entries = try Write.entries(
+            from: [["kind": "box", "text": "A", "at": "0,0"]], live: empty, mint: minter()
+        )
+        let plan = Write.skeletons(entries, sizes: sizes(["id-1": (30, 25)]), live: empty)
+        XCTAssertEqual(plan[0].width, Write.boxSize.width)
+        XCTAssertEqual(plan[0].height, Write.boxSize.height)
+    }
+
+    /// A measurement that never arrived is a floor, not a failure — the box is
+    /// drawn at the size every box used to be.
+    func test_anUnmeasuredBoxFallsBackToTheOldFixedSize() throws {
+        let plan = try Write.addPlan(
+            from: [["kind": "box", "text": "Auth", "at": "0,0"]], live: empty, mint: minter()
+        )
+        XCTAssertEqual(plan[0].width, Write.boxSize.width)
+        XCTAssertEqual(plan[0].height, Write.boxSize.height)
+    }
+
+    /// **No upper clamp on this side.** The page has already wrapped the label
+    /// at `maxBoxWidth`; a width it reports above that is one it could not wrap,
+    /// and clamping would hand back a box narrower than the text inside it —
+    /// which is the spill this whole change exists to stop.
+    func test_aWidthThePageCouldNotWrapIsHonouredRatherThanClamped() throws {
+        let entries = try Write.entries(
+            from: [["kind": "box", "text": "Unbreakable", "at": "0,0"]],
+            live: empty,
+            mint: minter()
+        )
+        let over = Write.maxBoxWidth + 120
+        let plan = Write.skeletons(entries, sizes: sizes(["id-1": (over, 60)]), live: empty)
+        XCTAssertEqual(plan[0].width, over)
+    }
+
+    /// A bare `text` element carries no width or height: it self-sizes, and
+    /// writing a number here would be a second opinion about a fact Excalidraw
+    /// owns. Its measurement is for the column and nothing else.
+    func test_aTextElementIsNotGivenASizeEvenWhenItHasBeenMeasured() throws {
+        let entries = try Write.entries(
+            from: [["kind": "text", "text": "a note to self", "at": "0,0"]],
+            live: empty,
+            mint: minter()
+        )
+        let plan = Write.skeletons(entries, sizes: sizes(["id-1": (140, 25)]), live: empty)
+        XCTAssertNil(plan[0].width)
+        XCTAssertNil(plan[0].height)
+    }
+
+    /// **The floor is exact now, where it used to guess.** A placed box grown to
+    /// a long label is taller than `boxSize.height`, and the scan that did not
+    /// know it put the next unplaced element inside it.
+    func test_theColumnFloorUsesTheMeasuredHeightOfAPlacedBox() throws {
+        let entries = try Write.entries(from: [
+            ["kind": "box", "text": "a long label that wrapped", "at": "0,100"],
+            ["kind": "box", "text": "stacked"],
+        ], live: empty, mint: minter())
+        let plan = Write.skeletons(entries, sizes: sizes(["id-1": (400, 260)]), live: empty)
+        XCTAssertEqual(plan[1].y, 100 + 260 + Write.layoutGap)
+    }
+
+    /// **The hole this closed.** A hand-placed `text` element contributed zero
+    /// height to the floor, because only a box or a note had a height Swift
+    /// could name — so an unplaced element stacked under a paragraph landed on
+    /// top of it, reading perfectly well in the digest.
+    func test_theColumnFloorNowClearsAHandPlacedTextElement() throws {
+        let entries = try Write.entries(from: [
+            ["kind": "text", "text": "three\nlines\nof prose", "at": "0,100"],
+            ["kind": "box", "text": "stacked"],
+        ], live: empty, mint: minter())
+        let plan = Write.skeletons(entries, sizes: sizes(["id-1": (180, 75)]), live: empty)
+        XCTAssertEqual(plan[1].y, 100 + 75 + Write.layoutGap)
+    }
+
+    /// An arrow's position never reaches the canvas — `edgePoints` recomputes it
+    /// in the page from its two endpoints — so a slot in the column is a hole.
+    func test_anUnplacedArrowTakesNoSlotInTheColumn() throws {
+        let plan = try Write.addPlan(from: [
+            ["kind": "box", "text": "A"],
+            ["kind": "box", "text": "B"],
+            ["kind": "arrow", "from": "id-1", "to": "id-2"],
+            ["kind": "box", "text": "C"],
+        ], live: live("old-1"), mint: minter())
+        let pitch = Write.boxSize.height + Write.layoutGap
+        XCTAssertEqual(plan[0].y, 500)
+        XCTAssertEqual(plan[1].y, 500 + pitch)
+        // The third box follows the second, not the arrow.
+        XCTAssertEqual(plan[3].y, 500 + 2 * pitch)
+    }
+
+    /// `rowStep` survives as the MINIMUM pitch, and it is load-bearing: a
+    /// measurement that did not come back reads as zero height, and a zero step
+    /// would stack two elements at the same `y` — the collision the whole scan
+    /// exists to prevent, reintroduced by its own fallback.
+    func test_aZeroHeightMeasurementStillAdvancesTheColumn() throws {
+        let entries = try Write.entries(from: [
+            ["kind": "text", "text": "one"],
+            ["kind": "text", "text": "two"],
+        ], live: live("old-1"), mint: minter())
+        let plan = Write.skeletons(
+            entries, sizes: sizes(["id-1": (0, 0), "id-2": (0, 0)]), live: live("old-1")
+        )
+        XCTAssertEqual(plan[0].y, 500)
+        XCTAssertEqual(plan[1].y, 500 + Write.rowStep)
+    }
+
+    // MARK: - A supplied size is honoured exactly
+
+    /// **The hard invariant `feat-whiteboard-layout-tool`'s column arithmetic
+    /// rests on.** A layout computes placement and a width budget from the
+    /// widths it supplies; if a supplied width can be grown or floored, every
+    /// number it derived is against a size the board did not use — and the
+    /// board looks wrong while the digest reads exactly as asked.
+    func test_aSuppliedWidthIsHonouredExactlyAndNeverFlooredAtTheMinimum() throws {
+        // 200 is BELOW boxSize.width. The auto-sized floor must not touch it.
+        let entries = try Write.entries(
+            from: [["kind": "box", "text": "Auth", "at": "0,0", "width": 200]],
+            live: empty,
+            mint: minter()
+        )
+        let plan = Write.skeletons(entries, sizes: sizes(["id-1": (312, 45)]), live: empty)
+        XCTAssertEqual(plan[0].width, 200)
+    }
+
+    func test_aSuppliedWidthIsNeverGrownToFitALongLabel() throws {
+        let entries = try Write.entries(
+            from: [["kind": "box", "text": "a very long label indeed", "width": 240]],
+            live: empty,
+            mint: minter()
+        )
+        // The page measured it far wider; the supplied width still wins.
+        let plan = Write.skeletons(entries, sizes: sizes(["id-1": (980, 45)]), live: empty)
+        XCTAssertEqual(plan[0].width, 240)
+    }
+
+    /// Per axis: a width budget with no opinion about height is the ordinary
+    /// shape, and the height is still measured around the supplied width.
+    func test_aSuppliedWidthLeavesTheHeightMeasured() throws {
+        let entries = try Write.entries(
+            from: [["kind": "box", "text": "wraps", "width": 240]], live: empty, mint: minter()
+        )
+        let plan = Write.skeletons(entries, sizes: sizes(["id-1": (240, 310)]), live: empty)
+        XCTAssertEqual(plan[0].width, 240)
+        XCTAssertEqual(plan[0].height, 310)
+    }
+
+    func test_aSuppliedHeightIsHonouredExactlyInBothDirections() throws {
+        for supplied in [40.0, 500.0] {
+            let entries = try Write.entries(
+                from: [["kind": "box", "text": "Auth", "height": supplied]],
+                live: empty,
+                mint: minter()
+            )
+            let plan = Write.skeletons(entries, sizes: sizes(["id-1": (312, 210)]), live: empty)
+            XCTAssertEqual(plan[0].height, supplied, "height = \(supplied)")
+        }
+    }
+
+    /// The measurement is wrapped at the width the caller asked for, not at
+    /// `maxBoxWidth`. Measuring against a wrap that never happens returns the
+    /// height of a different box, and the one that is drawn is too short for
+    /// the words in it.
+    func test_aSuppliedWidthIsWhatTheLabelIsMeasuredAgainst() throws {
+        let entries = try Write.entries(
+            from: [
+                ["kind": "box", "text": "narrow", "width": 150],
+                ["kind": "box", "text": "auto"],
+            ],
+            live: empty,
+            mint: minter()
+        )
+        XCTAssertEqual(Write.labelsToMeasure(entries).map(\.maxWidth), [150, Write.maxBoxWidth])
+    }
+
+    func test_nothingIsMeasuredWhenBothAxesWereSupplied() throws {
+        let entries = try Write.entries(
+            from: [["kind": "box", "text": "Auth", "width": 200, "height": 100]],
+            live: empty,
+            mint: minter()
+        )
+        XCTAssertEqual(Write.labelsToMeasure(entries), [])
+    }
+
+    /// **Refused rather than ignored, and refused rather than crashing.** A
+    /// non-finite `Double` reaching `Host.apply` raises an Objective-C
+    /// exception from inside `JSONSerialization` that no `try?` can catch — the
+    /// same crash `parsePosition` documents. Zero and negative draw an element
+    /// nobody can see, and an agent whose box never appeared has been told
+    /// nothing.
+    func test_aSizeThatIsNotASizeIsRefusedAndNamesTheField() {
+        for (field, value) in [
+            ("width", 0), ("width", -10), ("height", 0), ("height", -1),
+        ] as [(String, Int)] {
+            XCTAssertThrowsError(
+                try Write.entries(
+                    from: [["kind": "box", "text": "Auth", field: value]],
+                    live: empty,
+                    mint: minter()
+                ),
+                "\(field) = \(value)"
+            ) { error in
+                guard case let .invalidDimension(named, _)? = error as? Write.Failure else {
+                    return XCTFail("expected invalidDimension, got \(error)")
+                }
+                XCTAssertEqual(named, field)
+            }
+        }
+        XCTAssertThrowsError(
+            try Write.entries(
+                from: [["kind": "box", "text": "Auth", "width": "1e999"]],
+                live: empty,
+                mint: minter()
+            )
+        )
+        XCTAssertThrowsError(
+            try Write.entries(
+                from: [["kind": "box", "text": "Auth", "height": "wide"]],
+                live: empty,
+                mint: minter()
+            )
+        )
+    }
+
+    /// Absent is how a caller asks to be auto-sized, which is the ordinary
+    /// case — only a value that is present and unusable is an error. The two
+    /// spellings a serializer on the far side may write are both accepted, the
+    /// leniency `normalizedColor` already extends and for the same reason.
+    func test_anAbsentOrEmptySizeIsAnAutoSizeRatherThanARefusal() throws {
+        let entries = try Write.entries(from: [
+            ["kind": "box", "text": "a"],
+            ["kind": "box", "text": "b", "width": NSNull()],
+            ["kind": "box", "text": "c", "width": ""],
+            ["kind": "box", "text": "d", "width": "240"],
+        ], live: empty, mint: minter())
+        XCTAssertEqual(entries.map(\.width), [nil, nil, nil, 240])
+    }
+
+    /// **Refused, not ignored**, on every kind that has no size to be given —
+    /// the rule `mermaidFieldRefused` states, and here it is load-bearing in
+    /// both directions. An arrow's frame is recomputed in the page from its
+    /// endpoints, so a supplied one is overwritten and the number does nothing.
+    /// A bare `text` element is worse: `convertToExcalidrawElements` spreads
+    /// the skeleton AFTER the measured metrics, so a supplied width WINS and
+    /// puts a frame on the board that does not match the words drawn in it —
+    /// which reads perfectly well in the digest.
+    func test_aSizeIsRefusedOnEveryKindThatHasNoneToGive() {
+        for kind in ["text", "arrow"] {
+            for field in ["width", "height"] {
+                var entry: [String: Any] = ["kind": kind, "text": "x", field: 200]
+                if kind == "arrow" {
+                    entry["from"] = "old-1"
+                    entry["to"] = "old-2"
+                }
+                XCTAssertThrowsError(
+                    try Write.entries(from: [entry], live: live("old-1", "old-2"), mint: minter()),
+                    "\(kind).\(field)"
+                ) {
+                    XCTAssertEqual($0 as? Write.Failure, .sizeRefused(kind: kind, field: field))
+                }
+            }
+        }
+    }
+
+    func test_aSizeOnAMermaidDiagramIsRefusedBecauseTheConverterDecidesIt() {
+        for field in ["width", "height"] {
+            XCTAssertThrowsError(
+                try Write.plan(
+                    from: [["kind": "mermaid", "text": "graph LR; A --> B", field: 300]],
+                    live: empty,
+                    mint: minter()
+                ),
+                field
+            ) { XCTAssertEqual($0 as? Write.Failure, .mermaidFieldRefused(field)) }
+        }
+    }
+
+    /// The refusal has to name the way out, or it is one an agent retries
+    /// verbatim.
+    func test_theSizeRefusalNamesWhichKindsDoTakeOne() {
+        let message = Write.Failure.sizeRefused(kind: "arrow", field: "width")
+            .errorDescription ?? ""
+        XCTAssertTrue(message.contains("box"), message)
+        XCTAssertTrue(message.contains("note"), message)
+    }
+
+    /// **Where the size refusals sit in the order, pinned because an ordering
+    /// with one tested member drifts at the untested end.**
+    ///
+    /// `#230` deliberately put the whole-batch `ref` scan ahead of every
+    /// per-entry refusal, so that a collision is reported whatever order the
+    /// entries arrive in — an agent should not be able to change which
+    /// complaint it gets by shuffling the array.
+    /// `test_theRefScanIsRefusedAheadOfAnUnknownKindInTheSameBatch` pins that
+    /// against `unknownKind`. `dimension` and `sizeRefused` are two more
+    /// refusals on the same path, added afterwards and on the far side of it,
+    /// so they get the same treatment rather than being left to be discovered.
+    func test_theRefScanIsRefusedAheadOfABadSizeInTheSameBatch() {
+        XCTAssertThrowsError(
+            try Write.entries(from: [
+                ["kind": "box", "text": "bad size", "width": -10],
+                ["kind": "box", "text": "collides", "ref": "old-1"],
+            ], live: live("old-1"), mint: minter())
+        ) { XCTAssertEqual($0 as? Write.Failure, .refCollidesWithElement("old-1")) }
+    }
+
+    /// Within one entry the kind is read first, so an entry that is not a kind
+    /// this board can draw is refused for that rather than for a size it was
+    /// never going to be given.
+    func test_anUnknownKindIsRefusedAheadOfThatEntrysOwnBadSize() {
+        XCTAssertThrowsError(
+            try Write.entries(
+                from: [["kind": "cylinder", "width": -10]], live: empty, mint: minter()
+            )
+        ) { XCTAssertEqual($0 as? Write.Failure, .unknownKind("cylinder")) }
+    }
+
+    /// And the per-entry refusals stay in batch order between themselves: a bad
+    /// size late in the array does not jump ahead of a malformed entry early in
+    /// it, which is what would happen if sizes were scanned up front the way
+    /// `ref` is. They are not, deliberately — a size is a fact about one entry,
+    /// where a `ref` is a fact about the whole batch.
+    func test_aBadSizeDoesNotJumpAheadOfAnEarlierEntrysRefusal() {
+        XCTAssertThrowsError(
+            try Write.entries(from: [
+                ["kind": "text"],
+                ["kind": "box", "text": "late", "height": 0],
+            ], live: empty, mint: minter())
+        ) { XCTAssertEqual($0 as? Write.Failure, .textRequired(kind: "text")) }
+    }
+
+    // MARK: - What gets measured
+
+    func test_onlyLabelsThatAreDrawnAsWordsAreMeasured() throws {
+        let entries = try Write.entries(from: [
+            ["kind": "box", "text": "Auth"],
+            ["kind": "note", "text": "a note"],
+            ["kind": "text", "text": "prose"],
+            // No label: nothing to measure, and it keeps the floor size.
+            ["kind": "box"],
+            // An arrow's geometry is edgePoints' answer, so measuring its label
+            // would buy a number nothing reads.
+            ["kind": "arrow", "text": "calls", "from": "id-1", "to": "id-2"],
+        ], live: empty, mint: minter())
+        XCTAssertEqual(Write.labelsToMeasure(entries), [
+            Write.Measure(id: "id-1", text: "Auth", boxed: true, maxWidth: Write.maxBoxWidth),
+            Write.Measure(id: "id-2", text: "a note", boxed: true, maxWidth: Write.maxBoxWidth),
+            // A bare text element is its own words and has no container to grow.
+            Write.Measure(id: "id-3", text: "prose", boxed: false, maxWidth: Write.maxBoxWidth),
+        ])
+    }
+
+    // MARK: - The geometry a write answers with
+
+    func test_aRectIsSpelledTheWayTheToolTakesItBack() {
+        let rect = Write.Rect(x: 120, y: 80, width: 312, height: 90)
+        // Whole numbers lose the trailing `.0`: every coordinate here is a
+        // Double and almost all of them are whole, so the default description
+        // turns an answer into "120.0,80.0" — which parses fine and reads like
+        // noise. `atText` is meant to be handed straight back as an `at`.
+        XCTAssertEqual(rect.atText, "120,80")
+        XCTAssertEqual(rect.farText, "432,170")
+        XCTAssertEqual(rect.sizeText, "312×90")
+        XCTAssertEqual(try Write.parsePosition(rect.atText).x, 120)
+    }
+
+    func test_aFractionalRectKeepsOneDecimalRatherThanRounding() {
+        // A fraction survives; only the trailing `.0` of a whole number is
+        // dropped. Deliberately not a `.x5` value: `%.1f` rounds those to even
+        // on the binary representation, which is a property of the formatter
+        // rather than anything this is claiming.
+        XCTAssertEqual(Write.Rect(x: 12.4, y: -3.5, width: 1, height: 1).atText, "12.4,-3.5")
     }
 
     func test_aMalformedPositionIsRefusedRatherThanReadAsTheOrigin() {
@@ -652,9 +1053,13 @@ final class WhiteboardWriteTests: XCTestCase {
         }
     }
 
-    /// Through `plan`, because the column pre-scan in `addPlan` reads `at`
-    /// under `try?` — a guard at a call site rather than inside `parsePosition`
-    /// would have left that path carrying the value into `nextRow`.
+    /// Through `plan`, deliberately, rather than against `parsePosition`
+    /// directly: the point is that a non-finite coordinate cannot reach
+    /// `Host.apply`, where `JSONSerialization` raises an Objective-C exception
+    /// that kills the app. This used to have a second reason as well — the
+    /// column pre-scan read `at` again under `try?` — and that path is gone now
+    /// that a position is parsed once in `entries`. The assertion is worth more
+    /// than the reason that prompted it, so it stays.
     func test_aNonFinitePositionIsRefusedThroughTheWholeAddPath() {
         XCTAssertThrowsError(
             try Write.plan(
@@ -879,12 +1284,12 @@ final class WhiteboardWriteTests: XCTestCase {
             live: empty,
             mint: minter()
         )
-        guard case let .elements(skeletons) = plan else {
+        guard case let .elements(entries) = plan else {
             return XCTFail("expected an elements plan, got \(plan)")
         }
-        XCTAssertEqual(skeletons.map(\.id), ["id-1"])
-        XCTAssertEqual(skeletons.first?.label, "Auth service")
-        XCTAssertEqual(skeletons.first?.x, 120)
+        XCTAssertEqual(entries.map(\.id), ["id-1"])
+        XCTAssertEqual(entries.first?.text, "Auth service")
+        XCTAssertEqual(entries.first?.at, Write.Point(x: 120, y: 80))
     }
 
     func test_malformedJSONIsRefusedWithAWorkedExample() {
@@ -945,11 +1350,11 @@ final class WhiteboardWriteTests: XCTestCase {
             live: empty,
             mint: minter()
         )
-        guard case let .elements(skeletons) = plan else {
+        guard case let .elements(entries) = plan else {
             return XCTFail("expected an elements plan, got \(plan)")
         }
-        XCTAssertEqual(skeletons.map(\.id), ["id-1"])
-        XCTAssertEqual(skeletons.first?.label, "Auth service")
+        XCTAssertEqual(entries.map(\.id), ["id-1"])
+        XCTAssertEqual(entries.first?.text, "Auth service")
     }
 
     func test_aMermaidDiagramIsParsedFromTheJSONArgument() throws {
@@ -1058,10 +1463,10 @@ final class WhiteboardWriteTests: XCTestCase {
             live: empty,
             mint: minter()
         )
-        guard case let .elements(skeletons) = plan else {
+        guard case let .elements(entries) = plan else {
             return XCTFail("expected an elements plan, got \(plan)")
         }
-        XCTAssertNil(skeletons.first?.strokeColor)
+        XCTAssertNil(entries.first?.color)
     }
 
     func test_aMermaidDiagramWithAMalformedPositionIsRefused() {

@@ -55,11 +55,10 @@ extension IPC.Service {
             return .failure(id: request.id, error.localizedDescription)
         }
         do {
-            let (ids, note) = try await WorkspaceActions.shared.whiteboardAdd(
+            let added = try await WorkspaceActions.shared.whiteboardAdd(
                 workstreamID: workstreamID,
                 elementsJSON: elements
             )
-            let count = ids.count
             // **A write can land and still not be what was asked for**, and
             // the note is the only thing that says so. A mermaid diagram of
             // a type the converter should expand can be degraded by its own
@@ -69,14 +68,53 @@ extension IPC.Service {
             // the tab note, because it is about what is on the board rather
             // than about where to look at it.
             return .success(id: request.id, .text(
-                "Added \(count) element\(count == 1 ? "" : "s"): "
-                    + ids.joined(separator: ", ") + "."
-                    + (note.map { " \($0)" } ?? "")
+                Self.whiteboardAddText(added)
+                    + (added.note.map { " \($0)" } ?? "")
                     + Self.whiteboardTabNote
             ))
         } catch {
             return .failure(id: request.id, error.localizedDescription)
         }
+    }
+
+    /// What `whiteboard_add` says it drew, and where.
+    ///
+    /// **The geometry is here because auto-sizing without it is strictly worse
+    /// than the fixed size it replaced.** A box is now drawn at the size of its
+    /// label, so a caller that is told only the ids no longer knows how wide
+    /// anything is — a known-bad constant traded for an unknown one, and manual
+    /// placement made harder rather than easier. Naming each rectangle is what
+    /// makes the sizing pay for itself.
+    ///
+    /// The two arms are worded differently on purpose. An `elements` caller
+    /// named each element and holds each id, so a line each is proportionate to
+    /// what it asked for. A `mermaid` caller named a *diagram*; twenty lines for
+    /// twenty nodes it did not choose would spend the whole answer describing
+    /// something nobody asked about, and the one number it actually wants — how
+    /// big the diagram came out — would be buried in it. That number is the
+    /// `read_whiteboard` round trip this retires.
+    static func whiteboardAddText(_ added: Whiteboard.Added) -> String {
+        let count = added.ids.count
+        let opening = "Added \(count) element\(count == 1 ? "" : "s")"
+        // Named whatever the geometry did: the ids are true either way, and an
+        // answer that withheld them because a measurement was missing would
+        // fail the caller over the part it did not ask about.
+        let named = added.ids.isEmpty ? "." : ": " + added.ids.joined(separator: ", ") + "."
+        let body: String
+        switch added.arm {
+        case .elements:
+            let rects = added.rects
+            body = rects.isEmpty
+                ? named
+                : ":\n" + rects
+                .map { "  \($0.id) at \($0.rect.atText), \($0.rect.sizeText)" }
+                .joined(separator: "\n")
+        case .mermaid:
+            body = named + (added.bounds.map {
+                " The diagram occupies \($0.sizeText) from \($0.atText)."
+            } ?? "")
+        }
+        return opening + body + (added.boardText.map { "\n\($0)" } ?? "")
     }
 
     func whiteboardUpdate(for request: Request) async -> Response {
