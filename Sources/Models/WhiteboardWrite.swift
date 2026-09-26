@@ -288,10 +288,35 @@ extension Whiteboard {
                         + "around it in the same call. Add the diagram on its own, then add "
                         + "the rest in a second call."
                 case let .mermaidFieldRefused(field):
+                    // **This used to say "colour and connections belong in the
+                    // definition itself", and for an EDGE that is false.**
+                    // Measured against @excalidraw/mermaid-to-excalidraw 2.2.2
+                    // by `feat-whiteboard-layout-tool`: a node's `classDef`,
+                    // `style` and `class` survive the converter in full — fill
+                    // becomes backgroundColor, stroke becomes strokeColor,
+                    // `stroke-width:6px` becomes strokeWidth 6, and a node's
+                    // bound label inherits the node's strokeColor — while
+                    // `linkStyle` is DROPPED in every form tested, indexed and
+                    // `default` alike, so every arrow the converter draws is
+                    // #1e1e1e unconditionally. For an edge only the *syntax*
+                    // survives: `-.->` draws dashed and `==>` draws thick.
+                    //
+                    // So the old advice sent an agent that wanted a red arrow
+                    // to write `linkStyle`, get a black one, and have no
+                    // recourse inside mermaid at all — the silent success this
+                    // subsystem is organized against, reached by following a
+                    // refusal. The way out is `whiteboard_update` on the id the
+                    // call answers with, so the refusal names it.
                     "`\(field)` does nothing on a mermaid diagram. A mermaid entry takes `text` "
-                        + "(the definition) and optionally `at`; colour and connections belong "
-                        + "in the definition itself, and a diagram that must stand alone in its "
-                        + "call has nothing to name it by `ref`."
+                        + "(the definition) and optionally `at`, and a diagram that must stand "
+                        + "alone in its call has nothing to name it by `ref`. Style the NODES in "
+                        + "the definition: `classDef`, `style` and `class` all survive, and a "
+                        + "node's label takes the node's stroke colour. For an EDGE only the "
+                        + "syntax survives — `-.->` draws dashed, `==>` draws thick — and "
+                        + "`linkStyle` is dropped, so a definition cannot colour an arrow at "
+                        + "all; every arrow it draws comes out black. Recolour one afterwards "
+                        + "with whiteboard_update, on the id this call answers with — "
+                        + "read_whiteboard names which of them are arrows."
                 }
             }
         }

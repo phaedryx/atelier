@@ -171,9 +171,26 @@ so the import shares the chunk rather than adding one. Four consequences, each p
 - **A mermaid entry stands alone in its call** (`Failure.mermaidStandsAlone`). Its height is not known
   until it is drawn, so the column layout for anything after it would be a guess, and a guess drops
   the next element on top of the diagram — invisible in the digest. `addPlan` refuses a mermaid entry
-  on its own account too, so a direct caller cannot draw one as a box. `color`, `from` and `to` are
-  **refused, not ignored** (`mermaidFieldRefused`): an agent whose red diagram came out black has been
-  taught the field does nothing.
+  on its own account too, so a direct caller cannot draw one as a box. `color`, `from`, `to` and
+  `ref` are **refused, not ignored** (`mermaidFieldRefused`): an agent whose red diagram came out
+  black has been taught the field does nothing, and a `ref` on an entry that must stand alone could
+  never be named by anything.
+
+  **That refusal used to give advice that was false for half the diagram**, and the correction is
+  the interesting part. It said "colour and connections belong in the definition itself". For a
+  **node** that holds — measured against `@excalidraw/mermaid-to-excalidraw` 2.2.2, `classDef`,
+  `style` and `class` survive the converter in full, `fill` becoming `backgroundColor`, `stroke`
+  becoming `strokeColor`, `stroke-width:6px` becoming `strokeWidth` 6, and a node's bound label
+  inheriting the node's `strokeColor`. For an **edge** it is false: `linkStyle` is dropped in every
+  form tested, indexed and `default` alike, so every arrow the converter draws is `#1e1e1e`
+  unconditionally, and only the *syntax* survives — `-.->` dashed, `==>` thick. So an agent that
+  wanted a red arrow was sent by the refusal to `linkStyle`, got a black one, and had no recourse
+  inside mermaid at all: a silent success reached by following a refusal, which is the exact shape
+  this subsystem is organized against. The refusal now names the split and points at
+  `whiteboard_update` on the id the call answers with, which is the one thing that does work. The
+  measurement is `feat-whiteboard-layout-tool`'s and is recorded in `Tests/Harnesses/README.md`;
+  the *string* is pinned in `Tests/WhiteboardWriteTests.swift`, because the behaviour is the
+  converter's and a version bump may change it while the advice must not silently re-broaden.
 - **Ids are regenerated for this arm, the opposite of `add`'s `regenerateIds: false`.** Mermaid names
   its nodes `A` and `B`, and a second diagram keeping those ids would collide with the first; the
   converter remaps bindings and container ids along with them. So Swift mints nothing here, and the ids

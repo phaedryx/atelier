@@ -997,6 +997,36 @@ final class WhiteboardWriteTests: XCTestCase {
         }
     }
 
+    /// **The refusal has to name what actually works, and it used to not.**
+    ///
+    /// It said "colour and connections belong in the definition itself". For a
+    /// node that is true; for an EDGE it is false, and an agent following it
+    /// wrote `linkStyle`, got a black arrow and had no recourse inside mermaid
+    /// — a silent success reached by following a refusal, which is the shape
+    /// this subsystem is organized against. Measured against
+    /// @excalidraw/mermaid-to-excalidraw 2.2.2 by `feat-whiteboard-layout-tool`.
+    ///
+    /// Pinned here as the *string*, because the split itself is the converter's
+    /// behaviour and only reachable through the page — `Tests/Harnesses/README.md`
+    /// carries the measurement. What this guards is that a later rewrite cannot
+    /// re-broaden the advice back to the claim that was wrong.
+    func test_theMermaidRefusalNamesWhatSurvivesTheConverterAndWhatDoesNot() throws {
+        let message = try XCTUnwrap(Write.Failure.mermaidFieldRefused("color").errorDescription)
+        // What works for a node.
+        for survivor in ["classDef", "style", "class"] {
+            XCTAssertTrue(message.contains(survivor), message)
+        }
+        // What works for an edge, which is syntax and not styling.
+        XCTAssertTrue(message.contains("-.->"), message)
+        XCTAssertTrue(message.contains("==>"), message)
+        // And the part that does not survive at all, named rather than left to
+        // be discovered as a black arrow.
+        XCTAssertTrue(message.contains("linkStyle"), message)
+        XCTAssertTrue(message.contains("dropped"), message)
+        // A refusal that names no way out is one an agent retries verbatim.
+        XCTAssertTrue(message.contains("whiteboard_update"), message)
+    }
+
     /// **A `null` and an empty string are not asking for the field.**
     ///
     /// `JSONSerialization` hands a JSON `null` back as `NSNull`, which is not
