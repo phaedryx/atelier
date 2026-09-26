@@ -163,8 +163,9 @@ extension IPC {
         ///
         /// A **list**, because a diagram is eight boxes and six arrows, and one
         /// call per element at this tier makes agent-produced visuals
-        /// miserable. An arrow may name a box created earlier in the same call,
-        /// so a whole diagram is one round trip.
+        /// miserable. An arrow may name a box created earlier in the same call
+        /// by the `ref` that box declared — a minted id is a UUID, so nothing
+        /// else could name it — and a whole diagram is one round trip.
         case whiteboardAdd = "whiteboard_add"
         /// Moves, retexts or recolours one element of the caller's board.
         case whiteboardUpdate = "whiteboard_update"

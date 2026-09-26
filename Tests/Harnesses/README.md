@@ -248,6 +248,29 @@ Every node and edge carries `atelierAuthor`; bound labels carry nothing, on this
 arm as on `add`, because the converter creates them fresh from `label` and the
 digest folds a label into its container rather than reporting it on its own.
 
+**Measured, not pinned: mermaid styling survives for nodes and not for edges.**
+Against `@excalidraw/mermaid-to-excalidraw` 2.2.2, by
+`feat-whiteboard-layout-tool`. A node's `classDef`, `style` and `class` pass
+through in full — `fill` becomes `backgroundColor`, `stroke` becomes
+`strokeColor`, `stroke-width:6px` becomes `strokeWidth` 6 — and a node's bound
+label inherits the node's `strokeColor`. `linkStyle` is **dropped**, in every
+form tested, indexed and `default` alike, so every arrow the converter draws is
+`#1e1e1e` unconditionally; for an edge only the syntax survives, `-.->` dashed
+and `==>` at `strokeWidth` 4.
+
+It is recorded here rather than added as a check because it is not an invariant
+this codebase keeps — it is the converter's behaviour, and a later version may
+well change it. What it changed on our side is
+`Whiteboard.Write.Failure.mermaidFieldRefused`, which used to tell an agent that
+"colour and connections belong in the definition itself" and so sent one that
+wanted a red arrow to `linkStyle`, a black arrow and no recourse — a silent
+success reached by following a refusal. The refusal now names the split and
+points at `whiteboard_update` for an edge, and
+`Tests/WhiteboardWriteTests.swift` pins the *string* so it cannot be
+re-broadened back to the claim that was wrong. If a converter bump makes
+`linkStyle` survive, this note and that string are what has to be revisited
+together.
+
 ### If you change the page
 
 `./scripts/build-editor.sh` first. The harness runs the **built** bundle in
