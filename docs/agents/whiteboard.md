@@ -38,7 +38,23 @@ file order and keeping whatever fits can list an arrow whose endpoint it dropped
 the digest prints `n1 → n2` with no `n2` anywhere in it — an id that appears
 nowhere else, which is the digest lying. So elements are admitted in tier order
 (words, then bare arrows, then shapes and uncaptioned images, then freehand) and
-**an arrow is admitted together with the endpoints it names or not at all**.
+**an arrow is admitted together with the endpoints it names or not at all**. The
+bundle is **transitive**, because Excalidraw lets an arrow bind to an arrow:
+pulling `x2` in for `x1` and stopping there charges nothing for `x2`'s own
+endpoints and leaves `x2` printing the dangling id the bundle exists to prevent,
+one hop further out.
+
+**So the read path can now say something it could not before: if an arrow is
+listed, every endpoint it names that is on the board is listed too — an agent
+can trust `n1 → n2` to resolve within the digest it is holding.** That is the
+durable result of this section and the thing to preserve; the overflow note
+states the same guarantee, scoped to exactly what the admission enforces ("No
+arrow listed above names an element the cut left out"). It deliberately does not
+promise that *every* id on the board resolves, because a binding to an element
+that was never in the scene is not a cut's to fix — that is
+`whiteboard_delete`'s unbinding rule, above. Widening the sentence past what is
+enforced would be this feature's own failure mode wearing the fix's clothes.
+
 Two of those placements are load-bearing rather than aesthetic: freehand is last
 because the overflow note sends the reader to `board.png`, and for a stroke that
 is already the only answer there was; an **uncaptioned image is not** down there
