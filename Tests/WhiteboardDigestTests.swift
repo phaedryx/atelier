@@ -870,10 +870,11 @@ final class WhiteboardDigestTests: XCTestCase {
     }
 
     func test_theBudgetIsACeilingAndNotATarget() {
-        // The question a 2x raise has to answer: does a small board now cost
-        // what a large one does? It does not — nothing pads, and the assembly
-        // spends exactly what the elements are worth. A thirty-element board
-        // measures under 4KB against a 16,000-byte cap, and every board that
+        // The question a 4x raise has to answer, and the measurement the whole
+        // choice of default rests on: does a small board now cost what a large
+        // one does? It does not — nothing pads, and the assembly spends exactly
+        // what the elements are worth. A thirty-element board measures under
+        // 4KB against a 32,000-byte cap, and every board that
         // fitted inside the old 8,000 returns byte-identical output, so the
         // raise costs those calls nothing. `read_whiteboard` is on a hot path
         // and this is the property that keeps the raise off it.
