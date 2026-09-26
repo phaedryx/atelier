@@ -868,4 +868,19 @@ final class WhiteboardDigestTests: XCTestCase {
         XCTAssertFalse(text.contains("more elements"), text)
         XCTAssertLessThanOrEqual(text.utf8.count, Whiteboard.Digest.maxBytes)
     }
+
+    func test_theBudgetIsACeilingAndNotATarget() {
+        // The question a 2x raise has to answer: does a small board now cost
+        // what a large one does? It does not — nothing pads, and the assembly
+        // spends exactly what the elements are worth. A thirty-element board
+        // measures under 4KB against a 16,000-byte cap, and every board that
+        // fitted inside the old 8,000 returns byte-identical output, so the
+        // raise costs those calls nothing. `read_whiteboard` is on a hot path
+        // and this is the property that keeps the raise off it.
+        let small = digest(board(30) { self.labelledBox($0, x: $0 * 260) })
+        XCTAssertFalse(small.contains("more elements"), small)
+        XCTAssertLessThan(small.utf8.count, 4_000, small)
+        // And the same board asked for under the old cap is the same bytes.
+        XCTAssertEqual(digest(board(30) { self.labelledBox($0, x: $0 * 260) }, budget: 8_000), small)
+    }
 }

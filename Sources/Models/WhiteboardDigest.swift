@@ -40,23 +40,47 @@ extension Whiteboard {
         /// board got large enough to be worth checking: measured, a board of 83
         /// elements reported 21 of them not listed.
         ///
-        /// **32,000 is derived, not picked.** That same measurement puts a real
-        /// entry at about 123 bytes — 62 listed inside 8,000 less its reserve —
-        /// so the old cap covered roughly 60 elements and this one covers
-        /// roughly 250, past any board this feature has produced, a mermaid
-        /// flowchart's expansion included. The ceiling on the other side is the
-        /// reader: 32KB is about eight thousand tokens, half of what
-        /// `IPC.ExecutionLogs.defaultBudgetBytes` already allows a single log
-        /// tail, and it is a **cap and not a floor** — the median board is a
-        /// dozen elements and still costs the 1.5KB it always did. That
-        /// asymmetry is the whole argument for erring large: a generous budget
-        /// is paid for only by boards that really are large, and a tight one is
-        /// paid for by lying-by-omission on exactly those boards.
+        /// **16,000 is measured, not picked.** Assembled digests of a board
+        /// shaped like the ones this feature produces — labelled diagram nodes,
+        /// labelled edges, a note every few elements, a captioned screenshot:
+        ///
+        ///     12 elements → 1,229 B      120 elements → 10,722 B
+        ///     30 elements → 2,813 B      200 elements → 17,856 B
+        ///     83 elements → 7,371 B      250 elements → 22,314 B
+        ///
+        /// That is a flat ~89 bytes an entry past the first few, so 16,000
+        /// lists about 180 of them whole. The board in the report above ran
+        /// heavier — 62 entries inside 8,000 less its reserve, so ~123 bytes
+        /// each — and even at that rate this covers about 130. A well-formed
+        /// board is 60–120 elements: the skill that draws these caps concepts
+        /// at 3–5 and diagram nodes at 5–8, and the 83-element board is a
+        /// realistic one. So the realistic case is covered with room, and the
+        /// case past it is *cut* rather than covered, which is now a decent
+        /// answer rather than a bad one — see `admitted`.
+        ///
+        /// **It is a ceiling and not a target, and that is measured too**: at
+        /// this default a 30-element board answers with 2,813 bytes and a
+        /// 12-element one with 1,229. Nothing pads. Every board that fits under
+        /// the old 8,000 — which is every board of about 80 elements or fewer —
+        /// returns byte-identical output, so the raise costs those calls
+        /// nothing at all. `read_whiteboard` is on a hot path (draw, read back
+        /// for the extent, read again to verify), and the whole of the extra
+        /// cost falls on the boards that were previously being lied to.
+        ///
+        /// **Why not larger.** 32,000 was the first proposal and would list
+        /// ~355 of these entries. The difference is paid only by boards of
+        /// 180–355 elements, and for those the choice is no longer "complete or
+        /// lying" — `admitted` cuts freehand and bare geometry first, keeps
+        /// every word, and reports the count, the extent and a by-kind
+        /// breakdown of what went. Preferring the smaller default is what
+        /// making the cut load-bearing buys. The escape is one constant, with
+        /// this derivation beside it, and `text(budget:)` takes the number as a
+        /// parameter for a caller that needs another.
         ///
         /// Raising it does not make truncation rare enough to stop thinking
         /// about — `admitted` is what decides which elements a board past this
         /// size loses, and it is the load-bearing half of this pair.
-        static let maxBytes = 32_000
+        static let maxBytes = 16_000
 
         /// What `board.png` currently is.
         ///

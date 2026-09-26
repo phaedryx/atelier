@@ -10,7 +10,7 @@ transcription, and the capture button.
 are argued at length in `Sources/Models/WhiteboardDigest.swift`; what belongs
 here is the part another change can break.
 
-**The cap is 32,000 and the old 8,000 rested on a claim that is false at scale.**
+**The cap is 16,000 and the old 8,000 rested on a claim that is false at scale.**
 The argument for 8KB was that the agent is asked to open `board.png` in the same
 breath, so the picture carries whatever the text does not. It does not: the
 render is capped at `MAX_RENDER_EDGE` (1600, `editor/src/whiteboard.jsx`), which
@@ -22,6 +22,15 @@ degraded
 **together**, and exactly as a board got large enough to be worth checking — a
 board of 83 elements reported 21 of them not listed. If the render cap ever
 moves, this number's argument moves with it.
+
+The 16,000 is measured and the table is in the source: a board of the shape this
+feature produces costs a flat ~89 bytes an entry, so the cap lists about 180
+elements whole against the 60–120 a well-formed board holds. **It is a ceiling
+and not a target** — a 30-element board answers with 2,813 bytes, and every board
+that fitted inside the old 8,000 returns byte-identical output, which is what
+keeps a 2x raise off a hot path. Past ~180 elements the answer is a good cut
+rather than a complete list, and the rest of this section is what makes that
+trade worth taking.
 
 **Truncation is a choice about value, not a leftover of position**, and the
 reason is the same one the unbind-on-delete rule exists for. Walking the scene in
