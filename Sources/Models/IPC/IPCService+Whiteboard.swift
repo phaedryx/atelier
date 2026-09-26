@@ -117,6 +117,52 @@ extension IPC.Service {
         return opening + body + (added.boardText.map { "\n\($0)" } ?? "")
     }
 
+    /// **Answers in the same voice `whiteboard_add` does**, and that is a
+    /// shared formatter rather than a matching one: `whiteboardAddText` words
+    /// both. An arrangement IS a batch of elements — it takes the `.elements`
+    /// arm for that reason — so an agent that has learned what one answer means
+    /// has learned both, and the two cannot drift into wording the same
+    /// geometry differently.
+    ///
+    /// **The geometry matters more here than it does on `whiteboard_add`.**
+    /// There, a caller placed its own elements and mostly knows where they
+    /// went. Here it deliberately did not: handing the coordinates to this tool
+    /// is the entire point, so the rectangles it answers with are the only way
+    /// the caller learns where anything landed — and the only way it can anchor
+    /// anything beside what it just drew without a `read_whiteboard` round
+    /// trip.
+    func whiteboardAddLayout(for request: Request) async -> Response {
+        guard let workstreamID = callerWorkstreamID(request) else {
+            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
+        }
+        let arguments = ToolArguments(request)
+        let layout: String
+        let content: String
+        do {
+            layout = try arguments.required("layout")
+            content = try arguments.required("content")
+        } catch {
+            return .failure(id: request.id, error.localizedDescription)
+        }
+        do {
+            let added = try await WorkspaceActions.shared.whiteboardAddLayout(
+                workstreamID: workstreamID,
+                layout: layout,
+                contentJSON: content
+            )
+            // No `note` arm here, unlike `whiteboard_add`: that one exists for a
+            // mermaid diagram the converter silently degraded to an image, and
+            // this tool has no such case — what it plans is what the page
+            // expands.
+            return .success(
+                id: request.id,
+                .text(Self.whiteboardAddText(added) + Self.whiteboardTabNote)
+            )
+        } catch {
+            return .failure(id: request.id, error.localizedDescription)
+        }
+    }
+
     func whiteboardUpdate(for request: Request) async -> Response {
         guard let workstreamID = callerWorkstreamID(request) else {
             return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)

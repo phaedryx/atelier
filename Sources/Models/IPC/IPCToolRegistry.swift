@@ -211,6 +211,7 @@ extension IPC {
             .restartProcess,
             .readWhiteboard,
             .whiteboardAdd,
+            .whiteboardAddLayout,
             .whiteboardUpdate,
             .whiteboardDelete,
             .addTask,
@@ -1000,6 +1001,81 @@ extension IPC.Tool {
                         kind: .string,
                         isRequired: true,
                         description: "A JSON array of elements to add. Each is an object with `kind` (box, note, text, arrow or mermaid) and optionally `text`, `at` (\"x,y\"), `from`, `to`, `color`, `ref`, and — on a box or note only — `width` and `height` in pixels, which are honoured exactly. `ref` names an entry so an arrow later in the same array can point at it. For example [{\"kind\": \"box\", \"text\": \"Auth service\", \"ref\": \"auth\"}, {\"kind\": \"box\", \"text\": \"Token store\", \"ref\": \"tokens\"}, {\"kind\": \"arrow\", \"from\": \"auth\", \"to\": \"tokens\"}], or, on its own, [{\"kind\": \"mermaid\", \"text\": \"graph LR; A[Auth] --> B[Token store]\"}]."
+                    ),
+                ]
+            )
+        case .whiteboardAddLayout:
+            IPC.ToolSpec(
+                tool: .whiteboardAddLayout,
+                surface: .workspaceAction,
+                replyDeadline: IPC.ToolSpec.Deadline.immediate,
+                isSafeToReplay: false,
+                description: """
+                Draw a whole arrangement on this workstream's whiteboard, with the
+                positions worked out for you. Use this instead of placing boxes by
+                hand whenever what you are drawing is one of the three shapes below —
+                it cannot collide, and it will not sprawl wider than the board can
+                render.
+
+                `layout` picks the shape and `content` is JSON:
+
+                small_multiples — the same diagram redrawn per state, one node
+                highlighted in each. Every frame draws the same nodes in the same
+                order, which is what makes the difference between frames readable.
+                {"nodes": ["Client", "Gateway", "Auth"],
+                 "frames": [{"title": "1 Request", "highlight": "Gateway"},
+                            {"title": "2 Token checked", "highlight": "Auth"}]}
+
+                lanes — actors as rows, time as columns. Steps are numbered and run
+                left to right; past the width that fits, they continue in a second
+                band below with the lane labels repeated.
+                {"actors": ["Agent", "Swift", "Page"],
+                 "steps": [{"actor": "Agent", "text": "whiteboard_add"},
+                           {"actor": "Swift", "text": "validate"},
+                           {"actor": "Page", "text": "expand"}]}
+
+                before_after — two diagrams side by side.
+                {"before": {"title": "Today", "nodes": ["a", "b"]},
+                 "after": {"title": "Proposed", "nodes": ["a", "c"],
+                           "highlight": ["c"]}}
+
+                An optional top-level "color" sets the highlight (a name like red or
+                a hex value); there is one highlight colour per arrangement.
+
+                Labels are capped at 30 characters — they are node labels, not
+                sentences. Put the explanation in a note beside the diagram instead.
+                ARROWS ARE NEVER LABELLED: the field is refused rather than placed,
+                because overlapping arrow labels are the most common way a drawn
+                explanation becomes unreadable. Put the words in the box the arrow
+                points at.
+
+                An arrangement is placed below whatever is already on the board and
+                is never larger than the board can render legibly. Too much to fit is
+                refused, and the refusal names how much would fit.
+
+                For anything these three shapes do not fit, use whiteboard_add's box,
+                note, text, arrow and mermaid directly — they remain the general way
+                to draw, and this tool does not replace them.
+
+                Returns the real element ids, which whiteboard_update and
+                whiteboard_delete take. This opens the Whiteboard tab but DOES NOT
+                take the selection; use request_attention when you want their eyes on
+                it. NOT replayed automatically after a lost connection — if it fails
+                or times out, call read_whiteboard rather than retrying, or you will
+                draw it twice.
+                """,
+                arguments: [
+                    IPC.ArgumentSpec(
+                        name: "layout",
+                        kind: .string,
+                        isRequired: true,
+                        description: "One of small_multiples, lanes, before_after."
+                    ),
+                    IPC.ArgumentSpec(
+                        name: "content",
+                        kind: .string,
+                        isRequired: true,
+                        description: "A JSON object matching the chosen layout. For example {\"actors\": [\"Agent\", \"Swift\"], \"steps\": [{\"actor\": \"Agent\", \"text\": \"whiteboard_add\"}, {\"actor\": \"Swift\", \"text\": \"validate\"}]}."
                     ),
                 ]
             )

@@ -1,6 +1,6 @@
 # The whiteboard
 
-The Excalidraw-backed board: the read path's budget, the three write tools, image
+The Excalidraw-backed board: the read path's budget, the four write tools, image
 transcription, and the capture button.
 
 ### The digest's budget, and what truncation drops
@@ -82,9 +82,12 @@ so an `offset:` beside it later is additive rather than a redesign.
 
 ### The whiteboard write tools
 
-Three tools give an agent the board's write half, as `read_whiteboard` gave it the read half:
-`whiteboard_add`, `whiteboard_update`, `whiteboard_delete`. They sit immediately after
-`read_whiteboard` in `advertisedOrder`, so an agent that has found one has found all four.
+Four tools give an agent the board's write half, as `read_whiteboard` gave it the read half:
+`whiteboard_add`, `whiteboard_add_layout`, `whiteboard_update`, `whiteboard_delete`. They sit
+immediately after `read_whiteboard` in `advertisedOrder`, so an agent that has found one has found
+all five. Three of them are drawing tools and take a vocabulary of elements; `whiteboard_add_layout`
+is the odd one out and takes an *arrangement*, computing the coordinates itself — see **The layout
+tool** at the end of this file.
 
 **`.workspaceAction`, 15s, and no new `Surface` case.** They act on the caller's own workstream,
 which that surface's charter already covers; a fifth case needs a trust argument distinct from the
@@ -429,6 +432,133 @@ so the import shares the chunk rather than adding one. Four consequences, each p
 `Tests/WhiteboardWriteTests.swift` pins the Swift half; section 10 of the harness pins what the page
 does with it, from disk — including that the same diagram added twice yields disjoint ids and that a
 definition that does not parse leaves `board.excalidraw` byte-identical.
+
+### The layout tool
+
+*Placed after the measure-and-place rule and before the later arms, because it is
+that rule's most extreme application: the one tool where Swift decides every
+coordinate and the caller supplies none.*
+
+`whiteboard_add_layout` is the sixth write tool and the only one that is not a
+drawing tool. The other five hand an agent a pen; this one hands it an
+arrangement, and computes the coordinates itself.
+
+**Why it exists.** The write API is a drawing API, and what callers actually
+need is a layout API. Every agent drawing an explanation was doing coordinate
+arithmetic in its head, and in a four-run evaluation every run sprawled to
+2000–2900px against `MAX_RENDER_EDGE = 1600`, and two produced colliding arrow
+labels. Both failures are placement failures, and neither is fixable by telling
+agents to be more careful.
+
+**One tool with a `layout` discriminator, not one tool per layout.** Every entry
+in `advertisedOrder` costs schema tokens in every session of this project, for
+every agent, whether or not it ever draws. One discriminated tool is affordable;
+three are not. It is advertised immediately after `whiteboard_add`, so an agent
+reading down the group meets the primitive it already knows and then the tool
+that saves it the arithmetic.
+
+**The vocabulary is closed, and the primitives stay as the escape hatch.** Three
+layouts — small multiples, lanes, before/after — chosen because they are the
+spatial moves a canvas actually supports. Two other moves from the same analysis
+are deliberately *not* layouts: a numbered note pinned beside what it annotates
+is an anchoring primitive and is a fourth discriminator value still to come, and
+"write real captured values into the diagram" is a content rule that needs no
+tool at all. Do not try to make the three general enough to replace `box`,
+`note`, `text` and `arrow`; a request that does not fit them is a request for
+the primitives.
+
+**It emits `Write.Skeleton` and nothing else, so the page grew no new arm.** The
+result travels through the same `{"kind": "add"}` op `whiteboard_add` uses, and
+every invariant the page maintains for that op — binding, `edgePoints`, the
+`customData` spread — holds here without being restated. A second expansion path
+would be a second copy of those invariants, and this file is largely a record of
+what happens when there are two.
+
+**Mermaid is not the answer to this, and the reason is not the one you would
+guess.** Definition-level styling *does* survive the converter: `classDef`,
+`class` and `style` land as real `strokeColor`, `backgroundColor` and
+`strokeWidth` on the converted nodes, and a node's bound label inherits its
+stroke colour — all measured against 2.2.2. So a mermaid diagram is **not**
+limited to a monochrome band, and any argument resting on that is false. What
+actually rules mermaid out for these layouts is structural: a mermaid entry
+**stands alone in its call**, **regenerates its ids**, and **has no width
+budget**, so N small-multiple frames would be N separate calls that cannot be
+placed relative to one another or connected to each other.
+
+**`linkStyle` is the one thing that does not survive**, and it fails silently:
+every arrow the converter emits is `#1e1e1e` regardless, while `-.->` and `==>`
+*do* come through as `strokeStyle` and `strokeWidth`. So edge emphasis is
+available through edge syntax and edge colour is not available at all.
+
+**Collision-free by construction, and the proof is split across two files on
+purpose.** `Tests/WhiteboardArrangementTests.swift` pins that planned rects never
+overlap at their grown height; section 12 of the harness pins that the grown
+height is really what the page produces. Neither is the claim alone — the first
+would pass against a wrong constant and the second says nothing about placement.
+Change `maxLabelHeight`, `labelCap` or `columnWidth` and both halves move
+together.
+
+**The asymmetry above is the whole shape of this design.** A supplied width is
+honoured exactly — the invariant the section before this one states and pins —
+while height is `max(supplied, needed)` and grows to fit the label. So every
+column here is exact arithmetic settled before the page is involved, and only
+the *row pitch* has to absorb anything. The layout tool is the one caller that
+depends on that invariant for correctness rather than convenience: if a supplied
+width ever stopped being a ceiling, every column in every layout would collide.
+
+**The 30-character cap is a proxy for a width budget, and the pitch is set from
+the widest script rather than from the cap.** This is the sentence that matters,
+because the obvious tidy-up is to test a few English labels, observe they all
+come back 90 tall, and drop the 110 pitch to match. 30 characters of Latin — even
+all-`W` — does fit 90. So does 30 of CJK, of Cyrillic, and of full-width Latin.
+**30 emoji do not: they wrap to four lines and come back 110, and they are the
+only case at the cap that does.** The harness corpus carries every one of those
+scripts at *exactly* the cap, and checks that they are at the cap, because a
+corpus of 22 CJK characters and 15 emoji reports a clean 90 across the board
+while the real binding case sits untested two rows away — which is what the
+first version of that corpus did.
+
+**No layout emits a bare `text` element.** A bare text element does not wrap and
+has no container to clamp it: a 67-character label measured 665px wide on one
+line. The first design used `text` for lane labels and frame titles, so a long
+actor name would have run straight across the columns beside it — a collision
+inside a tool whose whole claim is that it cannot collide, and one the sizing
+table said nothing about because that table is about *containers*. Every label
+is now a container.
+
+**Arrows are never labelled, and the field is refused rather than ignored.** Two
+of the four evaluation runs collided on exactly this, and refusing deletes the
+class outright instead of trying to place labels cleverly. An agent whose labels
+silently vanished has learned nothing, which is why it is a refusal.
+
+**`lanes` bands rather than wrapping, and the difference is load-bearing.** The
+objection to wrapping a time axis is that the reader takes column N+1 as adjacent
+to column N when it is really below and to the left. Three things defeat that,
+and removing any one makes this the wrap it is accused of being: **lane labels
+are repeated in every band**, so each band is a complete swimlane rather than a
+continuation fragment; **step boxes are numbered**, so continuity is carried by
+the number and not by adjacency; and **no arrow crosses a band boundary**, so
+nothing on the canvas asserts an adjacency that is not true. It bands rather
+than refusing because refusing tops `lanes` out at five steps, below the
+four-actors-by-eight-steps case the layout exists for, and a tool that refuses
+its own worked example is not a tool. **Banding is still capped** — unbounded
+bands recreate the sprawl this tool exists to stop, rotated ninety degrees.
+
+**The budget claim is deliberately narrow: "the arrangement this places is never
+larger than 1600 on either edge", NOT "the board stays legible".**
+`MAX_RENDER_EDGE` is `maxWidthOrHeight` on `exportToBlob` for the *whole* board,
+and an arrangement is placed below whatever is already there, so it adds to the
+board's height; a 1500-wide arrangement on a board already 1400 tall is
+downscaled anyway. Nothing here can promise otherwise, and the wider claim must
+not be written down.
+
+**It is `Whiteboard.Arrangement`, not `Whiteboard.Layout`.**
+`Whiteboard.Write.Layout` already owns that spelling, for where the next
+*unpositioned* element goes. The agent-facing word is still "layout" — it is the
+tool's own argument — and that drift between the tool's word and the type's word
+is the cheaper of the two costs: two Swift types called `Layout` in one
+namespace, meaning different things, is how a reader ends up applying the
+column-origin rules to a swimlane.
 
 ### Image transcription, and the capture button
 

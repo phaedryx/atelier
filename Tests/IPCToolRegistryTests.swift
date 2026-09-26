@@ -423,13 +423,19 @@ final class IPCToolRegistryTests: XCTestCase {
     }
 
     /// The write tools group with the read, so an agent that has found one has
-    /// found all four.
+    /// found all five. `whiteboard_add_layout` sits immediately after
+    /// `whiteboard_add` rather than at the end of the group: an agent reading
+    /// down the list meets the primitive it already knows, then the layout tool
+    /// that saves it the arithmetic, which is the order it wants them in.
     func test_theWhiteboardWriteTools_areAdvertisedBesideTheRead() throws {
         let advertised = IPC.ToolSpec.advertised.map(\.tool)
         let read = try XCTUnwrap(advertised.firstIndex(of: .readWhiteboard))
         XCTAssertEqual(
-            Array(advertised[read ... (read + 3)]),
-            [.readWhiteboard, .whiteboardAdd, .whiteboardUpdate, .whiteboardDelete]
+            Array(advertised[read ... (read + 4)]),
+            [
+                .readWhiteboard, .whiteboardAdd, .whiteboardAddLayout,
+                .whiteboardUpdate, .whiteboardDelete,
+            ]
         )
     }
 

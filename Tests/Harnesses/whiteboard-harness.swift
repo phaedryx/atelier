@@ -1919,6 +1919,157 @@ check(
 )
 
 // ---------------------------------------------------------------------------
+section("13. The sizing table the layout tool's placement rests on")
+// `Whiteboard.Arrangement` places every container by arithmetic, and that
+// arithmetic is only collision-free if these hold. They are measured facts
+// about Excalidraw's own text layout, so they belong here rather than in
+// XCTest, and they are pinned because each one was a live defect first.
+//
+// SECTION 12 ABOVE AND THIS ONE MEASURE TWO DIFFERENT PATHS, and neither
+// subsumes the other. Section 12 is about the AUTO path: width and height
+// omitted, `__whiteboardMeasure` consulted, Excalidraw growing the box to its
+// words. This is about the SUPPLIED path, which is the one the layout tool
+// takes — width handed over explicitly, so it becomes a hard ceiling and only
+// height can move. The constants they share (25px line height, the +10 padding)
+// are measured there; what is pinned here is what the supplied path does with
+// them.
+//
+// This section is one half of the layout tool's collision claim.
+// `Tests/WhiteboardArrangementTests.swift` is the other: it proves planned
+// rects never overlap at their grown height, and this proves that grown height
+// is really what the page produces. Neither is the claim alone — that one would
+// pass against a wrong constant, and this one says nothing about placement.
+//
+// EVERY CONSTANT HERE IS MEASURED AT A FIXED 220 CONTAINER. A layout that
+// varies the container width, or that emits an element with NO container, is
+// outside this table and needs its own measurements. Both of those were real
+// bugs in the layout tool's first design — see the two checks at the end.
+
+/// The height a label of this text comes back at, drawn in a fresh 220 box.
+func heightOfLabel(_ id: String, _ label: String, y: Double) -> Double {
+    _ = host.apply(["kind": "add", "elements": [box(id, label, x: 100, y: y)]])
+    return number(files.elements()[id]?["height"])
+}
+
+/// The width it comes back at. Asserted separately, because width being a hard
+/// ceiling is the half the layout tool's column arithmetic rests on.
+func widthOfBox(_ id: String) -> Double {
+    number(files.elements()[id]?["width"])
+}
+
+/// -- A supplied width is a hard ceiling, for every script and every shape of
+///    token. If this ever stops holding, every column in every layout collides.
+let widthCases: [(String, String)] = [
+    ("h-w-long", "The validator refuses everything outside the vocabulary and the page expands it"),
+    ("h-w-token", "supercalifragilisticexpialidociousantidisestablishmentarianismxyz"),
+    ("h-w-cjk", "認証トークンストアのパス検証処理を担当する層であるところの検証層"),
+    ("h-w-emoji", "🔴🟠🟡🟢🔵🟣⚫⚪🟤🔺🔻🔶🔷🔸🔹🔴🟠🟡🟢🔵🟣⚫⚪🟤🔺🔻🔶🔷🔸🔹"),
+]
+var rowY = 5000.0
+for (id, label) in widthCases {
+    _ = heightOfLabel(id, label, y: rowY)
+    rowY += 400
+}
+
+check(
+    "a supplied width is never exceeded — by a long label, an unbroken token, CJK or emoji",
+    widthCases.allSatisfy { widthOfBox($0.0) == 220 },
+    widthCases.map { "\($0.0)=\(widthOfBox($0.0))" }.joined(separator: " ")
+)
+
+/// -- Height is max(supplied, needed), and it GROWS SILENTLY. This is why the
+///    row PITCH rather than the supplied height is what keeps rows apart.
+let shortHeight = heightOfLabel("h-h-short", "short", y: rowY)
+rowY += 400
+let longHeight = heightOfLabel("h-h-long", String(repeating: "word ", count: 30), y: rowY)
+rowY += 400
+check(
+    "a container handed 90 keeps 90 when its label fits",
+    shortHeight == 90,
+    "\(shortHeight)"
+)
+check(
+    "and grows past 90 when its label does not — height is max(supplied, needed)",
+    longHeight > 90,
+    "\(longHeight)"
+)
+
+/// -- THE WIDE-GLYPH TRAP. 30 characters of Latin — even all-W, the widest
+///    Latin glyph — fits the supplied 90. So does 30 characters of CJK, of
+///    full-width Latin, and of Cyrillic. 30 EMOJI DO NOT: they wrap to four
+///    lines and come back 110, and they are the ONLY case at the cap that does.
+///    A Latin-only corpus yields "30 characters never grows the box", which is
+///    true in every test that corpus would write and false in production, and
+///    invisible in the digest because every coordinate reads correctly.
+///
+///    The corpus below is every script measured, each at EXACTLY the cap —
+///    which matters, and was itself a bug here first: a corpus of 22 CJK
+///    characters and 15 emoji is not "at the cap", and it reported a clean 90
+///    across the board while the real binding case sat two rows away untested.
+///    CJK reaches 110 at 32 characters, past the cap; emoji reach it at 30.
+///
+///    THE REAL CONSTRAINT IS A WIDTH BUDGET. THE CHARACTER CAP IS A PROXY, AND
+///    THE PITCH IS SET FROM THE WIDEST SCRIPT, NOT FROM THE CAP. Someone will
+///    later "tidy" the 110 pitch down to 90 after testing in English. These two
+///    checks are what stops them.
+let capCorpus: [(String, String, String)] = [
+    ("h-cap-w", "Latin, widest glyph", String(repeating: "W", count: 30)),
+    ("h-cap-i", "Latin, narrowest glyph", String(repeating: "i", count: 30)),
+    ("h-cap-mixed", "ordinary Latin", "Token store for the auth paths"),
+    ("h-cap-cyr", "Cyrillic", "Проверка токена аутентификации"),
+    ("h-cap-cjk", "CJK", "認証トークンストアのパス検証処理を担当する層であるところの検"),
+    ("h-cap-fullwidth", "full-width Latin", String(repeating: "Ｗ", count: 30)),
+    ("h-cap-emoji", "emoji", String(repeating: "🔴🟠🟡🟢🔵🟣", count: 5)),
+]
+// Each one really is at the cap. A corpus that is merely "not too long" would
+// pass while testing nothing, which is what the first version of this did.
+for (id, name, label) in capCorpus where label.count != 30 {
+    check("corpus case \(name) (\(id)) is at the 30-character cap", false, "\(label.count) characters")
+}
+
+var capHeights: [(String, Double)] = []
+for (id, name, label) in capCorpus {
+    capHeights.append((name, heightOfLabel(id, label, y: rowY)))
+    rowY += 400
+}
+
+let tallestAtCap = capHeights.map(\.1).max() ?? 0
+check(
+    "no label at the 30-character cap exceeds the 110 row pitch, in ANY script",
+    tallestAtCap <= 110,
+    capHeights.map { "\($0.0)=\($0.1)" }.joined(separator: " ")
+)
+check(
+    "and the pitch is NOT 90 — emoji at the cap really do reach 110, so a corpus "
+        + "without them would have set it wrong",
+    tallestAtCap > 90,
+    "tallest at the cap = \(tallestAtCap); "
+        + capHeights.map { "\($0.0)=\($0.1)" }.joined(separator: " ")
+)
+
+// -- A BARE TEXT ELEMENT DOES NOT WRAP. The layout tool's first design used
+//    `text` for lane labels and frame titles; a long actor name would have run
+//    straight across the columns beside it. The sizing table above is a table
+//    about CONTAINERS, and this is the element that is outside it.
+_ = host.apply([
+    "kind": "add",
+    "elements": [[
+        "id": "h-bare-text",
+        "type": "text",
+        "x": 100, "y": rowY,
+        "text": "The validation layer that refuses everything outside the vocabulary",
+        "customData": ["atelierAuthor": "agent"],
+    ]],
+])
+let bareWidth = number(files.elements()["h-bare-text"]?["width"])
+check(
+    "a bare text element does not wrap — it is far wider than a container would be, "
+        + "which is why no layout emits one",
+    bareWidth > 220,
+    "\(bareWidth)px on one line"
+)
+
+// ---------------------------------------------------------------------------
 print("\n\(checksRun - failures.count)/\(checksRun) checks passed")
 if failures.isEmpty {
     print("PASS")

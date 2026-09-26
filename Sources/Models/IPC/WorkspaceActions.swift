@@ -931,6 +931,54 @@ extension WorkspaceActions {
         return Whiteboard.Added(arm: arm, applied: applied)
     }
 
+    /// Places a whole arrangement on the caller's board.
+    ///
+    /// **It goes through the same `{"kind": "add"}` op `whiteboardAdd` uses**,
+    /// because `Whiteboard.Arrangement` answers the same `Write.Skeleton`
+    /// array `Write.addPlan` does. So the page needs no new arm, and every
+    /// invariant it maintains for that op — binding, `edgePoints`, the
+    /// `customData` spread — holds here without being restated. A second
+    /// expansion path would be a second copy of those invariants, and
+    /// `docs/agents/whiteboard.md` is largely a record of what happens when
+    /// there are two.
+    ///
+    /// No `note` in the answer, unlike `whiteboardAdd`: that one exists for a
+    /// mermaid diagram the converter silently degraded to an image, and this
+    /// arm has no such case — what it plans is what the page expands.
+    func whiteboardAddLayout(
+        workstreamID: UUID,
+        layout: String,
+        contentJSON: String
+    ) async throws -> Whiteboard.Added {
+        let target = try whiteboardTarget(workstreamID: workstreamID)
+        // The live page, not the scene on disk — see `Host.liveState`. The
+        // arrangement needs it for where to start, the same way an unplaced
+        // element does.
+        let live = try await target.host.liveState()
+        let skeletons = try Whiteboard.Arrangement.plan(
+            layout: layout, content: contentJSON, live: live
+        )
+        // **No `measure` act, unlike `whiteboardAdd` above, and that is the
+        // arrangement's defining trade rather than an omission.** That arm asks
+        // the page for each label's size because it draws a box at the size of
+        // its words. This one fixes every container at `columnWidth` and caps
+        // the label, so the geometry is decided before the page is involved —
+        // which is what lets placement be exact arithmetic, and what the
+        // collision claim rests on. A measured arrangement would pack more
+        // tightly and is worth doing; it is a different design, not a
+        // refinement of this one, because a per-label width moves every
+        // constant outside the table they were measured at.
+        let applied = try await target.host.apply([
+            "kind": "add", "elements": skeletons.map(\.json),
+        ])
+        openBoardTab(target.model)
+        logger.detailed("whiteboard_add_layout: \(layout), \(applied.ids.count) elements")
+        // `.elements`, because an arrangement IS a batch of elements: the
+        // caller gets a line per rectangle, which here is the only way it
+        // learns where anything went.
+        return Whiteboard.Added(arm: .elements, applied: applied)
+    }
+
     /// Moves, retexts, recolours or captions one element of the caller's board.
     ///
     /// A caption is the agent's transcription of an image, and is refused for
