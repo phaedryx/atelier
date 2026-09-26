@@ -305,3 +305,21 @@ quote are a count of the file as it was then. The *number of checks each recipe
 predicts* is still right — none of them touches the mermaid arm — but the
 denominator is not, and this file has already been caught once quoting a count
 nobody re-measured. Re-measure before quoting one.
+
+## A known flake, so it is not rediscovered as a regression
+
+**Section 11's `a pan reaches the gate at all` is nondeterministic.** Observed
+2026-09-26, on `feat-whiteboard-autosize`: it passed on one run and failed on
+the two that followed, against code that differed only in
+`__whiteboardState`'s empty-board guard and the update arm's arrow exclusion —
+neither of which touches `onChange`, `scheduleSave`, `saveSignature`, the gate
+counters or the `Board` component. The check asserts that Excalidraw fires
+`onChange` for an **appState-only** change (a pan) in an occluded window, and
+that appears not to be reliable; its failure message is `calls 1 → 1; onChange
+did not fire for an appState change`.
+
+It is recorded rather than fixed or deleted because the check is still worth
+having: when it does fire, it is the only thing keeping the check below it —
+"and the gate declines it rather than arming a save" — from being vacuous. **Re-run
+before concluding it is a regression.** An unrecorded flake gets blamed on
+whichever PR happens to be the one that moved.

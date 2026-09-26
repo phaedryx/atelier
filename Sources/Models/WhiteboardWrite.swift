@@ -193,6 +193,17 @@ extension Whiteboard {
             /// The page measures the two differently, and only this side knows
             /// which kind was asked for.
             let boxed: Bool
+            /// Where this label wraps — **per label, not one number for the
+            /// batch.**
+            ///
+            /// A caller that supplied a width needs its label measured wrapped
+            /// at *that* width, because the height it gets back is the height
+            /// of the box it asked for. Measuring at `maxBoxWidth` instead
+            /// returns the height of a wrap that never happens, and the box is
+            /// drawn too short for the words in it — which reads perfectly well
+            /// in the digest. A label with no supplied width wraps at
+            /// `maxBoxWidth`, which is the ordinary case.
+            let maxWidth: Double
         }
 
         /// What the page says is on the board right now.
@@ -206,6 +217,33 @@ extension Whiteboard {
             let ids: Set<String>
             let imageIDs: Set<String>
             let layout: Layout
+            /// Every element's rectangle, keyed by id.
+            ///
+            /// **Validation input, not an answer.** The geometry a write
+            /// *returns* describes what that write just did; this describes what
+            /// is already there, and a caller placing something relative to an
+            /// element already on the board needs it before it can decide
+            /// anything. The answer would arrive a whole call too late.
+            ///
+            /// From the page for the same reason everything else here is: the
+            /// file lags by the save debounce, and Swift never reads the scene.
+            /// A subset of `ids` in principle and in practice the whole of it;
+            /// membership of `ids` is still what decides whether an element
+            /// exists, so an id missing only from here is unmeasurable rather
+            /// than unknown.
+            let rects: [String: Rect]
+
+            init(
+                ids: Set<String>,
+                imageIDs: Set<String>,
+                layout: Layout,
+                rects: [String: Rect] = [:]
+            ) {
+                self.ids = ids
+                self.imageIDs = imageIDs
+                self.layout = layout
+                self.rects = rects
+            }
         }
 
         /// One element, as the page will expand it.
@@ -314,6 +352,8 @@ extension Whiteboard {
             case nothingToUpdate
             case mermaidStandsAlone
             case mermaidFieldRefused(String)
+            case invalidDimension(field: String, raw: String)
+            case sizeRefused(kind: String, field: String)
 
             var errorDescription: String? {
                 switch self {
@@ -391,6 +431,20 @@ extension Whiteboard {
                         + "known until the page has drawn it, so nothing else can be placed "
                         + "around it in the same call. Add the diagram on its own, then add "
                         + "the rest in a second call."
+                case let .sizeRefused(kind, field):
+                    // **Refused, not ignored**, the rule
+                    // `mermaidFieldRefused` already states: an agent
+                    // whose number did nothing has been taught the
+                    // field works. Only a container has a size to be
+                    // given — an arrow's geometry is recomputed from
+                    // its endpoints in the page, and a bare text
+                    // element IS its words.
+                    "`\(field)` does nothing on a \(kind). Only `box` and `note` take a size; "
+                        + "an arrow is drawn between its endpoints, and a text element is sized "
+                        + "by the words in it."
+                case let .invalidDimension(field, raw):
+                    "\"\(raw)\" is not a \(field). Give a positive number of pixels, like "
+                        + "240 — or leave it out and the element is sized to its own label."
                 case let .mermaidFieldRefused(field):
                     // **This used to say "colour and connections belong in the
                     // definition itself", and for an EDGE that is false.**
@@ -413,7 +467,9 @@ extension Whiteboard {
                     // call answers with, so the refusal names it.
                     "`\(field)` does nothing on a mermaid diagram. A mermaid entry takes `text` "
                         + "(the definition) and optionally `at`, and a diagram that must stand "
-                        + "alone in its call has nothing to name it by `ref`. Style the NODES in "
+                        + "alone in its call has nothing to name it by `ref`. Its size is the "
+                        + "converter's answer, not yours to give — the call reports how big it "
+                        + "came out. Style the NODES in "
                         + "the definition: `classDef`, `style` and `class` all survive, and a "
                         + "node's label takes the node's stroke colour. For an EDGE only the "
                         + "syntax survives — `-.->` draws dashed, `==>` draws thick — and "
@@ -558,7 +614,7 @@ extension Whiteboard {
             // entry stands alone in its call, so a name declared on it can
             // never be named by anything — refused rather than ignored, so an
             // agent whose alias did nothing has been told.
-            for field in ["color", "from", "to", "ref"] where asks(entry, for: field) {
+            for field in ["color", "from", "to", "ref", "width", "height"] where asks(entry, for: field) {
                 throw Failure.mermaidFieldRefused(field)
             }
             guard let definition = entry["text"] as? String, !definition.isEmpty else {
@@ -629,6 +685,21 @@ extension Whiteboard {
             let text: String?
             /// Where the caller asked for it, or nil for one to be stacked.
             let at: Point?
+            /// **A size the caller asked for, which is honoured exactly.**
+            ///
+            /// Auto-sizing applies only where a caller supplied nothing. A
+            /// width that is given is never grown to fit a label and never
+            /// floored at `boxSize`; a caller asking for 200 gets 200. The two
+            /// are independent, so `width` alone clamps the wrap and lets the
+            /// height be measured around it.
+            ///
+            /// This is a hard invariant rather than a preference, and it is
+            /// pinned as a test. A layout that computes column arithmetic and a
+            /// width budget from the widths it supplies cannot enforce either if
+            /// those widths are elastic — every placement it derived would be
+            /// against a number the board did not use.
+            let width: Double?
+            let height: Double?
             let color: String?
             let from: String?
             let to: String?
@@ -729,10 +800,31 @@ extension Whiteboard {
                     let position = try parsePosition(raw)
                     return Point(x: position.x, y: position.y)
                 }
+                let width = try dimension(entry["width"], field: "width")
+                let height = try dimension(entry["height"], field: "height")
+                // Only a container has a size to be given. An arrow's width and
+                // height are recomputed in the page from its endpoints — the
+                // converter runs `getSizeFromPoints` after spreading the
+                // skeleton, so a supplied one is overwritten — and a bare text
+                // element's are Excalidraw's own `measureText`, except that the
+                // converter spreads the skeleton LAST, so a supplied width
+                // would win over the metrics and put a frame on the board that
+                // does not match the words drawn in it. Both are silent, which
+                // is why both are refused here.
+                if kind != .box, kind != .note {
+                    if width != nil {
+                        throw Failure.sizeRefused(kind: kind.rawValue, field: "width")
+                    }
+                    if height != nil {
+                        throw Failure.sizeRefused(kind: kind.rawValue, field: "height")
+                    }
+                }
 
                 let id = mint()
                 entries.append(Entry(
-                    id: id, kind: kind, text: text, at: at, color: color, from: from, to: to
+                    id: id, kind: kind, text: text, at: at,
+                    width: width, height: height,
+                    color: color, from: from, to: to
                 ))
                 known.insert(id)
                 // Registered only once the element is made, so an entry can
@@ -755,9 +847,24 @@ extension Whiteboard {
         static func labelsToMeasure(_ entries: [Entry]) -> [Measure] {
             entries.compactMap { entry in
                 guard let text = entry.text else { return nil }
+                // Both axes supplied means there is nothing left to decide, and
+                // asking anyway would spend a page round trip on a number that
+                // is then thrown away.
+                if entry.width != nil, entry.height != nil {
+                    return nil
+                }
                 switch entry.kind {
-                case .box, .note: return Measure(id: entry.id, text: text, boxed: true)
-                case .text: return Measure(id: entry.id, text: text, boxed: false)
+                case .box, .note:
+                    return Measure(
+                        id: entry.id, text: text, boxed: true,
+                        maxWidth: entry.width ?? maxBoxWidth
+                    )
+                case .text:
+                    // Never wrapped, so the number is carried only to keep one
+                    // shape crossing the boundary.
+                    return Measure(
+                        id: entry.id, text: text, boxed: false, maxWidth: maxBoxWidth
+                    )
                 case .arrow, .mermaid: return nil
                 }
             }
@@ -772,11 +879,28 @@ extension Whiteboard {
         /// unbreakable token — where clamping would hand back a box narrower
         /// than the text inside it, which is the spill this change exists to
         /// stop.
-        static func boxedSize(_ measured: Size?) -> Size {
-            guard let measured else { return Size(width: boxSize.width, height: boxSize.height) }
-            return Size(
-                width: max(boxSize.width, measured.width),
-                height: max(boxSize.height, measured.height)
+        /// **A supplied dimension wins outright**, per axis. `boxSize` is the
+        /// floor and `maxBoxWidth` the ceiling of the AUTO-SIZED case only — a
+        /// caller asking for width 200 gets 200, not 220, and one asking for 900
+        /// gets 900. Flooring a supplied width at the minimum is the bug this
+        /// spells out rather than leaves to be inferred: a layout that derives
+        /// column arithmetic from the widths it supplies is wrong in every
+        /// column the floor touched, and wrong in the picture only.
+        ///
+        /// Per axis, so `width` alone clamps the wrap and lets the height be
+        /// measured around it — which is what a layout with a width budget and
+        /// no opinion about height actually wants.
+        static func boxedSize(
+            _ measured: Size?,
+            supplied: (width: Double?, height: Double?) = (nil, nil)
+        ) -> Size {
+            Size(
+                width: supplied.width
+                    ?? measured.map { max(boxSize.width, $0.width) }
+                    ?? boxSize.width,
+                height: supplied.height
+                    ?? measured.map { max(boxSize.height, $0.height) }
+                    ?? boxSize.height
             )
         }
 
@@ -790,7 +914,10 @@ extension Whiteboard {
         /// are counted on their own account.
         private static func drawnHeight(_ entry: Entry, sizes: [String: Size]) -> Double {
             switch entry.kind {
-            case .box, .note: boxedSize(sizes[entry.id]).height
+            case .box, .note:
+                boxedSize(sizes[entry.id], supplied: (entry.width, entry.height)).height
+            // A bare `text` element sizes itself, and a supplied height is
+            // refused above — so the measurement is the only answer there is.
             case .text: sizes[entry.id]?.height ?? 0
             case .arrow, .mermaid: 0
             }
@@ -861,7 +988,9 @@ extension Whiteboard {
                 }
 
                 let isBoxy = entry.kind == .box || entry.kind == .note
-                let size = isBoxy ? boxedSize(sizes[entry.id]) : nil
+                let size = isBoxy
+                    ? boxedSize(sizes[entry.id], supplied: (entry.width, entry.height))
+                    : nil
                 let type = switch entry.kind {
                 case .arrow: "arrow"
                 case .text: "text"
@@ -878,6 +1007,11 @@ extension Whiteboard {
                     // above: it self-sizes, so the converter's own `measureText`
                     // is the one that should decide, and writing a number here
                     // would be a second opinion about a fact Excalidraw owns.
+                    // Only a container carries a size. A bare `text` element
+                    // self-sizes and an arrow is drawn between its endpoints,
+                    // so writing a number for either would be a second opinion
+                    // about a fact Excalidraw owns — and a supplied one is
+                    // refused above rather than arriving here.
                     width: size?.width,
                     height: size?.height,
                     label: entry.text,
@@ -1059,6 +1193,40 @@ extension Whiteboard {
         /// second reader; it does not make this a call-site check. It is the
         /// only place a coordinate becomes a `Double`, which is the property
         /// worth keeping whatever the callers do next.
+        /// A supplied `width` or `height`, refused rather than ignored.
+        ///
+        /// **Finite and positive, for the reason `parsePosition` states.**
+        /// `JSONSerialization` hands back a non-finite `Double` quite happily,
+        /// and one reaching `Host.apply` raises `NSInvalidArgumentException`
+        /// from inside `JSONSerialization` — an Objective-C exception no `try?`
+        /// can catch, so the app dies. Zero and negative are refused on their
+        /// own account: Excalidraw would draw an element nobody can see, and an
+        /// agent whose box never appeared has been told nothing.
+        ///
+        /// **Absent is not the same as refused.** Leaving the field out is how
+        /// a caller asks to be auto-sized, which is the ordinary case; only a
+        /// value that is present and unusable is an error. A number and its
+        /// string spelling are both accepted, the leniency `normalizedColor`
+        /// already extends for the same reason — arguments cross IPC as
+        /// strings, and a serializer on the far side may write either.
+        static func dimension(_ raw: Any?, field: String) throws -> Double? {
+            guard let raw, !(raw is NSNull) else { return nil }
+            if let text = raw as? String, text.isEmpty {
+                return nil
+            }
+            let value: Double? = if let number = raw as? NSNumber {
+                number.doubleValue
+            } else if let text = raw as? String {
+                Double(text.trimmingCharacters(in: .whitespaces))
+            } else {
+                nil
+            }
+            guard let value, value.isFinite, value > 0 else {
+                throw Failure.invalidDimension(field: field, raw: String(describing: raw))
+            }
+            return value
+        }
+
         static func parsePosition(_ raw: String) throws -> (x: Double, y: Double) {
             let parts = raw.split(separator: ",", omittingEmptySubsequences: false)
             guard parts.count == 2,

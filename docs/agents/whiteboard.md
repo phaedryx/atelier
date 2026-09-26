@@ -255,14 +255,56 @@ padding, and every one of those it got wrong is a box whose size disagrees with 
 it — which reads perfectly well in the digest and is wrong only in the picture. Measuring *through*
 the converter inherits all of it by construction, including what it does with a newline.
 
+### The page measures and reports; Swift places
+
+**This is the rule for the whole write path, not one PR's choice, and it is written here because
+people keep reaching for the mermaid precedent for things mermaid's precedent does not cover.** It
+has been reached for twice in two days: once for auto-sizing, once for resolving a layout's `anchor`
+offsets against a target's rectangle. Both belong on this side of the line.
+
+A fact only the page can know — a label's extent, the board's bounds, an element's rectangle —
+crosses into Swift as **data**, through `Live` or through a measurement call. The *decision* made
+from it stays in Swift. Two reasons, and only the first is obvious:
+
+1. **Coverage.** `Tests/Harnesses/README.md` is explicit that the harnesses are run by hand and are
+   not part of `./scripts/dev.sh test`. An invariant implemented in the page is pinned only in a
+   suite nobody is required to run before claiming done. The column floor, and a layout's "a note
+   never lands on its target", are exactly the invariants that must not quietly break — so they
+   belong in the unit suite, which means they belong in Swift.
+2. **The `await` window.** A page-side placement computes across the same gap the mermaid arm
+   already documents as its one real hazard: `__whiteboardApply` snapshots the scene at the top, and
+   the mermaid arm's `await` lets a user stroke, a capture or another agent's write land in between
+   and be replaced wholesale by that stale snapshot. Swift placing from a `Live` snapshot taken at
+   write time has no such window.
+
+**Mermaid is the exception, and it is narrow.** Placement lives in the page there because Swift
+cannot even *validate* a mermaid definition — only `parseMermaidToExcalidraw` can say whether it
+parses, so there is no Swift-side decision to keep. Everywhere else Swift can do the whole job once
+it is told the numbers. "The page already knows it" is not on its own a reason to move a decision
+there.
+
 **`window.__whiteboardMeasure` is a third round trip, and placement deliberately did NOT move to the
-page with it.** The mermaid arm is the obvious precedent and it is the wrong one here: there Swift
-cannot even *validate* the input, while here it can do everything once it is told the sizes. The
-deciding argument is where the invariant is tested. The column floor is pure Swift and pinned in
-`WhiteboardWriteTests`; the harnesses are run by hand and are not part of `./scripts/dev.sh test`
-(`Tests/Harnesses/README.md`). Moving placement into the page would move the one invariant that must
-not break out of the suite anybody actually runs. So the measurement is passed *in*, which is the
+page with it** — that is this rule's first application. The measurement is passed *in*, which is the
 same move `Live`/`Layout` already make for the board's extent.
+
+**`Live` carries per-element rectangles for the same reason, and they are validation INPUT rather
+than an answer.** The geometry a write *returns* describes what that write just did; a caller placing
+something relative to an element already on the board needs that element's rectangle *before* it can
+decide anything, so the answer arrives a whole call too late. They are deliberately **not** on
+`decodeLiveState`'s guard chain: the four fields that are there are what no write can be planned
+without, so a page missing one is a page that does not exist, while a missing rectangle is a refusal
+for one arm to make by naming the element.
+
+**A supplied size is honoured exactly, and this is a hard invariant with a test rather than a
+comment.** `width` and `height` are optional on an entry; auto-sizing applies only where neither was
+given. A supplied width is never grown to fit a label and never floored at `boxSize` — a caller
+asking for 200 gets 200, not 220 — and the same holds for height in both directions. The two axes are
+independent, so a width alone clamps the wrap and lets the height be measured around it, which is
+what a layout with a width budget and no opinion about height wants. The reason is not tidiness: a
+layout that derives column arithmetic and a width budget from the widths it supplies cannot enforce
+either if those widths are elastic, and it would be wrong in the picture while its digest read
+exactly as asked. One consequence worth stating: the label is measured wrapped at the **supplied**
+width, not at `maxBoxWidth`, or the height that comes back is the height of a box nobody drew.
 
 That split is why `addPlan` is now two functions. `entries` makes every refusal — a bad kind, a
 colour that is not a colour, an arrow naming nothing, a malformed `at` — and mints the ids, because

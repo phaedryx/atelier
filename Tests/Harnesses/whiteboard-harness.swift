@@ -1844,6 +1844,60 @@ check(
     "\(String(describing: labelOf("m-labelled")?["text"]))"
 )
 
+// **A SUPPLIED size is honoured exactly** — the invariant a layout's column
+// arithmetic rests on. Swift pins this on its own side; this pins that the page
+// and Excalidraw do not quietly override it, which is the half Swift cannot see.
+// 150 is below `boxSize.width` and the label is far too long for it, so both the
+// floor and the grow-to-fit would show up here if either applied.
+_ = host.apply([
+    "kind": "add",
+    "elements": [
+        box("m-exact", "a label far too long to fit inside a hundred and fifty pixels",
+            x: 7000, y: 7000, extra: ["width": 150, "height": 300]),
+    ],
+])
+let exact = files.elements()["m-exact"]
+check(
+    "a supplied width and height reach the board untouched",
+    number(exact?["width"]) == 150 && number(exact?["height"]) == 300,
+    "\(number(exact?["width"]))x\(number(exact?["height"]))"
+)
+
+// A label measured against a SUPPLIED width, not against maxWidth. Measuring at
+// the wrong width returns the height of a box nobody draws, and the one that is
+// drawn is too short for the words in it.
+if let atNarrow = measured("alpha beta gamma delta epsilon", boxed: true, maxWidth: 150),
+   let atWide = measured("alpha beta gamma delta epsilon", boxed: true, maxWidth: 400)
+{
+    check(
+        "a narrower maxWidth measures a taller box, because the label wraps more",
+        atNarrow.h > atWide.h && atNarrow.w <= 150,
+        "at 150: \(atNarrow), at 400: \(atWide)"
+    )
+}
+
+// **`Live` carries every element's rectangle**, as validation input for a caller
+// placing something relative to what is already there. The answer's geometry
+// describes only the write that just happened, which is a whole call too late.
+let liveJSON = host.callJS("return JSON.stringify(window.__whiteboardState())") ?? "null"
+let liveRaw = (try? JSONSerialization.jsonObject(with: Data(liveJSON.utf8))) as? [String: Any]
+let liveRects = liveRaw?["rects"] as? [String: Any]
+let exactRect = liveRects?["m-exact"] as? [String: Any]
+check(
+    "the live state carries a named element's own rectangle",
+    number(exactRect?["x"]) == 7000 && number(exactRect?["width"]) == 150,
+    "\(String(describing: exactRect))"
+)
+// A SUBSET of `ids`, not an equal set: a non-finite coordinate is filtered out
+// of `rects` and deliberately not out of `ids`, because membership of `ids` is
+// what decides whether an element exists. Asserting equality would pin a
+// stricter rule than the page promises.
+check(
+    "every rectangle it reports names an element it also reports",
+    Set((liveRects ?? [:]).keys).isSubset(of: Set((liveRaw?["ids"] as? [String]) ?? [])),
+    "\((liveRaw?["ids"] as? [String])?.count ?? -1) ids, \(liveRects?.count ?? -1) rects"
+)
+
 // **A board that cannot be measured answers NO ANSWER, never an empty board.**
 // The empty answer carries `ids: []`, and reporting that for a board with
 // elements on it would have whiteboard_update refuse a real id as unknown while

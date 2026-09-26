@@ -929,7 +929,8 @@ extension IPC.Tool {
                 Add elements to this workstream's whiteboard and get back their ids.
 
                 `elements` is a JSON array; each entry is {"kind": ..., "text": ...,
-                "at": "x,y", "from": ..., "to": ..., "color": ..., "ref": ...}. `kind`
+                "at": "x,y", "from": ..., "to": ..., "color": ..., "ref": ...,
+                "width": ..., "height": ...}. `kind`
                 is one of box, note, text, arrow, mermaid. A box is a diagram node; a
                 note is an annotation, and read_whiteboard reports it back as a note, so
                 your own commentary stays distinguishable from the structure you drew.
@@ -944,6 +945,15 @@ extension IPC.Tool {
                 got, the board's new extent, and where an element with no `at` would go
                 next — so you can place the next call against real numbers instead of
                 calling read_whiteboard to find out.
+
+                `width` and `height` override that for a box or a note, and are honoured
+                exactly: give "width": 200 and you get 200, never widened to fit the
+                label and never rounded up to a minimum. Give a width alone and the label
+                wraps inside it while the height is sized to the result, which is what
+                you want when you are keeping a set of boxes to one column. They are
+                refused on `text` and `arrow`, which have no size to give — a text
+                element is sized by its words and an arrow is drawn between its
+                endpoints — and on `mermaid`, whose size is the converter's answer.
 
                 An arrow needs `from` and `to`. Each names either an element already on
                 the board — call read_whiteboard for those ids — or an element this same
@@ -989,7 +999,7 @@ extension IPC.Tool {
                         name: "elements",
                         kind: .string,
                         isRequired: true,
-                        description: "A JSON array of elements to add. Each is an object with `kind` (box, note, text, arrow or mermaid) and optionally `text`, `at` (\"x,y\"), `from`, `to`, `color`, `ref`. `ref` names an entry so an arrow later in the same array can point at it. For example [{\"kind\": \"box\", \"text\": \"Auth service\", \"ref\": \"auth\"}, {\"kind\": \"box\", \"text\": \"Token store\", \"ref\": \"tokens\"}, {\"kind\": \"arrow\", \"from\": \"auth\", \"to\": \"tokens\"}], or, on its own, [{\"kind\": \"mermaid\", \"text\": \"graph LR; A[Auth] --> B[Token store]\"}]."
+                        description: "A JSON array of elements to add. Each is an object with `kind` (box, note, text, arrow or mermaid) and optionally `text`, `at` (\"x,y\"), `from`, `to`, `color`, `ref`, and — on a box or note only — `width` and `height` in pixels, which are honoured exactly. `ref` names an entry so an arrow later in the same array can point at it. For example [{\"kind\": \"box\", \"text\": \"Auth service\", \"ref\": \"auth\"}, {\"kind\": \"box\", \"text\": \"Token store\", \"ref\": \"tokens\"}, {\"kind\": \"arrow\", \"from\": \"auth\", \"to\": \"tokens\"}], or, on its own, [{\"kind\": \"mermaid\", \"text\": \"graph LR; A[Auth] --> B[Token store]\"}]."
                     ),
                 ]
             )

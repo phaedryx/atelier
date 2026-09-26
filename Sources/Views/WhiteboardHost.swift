@@ -419,10 +419,20 @@ extension Whiteboard {
                   let originX = (raw["originX"] as? NSNumber)?.doubleValue,
                   let nextY = (raw["nextY"] as? NSNumber)?.doubleValue
             else { throw WriteFailure.notReady("it answered with an incomplete state") }
+            // **`rects` is NOT on that guard chain, and the asymmetry is the
+            // point.** The four fields above are the ones a write cannot be
+            // planned without, so a page missing any of them is a page that
+            // does not exist. A rectangle is validation input for one arm; a
+            // caller that needs one and does not find it refuses on its own
+            // account, naming the element, which is a far better answer than
+            // `.notReady` about the whole board. An older page that does not
+            // send them is also simply a page without that arm, rather than a
+            // page nothing can write to.
             return Write.Live(
                 ids: Set(ids),
                 imageIDs: Set(imageIDs),
-                layout: Write.Layout(originX: originX, nextY: nextY)
+                layout: Write.Layout(originX: originX, nextY: nextY),
+                rects: decodeRects(raw["rects"] as? [String: Any] ?? [:])
             )
         }
 
@@ -447,8 +457,12 @@ extension Whiteboard {
             guard !labels.isEmpty else { return [:] }
             try await waitUntilReady()
             let request: [String: Any] = [
-                "labels": labels.map { ["id": $0.id, "text": $0.text, "boxed": $0.boxed] },
-                "maxWidth": Write.maxBoxWidth,
+                // `maxWidth` rides on each label rather than on the request: a
+                // caller that supplied a width needs its own label wrapped at
+                // that width, and a batch can mix supplied and auto widths.
+                "labels": labels.map {
+                    ["id": $0.id, "text": $0.text, "boxed": $0.boxed, "maxWidth": $0.maxWidth]
+                },
             ]
             guard let payload = (try? JSONSerialization.data(withJSONObject: request))
                 .flatMap({ String(data: $0, encoding: .utf8) })

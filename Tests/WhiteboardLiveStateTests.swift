@@ -289,4 +289,30 @@ final class WhiteboardLiveStateTests: XCTestCase {
         ])
         XCTAssertEqual(decoded, ["good": Write.Size(width: 312, height: 45)])
     }
+
+    /// **`rects` is validation INPUT, and it is deliberately not on the guard
+    /// chain the other four fields are on.** Those are what a write cannot be
+    /// planned without, so a page missing any of them is a page that does not
+    /// exist. A rectangle is needed by one arm, which refuses on its own account
+    /// and names the element — a far better answer than `.notReady` about the
+    /// whole board.
+    func test_theLiveStateCarriesEveryElementsRectangle() throws {
+        var raw = pageState()
+        raw["rects"] = [
+            "n1": rect(120, 80, 220, 90),
+            "i1": rect(0, 0, 400, 300),
+        ]
+        let live = try Host.decodeLiveState(raw)
+        XCTAssertEqual(live.rects["n1"], Write.Rect(x: 120, y: 80, width: 220, height: 90))
+        XCTAssertEqual(live.rects["i1"], Write.Rect(x: 0, y: 0, width: 400, height: 300))
+    }
+
+    func test_aPageThatSendsNoRectsIsStillAPageThatCanBeWrittenTo() throws {
+        let live = try Host.decodeLiveState(pageState())
+        XCTAssertTrue(live.rects.isEmpty)
+        // The ids are what decide whether an element exists, and they are
+        // unaffected — an id missing only from `rects` is unmeasurable, not
+        // unknown.
+        XCTAssertEqual(live.ids, ["n1", "i1"])
+    }
 }

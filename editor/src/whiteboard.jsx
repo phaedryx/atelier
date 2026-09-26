@@ -549,6 +549,17 @@ window.__whiteboardState = () => {
     imageIDs: els.filter((el) => el.type === 'image').map((el) => el.id),
     originX: board.x,
     nextY: board.y + board.height + BOARD_GAP,
+    // Every element's own rectangle, as VALIDATION INPUT rather than as an
+    // answer. A caller placing something relative to an element already on the
+    // board has to know where that element is before it can decide anything,
+    // and the geometry a write returns describes only what that write just did
+    // — a whole call too late. Bound labels are included: they are elements of
+    // the scene, and leaving them out would make this disagree with `ids`.
+    rects: Object.fromEntries(
+      els
+        .filter((el) => [el.x, el.y].every(Number.isFinite))
+        .map((el) => [el.id, rectOf(el)])
+    ),
   }
 }
 
@@ -583,7 +594,6 @@ window.__whiteboardMeasure = async (req) => {
   if (!api) return null
   await document.fonts.ready
   const labels = req?.labels || []
-  const maxWidth = req?.maxWidth
   const sizes = {}
   if (!labels.length) return { sizes }
 
@@ -605,13 +615,17 @@ window.__whiteboardMeasure = async (req) => {
     const natural = sizeByID(
       boxed.map((l) => ({ type: 'rectangle', id: l.id, label: { text: l.text } }))
     )
-    const tooWide = boxed.filter((l) => natural[l.id] && natural[l.id].width > maxWidth)
+    // Per label, because a caller that supplied a width needs ITS label wrapped
+    // at that width — the height it gets back is the height of the box it asked
+    // for, and a height measured against a wrap that never happens draws a box
+    // too short for the words inside it.
+    const tooWide = boxed.filter((l) => natural[l.id] && natural[l.id].width > l.maxWidth)
     const wrapped = tooWide.length
       ? sizeByID(
           tooWide.map((l) => ({
             type: 'rectangle',
             id: l.id,
-            width: maxWidth,
+            width: l.maxWidth,
             label: { text: l.text },
           }))
         )
