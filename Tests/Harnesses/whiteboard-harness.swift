@@ -1565,6 +1565,242 @@ if host.waitUntilReady() {
 }
 
 // ---------------------------------------------------------------------------
+section("12. Auto-sizing — the page measures, and every write answers with geometry")
+// A box is no longer 220x90 whatever it says. Swift cannot measure text, so it
+// asks the page, and the page asks the CONVERTER rather than measuring anything
+// itself. Every claim below is about what Excalidraw really does with a label,
+// which is exactly the kind of claim this file exists for and XCTest cannot make.
+
+/// `__whiteboardMeasure`'s answer for one label, or nil.
+func measured(_ text: String, boxed: Bool, maxWidth: Double = 400) -> (w: Double, h: Double)? {
+    let request: [String: Any] = [
+        "labels": [["id": "m-probe", "text": text, "boxed": boxed]],
+        "maxWidth": maxWidth,
+    ]
+    let payload = String(
+        data: try! JSONSerialization.data(withJSONObject: request), encoding: .utf8
+    )!
+    guard let answer = host.callJS(
+        "return JSON.stringify(await window.__whiteboardMeasure(JSON.parse(req)))",
+        ["req": payload]
+    ),
+        let data = answer.data(using: .utf8),
+        let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let sizes = parsed["sizes"] as? [String: Any],
+        let size = sizes["m-probe"] as? [String: Any]
+    else { return nil }
+    return (number(size["width"]), number(size["height"]))
+}
+
+let shortLabel = measured("Auth", boxed: true)
+let longLabel = measured("The authentication service that issues and rotates tokens", boxed: true)
+check("the page answers with a measurement at all", shortLabel != nil)
+
+if let shortLabel, let longLabel {
+    // The whole premise of the change: a longer label measures WIDER. Under the
+    // old fixed size both of these were 220 and the second one's text wrapped
+    // inside the box and spilled out the bottom.
+    check(
+        "a longer label measures wider than a short one",
+        longLabel.w > shortLabel.w,
+        "short \(shortLabel.w), long \(longLabel.w)"
+    )
+    check(
+        "and a label is never measured wider than maxWidth unless it cannot wrap",
+        longLabel.w <= 400,
+        "\(longLabel.w)"
+    )
+    check(
+        "a label too wide to fit grows in HEIGHT instead, which is what wrapping means",
+        longLabel.h > shortLabel.h,
+        "short \(shortLabel.h), long \(longLabel.h)"
+    )
+}
+
+// **The `\n` question, measured rather than asserted.**
+//
+// It was claimed that a box or note label collapses `\n` to a space while a
+// bare `text` element honours it, and that nothing documents the difference.
+// Reading Excalidraw's own `wrapText` says otherwise — it splits on "\n" first
+// and wraps each line independently — but a claim about the page belongs here,
+// not in a reading. It matters more under auto-sizing than it did under a fixed
+// size: the measurement is taken from the label UNWRAPPED, so if the two halves
+// disagree about a newline, every box holding one is sized for a rendering
+// nobody sees.
+let oneLine = measured("alpha beta", boxed: true)
+let twoLines = measured("alpha\nbeta", boxed: true)
+if let oneLine, let twoLines {
+    check(
+        "a newline in a box label is HONOURED, not collapsed — it measures taller",
+        twoLines.h > oneLine.h,
+        "one line \(twoLines.h) vs \(oneLine.h)"
+    )
+    check(
+        "and narrower, because the two words are no longer side by side",
+        twoLines.w < oneLine.w,
+        "\(twoLines.w) vs \(oneLine.w)"
+    )
+}
+
+// A bare text element is measured as itself: no container, and therefore no
+// wrap and no padding. It must come out SMALLER than the same words in a box.
+if let boxedSize = measured("alpha beta", boxed: true),
+   let bareSize = measured("alpha beta", boxed: false)
+{
+    check(
+        "a bare text element measures smaller than the same words in a container",
+        bareSize.w < boxedSize.w && bareSize.h < boxedSize.h,
+        "bare \(bareSize), boxed \(boxedSize)"
+    )
+}
+
+/// **The round trip that the Swift half rests on.** Swift takes the measured
+/// size and sends it back as the skeleton's own width and height. If handing a
+/// measurement back caused Excalidraw to grow the container a second time, every
+/// box would be drawn bigger than the size the answer reports — so this is the
+/// check that the two ends agree.
+let autoLabel = "The authentication service"
+if let autoSize = measured(autoLabel, boxed: true) {
+    _ = host.apply([
+        "kind": "add",
+        "elements": [
+            box("m-sized", autoLabel, x: 2000, y: 2000, extra: [
+                "width": autoSize.w, "height": autoSize.h,
+            ]),
+        ],
+    ])
+    let drawn = files.elements()["m-sized"]
+    check(
+        "a measured size handed back is the size the element really gets",
+        number(drawn?["width"]) == autoSize.w && number(drawn?["height"]) == autoSize.h,
+        "asked \(autoSize), got \(number(drawn?["width"]))x\(number(drawn?["height"]))"
+    )
+}
+
+/// The geometry half of the answer. Swift's own placement is worthless if the
+/// answer does not carry the result back: a caller that auto-sizes and is told
+/// only the ids has traded a known-bad constant for an unknown one.
+let geometryAnswer = host.apply([
+    "kind": "add",
+    "elements": [box("m-answer", "Rect", x: 3000, y: 3100)],
+])
+let answerRects = geometryAnswer["rects"] as? [String: Any]
+let answerRect = answerRects?["m-answer"] as? [String: Any]
+check(
+    "an add answers with each element's own rectangle, keyed by id",
+    number(answerRect?["x"]) == 3000 && number(answerRect?["y"]) == 3100,
+    "\(String(describing: answerRect))"
+)
+check(
+    "and that rectangle carries the size the element really has",
+    number(answerRect?["width"]) == number(files.elements()["m-answer"]?["width"]),
+    "answer \(number(answerRect?["width"]))"
+)
+let answerBoard = geometryAnswer["board"] as? [String: Any]
+check(
+    "and with the board's own extent, which retires the read_whiteboard round trip",
+    number(answerBoard?["width"]) > 0 && number(answerBoard?["height"]) > 0,
+    "\(String(describing: answerBoard))"
+)
+check(
+    "and where the next unplaced element would go, below that extent",
+    number(geometryAnswer["nextY"])
+        > number(answerBoard?["y"]) + number(answerBoard?["height"]) - 0.001,
+    "nextY \(number(geometryAnswer["nextY"]))"
+)
+
+// **Retexting has to resize, or the neighbouring tool undoes this feature.**
+// A box sized to one word and then retexted to a sentence used to keep the size
+// the old word earned, so its text spilled outside its own outline — the exact
+// failure auto-sizing exists to fix, reached through whiteboard_update.
+_ = host.apply([
+    "kind": "add",
+    "elements": [box("m-retext", "Hi", x: 4000, y: 4000, extra: ["width": 220, "height": 90])],
+])
+let beforeRetext = number(files.elements()["m-retext"]?["height"])
+_ = host.apply([
+    "kind": "update",
+    "id": "m-retext",
+    "text": "A much longer sentence than the one this box was drawn around, "
+        + "long enough that it has to wrap onto several lines to fit at all.",
+])
+let afterRetext = files.elements()["m-retext"]
+check(
+    "retexting a box to something longer grows the box",
+    number(afterRetext?["height"]) > beforeRetext,
+    "\(beforeRetext) → \(number(afterRetext?["height"]))"
+)
+// Grow-only is Excalidraw's own semantics, not a policy invented here:
+// redrawTextBoundingBox mutates a dimension only when the text exceeds it. It is
+// what keeps a box the USER deliberately drew large from being shrunk by an
+// agent's edit.
+_ = host.apply(["kind": "update", "id": "m-retext", "text": "Hi"])
+check(
+    "and retexting it back to something short does NOT shrink it",
+    number(files.elements()["m-retext"]?["height"]) >= number(afterRetext?["height"]),
+    "\(number(files.elements()["m-retext"]?["height"]))"
+)
+
+// The label has to travel with the box it is inside. This is the same failure
+// shiftLabel exists for, in the other direction: a container that grew while its
+// label stayed put leaves the words sitting outside the outline that claims
+// them, with the digest reporting the pair quite correctly.
+if let retextLabel = labelOf("m-retext"), let retextBox = files.elements()["m-retext"] {
+    let lx = number(retextLabel["x"])
+    let ly = number(retextLabel["y"])
+    check(
+        "the label is still inside the box after it has been resized",
+        lx >= number(retextBox["x"]) - 0.5
+            && ly >= number(retextBox["y"]) - 0.5
+            && lx + number(retextLabel["width"])
+            <= number(retextBox["x"]) + number(retextBox["width"]) + 0.5,
+        "label at \(lx),\(ly) in box at \(number(retextBox["x"])),\(number(retextBox["y"]))"
+    )
+}
+
+// An arrow bound to a box that GREW has to be redrawn, for the same reason one
+// bound to a box that MOVED has to be: edgePoints joins the two shapes' faces,
+// and growing a box moves the face without moving the arrow. Still bound, so
+// the digest goes on reporting the connection while the picture shows an arrow
+// stopping short of the box or running inside it.
+_ = host.apply([
+    "kind": "add",
+    "elements": [
+        box("m-grow", "x", x: 5000, y: 5000, extra: ["width": 220, "height": 90]),
+        box("m-fixed", "y", x: 5600, y: 5000),
+    ],
+])
+_ = host.apply(["kind": "add", "elements": [arrow("m-edge", from: "m-grow", to: "m-fixed")]])
+let growArrowBefore = (
+    x: number(files.elements()["m-edge"]?["x"]),
+    y: number(files.elements()["m-edge"]?["y"])
+)
+_ = host.apply([
+    "kind": "update",
+    "id": "m-grow",
+    "text": "A label long enough that it has to wrap onto several lines inside this box",
+])
+let growArrowAfter = (
+    x: number(files.elements()["m-edge"]?["x"]),
+    y: number(files.elements()["m-edge"]?["y"])
+)
+// Both coordinates, not just `x`. Retexting is grow-only against the container's
+// CURRENT width, so the label wraps at the width it already had and the box
+// grows in HEIGHT — which moves the vertical centre `edgePoints` joins, not the
+// right-hand face. Asserting on `x` alone passed for a box that was never
+// reflowed at all, which is the failure this check exists to catch.
+check(
+    "an arrow bound to a box that GREW is redrawn to its new face",
+    growArrowAfter != growArrowBefore,
+    "arrow \(growArrowBefore) → \(growArrowAfter)"
+)
+check(
+    "and it really did grow, or the check above would be vacuous",
+    number(files.elements()["m-grow"]?["height"]) > 90,
+    "height \(number(files.elements()["m-grow"]?["height"]))"
+)
+
+// ---------------------------------------------------------------------------
 print("\n\(checksRun - failures.count)/\(checksRun) checks passed")
 if failures.isEmpty {
     print("PASS")

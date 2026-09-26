@@ -234,6 +234,90 @@ this batch places by hand — scanned up front, so the answer does not depend on
 it an agent that placed two boxes and added an unplaced note got the note dropped on top of them:
 invisible in the digest, since the coordinates read exactly as asked, and wrong only in the picture.
 
+**A `box` and a `note` are sized to their labels, and `boxSize` is what is left of the constant that
+used to decide it.** A fixed `220×90` wrapped any label longer than three or four words and spilled
+it out of the box, and a caller could not know how wide anything was — so it had to hold a column
+pitch in its head, and got it wrong in every run of a real evaluation, at 300px putting an arrow's
+own label in the 80px gap on top of both boxes. `boxSize` survives as the **minimum**, so a short
+label draws at exactly the size it always did and only the boards that were already wrong move;
+`maxBoxWidth` (400) is where a label stops widening and starts wrapping.
+
+**Swift cannot measure text, so the page measures it — and the page does not measure it either, the
+converter does.** `convertToExcalidrawElements` creates a labelled container with `width ===
+undefined` at 0×0 and runs Excalidraw's own `redrawTextBoundingBox` over it, which sees a negative
+available width, so `wrapText` returns the label unwrapped, measures it, and grows the container to
+`ceil(metrics.width) + 10` by `ceil(metrics.height) + 10` (measured against 0.18.1 —
+`data/transform.ts`, `element/textElement.ts`). A natural size is therefore what Excalidraw gives for
+free when the two fields are simply left off, and `maxBoxWidth` is applied by converting a second
+time at exactly that width. **Do not replace this with `canvas.measureText`.** A hand-rolled
+measurement has to reproduce Excalidraw's font string, line height, `normalizeText`, tokenizer and
+padding, and every one of those it got wrong is a box whose size disagrees with the text drawn in
+it — which reads perfectly well in the digest and is wrong only in the picture. Measuring *through*
+the converter inherits all of it by construction, including what it does with a newline.
+
+**`window.__whiteboardMeasure` is a third round trip, and placement deliberately did NOT move to the
+page with it.** The mermaid arm is the obvious precedent and it is the wrong one here: there Swift
+cannot even *validate* the input, while here it can do everything once it is told the sizes. The
+deciding argument is where the invariant is tested. The column floor is pure Swift and pinned in
+`WhiteboardWriteTests`; the harnesses are run by hand and are not part of `./scripts/dev.sh test`
+(`Tests/Harnesses/README.md`). Moving placement into the page would move the one invariant that must
+not break out of the suite anybody actually runs. So the measurement is passed *in*, which is the
+same move `Live`/`Layout` already make for the board's extent.
+
+That split is why `addPlan` is now two functions. `entries` makes every refusal — a bad kind, a
+colour that is not a colour, an arrow naming nothing, a malformed `at` — and mints the ids, because
+an arrow may name a box created earlier in the same call and that set has to grow as the batch is
+*validated*. `skeletons` places, cannot throw, and is the only part that needs a measurement.
+
+**Auto-sizing did not weaken the column scan; it is what finally makes it exact.** The scan needs
+each placed element's bottom, which it used to guess as `boxSize.height` for a box or a note and as
+**zero** for everything else — so a hand-placed `text` element contributed nothing and an unplaced
+element stacked under a paragraph landed inside it. Now every element contributes what it will really
+be drawn at. Three consequences to keep: the scan still runs **up front over the whole batch**, so
+order-independence is unchanged; the column's pitch is the element's own height plus `layoutGap`
+rather than a flat `rowStep`, because a column of auto-sized boxes is a column of different heights;
+and `rowStep` survives as the **minimum** pitch, which is load-bearing rather than nostalgia — a
+measurement that did not come back reads as zero height, and a zero step stacks two elements at the
+same `y`, reintroducing the exact collision the scan exists to prevent through its own fallback. An
+**arrow takes no slot at all**: `edgePoints` recomputes its position in the page, so a slot was a
+120px hole for something not drawn in it.
+
+**Every write answers with geometry, and auto-sizing is why it has to.** Auto-sizing *alone* is
+strictly worse than the fixed size it replaced: a caller that no longer knows how wide a box is has
+traded a known-bad constant for an unknown one, and manual placement gets harder. So `Host.Applied`
+carries `rects` — keyed **by id**, not a second array beside `ids`, for the reason `Write.Add`
+already states about two copies of one list — plus the board's own `extent` and `nextY`. All of it is
+read back off the scene **after** the write, never assembled from the plan: that is the rule the ids
+already follow, and here it earns more than tidiness, because a measurement that turned out wrong
+shows up as the grown rect in the answer instead of as a box that silently does not match what the
+agent was told. `extent` also retires a round trip the mermaid arm forced — a caller had to
+`read_whiteboard` purely to learn how big its diagram came out.
+
+The two arms are **worded** differently and that is the whole reason `Whiteboard.Added` carries which
+one ran. An `elements` caller named each element and holds each id, so a line each is proportionate.
+A `mermaid` caller named a *diagram*; twenty lines for twenty nodes it did not choose would spend the
+whole answer describing something nobody asked about and bury the one number it wanted.
+
+**`whiteboard_update` regrows a container it retexts, or this feature is a promise the neighbouring
+tool quietly breaks.** A box sized to one word and then retexted to a sentence kept the size the old
+word earned and spilled its text — the exact failure auto-sizing exists to fix, reached through the
+other call. `redrawTextBoundingBox` is not exported, so the same conversion the add arm runs computes
+the answer and the result is transplanted, container and label together. It is **grow-only**, and
+that is Excalidraw's own semantics rather than a policy invented here: passing the container's
+*current* width and height means a dimension is mutated only when the text exceeds it, so a box the
+user deliberately drew large keeps its size. A bare `text` element gets the mirror of it — its own
+`width`/`height` went stale, which is what `getCommonBounds` reads, so the board's extent was
+measured against words that are no longer there. And a **resize reflows arrows** exactly as a move
+does: `edgePoints` joins two shapes' faces, so growing a box moves the face while the arrow stays
+put — still bound, so the digest goes on reporting the connection while the picture shows an arrow
+stopping short.
+
+**The board's extent is `getCommonBounds`, Excalidraw's own maths, not a min/max over `x` and
+`y + height`.** The two disagree for exactly the elements whose drawn extent is not their frame: an
+arrow's real span comes from its `points`, a rotated element's from its angle. The naive version
+reported a board *shorter* than what is drawn on it, and the number it feeds is `nextY` — where
+reading short means dropping the next element on top of something already there.
+
 **`mermaid` is the fifth kind, and it inverts the split above: Swift routes, the page validates.**
 `Whiteboard.Write.plan` is the entry `WorkspaceActions.whiteboardAdd` calls, and it answers one of
 two shapes — `.elements`, the batch `addPlan` has fully validated, or `.mermaid`, a definition Swift

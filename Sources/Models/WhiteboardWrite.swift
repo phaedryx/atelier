@@ -47,9 +47,31 @@ extension Whiteboard {
         /// a runaway loop, and the refusal should arrive before the page spends
         /// a minute on it.
         static let maxBatch = 100
-        /// The default size of a box or a note. A text element is sized by
-        /// Excalidraw from its content.
+        /// The **floor** a labelled container is sized up from, and the size an
+        /// unlabelled one keeps.
+        ///
+        /// It used to be the size of every box and note whatever they said,
+        /// which is what this constant is now the remains of. A label longer
+        /// than three or four words wrapped inside it and spilled out the
+        /// bottom, and a caller had no way to know how wide anything was, so it
+        /// had to hold a column pitch in its head and got it wrong in every run
+        /// of a real evaluation — at 300px an arrow's own label rendered in the
+        /// 80px gap, on top of both boxes.
+        ///
+        /// Kept as the minimum rather than deleted, so a short label draws at
+        /// exactly the size it drew at before and the change is visible only
+        /// where the old size was already wrong.
         static let boxSize = (width: 220.0, height: 90.0)
+        /// Where a label stops growing sideways and starts wrapping.
+        ///
+        /// A natural size is unbounded — the page measures the label unwrapped
+        /// — so a note holding a paragraph would draw a box a thousand pixels
+        /// wide and a board nobody can read. Past this the page converts the
+        /// label a second time at exactly this width and lets Excalidraw wrap
+        /// it, so height grows instead. Chosen to sit above mermaid's own nodes
+        /// (110–270px measured in practice), because a board mixing the two
+        /// should not show two obviously different scales.
+        static let maxBoxWidth = 400.0
         /// The vertical step between elements that were given no position.
         static let rowStep = 120.0
         /// Clearance left under the lowest thing already on the board, and
@@ -89,6 +111,74 @@ extension Whiteboard {
             /// on top of the user's diagram. `WhiteboardWriteTests`' empty
             /// board is the only reader left.
             static let fallback = Layout(originX: 100, nextY: 100)
+        }
+
+        /// A position on the board.
+        struct Point: Equatable {
+            let x: Double
+            let y: Double
+        }
+
+        /// How big something is, once something that can measure has said so.
+        struct Size: Equatable {
+            let width: Double
+            let height: Double
+        }
+
+        /// Where something is on the board and how big it is.
+        ///
+        /// The shape every write now answers in, per element and once more for
+        /// the board itself. **Always read back off the page after the write**,
+        /// never assembled from the plan that was sent — the rule the ids
+        /// already follow. Auto-sizing is what makes that more than tidiness:
+        /// Swift decides a box's size from a measurement taken moments earlier,
+        /// and if that measurement was ever wrong Excalidraw grows the container
+        /// at conversion time. Reading the rect back means the answer shows the
+        /// grown box instead of the one Swift asked for.
+        struct Rect: Equatable {
+            let x: Double
+            let y: Double
+            let width: Double
+            let height: Double
+
+            /// The `"x,y"` an agent writes, so a rect can be read straight back
+            /// into the `at` of a following call.
+            var atText: String {
+                "\(Self.short(x)),\(Self.short(y))"
+            }
+
+            /// `WxH`, for the one line an answer has to say it in.
+            var sizeText: String {
+                "\(Self.short(width))×\(Self.short(height))"
+            }
+
+            /// Trailing `.0` dropped. Every coordinate on this board is a
+            /// `Double` and almost all of them are whole, so the default
+            /// description turns "120,80" into "120.0,80.0" — which an agent
+            /// then hands back to `parsePosition`, where it parses fine and
+            /// reads like noise in every answer that got there first.
+            private static func short(_ value: Double) -> String {
+                value == value.rounded() && abs(value) < 1e15
+                    ? String(Int(value.rounded()))
+                    : String(format: "%.1f", value)
+            }
+        }
+
+        /// One label the page is being asked to measure.
+        ///
+        /// Carries the element's **id** rather than its index in the batch, and
+        /// the sizes come back keyed the same way. An index would have to stay
+        /// aligned across a filter — arrows and unlabelled boxes are not
+        /// measured — and a size handed to the wrong element is a box that fits
+        /// a label it does not carry, which reads perfectly well in the digest.
+        struct Measure: Equatable {
+            let id: String
+            let text: String
+            /// A container's label wraps inside a box that grows around it; a
+            /// bare `text` element **is** its own words and has no container.
+            /// The page measures the two differently, and only this side knows
+            /// which kind was asked for.
+            let boxed: Bool
         }
 
         /// What the page says is on the board right now.
@@ -339,17 +429,23 @@ extension Whiteboard {
         /// questions: `elements` is a batch Swift has fully validated and the
         /// page merely expands, while `mermaid` is a definition Swift cannot
         /// read and the page has to parse, size and place.
-        /// The elements arm carries **only** the skeletons, and deliberately no
+        /// The elements arm carries **only** the entries, and deliberately no
         /// second id list. It had one and nothing read it:
         /// `WorkspaceActions.whiteboardAdd` bound it to `_` and answered with
         /// the ids the *page* reports really landed — which for the mermaid arm
         /// is the only source there is, and for this one is the same list read
         /// off what was really stored rather than what was asked for. It was in
-        /// any case `skeletons.map(\.id)`, a second copy of a fact the
-        /// skeletons already carry, and two copies of one list is how they
-        /// eventually differ.
+        /// any case a second copy of a fact the entries already carry, and two
+        /// copies of one list is how they eventually differ.
+        ///
+        /// **It carries entries rather than finished skeletons**, which is where
+        /// auto-sizing changed this shape. A skeleton holds a width and a
+        /// height; those are not known until the page has measured the labels,
+        /// and the page cannot be asked to measure a batch that has not been
+        /// validated. So the elements arm now stops at the last point that needs
+        /// no measurement, and `skeletons(_:sizes:live:)` finishes it.
         enum Add: Equatable {
-            case elements(skeletons: [Skeleton])
+            case elements(entries: [Entry])
             case mermaid(Mermaid)
         }
 
@@ -415,7 +511,7 @@ extension Whiteboard {
         ) throws -> Add {
             let mermaidEntries = raw.filter { kind(of: $0) == .mermaid }
             guard !mermaidEntries.isEmpty else {
-                return try .elements(skeletons: addPlan(from: raw, live: live, mint: mint))
+                return try .elements(entries: entries(from: raw, live: live, mint: mint))
             }
             guard raw.count == 1, let entry = raw.first as? [String: Any] else {
                 throw Failure.mermaidStandsAlone
@@ -499,11 +595,38 @@ extension Whiteboard {
 
         // MARK: - add
 
-        static func addPlan(
+        /// One entry of a batch: validated and identified, not yet sized or
+        /// placed.
+        ///
+        /// **The split exists because a box's size is a fact only the page
+        /// holds.** A `box` or `note` is now drawn at the size of its label
+        /// rather than at a fixed constant, and Swift cannot measure text. So a
+        /// batch is validated here, its labels are measured by the page, and
+        /// only then is it placed — which is why validation and placement, once
+        /// one loop, are now two functions with a round trip between them.
+        ///
+        /// Ids are minted at validation rather than at placement because they
+        /// are identity, not geometry: an arrow may name a box created earlier
+        /// in the same call, so the set of known ids has to grow as the batch is
+        /// *validated*, which is the only place that refusal can be made.
+        struct Entry: Equatable {
+            let id: String
+            let kind: Kind
+            let text: String?
+            /// Where the caller asked for it, or nil for one to be stacked.
+            let at: Point?
+            let color: String?
+            let from: String?
+            let to: String?
+        }
+
+        /// Everything a batch can be refused for, and nothing that depends on a
+        /// measurement.
+        static func entries(
             from raw: [Any],
             live: Live,
             mint: () -> String = mintID
-        ) throws -> [Skeleton] {
+        ) throws -> [Entry] {
             guard !raw.isEmpty else { throw Failure.emptyBatch }
             guard raw.count <= maxBatch else { throw Failure.batchTooLarge(raw.count) }
 
@@ -530,7 +653,7 @@ extension Whiteboard {
                 guard declared.insert(ref).inserted else { throw Failure.duplicateRef(ref) }
             }
 
-            var skeletons: [Skeleton] = []
+            var entries: [Entry] = []
             // Grows as the batch is walked, so an arrow may name a box created
             // earlier in the same call — but not a later one. A forward
             // reference is refused rather than resolved: resolving it would make
@@ -549,30 +672,6 @@ extension Whiteboard {
             // between elements that were ALREADY on the board, which is not the
             // reason it takes a list.
             var refs: [String: String] = [:]
-            // The column starts below everything already on the board AND
-            // below anything this batch places by hand.
-            //
-            // Scanned up front rather than as the batch is walked, so the
-            // answer does not depend on whether the placed element came first:
-            // an agent that draws two boxes at chosen coordinates and adds an
-            // unplaced note would otherwise have the note dropped on top of
-            // them, which is invisible in the digest — the coordinates read
-            // fine — and ruins the picture, the half of the read path that
-            // exists to corroborate the other.
-            var nextRow = live.layout.nextY
-            for entry in raw {
-                guard let entry = entry as? [String: Any],
-                      let at = entry["at"] as? String,
-                      let placed = try? parsePosition(at)
-                else { continue }
-                // `kind(of:)`, not a second inline read: this used to lowercase
-                // without trimming, so `"box "` was a box to the loop below and
-                // not a box here, and its height was left out of the floor.
-                let kind = kind(of: entry)
-                let bottom = placed.y + (kind == .box || kind == .note ? boxSize.height : 0)
-                nextRow = max(nextRow, bottom + layoutGap)
-            }
-
             for (index, entry) in raw.enumerated() {
                 guard let entry = entry as? [String: Any] else {
                     throw Failure.malformedEntry(index)
@@ -608,38 +707,18 @@ extension Whiteboard {
                     to = try resolveEndpoint(end, refs: refs, known: known)
                 }
 
-                let position: (x: Double, y: Double)
-                if let at = entry["at"] as? String {
-                    position = try parsePosition(at)
-                } else {
-                    // An explicitly placed element must not consume a column
-                    // slot, or two placed elements would leave a gap in the
-                    // stack of the ones that were not placed.
-                    position = (live.layout.originX, nextRow)
-                    nextRow += rowStep
+                // Parsed HERE and not again at placement, so a malformed `at` is
+                // refused before anything is measured — and so the pre-scan
+                // below cannot read a position the batch loop rejected, which is
+                // the disagreement `kind(of:)` already exists to prevent.
+                let at = try (entry["at"] as? String).map { raw -> Point in
+                    let position = try parsePosition(raw)
+                    return Point(x: position.x, y: position.y)
                 }
 
-                let isBoxy = kind == .box || kind == .note
-                let type = switch kind {
-                case .arrow: "arrow"
-                case .text: "text"
-                case .box, .note: "rectangle"
-                case .mermaid: preconditionFailure("refused above")
-                }
                 let id = mint()
-                skeletons.append(Skeleton(
-                    id: id,
-                    type: type,
-                    x: position.x,
-                    y: position.y,
-                    width: isBoxy ? boxSize.width : nil,
-                    height: isBoxy ? boxSize.height : nil,
-                    label: text,
-                    strokeColor: color,
-                    backgroundColor: kind == .note ? noteBackground : nil,
-                    from: from,
-                    to: to,
-                    isNote: kind == .note
+                entries.append(Entry(
+                    id: id, kind: kind, text: text, at: at, color: color, from: from, to: to
                 ))
                 known.insert(id)
                 // Registered only once the element is made, so an entry can
@@ -649,7 +728,163 @@ extension Whiteboard {
                     refs[ref] = id
                 }
             }
-            return skeletons
+            return entries
+        }
+
+        /// The labels the page has to measure before this batch can be placed.
+        ///
+        /// An unlabelled box is absent rather than present-and-empty: there is
+        /// nothing to measure, and it keeps `boxSize`. An **arrow** is absent
+        /// too even when it carries a label, because an arrow's geometry is
+        /// `edgePoints`' answer in the page and its own `at` never reaches the
+        /// canvas — measuring it would buy a number nothing reads.
+        static func labelsToMeasure(_ entries: [Entry]) -> [Measure] {
+            entries.compactMap { entry in
+                guard let text = entry.text else { return nil }
+                switch entry.kind {
+                case .box, .note: return Measure(id: entry.id, text: text, boxed: true)
+                case .text: return Measure(id: entry.id, text: text, boxed: false)
+                case .arrow, .mermaid: return nil
+                }
+            }
+        }
+
+        /// The size a `box` or `note` will really be drawn at.
+        ///
+        /// `boxSize` is the **floor**, so a short label draws at exactly the
+        /// size it drew at before this change. There is deliberately no ceiling
+        /// here: the page has already wrapped the label at `maxBoxWidth`, and a
+        /// label it reports wider than that is one it could not wrap — a single
+        /// unbreakable token — where clamping would hand back a box narrower
+        /// than the text inside it, which is the spill this change exists to
+        /// stop.
+        static func boxedSize(_ measured: Size?) -> Size {
+            guard let measured else { return Size(width: boxSize.width, height: boxSize.height) }
+            return Size(
+                width: max(boxSize.width, measured.width),
+                height: max(boxSize.height, measured.height)
+            )
+        }
+
+        /// How far down the board an entry reaches, for the column floor below.
+        ///
+        /// A `text` element contributes its **measured** height, where the fixed
+        /// layout credited it with zero — so an unplaced element stacked under a
+        /// hand-placed paragraph used to land on top of it. An arrow
+        /// contributes none, unchanged: its `at` is overridden by `edgePoints`
+        /// in the page, so it places nothing by hand, and the elements it spans
+        /// are counted on their own account.
+        private static func drawnHeight(_ entry: Entry, sizes: [String: Size]) -> Double {
+            switch entry.kind {
+            case .box, .note: boxedSize(sizes[entry.id]).height
+            case .text: sizes[entry.id]?.height ?? 0
+            case .arrow, .mermaid: 0
+            }
+        }
+
+        /// Places a validated batch, given what the page measured.
+        ///
+        /// Cannot throw: every refusal was made in `entries`, and a measurement
+        /// that did not come back is a floor rather than a failure.
+        static func skeletons(_ entries: [Entry], sizes: [String: Size], live: Live) -> [Skeleton] {
+            // The column starts below everything already on the board AND
+            // below anything this batch places by hand.
+            //
+            // Scanned up front rather than as the batch is walked, so the
+            // answer does not depend on whether the placed element came first:
+            // an agent that draws two boxes at chosen coordinates and adds an
+            // unplaced note would otherwise have the note dropped on top of
+            // them, which is invisible in the digest — the coordinates read
+            // fine — and ruins the picture, the half of the read path that
+            // exists to corroborate the other.
+            //
+            // **Auto-sizing did not weaken this scan; it is what finally makes
+            // it exact.** The scan needs each placed element's bottom, which it
+            // used to guess as `boxSize.height` for a box or a note and as zero
+            // for everything else. Now it is told. The guess was wrong in both
+            // directions — short of a box grown to a long label, and short of
+            // every hand-placed `text` element by its whole height — and being
+            // short is the direction that drops one element on top of another.
+            var nextRow = live.layout.nextY
+            for entry in entries {
+                guard let at = entry.at else { continue }
+                nextRow = max(nextRow, at.y + drawnHeight(entry, sizes: sizes) + layoutGap)
+            }
+
+            var out: [Skeleton] = []
+            for entry in entries {
+                let position: Point
+                if let at = entry.at {
+                    // An explicitly placed element must not consume a column
+                    // slot, or two placed elements would leave a gap in the
+                    // stack of the ones that were not placed.
+                    position = at
+                } else {
+                    position = Point(x: live.layout.originX, y: nextRow)
+                    // **An arrow takes no slot in the column.** Its position
+                    // here is a placeholder that never reaches the canvas:
+                    // `edgePoints` recomputes an arrow's geometry from its two
+                    // endpoints in the page, and Swift refuses an arrow without
+                    // both, so this branch is always overwritten. Advancing for
+                    // one — which is what a fixed `rowStep` per entry did — left
+                    // a 120px hole in the column for an element that is not
+                    // drawn in it.
+                    //
+                    // Stepped by what was really drawn plus the same clearance
+                    // the floor uses. A column of auto-sized boxes is a column
+                    // of DIFFERENT heights, and a fixed step either overlaps the
+                    // tall ones or leaves a ragged gap under the short ones.
+                    //
+                    // `rowStep` survives as the **minimum** pitch, and that is
+                    // load-bearing rather than nostalgia: a measurement that did
+                    // not come back reads as zero height, and a zero step stacks
+                    // two elements at the same `y` — the collision this whole
+                    // scan exists to prevent, reintroduced by the one path that
+                    // is meant to be its fallback.
+                    if entry.kind != .arrow {
+                        nextRow += max(rowStep, drawnHeight(entry, sizes: sizes) + layoutGap)
+                    }
+                }
+
+                let isBoxy = entry.kind == .box || entry.kind == .note
+                let size = isBoxy ? boxedSize(sizes[entry.id]) : nil
+                let type = switch entry.kind {
+                case .arrow: "arrow"
+                case .text: "text"
+                case .box, .note: "rectangle"
+                case .mermaid: preconditionFailure("refused in entries(from:live:mint:)")
+                }
+                out.append(Skeleton(
+                    id: entry.id,
+                    type: type,
+                    x: position.x,
+                    y: position.y,
+                    // A bare `text` element carries no width or height on
+                    // purpose, and its measurement is used only for the column
+                    // above: it self-sizes, so the converter's own `measureText`
+                    // is the one that should decide, and writing a number here
+                    // would be a second opinion about a fact Excalidraw owns.
+                    width: size?.width,
+                    height: size?.height,
+                    label: entry.text,
+                    strokeColor: entry.color,
+                    backgroundColor: entry.kind == .note ? noteBackground : nil,
+                    from: entry.from,
+                    to: entry.to,
+                    isNote: entry.kind == .note
+                ))
+            }
+            return out
+        }
+
+        /// Both halves, for a caller that already holds the measurements.
+        static func addPlan(
+            from raw: [Any],
+            live: Live,
+            sizes: [String: Size] = [:],
+            mint: () -> String = mintID
+        ) throws -> [Skeleton] {
+            try skeletons(entries(from: raw, live: live, mint: mint), sizes: sizes, live: live)
         }
 
         /// One end of an arrow, as an id the page can bind to.
@@ -798,9 +1033,18 @@ extension Whiteboard {
         /// non-finite `Double`. That is an Objective-C exception, so the `try?`
         /// wrapped around the call cannot catch it and the app dies: one
         /// `whiteboard_add` with `"at": "1e999,0"` was enough. Refused here, in
-        /// the one place all three callers go through — the column pre-scan in
-        /// `addPlan` reaches this under `try?`, so a guard at a call site would
-        /// have left that path carrying the value.
+        /// the one place every caller goes through.
+        ///
+        /// **The second reader it had is gone, and the guard stays here anyway.**
+        /// `addPlan`'s column pre-scan used to read `at` a second time under
+        /// `try?`, which is what made a guard at any single call site
+        /// insufficient — that path would have swallowed the refusal and carried
+        /// the value into `nextRow`. A position is now parsed exactly once, in
+        /// `entries`, under `try`, because auto-sizing split validation from
+        /// placement and there is nothing left to scan twice. That removes the
+        /// second reader; it does not make this a call-site check. It is the
+        /// only place a coordinate becomes a `Double`, which is the property
+        /// worth keeping whatever the callers do next.
         static func parsePosition(_ raw: String) throws -> (x: Double, y: Double) {
             let parts = raw.split(separator: ",", omittingEmptySubsequences: false)
             guard parts.count == 2,

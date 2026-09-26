@@ -896,7 +896,7 @@ extension WorkspaceActions {
     func whiteboardAdd(
         workstreamID: UUID,
         elementsJSON: String
-    ) async throws -> (ids: [String], note: String?) {
+    ) async throws -> Whiteboard.Added {
         let target = try whiteboardTarget(workstreamID: workstreamID)
         // The live page, not the scene on disk — see `Host.liveState`.
         let live = try await target.host.liveState()
@@ -904,16 +904,31 @@ extension WorkspaceActions {
         // a mermaid diagram that is the only source there is: Swift mints
         // nothing, because how many elements a definition becomes is the
         // converter's answer.
-        let op: [String: Any] = switch try Whiteboard.Write.plan(fromJSON: elementsJSON, live: live) {
-        case let .elements(skeletons):
-            ["kind": "add", "elements": skeletons.map(\.json)]
+        let arm: Whiteboard.Added.Arm
+        let op: [String: Any]
+        switch try Whiteboard.Write.plan(fromJSON: elementsJSON, live: live) {
+        case let .elements(entries):
+            // **Three acts, and the order is the whole of the sizing design.**
+            // The batch is validated first, so a bad kind or a colour that is
+            // not a colour is refused before the page is asked to do anything.
+            // Then the page measures the labels, because a box is now drawn at
+            // the size of its words and Swift cannot measure text. Only then is
+            // the batch placed — with every element's real height, which is what
+            // lets the column floor stop guessing.
+            let sizes = try await target.host.measure(Whiteboard.Write.labelsToMeasure(entries))
+            let skeletons = Whiteboard.Write.skeletons(entries, sizes: sizes, live: live)
+            arm = .elements
+            op = ["kind": "add", "elements": skeletons.map(\.json)]
         case let .mermaid(mermaid):
-            mermaid.op
+            // Nothing to measure: the converter decides every node's size, and
+            // learning them is what the answer's extent is for.
+            arm = .mermaid
+            op = mermaid.op
         }
         let applied = try await target.host.apply(op)
         openBoardTab(target.model)
         logger.detailed("whiteboard_add: \(applied.ids.count) elements")
-        return (applied.ids, applied.note)
+        return Whiteboard.Added(arm: arm, applied: applied)
     }
 
     /// Moves, retexts, recolours or captions one element of the caller's board.

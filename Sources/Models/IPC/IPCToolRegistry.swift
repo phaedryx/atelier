@@ -937,6 +937,14 @@ extension IPC.Tool {
                 already on the board. `color` is a hex value like "#e03131" or a name
                 like red.
 
+                A box and a note are sized to their own label, so you do not have to
+                guess a column width to keep them apart. A long label wraps and the box
+                grows taller rather than spilling out of it, and a newline in `text`
+                is a line break. The answer tells you the rectangle each element really
+                got, the board's new extent, and where an element with no `at` would go
+                next — so you can place the next call against real numbers instead of
+                calling read_whiteboard to find out.
+
                 An arrow needs `from` and `to`. Each names either an element already on
                 the board — call read_whiteboard for those ids — or an element this same
                 call creates, by the `ref` you gave it.
@@ -956,10 +964,12 @@ extension IPC.Tool {
                 real boxes, arrows and labels you can then move and edit by id; any
                 other diagram type lands as one image, captioned with the definition.
                 It must be the only entry in its call, because its size is not known
-                until it is drawn; `at` places its top-left corner, and `color`,
-                `from`, `to` and `ref` are refused — style and connections go in the
-                definition, and a diagram standing alone has nothing to name it. A definition mermaid cannot parse is refused with
-                mermaid's own message and nothing is drawn.
+                until it is drawn — the answer reports how big it came out, so you do
+                not have to re-read the board to place anything after it. `at` places
+                its top-left corner, and `color`, `from`, `to` and `ref` are refused —
+                style and connections go in the definition, and a diagram standing
+                alone has nothing to name it. A definition mermaid cannot parse is
+                refused with mermaid's own message and nothing is drawn.
 
                 The ids returned are the board's real element ids. Pass them straight
                 to whiteboard_update and whiteboard_delete; read_whiteboard reports the

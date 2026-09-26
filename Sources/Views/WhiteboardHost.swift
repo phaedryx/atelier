@@ -426,6 +426,64 @@ extension Whiteboard {
             )
         }
 
+        /// How big each of these labels will be drawn.
+        ///
+        /// **Swift cannot measure text, so it asks.** This is the same move
+        /// `liveState` makes and for the same reason: a board's extent and a
+        /// label's width are both facts only the page holds, and both are passed
+        /// *into* `Whiteboard.Write` rather than read there, which is what keeps
+        /// that file pure and testable with no webview.
+        ///
+        /// It is a third round trip on the add path, after `liveState` and
+        /// before `apply`. Deliberately not folded into `liveState`: the labels
+        /// are not known until the batch has been validated, and measuring
+        /// before that would do the work for batches that are about to be
+        /// refused, in an order nothing else in this file follows.
+        ///
+        /// An empty request never reaches the page — a batch of arrows and
+        /// unlabelled boxes has nothing to measure, and a round trip to be told
+        /// so is one an agent waits through.
+        func measure(_ labels: [Write.Measure]) async throws -> [String: Write.Size] {
+            guard !labels.isEmpty else { return [:] }
+            try await waitUntilReady()
+            let request: [String: Any] = [
+                "labels": labels.map { ["id": $0.id, "text": $0.text, "boxed": $0.boxed] },
+                "maxWidth": Write.maxBoxWidth,
+            ]
+            guard let payload = (try? JSONSerialization.data(withJSONObject: request))
+                .flatMap({ String(data: $0, encoding: .utf8) })
+            else { throw WriteFailure.refused("the labels could not be encoded") }
+            guard let json = try await callJS(
+                "return JSON.stringify(await window.__whiteboardMeasure(JSON.parse(req)))",
+                ["req": payload]
+            ),
+                let data = json.data(using: .utf8),
+                let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let sizes = raw["sizes"] as? [String: Any]
+            else { throw WriteFailure.notReady("it did not answer with its measurements") }
+            return Self.decodeSizes(sizes)
+        }
+
+        /// The page's sizes, with anything unreadable dropped rather than
+        /// guessed.
+        ///
+        /// **A missing measurement is not a failure here**, which is the
+        /// opposite of `decodeLiveState` and deliberately so. A size that does
+        /// not arrive falls back to `boxSize`, which is a real size that draws a
+        /// real box — the size every box was before this change. A *coordinate*
+        /// that does not arrive has no such fallback, which is why that decode
+        /// refuses instead.
+        static func decodeSizes(_ raw: [String: Any]) -> [String: Write.Size] {
+            raw.reduce(into: [:]) { out, pair in
+                guard let value = pair.value as? [String: Any],
+                      let width = (value["width"] as? NSNumber)?.doubleValue,
+                      let height = (value["height"] as? NSNumber)?.doubleValue,
+                      width.isFinite, height.isFinite
+                else { return }
+                out[pair.key] = Write.Size(width: width, height: height)
+            }
+        }
+
         /// Posts one operation into the page and answers with the ids it moved.
         ///
         /// What one applied operation produced.
@@ -443,8 +501,31 @@ extension Whiteboard {
         /// reached Swift and died there while the agent was told "Added 1
         /// element". A caller that does not care writes `.ids`; there is no
         /// variant of this call that silently drops it.
+        ///
+        /// **The geometry rides here for the same reason the note does.** A
+        /// caller that auto-sizes a box no longer knows how wide it is, so
+        /// answering with ids alone would trade a known-bad constant for an
+        /// unknown one and make manual placement *harder*. `rects` is what makes
+        /// auto-sizing pay: the caller gets the real rectangle of everything it
+        /// just drew, and `extent` retires the `read_whiteboard` round trip an
+        /// agent had to make purely to learn how big a mermaid diagram came out.
+        ///
+        /// `rects` is keyed **by id** rather than being a second array beside
+        /// `ids`. `Whiteboard.Write.Add` already records why: a parallel list is
+        /// a second copy of a fact the first one carries, and two copies of one
+        /// list is how they eventually differ. `ids` stays the ordered list of
+        /// what the op touched and is the only one a `delete` can fill.
         struct Applied: Equatable {
             let ids: [String]
+            /// Empty for a `delete` — those elements are gone, and a rectangle
+            /// for one would be a geometry the board does not have.
+            let rects: [String: Write.Rect]
+            /// The board's own bounds after the write, or nil for a board with
+            /// nothing on it.
+            let extent: Write.Rect?
+            /// Where the next unplaced element would go, which is the other
+            /// half of what a caller needs to place anything after this write.
+            let nextY: Double?
             let note: String?
         }
 
@@ -494,8 +575,41 @@ extension Whiteboard {
             if let note {
                 logger.warning("whiteboard write landed with a note: \(note, privacy: .public)")
             }
-            // The ids that really landed, not the ids that were asked for.
-            return Applied(ids: result["ids"] as? [String] ?? [], note: note)
+            // The ids that really landed, not the ids that were asked for — and
+            // the geometry read off the same scene, for the same reason.
+            return Applied(
+                ids: result["ids"] as? [String] ?? [],
+                rects: Self.decodeRects(result["rects"] as? [String: Any] ?? [:]),
+                extent: Self.decodeRect(result["board"]),
+                nextY: (result["nextY"] as? NSNumber)?.doubleValue,
+                note: note
+            )
+        }
+
+        /// One rectangle from the page, or nil for anything that is not four
+        /// finite numbers.
+        ///
+        /// `NSNumber` rather than `Double`, the trap `SceneLoad.number`
+        /// documents on the read side: every coordinate on this board may be
+        /// integral, and an integral JSON number bridges to an `NSNumber` that
+        /// a `as? Double` cast misses. Non-finite is dropped because a rect is
+        /// re-encoded into the answer text and into a following call's `at`,
+        /// where `Write.parsePosition` would refuse it anyway.
+        static func decodeRect(_ raw: Any?) -> Write.Rect? {
+            guard let raw = raw as? [String: Any],
+                  let x = (raw["x"] as? NSNumber)?.doubleValue,
+                  let y = (raw["y"] as? NSNumber)?.doubleValue,
+                  let width = (raw["width"] as? NSNumber)?.doubleValue,
+                  let height = (raw["height"] as? NSNumber)?.doubleValue,
+                  [x, y, width, height].allSatisfy(\.isFinite)
+            else { return nil }
+            return Write.Rect(x: x, y: y, width: width, height: height)
+        }
+
+        static func decodeRects(_ raw: [String: Any]) -> [String: Write.Rect] {
+            raw.reduce(into: [:]) { out, pair in
+                out[pair.key] = decodeRect(pair.value)
+            }
         }
 
         /// **`callAsyncJavaScript`, never `evaluateJavaScript`.**
@@ -743,6 +857,90 @@ extension Whiteboard {
             default:
                 logger.error("Unknown whiteboard action \(action, privacy: .public)")
             }
+        }
+    }
+}
+
+extension Whiteboard {
+    /// What one `whiteboard_add` produced, in the shape its answer is worded
+    /// from.
+    ///
+    /// **Which arm drew it is carried, and that is the whole reason this type
+    /// exists** rather than `Host.Applied` being returned directly. The two arms
+    /// need different wording for the same geometry: an `elements` caller named
+    /// each element and can use each id, so each one's rectangle is worth a
+    /// line; a `mermaid` caller named a *diagram* and wants to know how big the
+    /// diagram came out, not the rectangle of each of twenty nodes it did not
+    /// choose. Reporting twenty lines there would spend the answer's whole
+    /// budget describing something nobody asked about.
+    ///
+    /// The distinction is made here rather than in the page because it is about
+    /// what the caller asked for, and the page is handed an op that no longer
+    /// remembers.
+    struct Added: Equatable {
+        enum Arm: Equatable {
+            case elements
+            case mermaid
+        }
+
+        let arm: Arm
+        let applied: Host.Applied
+
+        var ids: [String] {
+            applied.ids
+        }
+
+        var note: String? {
+            applied.note
+        }
+
+        /// The rectangles to name, in the order the ids came back.
+        ///
+        /// Empty on the mermaid arm — `bounds` is what that arm reports
+        /// instead — and empty for any id the page did not measure, which is not
+        /// a failure: the answer names what it knows.
+        var rects: [(id: String, rect: Write.Rect)] {
+            guard arm == .elements else { return [] }
+            return applied.ids.compactMap { id in
+                applied.rects[id].map { (id: id, rect: $0) }
+            }
+        }
+
+        /// The one rectangle the whole write occupies, for an arm that reports
+        /// a shape rather than a list of elements.
+        ///
+        /// Computed from the rects the page really stored rather than asked for
+        /// separately, so it cannot disagree with them.
+        var bounds: Write.Rect? {
+            let all = applied.ids.compactMap { applied.rects[$0] }
+            guard let first = all.first else { return nil }
+            let minX = all.reduce(first.x) { min($0, $1.x) }
+            let minY = all.reduce(first.y) { min($0, $1.y) }
+            let maxX = all.reduce(first.x + first.width) { max($0, $1.x + $1.width) }
+            let maxY = all.reduce(first.y + first.height) { max($0, $1.y + $1.height) }
+            return Write.Rect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+        }
+
+        /// The sentence that retires a `read_whiteboard` call.
+        ///
+        /// An agent adding a diagram and then wanting to put something under it
+        /// had to re-read the board purely to learn how big the diagram came
+        /// out. Both numbers it needed are answers to the instant this write
+        /// finished, so this is where they belong.
+        ///
+        /// Silent when the page could not measure the board rather than saying
+        /// so: an answer is not the place to report that a measurement failed,
+        /// and the ids above are true either way.
+        var boardText: String? {
+            guard let extent = applied.extent else { return nil }
+            let next = applied.nextY.map {
+                " An element added with no `at` goes at "
+                    + Write.Rect(x: extent.x, y: $0, width: 0, height: 0).atText + "."
+            } ?? ""
+            return "The board now covers \(extent.atText) to "
+                + Write.Rect(x: extent.x + extent.width, y: extent.y + extent.height,
+                             width: 0, height: 0).atText
+                + " (\(extent.sizeText))." + next
         }
     }
 }

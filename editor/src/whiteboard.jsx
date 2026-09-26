@@ -8,6 +8,7 @@ import {
   serializeAsJSON,
   exportToBlob,
   convertToExcalidrawElements,
+  getCommonBounds,
   getSceneVersion,
 } from '@excalidraw/excalidraw'
 import '@excalidraw/excalidraw/index.css'
@@ -460,16 +461,177 @@ createRoot(document.getElementById('board')).render(React.createElement(Board))
 // is a subset of ids, not a replacement for it: Whiteboard.Write still checks
 // membership of ids first, so an id that is on neither list is reported as
 // unknown rather than as the wrong kind.
+// The board's bounding box, or null for an empty board.
+//
+// getCommonBounds is Excalidraw's OWN bounds maths, and it is used here in
+// place of the min/max over `x` and `y + height` this used to do. The two
+// disagree for exactly the elements whose drawn extent is not their x/y/w/h:
+// an arrow's real span comes from its `points`, and a rotated element's from
+// its angle. The naive version therefore reported a board SHORTER than what is
+// drawn on it, and the number it feeds — `nextY`, where the next unpositioned
+// element goes — is one where reading short means dropping an element on top of
+// something already there. Invisible in the digest, since both sets of
+// coordinates read exactly as asked, and wrong only in the picture.
+//
+// Non-finite results are refused rather than passed on: `Whiteboard.Host`
+// cannot encode a non-finite Double without killing the app (see
+// `Write.parsePosition`), and a board that cannot be measured is one this
+// answers `null` for, the same as no board at all.
+const boardBounds = (els) => {
+  if (!els.length) return null
+  const [minX, minY, maxX, maxY] = getCommonBounds(els)
+  if (![minX, minY, maxX, maxY].every(Number.isFinite)) return null
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+}
+
+// Clearance under the board's own extent, matching `Write.layoutGap`. The two
+// are separate spellings of one number because neither end can import the
+// other's; they are named in both files so a change to one finds the other.
+const BOARD_GAP = 60
+
+// One element's rectangle, as the scene really holds it.
+//
+// `x`/`y`/`width`/`height` rather than getCommonBounds: this is what
+// `whiteboard_update` takes as `at` and what the layout maths on the Swift side
+// reasons in, so it must be the element's OWN frame. The board's extent above
+// is the other question and uses the other maths.
+const rectOf = (el) => ({
+  x: el.x,
+  y: el.y,
+  width: el.width || 0,
+  height: el.height || 0,
+})
+
+// The geometry half of every write's answer: what each named element really
+// became, and how big the board now is.
+//
+// **Read back off the scene AFTER the write, never off the op that was sent.**
+// That is the rule the ids already follow — "the ids actually stored, not the
+// ids asked for" — and it is what makes the sizing boundary honest. Swift
+// decides a box's size from a measurement taken moments earlier; if that
+// measurement was ever wrong, Excalidraw grows the container at conversion time
+// and THIS reports the grown rect. A wrong measurement is visible in the answer
+// instead of being a box that silently does not match what the agent was told.
+//
+// A bound label is left out for the same reason it is left out of `ids`: it is
+// not an element of the vocabulary this tool answers in, and its geometry is
+// Excalidraw's to own.
+const sceneAnswer = (ids) => {
+  const els = api ? api.getSceneElements() : []
+  const wanted = new Set(ids)
+  const rects = {}
+  for (const el of els) {
+    if (!wanted.has(el.id)) continue
+    if (![el.x, el.y].every(Number.isFinite)) continue
+    rects[el.id] = rectOf(el)
+  }
+  const board = boardBounds(els)
+  return {
+    rects,
+    ...(board ? { board, nextY: board.y + board.height + BOARD_GAP } : {}),
+  }
+}
+
 window.__whiteboardState = () => {
   if (!api) return null
   const els = api.getSceneElements()
   if (!els.length) return { ids: [], imageIDs: [], originX: 100, nextY: 100 }
+  const board = boardBounds(els)
+  // **An unmeasurable board is answered as NO ANSWER, never as an empty one.**
+  // Those two are very different facts on this end: the empty answer carries
+  // `ids: []`, and reporting that for a board with elements on it would have
+  // `whiteboard_update` refuse a real id as unknown while the digest lists it.
+  // `Host.decodeLiveState` turns a missing answer into `.notReady`, which says
+  // it is safe to retry — and it is, because nothing has been written.
+  if (!board) return null
   return {
     ids: els.map((el) => el.id),
     imageIDs: els.filter((el) => el.type === 'image').map((el) => el.id),
-    originX: Math.min(...els.map((el) => el.x)),
-    nextY: Math.max(...els.map((el) => el.y + (el.height || 0))) + 60,
+    originX: board.x,
+    nextY: board.y + board.height + BOARD_GAP,
   }
+}
+
+// How big a label really is, answered by the only thing that can measure it.
+//
+// **Swift cannot measure text and this page does not measure it either — the
+// CONVERTER does.** `convertToExcalidrawElements` creates a labelled container
+// with `width === undefined` at 0x0 and then runs Excalidraw's own
+// `redrawTextBoundingBox` over it, which sees a negative available width, so
+// `wrapText` returns the label unwrapped, measures it, and grows the container
+// to `ceil(metrics.width) + 10` by `ceil(metrics.height) + 10` (measured
+// against 0.18.1: data/transform.ts, element/textElement.ts). So a natural size
+// is what Excalidraw gives for free when width and height are simply left off.
+//
+// Doing it this way rather than with `canvas.measureText` is not a preference.
+// A hand-rolled measurement would have to reproduce Excalidraw's font string,
+// its line height, its `normalizeText`, its tokenizer and its padding, and
+// every one of those it got wrong would produce a box whose size disagrees with
+// the text drawn in it — which reads perfectly well in the digest and is wrong
+// only in the picture. Measuring THROUGH the converter inherits all of it,
+// including whatever it does with a newline, for free and by construction.
+//
+// Two passes, because a natural width is unbounded and a paragraph would
+// otherwise draw a box a thousand pixels wide. Anything wider than `maxWidth`
+// is converted a second time at exactly that width, where the same
+// `redrawTextBoundingBox` wraps the label and grows the height to fit it.
+//
+// `document.fonts.ready` is awaited first: measuring before Excalifont has
+// loaded measures a fallback font, and every box on the board would be sized
+// for a face it is not drawn in.
+window.__whiteboardMeasure = async (req) => {
+  if (!api) return null
+  await document.fonts.ready
+  const labels = req?.labels || []
+  const maxWidth = req?.maxWidth
+  const sizes = {}
+  if (!labels.length) return { sizes }
+
+  // Keyed by the caller's own ids, never by position in the converted array:
+  // the converter appends a bound text element per container, so output order
+  // is not input order, and a size handed to the wrong element is a box that
+  // fits a label it does not carry.
+  const sizeByID = (skeletons) => {
+    const out = {}
+    for (const el of convertToExcalidrawElements(skeletons, { regenerateIds: false })) {
+      if (el.containerId) continue
+      out[el.id] = { width: el.width, height: el.height }
+    }
+    return out
+  }
+
+  const boxed = labels.filter((l) => l.boxed)
+  if (boxed.length) {
+    const natural = sizeByID(
+      boxed.map((l) => ({ type: 'rectangle', id: l.id, label: { text: l.text } }))
+    )
+    const tooWide = boxed.filter((l) => natural[l.id] && natural[l.id].width > maxWidth)
+    const wrapped = tooWide.length
+      ? sizeByID(
+          tooWide.map((l) => ({
+            type: 'rectangle',
+            id: l.id,
+            width: maxWidth,
+            label: { text: l.text },
+          }))
+        )
+      : {}
+    for (const l of boxed) {
+      const size = wrapped[l.id] || natural[l.id]
+      if (size) sizes[l.id] = size
+    }
+  }
+
+  // A bare text element is its own words and has no container to grow, so it is
+  // measured as itself and never wrapped — the converter's `text` case runs
+  // `measureText` directly. Its size is not sent back to the board; Swift wants
+  // it only so that an element placed BELOW a hand-placed text element clears
+  // it, which is the one thing the old fixed-size layout could not do.
+  const bare = labels.filter((l) => !l.boxed)
+  if (bare.length) {
+    Object.assign(sizes, sizeByID(bare.map((l) => ({ type: 'text', id: l.id, text: l.text }))))
+  }
+  return { sizes }
 }
 
 // Excalidraw stores a container's label as a SEPARATE text element carrying
@@ -789,8 +951,10 @@ window.__whiteboardApply = async (op) => {
       await saveNow()
       // The ids actually stored, not the ids asked for. If Excalidraw ever
       // stops honouring a supplied id, the answer names what really landed
-      // rather than handing back ids that point at nothing.
-      return { ok: true, ids: fresh.filter((el) => !el.containerId).map((el) => el.id) }
+      // rather than handing back ids that point at nothing. The geometry is
+      // read off the same scene for the same reason — see `sceneAnswer`.
+      const addedIDs = fresh.filter((el) => !el.containerId).map((el) => el.id)
+      return { ok: true, ids: addedIDs, ...sceneAnswer(addedIDs) }
     }
 
     if (op.kind === 'update') {
@@ -878,6 +1042,22 @@ window.__whiteboardApply = async (op) => {
         }
         return out
       })
+      // **Retexting resizes what carries the words**, or auto-sizing is a
+      // promise the neighbouring tool quietly breaks. `whiteboard_add` sizes a
+      // box to its label; retexting that box used to write the new string onto
+      // the label and leave the container at the size the OLD string earned, so
+      // a one-word box retexted to a sentence spilled its text outside its own
+      // outline — the exact failure auto-sizing exists to fix, reached through
+      // the other call. A bare text element had the mirror of it: its own
+      // `width` and `height` went stale, which is what `getCommonBounds` reads,
+      // so the board's extent was measured against words that are no longer
+      // there and the next unplaced element was placed against a lie.
+      //
+      // Both are fixed the same way, and the way is deliberately not arithmetic
+      // of our own: the SAME conversion the add arm runs computes the answer and
+      // the result is transplanted. Excalidraw's `redrawTextBoundingBox` is what
+      // does this on the add path and it is not exported.
+      let resized = false
       if (textEl) {
         // By id, not by the object resolved above: a label that also MOVED has
         // already been replaced in `next`, and writing the pre-move object back
@@ -893,17 +1073,101 @@ window.__whiteboardApply = async (op) => {
           version: (next[i].version || 1) + 1,
           versionNonce: nonce(),
         }
+        const container = next.find((el) => el.id === op.id && el.id !== textEl.id)
+        // The container's CURRENT width and height go in, and that is what makes
+        // this GROW-ONLY: `redrawTextBoundingBox` mutates a dimension only when
+        // the text exceeds it. So a box the user deliberately drew large keeps
+        // its size and only one that is too small changes. Nothing here decides
+        // a policy; it reproduces Excalidraw's, which is the only way to be sure
+        // the outline matches the text that will be drawn inside it.
+        //
+        // Every font field is carried from the label that is really there rather
+        // than defaulted: a user may have drawn this box with any of them, and a
+        // measurement taken at the wrong font size is a box that fits a
+        // rendering nobody sees.
+        const skeleton = container
+          ? {
+              type: container.type,
+              id: container.id,
+              x: container.x,
+              y: container.y,
+              width: container.width,
+              height: container.height,
+              label: {
+                text: op.text,
+                fontSize: textEl.fontSize,
+                fontFamily: textEl.fontFamily,
+                textAlign: textEl.textAlign,
+                verticalAlign: textEl.verticalAlign,
+              },
+            }
+          : {
+              type: 'text',
+              id: textEl.id,
+              x: next[i].x,
+              y: next[i].y,
+              text: op.text,
+              fontSize: textEl.fontSize,
+              fontFamily: textEl.fontFamily,
+            }
+        const converted = convertToExcalidrawElements([skeleton], { regenerateIds: false })
+        if (container) {
+          const grown = converted.find((el) => el.id === container.id)
+          // The label's own position is transplanted along with its size.
+          // Recomputing it is what `shiftLabel` refuses to do, and for the
+          // reason stated there: the inscribed-rect maths is per-shape and not
+          // exported. Taking it from a conversion means never spelling it.
+          const placed = converted.find((el) => el.containerId === container.id)
+          if (grown && placed) {
+            const c = next.findIndex((el) => el.id === container.id)
+            resized = grown.width !== container.width || grown.height !== container.height
+            next[c] = {
+              ...next[c],
+              width: grown.width,
+              height: grown.height,
+              version: (next[c].version || 1) + 1,
+              versionNonce: nonce(),
+            }
+            next[i] = {
+              ...next[i],
+              // `text` as the conversion WRAPPED it, `originalText` as the agent
+              // wrote it — the same split the write above makes, and the reason
+              // the wrapped form must not become the source: the next edit would
+              // reopen with hard line breaks nobody typed.
+              text: placed.text,
+              originalText: op.text,
+              x: placed.x,
+              y: placed.y,
+              width: placed.width,
+              height: placed.height,
+            }
+          }
+        } else {
+          const measured = converted.find((el) => el.id === textEl.id)
+          if (measured) {
+            resized = measured.width !== textEl.width || measured.height !== textEl.height
+            next[i] = { ...next[i], width: measured.width, height: measured.height }
+          }
+        }
       }
       // A move drags every arrow attached to this element with it. The label
       // has already been dragged, above, and does not join this set: the set
       // names ids an arrow may be BOUND to, and nothing binds to a container's
       // own label, so adding it would be a no-op rather than a second reflow.
-      const moved = op.x !== undefined || op.y !== undefined
+      //
+      // **A RESIZE drags them too**, and that is the half this used to miss
+      // because nothing could resize an element here. `edgePoints` joins the
+      // FACES of two shapes, so growing a box moves the face its arrow lands on
+      // while the arrow stays where it was — still bound, so the digest goes on
+      // reporting the connection quite correctly, with the picture showing an
+      // arrow that stops short of the box or runs inside it. The same silent
+      // shape as moving a bound element, which is why it takes the same answer.
+      const moved = op.x !== undefined || op.y !== undefined || resized
       api.updateScene({
         elements: moved ? reflowArrowsTouching(next, new Set([op.id])) : next,
       })
       await saveNow()
-      return { ok: true, ids: [op.id] }
+      return { ok: true, ids: [op.id], ...sceneAnswer([op.id]) }
     }
 
     // A captured screen region. Not part of the agent vocabulary — an agent
@@ -941,7 +1205,8 @@ window.__whiteboardApply = async (op) => {
       await saveNow()
       // Deliberately unmarked by atelierAuthor: the user pressed the button, so
       // the digest must not report this as something an agent put there.
-      return { ok: true, ids: converted.map((el) => el.id) }
+      const captured = converted.map((el) => el.id)
+      return { ok: true, ids: captured, ...sceneAnswer(captured) }
     }
 
     // A mermaid definition, expanded by Excalidraw's own converter.
@@ -1070,11 +1335,16 @@ window.__whiteboardApply = async (op) => {
       // its id back invites an agent to move or delete it as though it were a
       // box. Filtered on the converted type rather than on which skeleton it
       // came from, because `regenerateIds: true` has already remapped the ids.
+      const diagramIDs = converted
+        .filter((el) => !el.containerId && el.type !== 'frame')
+        .map((el) => el.id)
       return {
         ok: true,
-        ids: converted
-          .filter((el) => !el.containerId && el.type !== 'frame')
-          .map((el) => el.id),
+        ids: diagramIDs,
+        // How big the diagram came out is the one thing a caller could not know
+        // without a second `read_whiteboard`, because only the converter
+        // decides it. Answering it here is what retires that round trip.
+        ...sceneAnswer(diagramIDs),
         // Present only when the diagram was degraded to an image. `Host.apply`
         // logs it; putting it in front of the agent is one line in
         // `WorkspaceActions.whiteboardAdd`, which is not this file's to write.
@@ -1098,7 +1368,10 @@ window.__whiteboardApply = async (op) => {
         api.updateScene({ elements: unbindFrom(survivors, doomed) })
         await saveNow()
       }
-      return { ok: true, ids: removed }
+      // No rects — these elements are gone, and a rectangle for one would be a
+      // geometry the board does not have. The board's own extent still travels,
+      // because a delete is one of the two things that SHRINKS it.
+      return { ok: true, ids: removed, ...sceneAnswer([]) }
     }
 
     return { ok: false, reason: `unknown operation ${op.kind}` }
