@@ -544,6 +544,18 @@ four-actors-by-eight-steps case the layout exists for, and a tool that refuses
 its own worked example is not a tool. **Banding is still capped** — unbounded
 bands recreate the sprawl this tool exists to stop, rotated ninety degrees.
 
+**`bandGap` is twice `groupGap`, and that came from looking at the render
+rather than from measuring it.** At one `groupGap` the bands sat 80px apart
+while the rows inside a band sat 50px apart, which is barely a difference: the
+eye read one continuous eight-row grid instead of two four-actor bands, and the
+repeated lane labels looked like duplicates rather than a new band's heading —
+the one thing banding most needs to communicate. Every geometry test passed.
+Nothing overlapped and the budget held, because nothing was wrong with the
+geometry. It was only visible in `board.png`, which is the argument for opening
+the picture and not only asserting over the numbers: the two halves of the read
+path exist to corroborate each other, and that applies to the people writing
+this as much as to an agent reading it back.
+
 **The budget claim is deliberately narrow: "the arrangement this places is never
 larger than 1600 on either edge", NOT "the board stays legible".**
 `MAX_RENDER_EDGE` is `maxWidthOrHeight` on `exportToBlob` for the *whole* board,

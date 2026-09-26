@@ -113,6 +113,18 @@ extension Whiteboard {
         /// that makes a frame read as a unit rather than as more of the grid.
         static let groupGap = 60.0
 
+        /// Separation between one lane band and the next.
+        ///
+        /// **Distinctly larger than `groupGap`, and that is a readability fix
+        /// rather than a taste.** At `groupGap` the bands sat 80px apart while
+        /// the rows inside a band sat 50px apart — barely a difference, so the
+        /// eye read one continuous eight-row grid rather than two four-actor
+        /// bands, and the repeated lane labels looked like duplicates instead
+        /// of a new band's heading. Every geometry test passed: nothing
+        /// overlapped, the budget held. It was only visible in `board.png`,
+        /// which is why the render is worth looking at and not only measuring.
+        static let bandGap = groupGap * 2
+
         /// Column-to-column stride. Width plus clearance.
         static let columnStride = columnWidth + gap
         /// Row-to-row stride. The *worst-case* label height plus clearance —

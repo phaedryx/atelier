@@ -211,23 +211,44 @@ final class WhiteboardArrangementTests: XCTestCase {
         XCTAssertEqual(numbered.last, "7 do it")
     }
 
+    /// **Asserted as "every arrow points rightward", not as "both ends share a
+    /// y".** The y predicate is what this checked first, and it was nearly
+    /// worthless: it holds trivially when every step names the same actor,
+    /// which is what the test fed it, and it is *wrong* the moment actors vary,
+    /// because a legitimate within-band arrow between two different lanes has
+    /// two different y values by construction. A cross-band arrow is the one
+    /// that runs from the rightmost column back to the leftmost, so `to.x >
+    /// from.x` catches exactly it, at any actor count.
     func test_noArrowCrossesABandBoundary() throws {
+        let steps = 12
         let skeletons = try plan("lanes", [
-            "actors": ["Agent"],
-            "steps": (1 ... 10).map { ["actor": "Agent", "text": "step \($0)"] },
+            "actors": ["Agent", "Swift", "Page"],
+            // Actors deliberately varied, so a within-band arrow really does
+            // change lane and the assertion has something to be wrong about.
+            "steps": (1 ... steps).map {
+                ["actor": ["Agent", "Swift", "Page"][($0 - 1) % 3], "text": "step \($0)"]
+            },
         ])
         let byID = Dictionary(
             uniqueKeysWithValues: skeletons.filter { $0.type == "rectangle" }.map { ($0.id, $0) }
         )
-        for arrow in skeletons where arrow.type == "arrow" {
+        let arrows = skeletons.filter { $0.type == "arrow" }
+        for arrow in arrows {
             guard let from = byID[arrow.from ?? ""], let to = byID[arrow.to ?? ""] else {
                 return XCTFail("an arrow named something that is not in the batch")
             }
-            // Same band means the same vertical offset: a cross-band arrow
-            // would be a long diagonal over the rows between, which is a
-            // collision this cannot prevent.
-            XCTAssertEqual(from.y, to.y, "arrow from \(from.label ?? "") to \(to.label ?? "")")
+            XCTAssertGreaterThan(
+                to.x, from.x,
+                "arrow from \(from.label ?? "") to \(to.label ?? "") runs backwards, "
+                    + "which is what a band boundary would look like"
+            )
         }
+        // And the count says a band break really happened: each band chains its
+        // own steps, so a break costs exactly one arrow. Without this the test
+        // above would pass just as well on a plan that drew no arrows at all.
+        let bands = Int(ceil(Double(steps) / Double(Arrangement.columnsThatFit() - 1)))
+        XCTAssertGreaterThan(bands, 1, "this case must actually band, or it proves nothing")
+        XCTAssertEqual(arrows.count, steps - bands)
     }
 
     // MARK: - The label cap, across scripts

@@ -171,8 +171,8 @@ extension Whiteboard.Arrangement {
         // One column is spent on the lane gutter, in every band.
         let perBand = max(1, columnsThatFit() - 1)
         let bandHeight = Double(actors.count) * rowStride - gap
-        let bandStride = bandHeight + groupGap
-        let maxBands = max(1, Int((maxEdge + groupGap) / bandStride))
+        let bandStride = bandHeight + bandGap
+        let maxBands = max(1, Int((maxEdge + bandGap) / bandStride))
         let fit = maxBands * perBand
         guard rawSteps.count <= fit else {
             throw Failure.tooManySteps(steps: rawSteps.count, fit: fit, actors: actors.count)
