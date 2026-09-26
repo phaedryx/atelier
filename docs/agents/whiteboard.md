@@ -1,7 +1,51 @@
 # The whiteboard
 
-The Excalidraw-backed board: the three write tools, image transcription, and the
-capture button.
+The Excalidraw-backed board: the read path's budget, the three write tools, image
+transcription, and the capture button.
+
+### The digest's budget, and what truncation drops
+
+`read_whiteboard` answers with a text digest under a byte cap
+(`Whiteboard.Digest.maxBytes`). The cap and the cut are both decisions, and both
+are argued at length in `Sources/Models/WhiteboardDigest.swift`; what belongs
+here is the part another change can break.
+
+**The cap is 32,000 and the old 8,000 rested on a claim that is false at scale.**
+The argument for 8KB was that the agent is asked to open `board.png` in the same
+breath, so the picture carries whatever the text does not. It does not: the
+render is capped at `MAX_RENDER_EDGE` (1600, `editor/src/whiteboard.jsx`) and
+real boards run 2000–2900px on their long edge, so at that scale label text in
+the picture is not legible. Both halves of the read path therefore degraded
+**together**, and exactly as a board got large enough to be worth checking — a
+board of 83 elements reported 21 of them not listed. If the render cap ever
+moves, this number's argument moves with it.
+
+**Truncation is a choice about value, not a leftover of position**, and the
+reason is the same one the unbind-on-delete rule exists for. Walking the scene in
+file order and keeping whatever fits can list an arrow whose endpoint it dropped:
+the digest prints `n1 → n2` with no `n2` anywhere in it — an id that appears
+nowhere else, which is the digest lying. So elements are admitted in tier order
+(words, then bare arrows, then shapes and uncaptioned images, then freehand) and
+**an arrow is admitted together with the endpoints it names or not at all**.
+Two of those placements are load-bearing rather than aesthetic: freehand is last
+because the overflow note sends the reader to `board.png`, and for a stroke that
+is already the only answer there was; an **uncaptioned image is not** down there
+with it, because its id is the entry point for `whiteboard_update(caption:)` and
+an image the digest leaves out is one that can never be captioned — on exactly
+the boards that arm is for.
+
+**The header carries the board's element count and extent whether or not the list
+is complete**, and the overflow note names what it left out by kind. The buckets
+are the closed `Element.Kind` set with one `other` bucket, and that is what keeps
+the reserve honest: the note's worst case is charged to the budget before a
+single entry is assembled, so a bucket named by an element's raw type would let a
+board of distinct unknown types write a note longer than the whole budget.
+
+**It is deliberately not paginated.** That is a change to the *tool* rather than
+to the digest — `read_whiteboard` takes no arguments, so an offset means a new
+argument, a cursor whose meaning survives an edit between two calls, and a second
+round trip an agent has to know to make. `Digest.text` already takes `budget:`,
+so an `offset:` beside it later is additive rather than a redesign.
 
 ### The whiteboard write tools
 
