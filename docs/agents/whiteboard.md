@@ -474,21 +474,15 @@ every invariant the page maintains for that op — binding, `edgePoints`, the
 would be a second copy of those invariants, and this file is largely a record of
 what happens when there are two.
 
-**Mermaid is not the answer to this, and the reason is not the one you would
-guess.** Definition-level styling *does* survive the converter: `classDef`,
-`class` and `style` land as real `strokeColor`, `backgroundColor` and
-`strokeWidth` on the converted nodes, and a node's bound label inherits its
-stroke colour — all measured against 2.2.2. So a mermaid diagram is **not**
-limited to a monochrome band, and any argument resting on that is false. What
-actually rules mermaid out for these layouts is structural: a mermaid entry
-**stands alone in its call**, **regenerates its ids**, and **has no width
-budget**, so N small-multiple frames would be N separate calls that cannot be
-placed relative to one another or connected to each other.
-
-**`linkStyle` is the one thing that does not survive**, and it fails silently:
-every arrow the converter emits is `#1e1e1e` regardless, while `-.->` and `==>`
-*do* come through as `strokeStyle` and `strokeWidth`. So edge emphasis is
-available through edge syntax and edge colour is not available at all.
+**Mermaid is not the answer to this, and "mermaid can only draw in one colour"
+is not the reason.** That claim is false — node styling survives the converter
+in full, which the `mermaid` kind's own section above records and measures. What
+actually rules mermaid out for these layouts is structural rather than
+cosmetic: a mermaid entry **stands alone in its call**, **regenerates its ids**,
+and **has no width budget**, so N small-multiple frames would be N separate
+calls that cannot be placed relative to one another or connected to each other.
+The colour argument is written down nowhere on purpose; a rationale this file's
+own measurements contradict is worse than none.
 
 **Collision-free by construction, and the proof is split across two files on
 purpose.** `Tests/WhiteboardArrangementTests.swift` pins that planned rects never
