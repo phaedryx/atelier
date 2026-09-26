@@ -144,7 +144,21 @@ extension Whiteboard {
             /// The `"x,y"` an agent writes, so a rect can be read straight back
             /// into the `at` of a following call.
             var atText: String {
-                "\(Self.short(x)),\(Self.short(y))"
+                Self.point(x, y)
+            }
+
+            /// The far corner, which is the other half of saying where a board
+            /// reaches to.
+            var farText: String {
+                Self.point(x + width, y + height)
+            }
+
+            /// Any `"x,y"` in the same spelling `at` uses. A free function on
+            /// the type rather than a zero-sized rect at each call site, which
+            /// is what this was and which read as geometry where it was only
+            /// formatting.
+            static func point(_ x: Double, _ y: Double) -> String {
+                "\(short(x)),\(short(y))"
             }
 
             /// `WxH`, for the one line an answer has to say it in.

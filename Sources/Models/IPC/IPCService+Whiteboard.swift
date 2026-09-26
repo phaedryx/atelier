@@ -93,7 +93,7 @@ extension IPC.Service {
     /// something nobody asked about, and the one number it actually wants — how
     /// big the diagram came out — would be buried in it. That number is the
     /// `read_whiteboard` round trip this retires.
-    private static func whiteboardAddText(_ added: Whiteboard.Added) -> String {
+    static func whiteboardAddText(_ added: Whiteboard.Added) -> String {
         let count = added.ids.count
         let opening = "Added \(count) element\(count == 1 ? "" : "s")"
         // Named whatever the geometry did: the ids are true either way, and an

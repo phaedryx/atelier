@@ -619,6 +619,7 @@ final class WhiteboardWriteTests: XCTestCase {
         // turns an answer into "120.0,80.0" — which parses fine and reads like
         // noise. `atText` is meant to be handed straight back as an `at`.
         XCTAssertEqual(rect.atText, "120,80")
+        XCTAssertEqual(rect.farText, "432,170")
         XCTAssertEqual(rect.sizeText, "312×90")
         XCTAssertEqual(try Write.parsePosition(rect.atText).x, 120)
     }

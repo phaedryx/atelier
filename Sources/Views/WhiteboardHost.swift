@@ -935,11 +935,9 @@ extension Whiteboard {
             guard let extent = applied.extent else { return nil }
             let next = applied.nextY.map {
                 " An element added with no `at` goes at "
-                    + Write.Rect(x: extent.x, y: $0, width: 0, height: 0).atText + "."
+                    + Write.Rect.point(extent.x, $0) + "."
             } ?? ""
-            return "The board now covers \(extent.atText) to "
-                + Write.Rect(x: extent.x + extent.width, y: extent.y + extent.height,
-                             width: 0, height: 0).atText
+            return "The board now covers \(extent.atText) to \(extent.farText)"
                 + " (\(extent.sizeText))." + next
         }
     }
