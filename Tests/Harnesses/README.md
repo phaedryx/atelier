@@ -309,11 +309,12 @@ nobody re-measured. Re-measure before quoting one.
 ## A known flake, so it is not rediscovered as a regression
 
 **Section 11's `a pan reaches the gate at all` is nondeterministic.** Observed
-2026-09-26, on `feat-whiteboard-autosize`: it passed on one run and failed on
-the two that followed, against code that differed only in
-`__whiteboardState`'s empty-board guard and the update arm's arrow exclusion —
-neither of which touches `onChange`, `scheduleSave`, `saveSignature`, the gate
-counters or the `Board` component. The check asserts that Excalidraw fires
+2026-09-26, on `feat-whiteboard-autosize`, across five runs: passed, failed,
+failed, passed, failed. The code under it did not change between any of them —
+and the last of the five was taken after rebasing onto two merged PRs, so it is
+not a property of one branch either. Nothing in any of those diffs touches
+`onChange`, `scheduleSave`, `saveSignature`, the gate counters or the `Board`
+component. The check asserts that Excalidraw fires
 `onChange` for an **appState-only** change (a pan) in an occluded window, and
 that appears not to be reliable; its failure message is `calls 1 → 1; onChange
 did not fire for an appState change`.
