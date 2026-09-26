@@ -183,6 +183,8 @@ extension IPC {
                 return readWhiteboard(for: request)
             case .whiteboardAdd:
                 return await whiteboardAdd(for: request)
+            case .whiteboardAddLayout:
+                return await whiteboardAddLayout(for: request)
             case .whiteboardUpdate:
                 return await whiteboardUpdate(for: request)
             case .whiteboardDelete:

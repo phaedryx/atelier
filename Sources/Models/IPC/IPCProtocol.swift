@@ -167,6 +167,15 @@ extension IPC {
         /// by the `ref` that box declared — a minted id is a UUID, so nothing
         /// else could name it — and a whole diagram is one round trip.
         case whiteboardAdd = "whiteboard_add"
+        /// Places a whole arrangement — small multiples, lanes, or a
+        /// before/after pair — with the geometry computed rather than asked
+        /// for.
+        ///
+        /// **One tool with a `layout` discriminator, not one tool per layout.**
+        /// Every entry in `advertisedOrder` costs schema tokens in every
+        /// session of this project, for every agent, whether or not it ever
+        /// draws. One discriminated tool is affordable; three are not.
+        case whiteboardAddLayout = "whiteboard_add_layout"
         /// Moves, retexts or recolours one element of the caller's board.
         case whiteboardUpdate = "whiteboard_update"
         /// Removes elements from the caller's board. An id that is already gone
