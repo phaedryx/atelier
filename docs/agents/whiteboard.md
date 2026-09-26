@@ -16,7 +16,7 @@ other configs answer does not even arise: a board is Atelier's own cache directo
 repository can ship.
 
 **Swift validates and normalizes; the page expands.** `Whiteboard.Write`
-(`Sources/Models/WhiteboardWrite.swift`) turns `{kind, text, at, from, to, color}` into an
+(`Sources/Models/WhiteboardWrite.swift`) turns `{kind, text, at, from, to, color, ref}` into an
 Excalidraw *skeleton* and refuses everything outside the vocabulary; `convertToExcalidrawElements`
 in `editor/src/whiteboard.jsx` turns a skeleton into a real element. The split falls there because
 this half is where the mistakes live — an unknown kind, an arrow pointing at nothing, a colour that
@@ -30,10 +30,38 @@ which cannot see `Whiteboard` and would stop compiling.
 `regenerateIds: false` — measured against 0.18.1, a supplied id survives byte-identical. So
 `whiteboard_add` answers with ids that *are* the real element ids, the same ones the digest reports
 and `whiteboard_update` takes: no mapping table, and no display-id vocabulary for the two ends to
-drift apart on. It is also what lets an arrow name a box created beside it, which is why `add`
-takes a **list** — a whole diagram is one call rather than fourteen at the 15s tier. A *forward*
-reference is refused rather than resolved, because resolving it would make a batch's meaning depend
-on a reading order nothing states.
+drift apart on.
+
+**A minted id is a UUID, so `ref` is what lets an arrow name a box created beside it** — which is
+why `add` takes a **list** at all: a whole diagram is one call rather than fourteen at the 15s tier.
+This is the one claim in this file that was asserted and never pinned, and it was false for as long
+as it stood: `addPlan` minted every id itself and read none off the entry, so the id of a box
+created in the same call could not be known until the call returned, and an arrow naming it was
+refused with `unknownElement` — which refuses the whole call and draws nothing. It was invisible
+because every arrow test injected a minter handing out `id-1`, `id-2`, `id-3`, pinning a batch no
+agent could compose. `Tests/WhiteboardWriteTests.swift` now carries one arrow test that runs
+**without** the injected minter, and that is the test the claim needed.
+
+`ref` is an optional name of the caller's own on any entry, which an arrow later in the same batch
+may use for `from` or `to`. Three things about it:
+
+- **It is parse-time only and never leaves `WhiteboardWrite.swift`.** Not on `Skeleton`, not on the
+  op, no spelling in the page or the digest. So the paragraph above still holds — there is one id
+  vocabulary, and `ref` is not in it; the table that resolves it lives for the length of one call.
+- **A `ref` that is also an id already on the board is refused, not resolved.** It could be resolved
+  either way round, and that is the problem: an arrow naming it means two things, and a rule
+  silently picking one draws the arrow to the wrong end of the board — which reads perfectly well in
+  the digest. Two entries declaring the same `ref` are refused for the same reason. Both are checked
+  **up front**, before any entry is drawn, so the refusal does not depend on where in the batch the
+  offending entry sits; one consequence is that it beats `unknownKind` and `malformedEntry` for a
+  batch carrying both, which is pinned rather than left to be rediscovered.
+- **A `ref` on a `mermaid` entry is refused**, the same refused-not-ignored rule `color`, `from` and
+  `to` already follow there: a mermaid entry stands alone in its call, so nothing can ever name it.
+
+A *forward* reference is still refused rather than resolved — for a `ref` exactly as for a minted id
+— because resolving it would make a batch's meaning depend on a reading order nothing states. A
+`ref` is registered only once its element is made, so an entry naming its own `ref` falls out of
+that rule rather than needing one of its own.
 
 **What is on the board is read from the page, never from `board.excalidraw`.** The file lags by the
 800ms save debounce, so an agent that adds a box and then updates it would be refused for naming an

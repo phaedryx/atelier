@@ -205,6 +205,162 @@ final class WhiteboardWriteTests: XCTestCase {
         ) { XCTAssertEqual($0 as? Write.Failure, .unknownElement("id-2")) }
     }
 
+    /// **The test that was missing, and the one the feature exists for.**
+    ///
+    /// No injected minter — `addPlan` mints `atl-<uuid>`, which is what a real
+    /// caller faces. Every other arrow test here hands out `id-1`, `id-2`,
+    /// `id-3` and so pins a batch no agent can compose: the affordance the tool
+    /// advertises was asserted in four places and reachable from none of them,
+    /// because the id of a box created in the same call cannot be known before
+    /// the call returns.
+    func test_anArrowBindsToABoxCreatedInTheSameBatchByRef_withNoInjectedMinter() throws {
+        let plan = try Write.addPlan(from: [
+            ["kind": "box", "text": "Auth service", "ref": "auth"],
+            ["kind": "box", "text": "Token store", "ref": "tokens"],
+            ["kind": "arrow", "from": "auth", "to": "tokens", "text": "issues"],
+        ], live: empty)
+
+        let arrow = try XCTUnwrap(plan.last)
+        XCTAssertEqual(arrow.from, plan[0].id)
+        XCTAssertEqual(arrow.to, plan[1].id)
+        // The ids are the real minted ones, which is the half a test with an
+        // injected minter cannot see.
+        XCTAssertTrue(plan[0].id.hasPrefix("atl-"), plan[0].id)
+        // And the ref itself never reaches the page. An endpoint left
+        // unresolved would be an arrow bound to nothing, which the digest
+        // reports as an endpoint id appearing nowhere else on the board.
+        XCTAssertNotEqual(arrow.from, "auth")
+        XCTAssertNotEqual(arrow.to, "tokens")
+        XCTAssertNil(arrow.json["ref"])
+    }
+
+    func test_anArrowMayStillNameAnElementAlreadyOnTheBoardWhenTheBatchUsesRefs() throws {
+        // The two vocabularies coexist in one batch: a real board id on one end
+        // and a batch-local name on the other.
+        let plan = try Write.addPlan(from: [
+            ["kind": "box", "text": "new", "ref": "fresh"],
+            ["kind": "arrow", "from": "old-1", "to": "fresh"],
+        ], live: live("old-1"))
+        let arrow = try XCTUnwrap(plan.last)
+        XCTAssertEqual(arrow.from, "old-1")
+        XCTAssertEqual(arrow.to, plan[0].id)
+    }
+
+    func test_anArrowCannotNameARefDeclaredLaterInTheSameBatch() {
+        // The forward-reference rule, on the path that can actually be reached:
+        // resolving this would make a batch's meaning depend on a reading order
+        // nothing states. The existing test above pins the same rule for a
+        // minted id, which no real caller can write.
+        XCTAssertThrowsError(
+            try Write.addPlan(from: [
+                ["kind": "arrow", "from": "auth", "to": "tokens"],
+                ["kind": "box", "text": "Auth service", "ref": "auth"],
+                ["kind": "box", "text": "Token store", "ref": "tokens"],
+            ], live: empty)
+        ) { XCTAssertEqual($0 as? Write.Failure, .unknownElement("auth")) }
+    }
+
+    func test_anArrowCannotNameItsOwnRef() {
+        // A ref is registered only once its element is made, so this falls out
+        // of the forward-reference rule rather than needing one of its own —
+        // the same way `test_anArrowMayNotNameItself` does for a minted id.
+        XCTAssertThrowsError(
+            try Write.addPlan(
+                from: [["kind": "arrow", "from": "self", "to": "self", "ref": "self"]],
+                live: empty
+            )
+        ) { XCTAssertEqual($0 as? Write.Failure, .unknownElement("self")) }
+    }
+
+    // MARK: - Refs
+
+    func test_aRefThatIsAlreadyAnIDOnTheBoardIsRefused() {
+        // Resolvable either way round, which is exactly why it is refused: an
+        // arrow naming it would mean two things and a rule picking one draws
+        // the arrow to the wrong end of the board — which reads fine in the
+        // digest.
+        XCTAssertThrowsError(
+            try Write.addPlan(from: [
+                ["kind": "box", "text": "A", "ref": "old-1"],
+            ], live: live("old-1"))
+        ) { error in
+            XCTAssertEqual(error as? Write.Failure, .refCollidesWithElement("old-1"))
+            XCTAssertTrue(
+                (error as? Write.Failure)?.errorDescription?.contains("old-1") == true,
+                "the refusal has to name the ref"
+            )
+        }
+    }
+
+    func test_twoEntriesDeclaringTheSameRefAreRefused() {
+        XCTAssertThrowsError(
+            try Write.addPlan(from: [
+                ["kind": "box", "text": "A", "ref": "node"],
+                ["kind": "box", "text": "B", "ref": "node"],
+            ], live: empty)
+        ) { XCTAssertEqual($0 as? Write.Failure, .duplicateRef("node")) }
+    }
+
+    func test_aRefCollisionIsRefusedWhereverInTheBatchItSits() {
+        // Scanned up front, so the answer does not depend on batch order — a
+        // refusal an agent fixes by shuffling entries is one it never
+        // understood. Pinned in both directions, and with the collision after a
+        // valid arrow, where a scan done as the batch is walked would have let
+        // the arrow bind first.
+        for batch in [
+            [
+                ["kind": "box", "text": "A", "ref": "old-1"],
+                ["kind": "box", "text": "B"],
+            ],
+            [
+                ["kind": "box", "text": "B"],
+                ["kind": "box", "text": "A", "ref": "old-1"],
+            ],
+        ] {
+            XCTAssertThrowsError(try Write.addPlan(from: batch, live: live("old-1"))) {
+                XCTAssertEqual($0 as? Write.Failure, .refCollidesWithElement("old-1"))
+            }
+        }
+    }
+
+    func test_theRefScanIsRefusedAheadOfAnUnknownKindInTheSameBatch() {
+        // A consequence of scanning up front, pinned rather than left to be
+        // discovered by whoever reorders these two checks.
+        XCTAssertThrowsError(
+            try Write.addPlan(from: [
+                ["kind": "cylinder"],
+                ["kind": "box", "text": "A", "ref": "old-1"],
+            ], live: live("old-1"))
+        ) { XCTAssertEqual($0 as? Write.Failure, .refCollidesWithElement("old-1")) }
+    }
+
+    func test_anEmptyOrNullRefIsNotADeclaration() throws {
+        // A serializer that writes every key of its struct sends `"ref": ""` or
+        // `null` on every entry, and reading those as declarations would refuse
+        // the batch for a duplicate name nobody wrote. The same trap
+        // `asks(_:for:)` documents for the mermaid arm, and this side has to
+        // fall the same way for the same bytes.
+        let plan = try Write.addPlan(from: [
+            ["kind": "box", "text": "A", "ref": ""],
+            ["kind": "box", "text": "B", "ref": NSNull()],
+            ["kind": "box", "text": "C", "ref": ""],
+        ], live: empty)
+        XCTAssertEqual(plan.count, 3)
+    }
+
+    func test_aRefOnANonArrowIsNotCarriedIntoTheSkeleton() throws {
+        // Parse-time only: the page is handed real ids and nothing else, so
+        // there is still one id vocabulary and no mapping table for the two
+        // ends to drift apart on.
+        let plan = try Write.addPlan(
+            from: [["kind": "box", "text": "A", "ref": "auth"]],
+            live: empty
+        )
+        let json = try XCTUnwrap(plan.first?.json)
+        XCTAssertNil(json["ref"])
+        XCTAssertFalse("\(json)".contains("auth"))
+    }
+
     func test_anArrowMayNotNameItself() {
         // Its own id is minted after its endpoints are checked, so this falls
         // out of the rule above rather than needing one of its own — pinned
@@ -829,7 +985,10 @@ final class WhiteboardWriteTests: XCTestCase {
     /// Refused rather than ignored: an agent that asked for a red diagram and
     /// got a black one has been taught that `color` does nothing.
     func test_aMermaidDiagramRefusesTheFieldsItCannotHonour() {
-        for field in ["color", "from", "to"] {
+        // `ref` is in the list for the same reason: a mermaid entry stands
+        // alone in its call, so nothing can ever name it, and an alias that
+        // silently does nothing is the failure this refusal exists for.
+        for field in ["color", "from", "to", "ref"] {
             var entry: [String: Any] = ["kind": "mermaid", "text": flowchart]
             entry[field] = "red"
             XCTAssertThrowsError(try Write.plan(from: [entry], live: empty, mint: minter())) {

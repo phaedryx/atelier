@@ -929,18 +929,27 @@ extension IPC.Tool {
                 Add elements to this workstream's whiteboard and get back their ids.
 
                 `elements` is a JSON array; each entry is {"kind": ..., "text": ...,
-                "at": "x,y", "from": ..., "to": ..., "color": ...}. `kind` is one of
-                box, note, text, arrow, mermaid. A box is a diagram node; a note is an
-                annotation, and read_whiteboard reports it back as a note, so your own
-                commentary stays distinguishable from the structure you drew. `at` is
-                optional — anything you do not place is stacked below what is already
-                on the board. `color` is a hex value like "#e03131" or a name like red.
+                "at": "x,y", "from": ..., "to": ..., "color": ..., "ref": ...}. `kind`
+                is one of box, note, text, arrow, mermaid. A box is a diagram node; a
+                note is an annotation, and read_whiteboard reports it back as a note, so
+                your own commentary stays distinguishable from the structure you drew.
+                `at` is optional — anything you do not place is stacked below what is
+                already on the board. `color` is a hex value like "#e03131" or a name
+                like red.
 
-                An arrow needs `from` and `to`, each an element id: either one already
-                on the board — call read_whiteboard for those — or one added EARLIER in
-                this same call, using the id you are about to be handed back. So a
-                whole diagram is one call: the boxes first, then the arrows between
-                them. Naming an element added later in the same call is refused.
+                An arrow needs `from` and `to`. Each names either an element already on
+                the board — call read_whiteboard for those ids — or an element this same
+                call creates, by the `ref` you gave it.
+
+                `ref` is a name of your own on any entry, used only inside this one call:
+                give a box "ref": "auth", then write an arrow with "from": "auth". You
+                cannot name a new element by its id, because the id is minted for you and
+                you only learn it when this call returns. So a whole diagram is one call:
+                the boxes first, each with a ref, then the arrows between them. A ref may
+                only be used by an entry LATER in the array than the one that declared it;
+                naming one declared later is refused. Two entries may not share a ref, and
+                a ref may not be an id already on the board — both would make an arrow
+                naming it ambiguous, so both are refused rather than guessed.
 
                 A mermaid entry draws a whole diagram from a mermaid definition in
                 `text` — flowcharts, sequence, class, ER and state diagrams become
@@ -948,8 +957,8 @@ extension IPC.Tool {
                 other diagram type lands as one image, captioned with the definition.
                 It must be the only entry in its call, because its size is not known
                 until it is drawn; `at` places its top-left corner, and `color`,
-                `from` and `to` are refused — style and connections go in the
-                definition. A definition mermaid cannot parse is refused with
+                `from`, `to` and `ref` are refused — style and connections go in the
+                definition, and a diagram standing alone has nothing to name it. A definition mermaid cannot parse is refused with
                 mermaid's own message and nothing is drawn.
 
                 The ids returned are the board's real element ids. Pass them straight
@@ -970,7 +979,7 @@ extension IPC.Tool {
                         name: "elements",
                         kind: .string,
                         isRequired: true,
-                        description: "A JSON array of elements to add. Each is an object with `kind` (box, note, text, arrow or mermaid) and optionally `text`, `at` (\"x,y\"), `from`, `to`, `color`. For example [{\"kind\": \"box\", \"text\": \"Auth service\", \"at\": \"120,80\"}], or, on its own, [{\"kind\": \"mermaid\", \"text\": \"graph LR; A[Auth] --> B[Token store]\"}]."
+                        description: "A JSON array of elements to add. Each is an object with `kind` (box, note, text, arrow or mermaid) and optionally `text`, `at` (\"x,y\"), `from`, `to`, `color`, `ref`. `ref` names an entry so an arrow later in the same array can point at it. For example [{\"kind\": \"box\", \"text\": \"Auth service\", \"ref\": \"auth\"}, {\"kind\": \"box\", \"text\": \"Token store\", \"ref\": \"tokens\"}, {\"kind\": \"arrow\", \"from\": \"auth\", \"to\": \"tokens\"}], or, on its own, [{\"kind\": \"mermaid\", \"text\": \"graph LR; A[Auth] --> B[Token store]\"}]."
                     ),
                 ]
             )

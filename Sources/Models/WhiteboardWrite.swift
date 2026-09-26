@@ -7,7 +7,7 @@ extension Whiteboard {
     /// The agent write path's Swift half.
     ///
     /// **Swift validates; the page expands.** This turns `{kind, text, at,
-    /// from, to, color}` into an Excalidraw *skeleton* and refuses everything
+    /// from, to, color, ref}` into an Excalidraw *skeleton* and refuses everything
     /// outside the vocabulary; `convertToExcalidrawElements` in
     /// `editor/src/whiteboard.jsx` turns a skeleton into a real element. The
     /// split falls here because this half is where the feature's mistakes live
@@ -25,6 +25,16 @@ extension Whiteboard {
     /// apart on. The one exception is a `mermaid` entry — see `Mermaid` — where
     /// the page regenerates ids on purpose and the answer is read off what
     /// really landed, which is the same source of truth reached the other way.
+    ///
+    /// **A minted id is a UUID, so a caller cannot name one it is creating.**
+    /// That is what `ref` is for: an optional name of the caller's own on an
+    /// entry, which an arrow later in the same batch may use for `from` or
+    /// `to`. It is resolved here to the minted id and **never leaves this
+    /// file** — nothing on the op, nothing on `Skeleton`, nothing the page or
+    /// the digest has a spelling for — so the paragraph above still holds:
+    /// there is one id vocabulary, and a `ref` is not in it. Without this the
+    /// list `add` takes could only hold arrows between elements already on the
+    /// board, which is not the reason it takes a list.
     ///
     /// **Nothing here reads `board.excalidraw`.** What is on the board arrives
     /// as a `Live` parameter, supplied from the *page*, because the file lags it
@@ -191,6 +201,8 @@ extension Whiteboard {
             case textRequired(kind: String)
             case arrowNeedsEndpoints
             case unknownElement(String)
+            case refCollidesWithElement(String)
+            case duplicateRef(String)
             case invalidPosition(String)
             case invalidColor(String)
             case captionNeedsImage(String)
@@ -220,9 +232,25 @@ extension Whiteboard {
                 case .arrowNeedsEndpoints:
                     "An arrow needs both `from` and `to`, each naming an element id."
                 case let .unknownElement(id):
-                    "No element on this board has the id \"\(id)\". Call read_whiteboard for the "
-                        + "current ids. An arrow may only name an element already on the board, or "
-                        + "one added earlier in the same call — not one added later in it."
+                    "Nothing on this board, and nothing earlier in this call, is named "
+                        + "\"\(id)\". Call read_whiteboard for the current ids. An arrow's "
+                        + "`from` and `to` may name an element already on the board, or a `ref` "
+                        + "declared on an entry EARLIER in this same call — not one declared "
+                        + "later in it."
+                case let .refCollidesWithElement(ref):
+                    // Refused rather than resolved either way round. A `ref`
+                    // that is also a real board id makes an arrow naming it
+                    // mean two things, and a rule silently picking one of them
+                    // draws the arrow to the wrong end of the board — which
+                    // reads perfectly well in the digest.
+                    "\"\(ref)\" is already the id of an element on this board, so it cannot "
+                        + "also be a `ref` for something this call creates — an arrow naming it "
+                        + "would be ambiguous. A `ref` is a name of your own, used only inside "
+                        + "this call; pick one that is not an id read_whiteboard reports."
+                case let .duplicateRef(ref):
+                    "Two entries in this call declare the same `ref` \"\(ref)\". A `ref` names "
+                        + "exactly one element, or an arrow naming it would be ambiguous. Give "
+                        + "each entry its own."
                 case let .invalidPosition(raw):
                     "\"\(raw)\" is not a position. Write it as \"x,y\", for example \"120,80\"."
                 case let .invalidColor(raw):
@@ -262,7 +290,8 @@ extension Whiteboard {
                 case let .mermaidFieldRefused(field):
                     "`\(field)` does nothing on a mermaid diagram. A mermaid entry takes `text` "
                         + "(the definition) and optionally `at`; colour and connections belong "
-                        + "in the definition itself."
+                        + "in the definition itself, and a diagram that must stand alone in its "
+                        + "call has nothing to name it by `ref`."
                 }
             }
         }
@@ -390,7 +419,11 @@ extension Whiteboard {
         }
 
         private static func mermaidPlan(from entry: [String: Any], live: Live) throws -> Mermaid {
-            for field in ["color", "from", "to"] where asks(entry, for: field) {
+            // `ref` is here for the same reason the other three are: a mermaid
+            // entry stands alone in its call, so a name declared on it can
+            // never be named by anything — refused rather than ignored, so an
+            // agent whose alias did nothing has been told.
+            for field in ["color", "from", "to", "ref"] where asks(entry, for: field) {
                 throw Failure.mermaidFieldRefused(field)
             }
             guard let definition = entry["text"] as? String, !definition.isEmpty else {
@@ -422,6 +455,23 @@ extension Whiteboard {
             return Kind(rawValue: raw)
         }
 
+        /// The batch-local name an entry declares, or nil for one declaring none.
+        ///
+        /// **The one place a `ref` is read**, for the reason `kind(of:)` is the
+        /// one place a kind is read: the pre-scan that refuses a collision and
+        /// the loop that registers the minted id must agree about which entries
+        /// declared a name, or a batch could be refused for a name the loop
+        /// never binds, or bind one the scan never checked.
+        ///
+        /// Read exactly the way `text`, `from` and `to` are — `as? String`,
+        /// empty is absent — so a serializer that writes every key of its
+        /// struct is not treated as having named three elements `""`. That is
+        /// the trap `asks(_:for:)` documents for the mermaid arm, and this side
+        /// has to fall the same way for the same bytes.
+        private static func refName(of entry: [String: Any]) -> String? {
+            (entry["ref"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        }
+
         // MARK: - add
 
         static func addPlan(
@@ -432,12 +482,48 @@ extension Whiteboard {
             guard !raw.isEmpty else { throw Failure.emptyBatch }
             guard raw.count <= maxBatch else { throw Failure.batchTooLarge(raw.count) }
 
+            // **Names are scanned before anything is drawn**, on the same
+            // ground the column is: a refusal that depends on where in the
+            // batch the offending entry sits is one an agent fixes by shuffling
+            // rather than by understanding. So a collision is refused whatever
+            // order the entries arrive in. One consequence, pinned rather than
+            // left to be discovered: this beats `unknownKind` and
+            // `malformedEntry` for a batch carrying both.
+            var declared: Set<String> = []
+            for entry in raw {
+                guard let entry = entry as? [String: Any],
+                      let ref = refName(of: entry)
+                else { continue }
+                // **A `ref` may not be an id already on the board.** It could
+                // be resolved either way round, and that is the problem: an
+                // arrow naming it would mean two things, and a rule silently
+                // picking one draws the arrow to the wrong end of the board —
+                // which reads perfectly well in the digest.
+                guard !live.ids.contains(ref) else {
+                    throw Failure.refCollidesWithElement(ref)
+                }
+                guard declared.insert(ref).inserted else { throw Failure.duplicateRef(ref) }
+            }
+
             var skeletons: [Skeleton] = []
             // Grows as the batch is walked, so an arrow may name a box created
             // earlier in the same call — but not a later one. A forward
             // reference is refused rather than resolved: resolving it would make
             // a batch's meaning depend on a reading order nothing states.
             var known = live.ids
+            // The other half of that: a `ref` an entry declared, against the id
+            // Swift minted for it. **Batch-local and parse-time only.** It is
+            // not on `Skeleton` and never crosses to the page, because the page
+            // is handed real ids and nothing else — so the invariant that there
+            // is no mapping table for the two ends to drift apart on still
+            // holds. This table lives for the length of one call.
+            //
+            // It exists because an agent composing a diagram cannot know the id
+            // of a box it is creating in the same call: `mintID` is a UUID.
+            // Without it the list `add` takes could only ever hold arrows
+            // between elements that were ALREADY on the board, which is not the
+            // reason it takes a list.
+            var refs: [String: String] = [:]
             // The column starts below everything already on the board AND
             // below anything this batch places by hand.
             //
@@ -487,10 +573,14 @@ extension Whiteboard {
                     guard let start = entry["from"] as? String, !start.isEmpty,
                           let end = entry["to"] as? String, !end.isEmpty
                     else { throw Failure.arrowNeedsEndpoints }
-                    guard known.contains(start) else { throw Failure.unknownElement(start) }
-                    guard known.contains(end) else { throw Failure.unknownElement(end) }
-                    from = start
-                    to = end
+                    // A name resolves against `refs` first and `known` second,
+                    // and the two can never both answer: a `ref` colliding with
+                    // a board id was refused up front. `refs` holds only what
+                    // entries BEFORE this one declared, which is what keeps a
+                    // forward reference refused — the endpoint is simply not
+                    // there yet, the same way a minted id is not.
+                    from = try resolveEndpoint(start, refs: refs, known: known)
+                    to = try resolveEndpoint(end, refs: refs, known: known)
                 }
 
                 let position: (x: Double, y: Double)
@@ -527,8 +617,32 @@ extension Whiteboard {
                     isNote: kind == .note
                 ))
                 known.insert(id)
+                // Registered only once the element is made, so an entry can
+                // never name itself — the rule an arrow's `from` already falls
+                // out of rather than being given one of its own.
+                if let ref = refName(of: entry) {
+                    refs[ref] = id
+                }
             }
             return skeletons
+        }
+
+        /// One end of an arrow, as an id the page can bind to.
+        ///
+        /// A `ref` declared earlier in this batch, or an id already on the
+        /// board. Anything else is refused, and that refusal is the whole of
+        /// what an agent has to work from: it cannot see the board, and a
+        /// forward reference and a typo look identical from here.
+        private static func resolveEndpoint(
+            _ name: String,
+            refs: [String: String],
+            known: Set<String>
+        ) throws -> String {
+            if let resolved = refs[name] {
+                return resolved
+            }
+            guard known.contains(name) else { throw Failure.unknownElement(name) }
+            return name
         }
 
         // MARK: - update
