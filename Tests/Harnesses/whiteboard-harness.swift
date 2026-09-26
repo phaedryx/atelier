@@ -1800,6 +1800,67 @@ check(
     "height \(number(files.elements()["m-grow"]?["height"]))"
 )
 
+// **A labelled ARROW is not resized, and this is a real case rather than
+// caution.** Write.skeletons sets a label for every kind, arrows included, so
+// retexting a labelled arrow reaches the resize branch with an arrow as the
+// container. An arrow's frame comes from its `points`, which a skeleton cannot
+// carry — the conversion would rebuild it as a straight line — and
+// computeContainerDimensionForBoundText has a separate `arrow` branch that grows
+// by padding * 8. Excalidraw excludes arrows from this itself
+// (`!isArrowElement(container)` in redrawTextBoundingBox), and so does the add
+// arm, where `isBoxy` never sizes one.
+_ = host.apply([
+    "kind": "add",
+    "elements": [
+        box("m-l", "L", x: 6000, y: 6000),
+        box("m-r", "R", x: 6600, y: 6000),
+    ],
+])
+var labelledArrow = arrow("m-labelled", from: "m-l", to: "m-r")
+labelledArrow["label"] = ["text": "calls"]
+_ = host.apply(["kind": "add", "elements": [labelledArrow]])
+let arrowFrameBefore = (
+    w: number(files.elements()["m-labelled"]?["width"]),
+    h: number(files.elements()["m-labelled"]?["height"])
+)
+_ = host.apply([
+    "kind": "update",
+    "id": "m-labelled",
+    "text": "invokes over a very much longer edge label than the one it had",
+])
+check(
+    "retexting a labelled arrow leaves its own frame alone",
+    (
+        w: number(files.elements()["m-labelled"]?["width"]),
+        h: number(files.elements()["m-labelled"]?["height"])
+    ) == arrowFrameBefore,
+    "before \(arrowFrameBefore), after "
+        + "\(number(files.elements()["m-labelled"]?["width"]))x"
+        + "\(number(files.elements()["m-labelled"]?["height"]))"
+)
+check(
+    "and the retext still landed on its label",
+    (labelOf("m-labelled")?["text"] as? String)?.hasPrefix("invokes") == true,
+    "\(String(describing: labelOf("m-labelled")?["text"]))"
+)
+
+// **A board that cannot be measured answers NO ANSWER, never an empty board.**
+// The empty answer carries `ids: []`, and reporting that for a board with
+// elements on it would have whiteboard_update refuse a real id as unknown while
+// the digest goes on listing it. This checks the ordinary half of that rule —
+// that a non-empty scene never reports itself empty — because the other half is
+// unreachable without a scene holding a non-finite coordinate, which Swift
+// refuses to create.
+let stateJSON = host.callJS("return JSON.stringify(window.__whiteboardState())") ?? "null"
+let stateIDs = ((try? JSONSerialization.jsonObject(
+    with: Data(stateJSON.utf8)
+)) as? [String: Any])?["ids"] as? [String]
+check(
+    "a board with elements on it never reports itself as empty",
+    !(stateIDs ?? []).isEmpty && !files.elements().isEmpty,
+    "\(stateIDs?.count ?? -1) ids for \(files.elements().count) elements on disk"
+)
+
 // ---------------------------------------------------------------------------
 print("\n\(checksRun - failures.count)/\(checksRun) checks passed")
 if failures.isEmpty {

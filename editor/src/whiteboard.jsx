@@ -1073,7 +1073,25 @@ window.__whiteboardApply = async (op) => {
           version: (next[i].version || 1) + 1,
           versionNonce: nonce(),
         }
-        const container = next.find((el) => el.id === op.id && el.id !== textEl.id)
+        // **An arrow is excluded, and it is a real case rather than caution.**
+        // An arrow may carry a label — `Write.skeletons` sets one for every kind
+        // — so retexting a labelled arrow arrives here with an arrow as the
+        // container. Sizing it would be wrong twice over. The skeleton below
+        // cannot carry the arrow's own `points`, so the conversion rebuilds it
+        // as a straight line from (0,0) to (width, height); and
+        // `computeContainerDimensionForBoundText` has a separate `arrow` branch
+        // that grows by `padding * 8`. Transplanting that width onto an arrow
+        // whose `points` never changed leaves its frame disagreeing with the
+        // line that actually renders, and `reflowArrowsTouching` cannot repair
+        // it — it writes `x`, `y` and `points`, never `width` or `height`.
+        //
+        // Excalidraw draws the same line itself: `redrawTextBoundingBox` guards
+        // its height growth with `!isArrowElement(container)`. And so does the
+        // add arm, where `isBoxy` excludes an arrow from sizing. An arrow's
+        // geometry is `edgePoints`' answer at both ends.
+        const container = next.find(
+          (el) => el.id === op.id && el.id !== textEl.id && el.type !== 'arrow'
+        )
         // The container's CURRENT width and height go in, and that is what makes
         // this GROW-ONLY: `redrawTextBoundingBox` mutates a dimension only when
         // the text exceeds it. So a box the user deliberately drew large keeps

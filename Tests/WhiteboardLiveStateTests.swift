@@ -233,4 +233,60 @@ final class WhiteboardLiveStateTests: XCTestCase {
             "The whiteboard page refused the write: no reason given"
         )
     }
+
+    // MARK: - The geometry a write answers with
+
+    /// Exactly the shape the page sends a rectangle in, as `JSONSerialization`
+    /// hands it over: every number an `NSNumber`. That is not pedantry — every
+    /// coordinate on this board may be integral, and an integral JSON number
+    /// bridges to an `NSNumber` that an `as? Double` cast misses entirely.
+    /// `SceneLoad.number` documents the same trap on the read side.
+    private func rect(_ x: Double, _ y: Double, _ w: Double, _ h: Double) -> [String: Any] {
+        [
+            "x": NSNumber(value: x), "y": NSNumber(value: y),
+            "width": NSNumber(value: w), "height": NSNumber(value: h),
+        ]
+    }
+
+    func test_aRectSurvivesIntegralNumbersFromThePage() {
+        XCTAssertEqual(
+            Host.decodeRect(rect(120, 80, 312, 90)),
+            Write.Rect(x: 120, y: 80, width: 312, height: 90)
+        )
+    }
+
+    /// **Dropped rather than guessed.** A rect is re-encoded into the answer and
+    /// into a following call's `at`, where `Write.parsePosition` refuses a
+    /// non-finite coordinate anyway — and a non-finite `Double` reaching
+    /// `JSONSerialization` raises an Objective-C exception that kills the app.
+    func test_aRectMissingOrNonFiniteIsNoRectAtAll() {
+        XCTAssertNil(Host.decodeRect(nil))
+        XCTAssertNil(Host.decodeRect(["x": 1, "y": 2, "width": 3]))
+        XCTAssertNil(Host.decodeRect(rect(.infinity, 0, 10, 10)))
+        XCTAssertNil(Host.decodeRect(rect(0, .nan, 10, 10)))
+    }
+
+    func test_rectsAreKeyedByTheIdThePageReported() {
+        let decoded = Host.decodeRects([
+            "n1": rect(0, 0, 10, 20),
+            "n2": rect(5, 5, 30, 40),
+        ])
+        XCTAssertEqual(decoded["n1"], Write.Rect(x: 0, y: 0, width: 10, height: 20))
+        XCTAssertEqual(decoded["n2"], Write.Rect(x: 5, y: 5, width: 30, height: 40))
+    }
+
+    /// **A missing measurement is a floor, not a failure** — the opposite of
+    /// `decodeLiveState` above, and deliberately so. A size that does not arrive
+    /// falls back to `boxSize`, which is a real size that draws a real box: the
+    /// size every box was before auto-sizing. A coordinate that does not arrive
+    /// has no such fallback, which is why that decode refuses instead.
+    func test_anUnreadableSizeIsDroppedRatherThanRefusingTheWholeBatch() {
+        let decoded = Host.decodeSizes([
+            "good": ["width": NSNumber(value: 312), "height": NSNumber(value: 45)],
+            "half": ["width": NSNumber(value: 312)],
+            "wild": ["width": NSNumber(value: Double.infinity), "height": NSNumber(value: 45)],
+            "junk": "not an object",
+        ])
+        XCTAssertEqual(decoded, ["good": Write.Size(width: 312, height: 45)])
+    }
 }
