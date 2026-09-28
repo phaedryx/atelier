@@ -4,6 +4,217 @@ Atelier was forked from [Factory Floor](https://github.com/alltuner/factoryfloor
 at v0.1.79. Everything below that release is Factory Floor's history; those links
 point at the upstream repository.
 
+## [0.2.7](https://github.com/phaedryx/atelier/compare/v0.2.6...v0.2.7) (2026-09-27)
+
+### Features
+
+* **whiteboard:** `whiteboard_add_layout`, a sixth write tool that is not a
+  drawing tool. The other five hand an agent a pen; this one hands it an
+  arrangement — small multiples, lanes, or a before/after pair — and computes
+  the coordinates itself. In a four-run evaluation every run sprawled to
+  2000–2900px against `MAX_RENDER_EDGE` (1600) and two produced colliding arrow
+  labels; both are placement failures and neither is fixable by asking agents to
+  be more careful. One tool with a `layout` discriminator rather than one tool
+  per layout, because every entry in `advertisedOrder` costs schema tokens in
+  every session whether or not it ever draws, and it emits `Write.Skeleton` and
+  nothing else — so it travels through the `add` op the page already has and
+  every invariant that op maintains holds here without being restated. It is
+  collision-free by construction, pinned in two places on purpose: the planned
+  rectangles never overlap at their grown height, and the harness pins that the
+  grown height is what the page really produces. Arrows are never labelled and
+  the field is refused rather than ignored, which deletes the collision class
+  the evaluation found, and no layout emits a bare `text` element — one does not
+  wrap and has no container to clamp it. `lanes` bands rather than wrapping,
+  with the lane labels repeated and no arrow crossing a band boundary, so
+  nothing asserts an adjacency that is not true.
+* **whiteboard:** a box or note is sized to its label, and the answer carries
+  the geometry. Both were 220x90 whatever they said, so a label longer than
+  three or four words wrapped inside and spilled out the bottom, and a caller
+  had no way to know how wide anything was — it had to hold a column pitch in
+  its head and got it wrong in every run of a real evaluation. Auto-sizing alone
+  would have been strictly worse, trading a known-bad constant for an unknown
+  one, so this is both halves. Nothing here measures text by hand: the converter
+  does, through Excalidraw's own `redrawTextBoundingBox`, because a rolled
+  `measureText` would have to reproduce the font string, line height,
+  `normalizeText`, tokenizer and padding, and every one it got wrong is a box
+  whose size disagrees with the words drawn in it. Placement deliberately stayed
+  in Swift — the rule for the whole write path is now stated as "the page
+  measures and reports; Swift places", because the column floor is the one
+  invariant that must not break and the harnesses are run by hand.
+  `whiteboard_update` regrows a container it retexts, grow-only, which is
+  Excalidraw's own semantics rather than a policy invented here, and the board's
+  extent is `getCommonBounds` rather than a min/max that read the board short
+  for arrows and rotated elements — the direction that drops an element on top
+  of something already there.
+* **whiteboard:** a supplied `width` or `height` on a box or note is honoured
+  exactly, and auto-sizing applies only where neither was given. Ask for 200 and
+  get 200, not 220: a supplied width is never grown to fit a label and never
+  floored at the default, and the same holds for height in both directions. Per
+  axis, so a width alone clamps the wrap and lets the height be measured around
+  it — and the label is measured wrapped at the *supplied* width, or the height
+  that comes back is the height of a box nobody drew. A layout that derives
+  column arithmetic and a width budget from the widths it supplies cannot
+  enforce either if those widths are elastic, so both are pinned as tests rather
+  than left as a comment. Refused on `text`, `arrow` and `mermaid` rather than
+  ignored, the rule the mermaid refusal already states. `Live` now carries every
+  element's rectangle as validation input, since a caller placing something
+  relative to an element already on the board needs that rectangle before it can
+  decide anything, and the geometry a write returns describes only what that
+  write just did — a whole call too late.
+
+### Bug Fixes
+
+* **whiteboard:** an arrow can finally name a box created beside it.
+  `whiteboard_add` advertised in four places — the refusal string, the tool
+  prose, the `IPCProtocol` case and the docs — that an arrow may name an element
+  added earlier in the same call, and 0.2.6's changelog entry repeated it. No
+  caller could do it: Swift minted every id itself and read none off the entry,
+  so the id was unknowable until the call returned and an arrow naming it was
+  refused, which refuses the whole call and draws nothing. Every hand-composed
+  diagram failed on its first attempt. It survived because every arrow test
+  injected its own minter, pinning a batch no agent can compose. An entry may
+  now declare an optional `ref`, a name of the caller's own, and an arrow's
+  `from`/`to` may name either a real board id or a `ref` declared earlier in the
+  same batch; Swift still mints the real id. `ref` is parse-time only — not on
+  the skeleton, not on the op, no spelling in the page or the digest — so there
+  is still one id vocabulary and no mapping table for the two ends to drift
+  apart on. A forward reference stays refused, and a `ref` that collides with a
+  board id or with another `ref` is refused up front, before anything is drawn,
+  because a rule silently picking an end draws the arrow to the wrong one and
+  reads perfectly well in the digest afterwards.
+* **whiteboard:** the digest silently stopped being a complete record past
+  roughly 60 elements, and the fallback its overflow note offered — `board.png`
+  — is capped at 1600px while real boards run past 2000, so the labels are not
+  legible at that scale. Both halves of the read path degraded together, exactly
+  as a board got large enough to be worth checking. The byte budget is 32,000,
+  derived rather than picked: measured against assembled digests of boards this
+  feature really produces, an entry costs a flat ~89 bytes, so the cap holds
+  ~355 clean entries against the 60–120 a well-formed board carries. It is a
+  *ceiling* and that is pinned rather than claimed — a 30-element board answers
+  with under 4KB and is byte-identical to what the old 8,000 produced, so no
+  ordinary `read_whiteboard` pays for the raise. Truncation is now a choice
+  about value rather than a leftover of position: the serious bug was
+  referential, since file-order truncation can list an arrow whose endpoint it
+  dropped, printing an id that appears nowhere else. An arrow is admitted
+  together with the endpoints it names, transitively — Excalidraw lets an arrow
+  bind to another arrow, and stopping at one hop just moves the dangling id one
+  element further out. Elements are admitted in tier order, freehand last,
+  because a stroke is the one entry whose loss the overflow note answers for
+  honestly; an uncaptioned image is deliberately not down there with it, since
+  its id is the entry point for `whiteboard_update(caption:)`. The header
+  carries the board's element count and extent whether or not the list below it
+  is complete, and the overflow note names what it left out by kind.
+* **whiteboard:** the mermaid refusal told an agent that "colour and connections
+  belong in the definition itself". For a node that is true; for an edge it is
+  false, and false in the worst direction — an agent that wanted a red arrow was
+  sent by the refusal to write `linkStyle`, got a black arrow, and had no
+  recourse inside mermaid at all. A silent success reached by following a
+  refusal is the shape this subsystem is organized against. Measured against
+  `@excalidraw/mermaid-to-excalidraw` 2.2.2: `classDef`, `style` and `class`
+  survive in full on nodes, while `linkStyle` is dropped in every form tested,
+  so every converted arrow is `#1e1e1e` unconditionally. The refusal now names
+  that split and points at `whiteboard_update` on an id the call answers with,
+  which is the one thing that does work for edge colour. The converter's
+  behaviour is recorded as a measurement rather than pinned as a check — it is
+  not an invariant this codebase keeps — but the refusal's wording is pinned, so
+  a later rewrite cannot re-broaden the advice back to the claim that was wrong.
+* **sidebar:** a workstream row was keyed by one id and tagged with another.
+  Rows iterated a cached id list but resolved their content — and their
+  selection tag — through a cached positional index pair, and those caches are
+  one frame behind by construction, since they are refilled from `onChange`
+  after the body that already observed the mutated projects. So after a purge
+  the removed workstream's id was still in the order list, its stale index
+  pointed at whichever workstream had shifted into that slot, and the sidebar
+  emitted two rows carrying the same tag: `List(selection:)` highlighted both,
+  and clicking a third row handed the selection straight back to the stale twin.
+  The pair was global, so a stale project index could also render one project's
+  workstreams inside another's group. The caches now supply order and nothing
+  else, membership is reconciled against the live ids on every render, and rows
+  resolve their workstream by id out of the project value their own group was
+  built from — so key, content and tag are the same id by construction. The
+  index type is deleted, so nothing can index positionally again. Two related
+  traps go with it: an unknown project id returned a blank `Project` whose
+  identity changed every evaluation and now emits no row, and terminal activity
+  wrote `lastAccessedAt` through the same positional pair, stamping the wrong
+  workstream's timestamp and reordering the sidebar around it.
+* **sidebar:** dragging the sidebar divider could strand a workstream row at its
+  pre-resize frame — a selected row's highlight capsule left floating at the old
+  width, over rows in a different project's group, still taking content updates
+  but no longer taking geometry. The `GeometryReader` wrapping the list had
+  discarded its proxy since #101, which deleted its last real use; the container
+  stayed. It is not free: it can only hand the closure a proxy once its own size
+  has resolved, so children lay out downstream of the previous pass rather than
+  in it, and `List` under `.listStyle(.sidebar)` is an `NSTableView` that caches
+  row rects and invalidates them on a bounds change. Across that extra hop the
+  bounds change and the SwiftUI row updates arrive in no guaranteed order. The
+  comment left behind names the replacements for when something here genuinely
+  needs the container's size, so the wrapper does not come back.
+
+### Build System
+
+* **ci:** one release run per ref. v0.2.6's tag push dispatched the release
+  workflow twice — two runs two seconds apart, same workflow, same `push` event,
+  same sha, attempt 1 each. Two dispatches of one ref creation, not a re-run,
+  and no repository-side cause exists: one `git push`, a remote tag object
+  byte-identical to the local one, a single push URL with no hooks, and no other
+  workflow triggering on `v*`. Most of the job already tolerates a peer — the
+  draft create is guarded, the upload clobbers, publishing is idempotent — but
+  the unsigned-build note's stacking guard reads the body and then writes it,
+  which is written for a serial re-run and defenceless against a concurrent one:
+  two runs reaching it together both see no note and both prepend one. A
+  `cancel-in-progress` concurrency group on the ref means whichever dispatch
+  arrives last wins and exactly one run reaches the release steps. For v0.2.6
+  the duplicate was cancelled by hand; this makes that self-resolving.
+
+### Documentation
+
+* **agents:** `AGENTS.md` was 3057 lines and every agent loaded all of it. It is
+  split into seven conditionally-loaded files under `docs/agents/`, keyed by a
+  path routing table, leaving 243 lines of rules that apply everywhere. The
+  split itself was a pure move — sections byte-identical, none split internally,
+  no line duplicated or orphaned — and then an adversarial auditor checked every
+  falsifiable claim against source and found 27 stale ones. Twelve of sixteen
+  `file:line` citations in the IPC doc were wrong and three pointed past the end
+  of a file that had since been split; coordinates are stripped rather than
+  re-pinned, because the refactor that broke them is the argument against
+  pinning. The rest were counts and enumerations that had rotted —
+  `AppCommand` said twenty cases and listed eighteen against twenty-one,
+  `ATELIER_DEFAULT_BRANCH` named four callers of six and exempted two producers
+  from the base-branch rule by silence, four files said three singletons after
+  Whiteboard became the fourth — and each is replaced by the rule and the symbol
+  that declares the set rather than by a corrected list. Two parsers the IPC doc
+  described as delegating had been deleted outright, which a count-only check
+  passes: the count of three was right, and the things it named no longer
+  existed in the state it put them in.
+* **readme:** the README was 495 lines, roughly 300 of which were a
+  process-compose config reference sitting between "how do I build this" and
+  "what are the shortcuts". That material is now `docs/configuration.md`; the
+  README keeps a file table, the namespace table and a pointer, and gains an
+  Install section and a list of what a workstream actually gives you — it
+  mentioned none of Changes, Verification, the whiteboard, the per-workstream
+  MCP server, agent messaging, the palette or the browser. Several claims were
+  wrong rather than merely long: the build recipe skipped the ghostty
+  xcframework, which is not in git and which nothing builds for you, so
+  following it ended at `ld: library 'ghostty' not found`; `ports.yml` and
+  `ports.yaml` named the same file; a config `path` field that does not exist
+  was documented twenty lines above "auto-detected with no override".
+  `CONTRIBUTING.md` is gone — three of its nine sections were wrong, including
+  a website that does not exist and a slashed branch-naming convention that puts
+  a worktree a directory deeper than its peers — and what was still true moved
+  into the README.
+* **whiteboard:** three rationales that this release's own changes falsified.
+  The digest's extent and the page's no longer answer the same question, since
+  the page moved to `getCommonBounds` while the digest stays a min/max and so
+  reads short for arrows and rotated elements — the comment claiming they agree
+  is corrected rather than the maths being matched, because matching would mean
+  reimplementing `getCommonBounds` in Swift, which is exactly the hand-rolled
+  geometry the write path is organized around never writing. The mermaid
+  measurement now lives in one place instead of being restated beside the layout
+  tool, which is the duplication this file repeatedly says not to do. And the
+  harness's save-gate flake has five observations, not three, one of them after
+  a rebase onto two merged PRs — so it is not a property of one branch, which is
+  the part that stops the next person bisecting for it.
+
 ## [0.2.6](https://github.com/phaedryx/atelier/compare/v0.2.5...v0.2.6) (2026-09-23)
 
 ### Features
