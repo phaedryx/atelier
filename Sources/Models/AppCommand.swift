@@ -38,6 +38,7 @@ enum AppCommand: Equatable, Sendable {
     /// travelled as a raw `String` while this was a notification; it is typed
     /// now, so a misspelling is a compile error rather than a silent plain open.
     case openSettings(pane: SettingsPane?)
+    case openExternalEditor
     case openExternalTerminal
     case clearProjects
 

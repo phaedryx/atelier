@@ -162,20 +162,6 @@ struct AppInfo: Identifiable, @unchecked Sendable {
         NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) != nil
     }
 
-    static func detectTerminals() -> [AppInfo] {
-        let candidates: [(String, String)] = [
-            ("Ghostty", "com.mitchellh.ghostty"),
-            ("iTerm2", "com.googlecode.iterm2"),
-            ("Terminal", "com.apple.Terminal"),
-            ("Warp", "dev.warp.Warp-Stable"),
-            ("Alacritty", "org.alacritty"),
-            ("kitty", "net.kovidgoyal.kitty"),
-        ]
-        return candidates.compactMap { name, id in
-            isAppInstalled(id) ? AppInfo(name: name, bundleID: id) : nil
-        }
-    }
-
     static func detectBrowsers() -> [AppInfo] {
         let candidates: [(String, String)] = [
             ("Safari", "com.apple.Safari"),

@@ -82,7 +82,6 @@ struct WorkstreamInfoView: View {
     let onRerunInitialization: () -> Void
 
     @EnvironmentObject var appEnv: AppEnvironment
-    @AppStorage("atelier.defaultTerminal") private var defaultTerminal: String = ""
     @State private var copiedBranch = false
     @State private var copiedPath = false
     @State private var docFiles: [DocFile] = []
@@ -179,12 +178,7 @@ struct WorkstreamInfoView: View {
                     ) {
                         copy(workingDirectory, flag: $copiedPath)
                     }
-                    DirectoryActionButton(
-                        icon: "terminal",
-                        tooltip: "Open in external terminal"
-                    ) {
-                        openInTerminal(path: workingDirectory)
-                    }
+                    OpenInAppButtons(directory: workingDirectory)
                 }
             } label: {
                 Text("Directory")
@@ -373,10 +367,6 @@ struct WorkstreamInfoView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { flag.wrappedValue = false }
     }
 
-    private func openInTerminal(path: String) {
-        ExternalTerminal.open(directory: path, preferredBundleID: defaultTerminal)
-    }
-
     private func loadInfo() {
         let workingDir = workingDirectory
         let gitHubProjectDir = projectDirectory
@@ -454,11 +444,10 @@ struct WorkstreamInfoView: View {
     }
 }
 
-// MARK: - Directory row with copy and open-in-terminal actions
+// MARK: - Directory row with copy and open-in-app actions
 
 struct DirectoryRow: View {
     let path: String
-    var defaultTerminal: String = ""
     var githubURL: URL?
 
     @State private var copied = false
@@ -482,12 +471,7 @@ struct DirectoryRow: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
             }
 
-            DirectoryActionButton(
-                icon: "terminal",
-                tooltip: "Open in external terminal"
-            ) {
-                openInTerminal()
-            }
+            OpenInAppButtons(directory: path)
 
             if let githubURL {
                 DirectoryActionButton(
@@ -499,9 +483,44 @@ struct DirectoryRow: View {
             }
         }
     }
+}
 
-    private func openInTerminal() {
-        ExternalTerminal.open(directory: path, preferredBundleID: defaultTerminal)
+/// The editor and terminal buttons beside a directory, and the "Open With"
+/// chevron behind them. Each button's tooltip names the app it will open, so
+/// which default is in force is visible without a trip to Settings.
+private struct OpenInAppButtons: View {
+    let directory: String
+
+    @EnvironmentObject private var appEnv: AppEnvironment
+    @AppStorage(ExternalApp.Kind.editor.defaultsKey) private var defaultEditor = ""
+    @AppStorage(ExternalApp.Kind.terminal.defaultsKey) private var defaultTerminal = ""
+
+    var body: some View {
+        if let editor = ExternalApp.resolve(stored: defaultEditor, installed: appEnv.installedEditors) {
+            DirectoryActionButton(
+                icon: "chevron.left.forwardslash.chevron.right",
+                tooltip: "Open in \(editor.name)"
+            ) {
+                ExternalApp.open(directory: directory, kind: .editor)
+            }
+        }
+        DirectoryActionButton(
+            icon: "terminal",
+            tooltip: ExternalApp.resolve(stored: defaultTerminal, installed: appEnv.installedTerminals)
+                .map { "Open in \($0.name)" } ?? "Open in external terminal"
+        ) {
+            ExternalApp.open(directory: directory, kind: .terminal)
+        }
+        OpenWithMenu(directory: directory) {
+            Image(systemName: "chevron.down")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Open With")
+        .accessibilityLabel("Open With")
     }
 }
 

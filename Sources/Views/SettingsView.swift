@@ -358,9 +358,20 @@ private struct CodingAgentSettingsPane: View {
     @AppStorage(PermissionApprovalSettings.enabledKey) private var permissionApproval: Bool = false
     @AppStorage(PermissionApprovalSettings.holdKey) private var permissionHold: Double = PermissionApprovalSettings.defaultHold
     @AppStorage("atelier.defaultTerminal") private var defaultTerminal: String = ""
+    @AppStorage(ExternalApp.Kind.editor.defaultsKey) private var defaultEditor: String = ""
     @AppStorage("atelier.defaultBrowser") private var defaultBrowser: String = ""
 
     @EnvironmentObject private var appEnv: AppEnvironment
+
+    /// Shows the editor an open would actually use, which with nothing stored
+    /// is the first one installed — so no seeding step is needed, and a
+    /// default whose app was since removed shows its replacement, not a blank.
+    private var editorSelection: Binding<String> {
+        Binding(
+            get: { ExternalApp.resolve(stored: defaultEditor, installed: appEnv.installedEditors)?.bundleID ?? "" },
+            set: { defaultEditor = $0 }
+        )
+    }
 
     var body: some View {
         Form {
@@ -449,6 +460,23 @@ private struct CodingAgentSettingsPane: View {
                     Text("Requires tmux to be installed.")
                         .font(.caption)
                         .foregroundStyle(.orange)
+                }
+
+                if !appEnv.installedEditors.isEmpty {
+                    Picker("External Editor", selection: editorSelection) {
+                        ForEach(appEnv.installedEditors) { app in
+                            Label {
+                                Text(app.name)
+                            } icon: {
+                                if let icon = app.icon {
+                                    Image(nsImage: icon)
+                                        .resizable()
+                                        .frame(width: 16, height: 16)
+                                }
+                            }
+                            .tag(app.bundleID)
+                        }
+                    }
                 }
 
                 Picker("External Terminal", selection: $defaultTerminal) {

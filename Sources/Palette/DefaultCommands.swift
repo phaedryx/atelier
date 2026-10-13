@@ -154,6 +154,10 @@ func defaultPaletteCommands() -> [PaletteCommand] {
 
         PaletteCommand(id: "external.browser", title: NSLocalizedString("Open in External Browser", comment: ""), category: external,
                        shortcut: "⌘⌥B", isAvailable: workstream, action: post(.openExternalBrowser)),
+        // Hidden, not disabled, with no editor installed: there is nothing to
+        // act on from here, and a terminal always exists so its row never is.
+        PaletteCommand(id: "external.editor", title: NSLocalizedString("Open in External Editor", comment: ""), category: external,
+                       isAvailable: { $0.workstreamActive && $0.hasExternalEditor }, action: send(.openExternalEditor)),
         PaletteCommand(id: "external.terminal", title: NSLocalizedString("Open in External Terminal", comment: ""), category: external,
                        shortcut: "⌘⌥T", isAvailable: workstream, action: send(.openExternalTerminal)),
 

@@ -12,6 +12,7 @@ final class AppEnvironment: ObservableObject {
     // cache updates produces a single `objectWillChange` notification.
     var toolStatus = ToolStatus()
     var installedTerminals: [AppInfo] = []
+    var installedEditors: [AppInfo] = []
     var installedBrowsers: [AppInfo] = []
     var isDetecting = false
 
@@ -62,16 +63,29 @@ final class AppEnvironment: ObservableObject {
         commitChanges { isDetecting = true }
         Task.detached {
             let tools = ToolStatus.detect()
-            let terminals = AppInfo.detectTerminals()
+            let terminals = ExternalApp.detect(.terminal)
+            let editors = ExternalApp.detect(.editor)
             let browsers = AppInfo.detectBrowsers()
             await MainActor.run {
                 self.commitChanges {
                     self.toolStatus = tools
                     self.installedTerminals = terminals
+                    self.installedEditors = editors
                     self.installedBrowsers = browsers
                     self.isDetecting = false
                 }
             }
+        }
+    }
+
+    /// The startup detection's answer for one kind. Menus and availability
+    /// read this rather than asking LaunchServices on every body evaluation;
+    /// `ExternalApp.open` re-detects at click time, so an app installed since
+    /// launch is still reached by the plain open even before it is listed.
+    func installedApps(_ kind: ExternalApp.Kind) -> [AppInfo] {
+        switch kind {
+        case .editor: installedEditors
+        case .terminal: installedTerminals
         }
     }
 

@@ -200,7 +200,8 @@ struct ContentView: View {
             bypassPermissions: activeWorkstream?.bypassPermissions ?? false,
             hasGitHubRemote: workstreamActionTarget?.githubURL != nil,
             hasPullRequest: workstreamActionTarget?.pullRequestURL != nil,
-            hasShortcutStory: workstreamActionTarget?.shortcutURL != nil
+            hasShortcutStory: workstreamActionTarget?.shortcutURL != nil,
+            hasExternalEditor: !appEnvironment.installedEditors.isEmpty
         )
     }
 
@@ -963,7 +964,10 @@ struct ContentView: View {
         return project.name
     }
 
-    private func openExternalTerminal() {
+    /// The editor and terminal commands share one rule for *which* directory:
+    /// the selected workstream's, or the project's checkout when a project row
+    /// is selected — so the pair cannot disagree about where they open.
+    private func openExternal(_ kind: ExternalApp.Kind) {
         let dir: String? = if let ws = activeWorkstream, let project = activeProject {
             ws.workingDirectory(checkout: project.checkout)
         } else if let project = activeProject {
@@ -972,7 +976,7 @@ struct ContentView: View {
             nil
         }
         guard let dir else { return }
-        ExternalTerminal.open(directory: dir)
+        ExternalApp.open(directory: dir, kind: kind)
     }
 
     /// Creates the HEAD watcher and points it at the current worktrees.
@@ -1064,8 +1068,10 @@ struct ContentView: View {
             }
         case let .openSettings(pane):
             openSettings(pane: pane)
+        case .openExternalEditor:
+            openExternal(.editor)
         case .openExternalTerminal:
-            openExternalTerminal()
+            openExternal(.terminal)
         case .clearProjects:
             clearProjects()
         case .switchToProject:

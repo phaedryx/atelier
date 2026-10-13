@@ -517,6 +517,10 @@ struct AtelierApp: App {
                 }
                 .keyboardShortcut("b", modifiers: [.command, .option])
 
+                Button("Open in External Editor") {
+                    AppCommandChannel.shared.send(.openExternalEditor)
+                }
+
                 Button("Open in External Terminal") {
                     AppCommandChannel.shared.send(.openExternalTerminal)
                 }

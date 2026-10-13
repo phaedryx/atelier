@@ -363,6 +363,25 @@ final class DefaultCommandsTests: XCTestCase {
         }
     }
 
+    /// Hidden with no editor installed; a terminal always exists, so its row
+    /// is gated on the workstream alone.
+    @MainActor
+    func testExternalEditorCommandIsHiddenWithoutAnEditorAndSendsItsCommand() throws {
+        let commands = defaultPaletteCommands()
+        let editor = try XCTUnwrap(commands.first { $0.id == "external.editor" })
+        let terminal = try XCTUnwrap(commands.first { $0.id == "external.terminal" })
+        let noEditor = PaletteContext(workstreamActive: true, editorActive: false)
+        let withEditor = PaletteContext(workstreamActive: true, editorActive: false, hasExternalEditor: true)
+
+        XCTAssertEqual(editor.availability(noEditor), .hidden)
+        XCTAssertEqual(editor.availability(withEditor), .available)
+        XCTAssertEqual(terminal.availability(noEditor), .available)
+
+        let collector = AppCommandCollector()
+        editor.action()
+        XCTAssertEqual(collector.sent, [.openExternalEditor])
+    }
+
     @MainActor
     func testSubmitReviewCommandIsWorkstreamGated() {
         let commands = defaultPaletteCommands()

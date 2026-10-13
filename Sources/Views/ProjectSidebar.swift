@@ -1733,11 +1733,6 @@ func copyTextToPasteboard(_ text: String) {
     NSPasteboard.general.setString(text, forType: .string)
 }
 
-/// Opens a directory in the user's configured terminal, falling back to Apple Terminal.
-func openDirectoryInTerminal(_ directory: String) {
-    ExternalTerminal.open(directory: directory)
-}
-
 private struct ProjectHeaderRow: View {
     let project: Project
     var githubURL: URL?
@@ -1815,11 +1810,7 @@ private struct ProjectHeaderRow: View {
             } label: {
                 Label("Reveal in Finder", systemImage: "folder")
             }
-            Button {
-                openDirectoryInTerminal(project.directory)
-            } label: {
-                Label("Open in External Terminal", systemImage: "terminal")
-            }
+            OpenInAppMenuItems(directory: project.directory)
             if let githubURL {
                 Button {
                     NSWorkspace.shared.open(githubURL)
@@ -2244,11 +2235,7 @@ private struct WorkstreamRow: View {
                 } label: {
                     Label("Reveal in Finder", systemImage: "folder")
                 }
-                Button {
-                    openDirectoryInTerminal(worktreePath)
-                } label: {
-                    Label("Open in External Terminal", systemImage: "terminal")
-                }
+                OpenInAppMenuItems(directory: worktreePath)
             }
             if let githubURL {
                 Button {

@@ -160,10 +160,17 @@ Three things that are easy to undo:
   discarding the error dictionary is precisely how the escaping bug presented —
   as ordinary files quietly failing to open.
 
-`ExternalTerminal` also owns opening a *directory* in the user's terminal, which
-is an `NSWorkspace` call carrying a `URL` and has no injection to speak of. It
-lives there because the same eight lines had been copied into four views, and a
-fifth copy is how the hardened path above eventually gets worked around.
+Opening a *directory* in an external editor or terminal is `ExternalApp`'s, not
+`ExternalTerminal`'s: an `NSWorkspace` call carrying a `URL`, with no injection
+to speak of and no child process. It used to live in `ExternalTerminal` because
+the same eight lines had been copied into four views; it moved out when editors
+needed the same call, so there is still exactly one copy, and a fifth copy is
+still how the hardened path above eventually gets worked around. Installation
+is a LaunchServices lookup by bundle id (`urlForApplication(withBundleIdentifier:)`),
+which already covers `/Applications`, `~/Applications` and wherever else an app
+lives — do not add an `/Applications` walk, an `open -Ra` probe, or a fallback
+to a CLI shim on `PATH` (`code`, `zed`): a GUI app's environment never read the
+`.zshrc` that puts those there.
 
 ### Paths
 - Persistent data: UserDefaults (projects, sidebar state, workspace tabs)
