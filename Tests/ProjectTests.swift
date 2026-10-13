@@ -87,6 +87,27 @@ final class ProjectTests: XCTestCase {
         XCTAssertEqual(projects, loaded)
     }
 
+    /// An upgrade hands out distinct slots in array order, and two independent
+    /// loads of the same unsaved blob agree — `AtelierApp`, `ProjectList` and
+    /// `ContentView` each load without comparing notes.
+    func testLoadBackfillsSlotsDeterministically() {
+        let json = """
+        [{ "id": "\(UUID().uuidString)", "name": "app", "directory": "/tmp/app",
+           "checkoutDirectory": "/tmp/app", "lastAccessedAt": 0,
+           "workstreams": [
+             { "id": "\(UUID().uuidString)", "name": "a", "worktreePath": "/tmp/app/a", "bypassPermissions": false, "lastAccessedAt": 0 },
+             { "id": "\(UUID().uuidString)", "name": "b", "worktreePath": "/tmp/app/b", "bypassPermissions": false, "lastAccessedAt": 0 }
+           ] }]
+        """
+        testDefaults.set(Data(json.utf8), forKey: "atelier.projects")
+
+        let first = ProjectStore.load(defaults: testDefaults)
+        let second = ProjectStore.load(defaults: testDefaults)
+
+        XCTAssertEqual(first.first?.workstreams.map(\.slot), [1, 2])
+        XCTAssertEqual(second.first?.workstreams.map(\.slot), [1, 2])
+    }
+
     func testProjectDefaultsToNoWorkstreams() {
         let project = Project(name: "test", directory: "/test")
         XCTAssertTrue(project.workstreams.isEmpty)
