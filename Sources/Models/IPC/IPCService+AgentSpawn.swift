@@ -273,7 +273,8 @@ extension IPC.Service {
             workstreamName: launched.name,
             projectDirectory: target.directory,
             worktreePath: launched.worktreePath,
-            defaultBranch: Git.Operations.defaultBranch(at: target.directory)
+            defaultBranch: Git.Operations.defaultBranch(at: target.directory),
+            slot: launched.slot
         )
         // The Coding Agent's surface id is the workstream id, so it
         // addresses itself the way every other surface does.

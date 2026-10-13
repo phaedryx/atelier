@@ -35,6 +35,30 @@ final class WorkstreamEnvironmentTests: XCTestCase {
         XCTAssertEqual(vars["ATELIER_DEFAULT_BRANCH"], "main")
     }
 
+    // MARK: - ATELIER_SLOT
+
+    func testSlotIsExportedWithItsFFMirror() {
+        let vars = Workstream.Environment.variables(
+            workstreamID: baseParams.0, projectName: baseParams.1, workstreamName: baseParams.2,
+            projectDirectory: baseParams.3, workingDirectory: baseParams.4, port: baseParams.5,
+            defaultBranch: "main", slot: 3
+        )
+        XCTAssertEqual(vars["ATELIER_SLOT"], "3")
+        XCTAssertEqual(vars["FF_SLOT"], "3")
+    }
+
+    /// Absent rather than a sentinel: a consumer reading `$ATELIER_SLOT` should
+    /// fail loudly, not compute a Redis DB from "0" or "-1".
+    func testNoSlotMeansNoVariable() {
+        let vars = Workstream.Environment.variables(
+            workstreamID: baseParams.0, projectName: baseParams.1, workstreamName: baseParams.2,
+            projectDirectory: baseParams.3, workingDirectory: baseParams.4, port: baseParams.5,
+            defaultBranch: "main"
+        )
+        XCTAssertNil(vars["ATELIER_SLOT"])
+        XCTAssertNil(vars["FF_SLOT"])
+    }
+
     // MARK: - No aliases for other tools
 
     /// `CONDUCTOR_*`, `EMDASH_*` and `SUPERSET_*` were emitted when a project's

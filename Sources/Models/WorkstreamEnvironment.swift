@@ -19,6 +19,7 @@ extension Workstream {
             workingDirectory: String,
             port: Int,
             defaultBranch: String = "main",
+            slot: Int? = nil,
             portPlan: ProcessCompose.PortPlan = .empty
         ) -> [String: String] {
             let id = workstreamID.uuidString.lowercased()
@@ -33,6 +34,13 @@ extension Workstream {
                 "ATELIER_PORT": portString,
                 "ATELIER_DEFAULT_BRANCH": defaultBranch,
             ]
+
+            // Allocated rather than hashed, so it is the one value here a caller
+            // cannot recompute from a path; see `Workstream.Slot`. Reserved in
+            // `ports.yaml`, so the merge below cannot replace it.
+            if let slot {
+                vars["ATELIER_SLOT"] = String(slot)
+            }
 
             // Before the FF_ mirror, so a project's own declarations win over
             // Atelier's defaults: a project that wants ATELIER_PORT to mean

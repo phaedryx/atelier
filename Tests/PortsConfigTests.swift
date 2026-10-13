@@ -279,12 +279,13 @@ final class PortsConfigTests: XCTestCase {
         XCTAssertNoThrow(try ProcessCompose.PortsConfig.load(from: dir.path))
     }
 
-    /// All six, not the three the previous version looped over: removing any
+    /// All seven, not the three the previous version looped over: removing any
     /// one from `reservedNames` must fail this.
     func testEveryNameAtelierSetsIsReserved() throws {
         for name in [
             "ATELIER_WORKSTREAM_ID", "ATELIER_PROJECT", "ATELIER_WORKSTREAM",
             "ATELIER_PROJECT_DIR", "ATELIER_WORKTREE_DIR", "ATELIER_DEFAULT_BRANCH",
+            "ATELIER_SLOT",
         ] {
             try write("ports:\n  \(name): { assigned: true }")
 

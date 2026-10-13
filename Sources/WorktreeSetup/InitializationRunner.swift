@@ -137,7 +137,8 @@ extension Initialization {
             projectName: String,
             workstreamName: String,
             projectPath: String,
-            worktreePath: String
+            worktreePath: String,
+            slot: Int?
         ) async {
             // Checked and claimed without an intervening `await`, so two callers
             // cannot both pass it.
@@ -206,7 +207,8 @@ extension Initialization {
                             workstreamName: workstreamName,
                             projectDirectory: projectPath,
                             worktreePath: worktreePath,
-                            defaultBranch: Git.Operations.defaultBranch(at: projectPath)
+                            defaultBranch: Git.Operations.defaultBranch(at: projectPath),
+                            slot: slot
                         ),
                         loginPath: CommandLineTools.loginShellPath(shell: CommandBuilder.userShell)
                     )

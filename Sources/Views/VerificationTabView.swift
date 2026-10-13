@@ -129,6 +129,7 @@ struct VerificationTabView: View {
     let projectDirectory: String
     let projectName: String
     let workstreamName: String
+    let slot: Int?
     /// The checks `verification.yaml` declares, **in file order**. Empty when
     /// `unavailableReason` is non-nil.
     let declaredProcesses: [String]
@@ -353,6 +354,7 @@ struct VerificationTabView: View {
                     worktreePath: worktreePath,
                     projectDirectory: projectDirectory,
                     defaultBranch: defaultBranch,
+                    slot: slot,
                     checks: [name]
                 )
                 // A check that has just started has nothing to show yet, but the

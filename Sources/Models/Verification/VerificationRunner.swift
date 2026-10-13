@@ -293,6 +293,7 @@ extension Verification {
             worktreePath: String,
             projectDirectory: String,
             defaultBranch: String,
+            slot: Int?,
             checks requested: [String]?
         ) throws -> Run {
             let config = try loadConfig(projectDirectory: projectDirectory)
@@ -335,7 +336,8 @@ extension Verification {
                 workstreamName: workstreamName,
                 projectDirectory: projectDirectory,
                 worktreePath: worktreePath,
-                defaultBranch: defaultBranch
+                defaultBranch: defaultBranch,
+                slot: slot
             )
 
             Verification.Spawn.ensureStateDirectory()

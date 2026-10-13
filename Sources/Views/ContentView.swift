@@ -301,6 +301,7 @@ struct ContentView: View {
                     projectDirectory: project.directory,
                     projectName: project.name,
                     workstreamName: workstream.name,
+                    slot: workstream.slot,
                     workstreamLabel: workstream.label,
                     bypassPermissions: workstream.bypassPermissions,
                     isActive: true,
@@ -679,13 +680,15 @@ struct ContentView: View {
                 // terminals get, and only the project model knows them.
                 let projectName = projects[found.project].name
                 let workstreamName = projects[found.project].workstreams[found.workstream].name
+                let slot = projects[found.project].workstreams[found.workstream].slot
                 Task {
                     await Initialization.Runner.shared.run(
                         workstreamID: workstreamID,
                         projectName: projectName,
                         workstreamName: workstreamName,
                         projectPath: projectPath,
-                        worktreePath: worktreePath
+                        worktreePath: worktreePath,
+                        slot: slot
                     )
                 }
             }

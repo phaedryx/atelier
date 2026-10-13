@@ -106,6 +106,7 @@ extension IPC {
                 worktreePath: target.worktreePath,
                 projectDirectory: target.projectDirectory,
                 defaultBranch: target.defaultBranch,
+                slot: target.slot,
                 checks: checks.isEmpty ? nil : checks
             )
             register(runID: started.id, onFinish: onFinish)

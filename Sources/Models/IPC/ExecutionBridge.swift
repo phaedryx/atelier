@@ -285,7 +285,8 @@ extension IPC {
                 workstreamName: target.workstreamName,
                 projectDirectory: target.projectDirectory,
                 worktreePath: target.worktreePath,
-                defaultBranch: target.defaultBranch
+                defaultBranch: target.defaultBranch,
+                slot: target.slot
             )
             // The same correction `runEnvironmentVars` makes, for the same
             // reason: a headless terminal cannot answer Next.js's first-run

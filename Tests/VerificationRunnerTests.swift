@@ -79,6 +79,7 @@ final class VerificationRunnerTests: XCTestCase {
             worktreePath: worktree.path,
             projectDirectory: projectDirectory.path,
             defaultBranch: "main",
+            slot: nil,
             checks: checks
         )
     }

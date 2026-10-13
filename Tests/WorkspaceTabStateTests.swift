@@ -24,7 +24,8 @@ final class WorkspaceTabSnapshotTests: XCTestCase {
             projectDirectory: "/app",
             workingDirectory: "/app/task",
             port: 3000,
-            defaultBranch: "develop"
+            defaultBranch: "develop",
+            slot: nil
         )
 
         XCTAssertEqual(vars["ATELIER_DEFAULT_BRANCH"], "develop")
