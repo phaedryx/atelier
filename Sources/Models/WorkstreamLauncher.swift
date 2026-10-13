@@ -72,6 +72,11 @@ extension Workstream {
             /// The project's groups, from `Project.sortedGroups`. A creation names
             /// exactly one of these (`launch(groupID:)`).
             let groups: [Workstream.Group]
+            /// What `launch` reads when it has no live `projectList` — a
+            /// `Launcher` constructed without the bridge, as a test may. In the
+            /// app the live list is always present and wins, because `Target` is
+            /// a snapshot taken before the launch.
+            var retiredSlots: [String: Int]?
 
             var existingWorkstreamNames: Set<String> {
                 Set(existingWorkstreams.map(\.name))
@@ -122,6 +127,8 @@ extension Workstream {
             let name: String
             let worktreePath: String
             let groupID: UUID
+            /// `ATELIER_SLOT` for this workstream. See `Workstream.Slot`.
+            let slot: Int
         }
 
         /// Which of the two worktree operations a launch runs.
@@ -261,7 +268,8 @@ extension Workstream {
                 checkout: project.checkout,
                 directory: project.directory,
                 existingWorkstreams: project.workstreams,
-                groups: project.sortedGroups
+                groups: project.sortedGroups,
+                retiredSlots: project.retiredSlots
             )
         }
 
@@ -345,6 +353,25 @@ extension Workstream {
             return URL(fileURLWithPath: trimmed).standardizedFileURL.resolvingSymlinksInPath().path
         }
 
+        /// Slots minted by launches that have not returned yet, by project.
+        ///
+        /// `.workstreamCreated` is what appends the row the next launch would
+        /// read, and nothing guarantees it has been handled before a second
+        /// launch mints. Counting in-flight slots closes that window without
+        /// depending on delivery order.
+        private var inFlightSlots: [UUID: Set<Int>] = [:]
+
+        /// The lowest slot free in the *live* project, falling back to what the
+        /// target captured when there is no live list.
+        private func allocateSlot(projectID: UUID, fallback: Target?) -> Int {
+            let live = projectList?.items.first { $0.id == projectID }
+            let held = Workstream.Slot.held(
+                workstreams: live?.workstreams ?? fallback?.existingWorkstreams ?? [],
+                retired: live?.retiredSlots ?? fallback?.retiredSlots
+            )
+            return Workstream.Slot.lowestFree(held: held.union(inFlightSlots[projectID] ?? []))
+        }
+
         // MARK: - Launching
 
         /// Creates a workstream in the project the caller names and returns once
@@ -409,12 +436,19 @@ extension Workstream {
                 existing: target.existingWorkstreamNames
             ).get()
 
+            // Minted before the first `await`, so nothing on the main actor can
+            // interleave between choosing the slot and recording it in flight.
+            let slot = allocateSlot(projectID: target.projectID, fallback: target)
+            inFlightSlots[target.projectID, default: []].insert(slot)
+            defer { inFlightSlots[target.projectID]?.remove(slot) }
+
             let workstream = Workstream(
                 name: name,
                 worktreePath: nil,
                 bypassPermissions: bypassPermissions,
                 shortcutStoryID: shortcutStoryID,
-                groupID: groupID
+                groupID: groupID,
+                slot: slot
             )
             logger.warning("[Atelier] Launcher: creating \(name, privacy: .public) in \(target.projectName, privacy: .public)")
 
@@ -449,7 +483,7 @@ extension Workstream {
                 throw Failure.worktreeCreationFailed(name)
             }
 
-            let launched = Launched(workstreamID: workstream.id, name: name, worktreePath: worktreePath, groupID: groupID)
+            let launched = Launched(workstreamID: workstream.id, name: name, worktreePath: worktreePath, groupID: groupID, slot: slot)
             await beforeReady?(launched)
 
             // This is what runs initialization, via ContentView's handler and
@@ -502,7 +536,13 @@ extension Workstream {
             worktreePath: String,
             select: Bool = true
         ) -> Launched {
-            let workstream = Workstream(name: name, worktreePath: nil, groupID: groupID)
+            // A worktree removed earlier and adopted back gets the slot its
+            // leftover state was keyed by. `ContentView`'s append handler drops
+            // the retired entry via `Workstream.Slot.claim`.
+            let retired = projectList?.items.first { $0.id == projectID }?.retiredSlots
+            let slot = retired?[Workstream.Slot.key(for: worktreePath)]
+                ?? allocateSlot(projectID: projectID, fallback: nil)
+            let workstream = Workstream(name: name, worktreePath: nil, groupID: groupID, slot: slot)
             logger.warning("[Atelier] Launcher: adopting \(name, privacy: .public) at \(worktreePath, privacy: .public)")
 
             NotificationCenter.default.post(
@@ -524,7 +564,7 @@ extension Workstream {
                 ]
             )
 
-            return Launched(workstreamID: workstream.id, name: name, worktreePath: worktreePath, groupID: groupID)
+            return Launched(workstreamID: workstream.id, name: name, worktreePath: worktreePath, groupID: groupID, slot: slot)
         }
     }
 }
