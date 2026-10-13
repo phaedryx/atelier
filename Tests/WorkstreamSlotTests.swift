@@ -91,6 +91,32 @@ final class WorkstreamSlotTests: XCTestCase {
         XCTAssertNil(p.retiredSlots)
     }
 
+    /// The project was registered through a symlink and git reported the
+    /// trunk's path resolved, so `isMain` fails open and the trunk can be
+    /// adopted. The guard must recognise it under either spelling, as
+    /// `Archiver.destroyableWorktreePath` does, or the slot is retired under a
+    /// directory that never disappears.
+    func testDetachRecognisesTheProjectsOwnDirectoryThroughASymlink() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("slot-symlink-\(UUID().uuidString)")
+        let real = root.appendingPathComponent("real/app")
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let link = root.appendingPathComponent("link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: root.appendingPathComponent("real"))
+
+        let trunk = ws("trunk", path: real.resolvingSymlinksInPath().path, slot: 1)
+        var p = Project(
+            name: "app",
+            directory: link.appendingPathComponent("app").path,
+            workstreams: [trunk]
+        )
+        Workstream.Slot.detach(trunk.id, from: &p)
+
+        XCTAssertTrue(p.workstreams.isEmpty)
+        XCTAssertNil(p.retiredSlots)
+    }
+
     func testDetachOfAWorkstreamWithNoSlotOrNoPathRetiresNothing() {
         let noSlot = ws("a", slot: nil)
         var pathless = ws("b", slot: 2)

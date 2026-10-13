@@ -89,10 +89,16 @@ extension Workstream {
             guard let index = project.workstreams.firstIndex(where: { $0.id == workstreamID }) else { return }
             let workstream = project.workstreams.remove(at: index)
             guard let slot = workstream.slot, let path = workstream.worktreePath else { return }
-            let pathKey = key(for: path)
-            guard pathKey != key(for: project.directory), pathKey != key(for: project.checkout) else { return }
+            // `canonicalPath`, not `key(for:)`, for the same reason
+            // `Archiver.destroyableWorktreePath` uses it: a project registered
+            // through a symlink and a path git reported resolved are one
+            // directory under two spellings, which is exactly how `isMain`
+            // fails open.
+            let canonical = path.canonicalPath
+            guard canonical != project.directory.canonicalPath,
+                  canonical != project.checkout.canonicalPath else { return }
             var retired = project.retiredSlots ?? [:]
-            retired[pathKey] = slot
+            retired[key(for: path)] = slot
             project.retiredSlots = retired
         }
 
