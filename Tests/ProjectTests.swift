@@ -678,6 +678,34 @@ final class ProjectTests: XCTestCase {
         XCTAssertTrue(decoded.bypassPermissions)
     }
 
+    func testWorkstreamWithoutSlotDecodesToNil() throws {
+        let json = """
+        { "id": "\(UUID().uuidString)", "name": "no-slot", "bypassPermissions": false, "lastAccessedAt": 0 }
+        """
+        let decoded = try JSONDecoder().decode(Workstream.self, from: Data(json.utf8))
+        XCTAssertNil(decoded.slot)
+    }
+
+    func testSlotAndRetiredSlotsRoundTrip() throws {
+        let original = Project(
+            name: "app", directory: "/tmp/app",
+            workstreams: [Workstream(name: "a", worktreePath: "/tmp/app/a", slot: 3)],
+            retiredSlots: ["/tmp/app/old": 1]
+        )
+        let decoded = try JSONDecoder().decode(Project.self, from: JSONEncoder().encode(original))
+        XCTAssertEqual(decoded.workstreams.first?.slot, 3)
+        XCTAssertEqual(decoded.retiredSlots, ["/tmp/app/old": 1])
+    }
+
+    func testProjectWithoutRetiredSlotsDecodesToNil() throws {
+        let json = """
+        { "id": "\(UUID().uuidString)", "name": "app", "directory": "/tmp/app",
+          "checkoutDirectory": "/tmp/app", "lastAccessedAt": 0, "workstreams": [] }
+        """
+        let decoded = try JSONDecoder().decode(Project.self, from: Data(json.utf8))
+        XCTAssertNil(decoded.retiredSlots)
+    }
+
     func testWorkstreamWithoutShortcutStoryIDDecodesToNil() throws {
         let json = """
         {

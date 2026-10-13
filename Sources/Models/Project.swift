@@ -23,8 +23,13 @@ struct Workstream: Identifiable, Hashable, Codable {
     /// `shortcutStoryID`; `Project.housingWorkstreams()` fills it on decode, so a
     /// loaded workstream always has one when its project has any.
     var groupID: UUID?
+    /// The small dense integer exported as `ATELIER_SLOT`; see `Workstream.Slot`.
+    ///
+    /// Optional for the same reason as `shortcutStoryID`: a non-Optional key
+    /// would fail to decode every blob written before it existed.
+    var slot: Int?
 
-    init(name: String, displayName: String? = nil, worktreePath: String? = nil, bypassPermissions: Bool = false, id: UUID = UUID(), lastAccessedAt: Date = Date(), shortcutStoryID: Int? = nil, groupID: UUID? = nil) {
+    init(name: String, displayName: String? = nil, worktreePath: String? = nil, bypassPermissions: Bool = false, id: UUID = UUID(), lastAccessedAt: Date = Date(), shortcutStoryID: Int? = nil, groupID: UUID? = nil, slot: Int? = nil) {
         self.id = id
         self.name = name
         self.displayName = displayName
@@ -33,6 +38,7 @@ struct Workstream: Identifiable, Hashable, Codable {
         self.lastAccessedAt = lastAccessedAt
         self.shortcutStoryID = shortcutStoryID
         self.groupID = groupID
+        self.slot = slot
     }
 
     /// The user-facing label. Falls back to the branch-tracked `name` when no override is set.
@@ -97,6 +103,14 @@ struct Project: Identifiable, Hashable, Codable {
     /// The project's workstream groups. Optional for the same reason as
     /// `checkoutDirectory`; nil means the project has never had a workstream.
     var groups: [Workstream.Group]?
+    /// Slots of workstreams detached while their directory still exists, by
+    /// standardized worktree path. Held so nothing else takes the slot while a
+    /// removed workstream's stack, or a purge's `dispose`, may still use it;
+    /// released by `Workstream.Slot.sweep` once the directory is gone.
+    ///
+    /// Optional, and decoded with `decodeIfPresent` below, for the reason
+    /// `checkoutDirectory` gives.
+    var retiredSlots: [String: Int]?
 
     init(
         name: String,
@@ -105,7 +119,8 @@ struct Project: Identifiable, Hashable, Codable {
         id: UUID = UUID(),
         workstreams: [Workstream] = [],
         lastAccessedAt: Date = Date(),
-        groups: [Workstream.Group]? = nil
+        groups: [Workstream.Group]? = nil,
+        retiredSlots: [String: Int]? = nil
     ) {
         self.id = id
         self.name = name
@@ -114,6 +129,7 @@ struct Project: Identifiable, Hashable, Codable {
         self.workstreams = workstreams
         self.lastAccessedAt = lastAccessedAt
         self.groups = groups
+        self.retiredSlots = retiredSlots
     }
 
     /// The directory to run work-tree operations in: `git status`, the branch
@@ -179,6 +195,7 @@ struct Project: Identifiable, Hashable, Codable {
         housing = housing.housingWorkstreams()
         workstreams = housing.workstreams
         groups = housing.groups
+        retiredSlots = try container.decodeIfPresent([String: Int].self, forKey: .retiredSlots)
     }
 
     static func == (lhs: Project, rhs: Project) -> Bool {
