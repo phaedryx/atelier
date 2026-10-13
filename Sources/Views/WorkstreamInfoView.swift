@@ -511,7 +511,7 @@ private struct OpenInAppButtons: View {
         ) {
             ExternalApp.open(directory: directory, kind: .terminal)
         }
-        OpenWithMenu(directory: directory) {
+        OpenWithMenu(directory: directory, installed: appEnv.installedExternalApps) {
             Image(systemName: "chevron.down")
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(.secondary)

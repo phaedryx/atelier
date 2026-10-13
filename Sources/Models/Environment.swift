@@ -78,15 +78,12 @@ final class AppEnvironment: ObservableObject {
         }
     }
 
-    /// The startup detection's answer for one kind. Menus and availability
-    /// read this rather than asking LaunchServices on every body evaluation;
+    /// The startup detection's answer, by kind. Menus and availability read
+    /// this rather than asking LaunchServices on every body evaluation;
     /// `ExternalApp.open` re-detects at click time, so an app installed since
     /// launch is still reached by the plain open even before it is listed.
-    func installedApps(_ kind: ExternalApp.Kind) -> [AppInfo] {
-        switch kind {
-        case .editor: installedEditors
-        case .terminal: installedTerminals
-        }
+    var installedExternalApps: [ExternalApp.Kind: [AppInfo]] {
+        [.editor: installedEditors, .terminal: installedTerminals]
     }
 
     // MARK: - Origin Fetch

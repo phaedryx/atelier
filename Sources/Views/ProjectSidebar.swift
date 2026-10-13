@@ -377,6 +377,7 @@ struct ProjectSidebar: View {
         ProjectHeaderRow(
             project: project,
             githubURL: appEnv.githubURL(for: project.directory),
+            externalApps: appEnv.installedExternalApps,
             onAddGroup: { beginNewGroup(in: project.id) },
             isSelected: selection == .project(project.id),
             isRenaming: Binding(
@@ -591,6 +592,7 @@ struct ProjectSidebar: View {
                         mainContextUsage: agentStateTracker.mainContextUsage(for: workstream.id),
                         startedAt: mainRun?.startedAt,
                         githubURL: appEnv.githubURL(for: project.directory),
+                        externalApps: appEnv.installedExternalApps,
                         taskDescription: facts?.taskDescription,
                         prTitle: pr?.title,
                         prNumber: pr?.number,
@@ -1736,6 +1738,7 @@ func copyTextToPasteboard(_ text: String) {
 private struct ProjectHeaderRow: View {
     let project: Project
     var githubURL: URL?
+    var externalApps: [ExternalApp.Kind: [AppInfo]] = [:]
     /// Opens the inline new-group field; the only way to add a group.
     let onAddGroup: () -> Void
     /// Whether this row is the sidebar's current selection. Gates the
@@ -1810,7 +1813,7 @@ private struct ProjectHeaderRow: View {
             } label: {
                 Label("Reveal in Finder", systemImage: "folder")
             }
-            OpenInAppMenuItems(directory: project.directory)
+            OpenInAppMenuItems(directory: project.directory, installed: externalApps)
             if let githubURL {
                 Button {
                     NSWorkspace.shared.open(githubURL)
@@ -2064,6 +2067,7 @@ private struct WorkstreamRow: View {
     /// the status line's ticking elapsed time.
     var startedAt: Date?
     var githubURL: URL?
+    var externalApps: [ExternalApp.Kind: [AppInfo]] = [:]
     var taskDescription: String?
     var prTitle: String?
     var prNumber: Int?
@@ -2235,7 +2239,7 @@ private struct WorkstreamRow: View {
                 } label: {
                     Label("Reveal in Finder", systemImage: "folder")
                 }
-                OpenInAppMenuItems(directory: worktreePath)
+                OpenInAppMenuItems(directory: worktreePath, installed: externalApps)
             }
             if let githubURL {
                 Button {

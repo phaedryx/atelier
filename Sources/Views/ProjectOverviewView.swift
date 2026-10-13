@@ -225,6 +225,7 @@ struct ProjectOverviewView: View {
                                 prNumber: pr?.number,
                                 prStatus: pr?.status,
                                 prURL: pr?.url,
+                                externalApps: appEnv.installedExternalApps,
                                 onSelect: { onSelectWorkstream(workstream.id) },
                                 onRemove: { onRemoveWorkstream(workstream.id) },
                                 onPurge: { onPurgeWorkstream(workstream.id) }
@@ -768,6 +769,7 @@ private struct WorkstreamRow: View {
     var prNumber: Int?
     var prStatus: GitHub.PR.Status?
     var prURL: String?
+    var externalApps: [ExternalApp.Kind: [AppInfo]] = [:]
     let onSelect: () -> Void
     let onRemove: () -> Void
     let onPurge: () -> Void
@@ -871,7 +873,7 @@ private struct WorkstreamRow: View {
                 } label: {
                     Label("Reveal in Finder", systemImage: "folder")
                 }
-                OpenInAppMenuItems(directory: worktreePath)
+                OpenInAppMenuItems(directory: worktreePath, installed: externalApps)
                 Divider()
             }
             if let branchName {

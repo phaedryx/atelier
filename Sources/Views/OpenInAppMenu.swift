@@ -7,12 +7,18 @@ import SwiftUI
 /// submenu, for a context menu. The editor item is omitted when no editor is
 /// installed, the same choice the menu makes for "Open on GitHub" with no
 /// remote; a terminal always exists, because Apple Terminal ships with macOS.
+///
+/// `installed` is a parameter, not an `@EnvironmentObject` read, because this
+/// is built inside `.contextMenu`: a menu is presented outside the row's own
+/// hierarchy, and a missing environment object there is a crash rather than an
+/// empty menu. The row's owner already holds `AppEnvironment`, so it passes the
+/// value down the way it passes `githubURL`.
 struct OpenInAppMenuItems: View {
     let directory: String
-    @EnvironmentObject private var appEnv: AppEnvironment
+    let installed: [ExternalApp.Kind: [AppInfo]]
 
     var body: some View {
-        if !appEnv.installedEditors.isEmpty {
+        if !(installed[.editor] ?? []).isEmpty {
             Button {
                 ExternalApp.open(directory: directory, kind: .editor)
             } label: {
@@ -24,7 +30,7 @@ struct OpenInAppMenuItems: View {
         } label: {
             Label("Open in External Terminal", systemImage: "terminal")
         }
-        OpenWithMenu(directory: directory)
+        OpenWithMenu(directory: directory, installed: installed)
     }
 }
 
@@ -34,21 +40,23 @@ struct OpenInAppMenuItems: View {
 /// once without a trip to Settings.
 struct OpenWithMenu<MenuLabel: View>: View {
     let directory: String
+    /// A parameter for the reason `OpenInAppMenuItems` gives.
+    let installed: [ExternalApp.Kind: [AppInfo]]
     let label: MenuLabel
 
-    @EnvironmentObject private var appEnv: AppEnvironment
     // Read here so the ticks redraw when a pick, or Settings, moves a default.
     @AppStorage(ExternalApp.Kind.editor.defaultsKey) private var defaultEditor = ""
     @AppStorage(ExternalApp.Kind.terminal.defaultsKey) private var defaultTerminal = ""
 
-    init(directory: String, @ViewBuilder label: () -> MenuLabel) {
+    init(directory: String, installed: [ExternalApp.Kind: [AppInfo]], @ViewBuilder label: () -> MenuLabel) {
         self.directory = directory
+        self.installed = installed
         self.label = label()
     }
 
     var body: some View {
         let sections = ExternalApp.menuSections(
-            installed: [.editor: appEnv.installedEditors, .terminal: appEnv.installedTerminals],
+            installed: installed,
             stored: [.editor: defaultEditor, .terminal: defaultTerminal]
         )
         if !sections.isEmpty {
@@ -73,8 +81,8 @@ struct OpenWithMenu<MenuLabel: View>: View {
 }
 
 extension OpenWithMenu where MenuLabel == Label<Text, Image> {
-    init(directory: String) {
-        self.init(directory: directory) {
+    init(directory: String, installed: [ExternalApp.Kind: [AppInfo]]) {
+        self.init(directory: directory, installed: installed) {
             Label("Open With", systemImage: "arrow.up.forward.app")
         }
     }
