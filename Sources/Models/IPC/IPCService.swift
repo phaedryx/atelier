@@ -457,10 +457,16 @@ extension IPC {
             let context = contexts[peer.id]
             let group = context?.groupName
                 ?? context?.workstreamID.flatMap(UUID.init(uuidString:)).flatMap { groupNameByWorkstreamID[$0] }
+            // Spec §3: a coordinator (a group, no workstream) reads as
+            // `coordinator` unless it registered a role of its own. Derived here
+            // rather than stored at registration, so re-registering with a role
+            // replaces nothing but the empty string it always was.
+            let isCoordinator = context?.groupID != nil && context?.workstreamID == nil
+            let role = peer.role.isEmpty && isCoordinator ? "coordinator" : peer.role
             return PeerInfo(
                 id: peer.id.uuidString,
                 name: peer.name,
-                role: peer.role,
+                role: role,
                 workstream: contexts[peer.id]?.workstreamName,
                 surfaceID: surfaceID?.uuidString,
                 lastSeenSecondsAgo: Int(now.timeIntervalSince(peer.lastSeen)),

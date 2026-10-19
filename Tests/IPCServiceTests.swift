@@ -103,6 +103,30 @@ final class IPCServiceTests: XCTestCase {
         XCTAssertEqual(listed[0].group, "Billing")
     }
 
+    /// Spec §3: a coordinator is listed with the role `coordinator` unless it
+    /// registered a different one. Derived when listed, not stored, so a later
+    /// explicit role is not fighting a baked-in default.
+    func test_listPeersReportsACoordinatorsRoleAsCoordinatorByDefault() async throws {
+        _ = await call(.registerPeer, [:], as: groupClient(project: projectA))
+        let listed = try await peers(of: call(.listPeers, as: client(project: projectA)))
+        XCTAssertEqual(listed.first?.role, "coordinator")
+    }
+
+    func test_listPeersKeepsARoleTheCoordinatorRegistered() async throws {
+        _ = await call(.registerPeer, ["role": "release captain"], as: groupClient(project: projectA))
+        let listed = try await peers(of: call(.listPeers, as: client(project: projectA)))
+        XCTAssertEqual(listed.first?.role, "release captain")
+    }
+
+    func test_listPeersGivesAMemberNoCoordinatorRole() async throws {
+        await service.setGroupNames([UUID(): "Billing"])
+        _ = await call(.registerPeer, [:], as: groupClient(project: projectA, groupName: nil, workstreamID: UUID(), workstreamName: "wry-amber-lexer"))
+        _ = try await register(name: "solo", project: projectA)
+        let listed = try await peers(of: call(.listPeers, as: client(project: projectA)))
+        XCTAssertEqual(listed.count, 2)
+        XCTAssertTrue(listed.allSatisfy(\.role.isEmpty), "\(listed.map(\.role))")
+    }
+
     func test_listPeersReportsNoGroupForAnUngroupedMember() async throws {
         _ = try await register(name: "solo", project: projectA)
         let listed = try await peers(of: call(.listPeers, as: client(project: projectA)))
