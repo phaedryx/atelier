@@ -611,6 +611,19 @@ is the only way a caller turns a tab it just created into a peer it can address.
 worktree cannot hold is two *branches*, which is why work needing its own branch needs its own
 workstream.
 
+**A coordinator's identity is a group, not a workstream.** The coordinator exports
+`ATELIER_GROUP_ID` (lowercased UUID) and `ATELIER_GROUP` (the name) through
+`Workstream.Environment.coordinatorVariables`, which `ClientIdentity` reads as `groupID` and
+`groupName`; it exports **no** `ATELIER_WORKSTREAM_ID`, `ATELIER_WORKSTREAM`, `ATELIER_WORKTREE_DIR`
+or `ATELIER_PORT`, because exporting empty ones would make a script believe it was in a worktree.
+Members export no group variables. Its `ATELIER_SURFACE_ID` is the group id, so it is the one peer
+whose surface id and group id coincide. It registers under its group's name. Two coordinators share
+a cwd (the project root), which is why nothing about it may be resolved by directory. What it may
+call: `request_attention` accepts it, keyed on the group id (an opaque key for the notifier's
+cooldown, and the id a click on the banner selects the group by); every other workstream-scoped tool
+refuses it, `open_agent_tab` included, because the coordinator pane has no terminal-tab strip for a
+new tab to land in. `create_workstream` is how it acts on the project (see "Which group").
+
 **Retiring a peer clears the tracker state for its surface — unless a live peer has already
 taken that surface over.** Closing a helper's socket is how a peer is retired
 (`IPC.Server.forget` → `retire` → `Service.release`), and the clear exists because a surface

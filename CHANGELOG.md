@@ -4,6 +4,28 @@ Atelier was forked from [Factory Floor](https://github.com/alltuner/factoryfloor
 at v0.1.79. Everything below that release is Factory Floor's history; those links
 point at the upstream repository.
 
+## Unreleased
+
+### Features
+
+* **groups:** every workstream now lives in a named group under its project, and
+  each group's sidebar row is a coordinator: a Claude Code agent that runs at the
+  project root with no worktree, branch, port or initialization. It is not a
+  workstream, and it is the only agent whose view of the project is above all of
+  them. Existing workstreams are housed in one group named after the project, with
+  an id derived from the project id so two decodes agree. New Group is in the
+  palette and the menu (⌘⌥N), adopt picks a group, and Remove Group is refused
+  while the group has members. A new group takes the app's permission default,
+  and its Full Permissions toggle applies the next time its coordinator starts.
+* **ipc:** `create_workstream` and `create_shortcut_workstream` take an optional
+  `group`; without one the workstream joins the caller's own group or the group
+  the caller coordinates. `list_peers` reports each peer's group.
+  `request_attention` accepts a coordinator; the workstream-scoped tools refuse
+  it and say why.
+* **agent-status:** hook events are attributed by surface id before directory.
+  Coordinators share the project root as their cwd, so the directory alone cannot
+  say whose event it is.
+
 ## [0.2.7](https://github.com/phaedryx/atelier/compare/v0.2.6...v0.2.7) (2026-09-27)
 
 ### Features

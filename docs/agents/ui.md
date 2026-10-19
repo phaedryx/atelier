@@ -85,6 +85,22 @@ keyboard shortcut tables that have to be reconciled by hand.
   `ProcessCompose.Settings.resolveBinary()` and never by `ToolStatus.findBinary`, for the
   reason **Detected Tools** gives at length in `docs/agents/execution-and-config.md`.
 - **Sidebar state** (selection, expanded sections) stored in UserDefaults (`atelier.selection`, `atelier.expandedProjects`, `atelier.expandedGroups`)
+- **The sidebar is a three-level tree: project, group, workstream.** Every workstream lives in a
+  group (`Workstream.groupID`; `Project.housingWorkstreams()` backfills it on decode). **The group
+  row is the group's coordinator**: selecting it (`SidebarSelection.group`) shows
+  `CoordinatorPaneView`, a Claude Code session at `Project.directory` plus an Info tab, not a
+  workstream pane. `atelier.expandedGroups` holds the expanded set, beside `atelier.expandedProjects`
+  (`SidebarState.loadExpandedGroups`/`saveExpandedGroups`); a memberless group is a bare row with no
+  disclosure. Selecting a group never stamps it: a group's recency under Recent is the max of its own
+  `lastAccessedAt` (its creation time) and its newest member's, so a click cannot move the row under
+  the cursor. The coordinator's Info tab has no launch log, because `LaunchLogger` writes one and
+  nothing reads it back for any pane's display. A new group takes the `atelier.bypassPermissions`
+  default; its Full Permissions toggle only changes the stored `group.bypassPermissions`, which the
+  coordinator reads when it next starts, so a running one is not restarted.
+- **`cycledSelection` (⌘[ / ⌘]) walks groups as stops.** `ContentView.cycledSelection` visits each
+  group row and then its usable members, in the order the sidebar drew (`order` has no default for
+  that reason), so a memberless group is still reachable. Remove Group is disabled while the group has
+  members; `Archiver.removeGroup` refuses it again.
 - **No sidebar row is ever resolved by position.** `ProjectSidebar` caches a group
   order per project (`cachedSortedGroupIDs`), a workstream order per **group**
   (`cachedSortedWorkstreamIDs`) and a project order (`cachedSortedIDs`), and all
