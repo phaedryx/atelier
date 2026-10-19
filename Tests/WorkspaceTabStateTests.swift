@@ -325,6 +325,40 @@ final class WorkspaceTabStateTests: XCTestCase {
         )
     }
 
+    /// Under `.recent` the walk must reach every group in both directions. The
+    /// member timestamps differ, so any write that stamped a group or member on
+    /// the way past would reorder the groups and make the walk loop short.
+    func testRecentCycleThroughThreeGroupsReachesEveryGroupBothWays() {
+        let created = Date(timeIntervalSince1970: 0)
+        let g1 = Workstream.Group(name: "g1", createdAt: created, lastAccessedAt: created)
+        let g2 = Workstream.Group(name: "g2", createdAt: created, lastAccessedAt: created)
+        let g3 = Workstream.Group(name: "g3", createdAt: created, lastAccessedAt: created)
+        let w1 = Workstream(name: "w1", worktreePath: "/app/w1", lastAccessedAt: Date(timeIntervalSince1970: 30), groupID: g1.id)
+        let w2 = Workstream(name: "w2", worktreePath: "/app/w2", lastAccessedAt: Date(timeIntervalSince1970: 20), groupID: g2.id)
+        let w3 = Workstream(name: "w3", worktreePath: "/app/w3", lastAccessedAt: Date(timeIntervalSince1970: 10), groupID: g3.id)
+        let project = Project(name: "app", directory: "/app", workstreams: [w3, w1, w2], groups: [g3, g1, g2])
+
+        func walk(_ direction: Int) -> [SidebarSelection] {
+            var current: SidebarSelection = .group(g1.id)
+            var visited: [SidebarSelection] = [current]
+            for _ in 0 ..< 6 {
+                guard let next = cycledSelection(in: project, selected: current, direction: direction, order: .recent, pathExists: { _ in true }) else { break }
+                current = next
+                visited.append(next)
+            }
+            return visited
+        }
+
+        XCTAssertEqual(walk(1), [
+            .group(g1.id), .workstream(w1.id), .group(g2.id), .workstream(w2.id),
+            .group(g3.id), .workstream(w3.id), .group(g1.id),
+        ])
+        XCTAssertEqual(walk(-1), [
+            .group(g1.id), .workstream(w3.id), .group(g3.id), .workstream(w2.id),
+            .group(g2.id), .workstream(w1.id), .group(g1.id),
+        ])
+    }
+
     func testAGroupWithNoRenderableWorkstreamsIsStillAStop() {
         let first = Workstream.Group(name: "first")
         let second = Workstream.Group(name: "second")

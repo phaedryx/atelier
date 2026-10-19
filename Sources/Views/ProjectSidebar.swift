@@ -937,9 +937,6 @@ struct ProjectSidebar: View {
                         groupIDByWorkstreamID: groupIDByWorkstreamIDSnapshot(),
                         scrollProxy: scrollProxy
                     )
-                    if case let .group(groupID) = sel {
-                        touchGroup(groupID)
-                    }
                 }
             } // ScrollViewReader
 
@@ -1436,7 +1433,8 @@ struct ProjectSidebar: View {
         guard let pi = projects.firstIndex(where: { $0.id == projectID }) else { return }
         switch Workstream.Group.validateName(input, siblings: projects[pi].groups ?? []) {
         case let .success(name):
-            let group = Workstream.Group(name: name)
+            // The app's current permission default, as a new workstream takes it.
+            let group = Workstream.Group(name: name, bypassPermissions: defaultBypass)
             projects[pi].groups = (projects[pi].groups ?? []) + [group]
             expandedGroups.insert(group.id)
             onProjectsChanged()
@@ -1485,22 +1483,6 @@ struct ProjectSidebar: View {
         }
         rebuildSortOrder()
         onProjectsChanged()
-    }
-
-    /// Selecting a group row stamps its `lastAccessedAt`, which is what `.recent`
-    /// ranks it by alongside its members'.
-    private func touchGroup(_ groupID: UUID) {
-        guard let pi = projects.firstIndex(where: { $0.group(with: groupID) != nil }),
-              let gi = projects[pi].groups?.firstIndex(where: { $0.id == groupID })
-        else { return }
-        projects[pi].groups?[gi].lastAccessedAt = Date()
-        onProjectsChanged()
-        if workstreamSortOrder == .recent {
-            let project = projects[pi]
-            cachedSortedGroupIDs[project.id] = workstreamSortOrder
-                .sorted(project.sortedGroups, in: project)
-                .map(\.id)
-        }
     }
 
     // MARK: - Project management

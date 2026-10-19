@@ -418,7 +418,10 @@ extension Project {
         ///
         /// `.recent` ranks a group by the newest of its own `lastAccessedAt` and
         /// its members', so a group whose workstream was just used rises with it
-        /// even though nobody selected the group row itself. `.alphabetical` is
+        /// even though nobody selected the group row itself. Nothing stamps a group
+        /// on selection: a group's own `lastAccessedAt` is its creation time, so a
+        /// click cannot move the row under the cursor, and ⌘[ / ⌘] — which walks
+        /// this same order through `cycledSelection` — cannot loop short of a group. `.alphabetical` is
         /// case-insensitive on the name, matching the workstream rule.
         func sorted(_ groups: [Workstream.Group], in project: Project) -> [Workstream.Group] {
             switch self {
