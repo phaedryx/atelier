@@ -19,8 +19,12 @@ struct Workstream: Identifiable, Hashable, Codable {
     /// `Project.init(from:)` and `LossyStore`), but a workstream silently
     /// vanishing on upgrade is still not an acceptable price for a stored field.
     var shortcutStoryID: Int?
+    /// The group this workstream belongs to. Optional for the same reason as
+    /// `shortcutStoryID`; `Project.housingWorkstreams()` fills it on decode, so a
+    /// loaded workstream always has one when its project has any.
+    var groupID: UUID?
 
-    init(name: String, displayName: String? = nil, worktreePath: String? = nil, bypassPermissions: Bool = false, id: UUID = UUID(), lastAccessedAt: Date = Date(), shortcutStoryID: Int? = nil) {
+    init(name: String, displayName: String? = nil, worktreePath: String? = nil, bypassPermissions: Bool = false, id: UUID = UUID(), lastAccessedAt: Date = Date(), shortcutStoryID: Int? = nil, groupID: UUID? = nil) {
         self.id = id
         self.name = name
         self.displayName = displayName
@@ -28,6 +32,7 @@ struct Workstream: Identifiable, Hashable, Codable {
         self.bypassPermissions = bypassPermissions
         self.lastAccessedAt = lastAccessedAt
         self.shortcutStoryID = shortcutStoryID
+        self.groupID = groupID
     }
 
     /// The user-facing label. Falls back to the branch-tracked `name` when no override is set.
@@ -89,6 +94,9 @@ struct Project: Identifiable, Hashable, Codable {
     var checkoutDirectory: String?
     var workstreams: [Workstream]
     var lastAccessedAt: Date
+    /// The project's workstream groups. Optional for the same reason as
+    /// `checkoutDirectory`; nil means the project has never had a workstream.
+    var groups: [Workstream.Group]?
 
     init(
         name: String,
@@ -96,7 +104,8 @@ struct Project: Identifiable, Hashable, Codable {
         checkoutDirectory: String? = nil,
         id: UUID = UUID(),
         workstreams: [Workstream] = [],
-        lastAccessedAt: Date = Date()
+        lastAccessedAt: Date = Date(),
+        groups: [Workstream.Group]? = nil
     ) {
         self.id = id
         self.name = name
@@ -104,6 +113,7 @@ struct Project: Identifiable, Hashable, Codable {
         self.checkoutDirectory = checkoutDirectory
         self.workstreams = workstreams
         self.lastAccessedAt = lastAccessedAt
+        self.groups = groups
     }
 
     /// The directory to run work-tree operations in: `git status`, the branch
@@ -129,6 +139,11 @@ struct Project: Identifiable, Hashable, Codable {
     /// checkout where the container belongs. That is worse than a decode
     /// failure, which at least surfaces, so it is repaired here. See
     /// `Project.hoistedLocation`.
+    ///
+    /// The third: a blob written before workstream groups carries neither
+    /// `groups` nor any `groupID`. Both decode with `decodeIfPresent`, and
+    /// `housingWorkstreams()` then runs on locals, since `self` is not usable
+    /// until every stored property is set.
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
@@ -146,7 +161,21 @@ struct Project: Identifiable, Hashable, Codable {
             checkoutDirectory = hoisted.checkoutDirectory
         }
         lastAccessedAt = try container.decode(Date.self, forKey: .lastAccessedAt)
-        workstreams = try container.decodeLossyArray(Workstream.self, forKey: .workstreams)
+        let decodedWorkstreams = try container.decodeLossyArray(Workstream.self, forKey: .workstreams)
+        let decodedGroups = try container.decodeIfPresent([Workstream.Group].self, forKey: .groups)
+
+        var housing = Project(
+            name: name,
+            directory: directory,
+            checkoutDirectory: checkoutDirectory,
+            id: id,
+            workstreams: decodedWorkstreams,
+            lastAccessedAt: lastAccessedAt,
+            groups: decodedGroups
+        )
+        housing = housing.housingWorkstreams()
+        workstreams = housing.workstreams
+        groups = housing.groups
     }
 
     static func == (lhs: Project, rhs: Project) -> Bool {
@@ -155,6 +184,61 @@ struct Project: Identifiable, Hashable, Codable {
 
     func hash(into hasher: inout Hasher) {
         hasher.combine(id)
+    }
+}
+
+extension Project {
+    /// Returns the project with every workstream housed in a group.
+    ///
+    /// A project with no workstreams is returned unchanged. Otherwise, when it
+    /// has no groups, one is created named after the project; then any workstream
+    /// whose `groupID` is nil or names no group lands in the first group.
+    ///
+    /// The backfilled group is deterministic: its id derives from the project's
+    /// id and its dates are the project's `lastAccessedAt`, so two decodes of the
+    /// same blob agree. A random id would differ on every launch until the first
+    /// save, and anything keyed by it (a coordinator's tab, say) would be orphaned.
+    func housingWorkstreams() -> Project {
+        guard !workstreams.isEmpty else { return self }
+        var housed = self
+        let known: [Workstream.Group] = if let groups, !groups.isEmpty {
+            groups
+        } else {
+            [Workstream.Group(
+                name: name,
+                id: derivedUUID(from: id, salt: "default-group"),
+                createdAt: lastAccessedAt,
+                lastAccessedAt: lastAccessedAt
+            )]
+        }
+        housed.groups = known
+        let ids = Set(known.map(\.id))
+        for index in housed.workstreams.indices {
+            if let current = housed.workstreams[index].groupID, ids.contains(current) {
+                continue
+            }
+            housed.workstreams[index].groupID = known[0].id
+        }
+        return housed
+    }
+
+    func workstreams(in groupID: UUID) -> [Workstream] {
+        workstreams.filter { $0.groupID == groupID }
+    }
+
+    /// Matches the trimmed name exactly, the same rule `Workstream.Group.validateName` enforces.
+    func group(named name: String) -> Workstream.Group? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return groups?.first { $0.name == trimmed }
+    }
+
+    func group(with id: UUID) -> Workstream.Group? {
+        groups?.first { $0.id == id }
+    }
+
+    /// Model order; the sidebar sorts separately.
+    var sortedGroups: [Workstream.Group] {
+        groups ?? []
     }
 }
 
