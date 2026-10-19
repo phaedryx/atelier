@@ -69,27 +69,34 @@ final class SidebarRowOrderTests: XCTestCase {
         XCTAssertEqual(sidebarRowOrder(cached: ids(3), actual: []), [])
     }
 
-    // MARK: - Expanded groups persistence
+    // MARK: - Collapsed groups persistence
 
-    func testExpandedGroupsRoundTripThroughDefaults() throws {
-        let suiteName = "atelier.tests.expandedGroups"
+    /// The persisted set is the *collapsed* one, so a group nobody has seen
+    /// yet — the backfilled group after upgrade, one made by adopt — is open.
+    func testCollapsedGroupsRoundTripThroughDefaults() throws {
+        let suiteName = "atelier.tests.collapsedGroups"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defaults.removePersistentDomain(forName: suiteName)
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
         let saved: Set<UUID> = Set(ids(2))
-        SidebarState.saveExpandedGroups(saved, defaults: defaults)
+        SidebarState.saveCollapsedGroups(saved, defaults: defaults)
 
-        XCTAssertEqual(SidebarState.loadExpandedGroups(defaults: defaults), saved)
-        XCTAssertNotNil(defaults.data(forKey: "atelier.expandedGroups"))
+        XCTAssertEqual(SidebarState.loadCollapsedGroups(defaults: defaults), saved)
+        XCTAssertNotNil(defaults.data(forKey: "atelier.collapsedGroups"))
+        XCTAssertNil(defaults.data(forKey: "atelier.expandedGroups"), "the old key is no longer written")
     }
 
-    func testExpandedGroupsLoadEmptyWhenNothingWasSaved() throws {
-        let suiteName = "atelier.tests.expandedGroupsEmpty"
+    func testAnUnknownGroupReadsAsExpanded() throws {
+        let suiteName = "atelier.tests.collapsedGroupsEmpty"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defaults.removePersistentDomain(forName: suiteName)
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
-        XCTAssertEqual(SidebarState.loadExpandedGroups(defaults: defaults), [])
+        let collapsed = SidebarState.loadCollapsedGroups(defaults: defaults)
+        XCTAssertEqual(collapsed, [])
+        XCTAssertTrue(SidebarState.isGroupExpanded(UUID(), collapsed: collapsed))
+        let folded = UUID()
+        XCTAssertFalse(SidebarState.isGroupExpanded(folded, collapsed: [folded]))
     }
 }

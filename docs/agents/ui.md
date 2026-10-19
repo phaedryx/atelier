@@ -84,13 +84,17 @@ keyboard shortcut tables that have to be reconciled by hand.
   unauthenticated `gh`. The process-compose row is fed by
   `ProcessCompose.Settings.resolveBinary()` and never by `ToolStatus.findBinary`, for the
   reason **Detected Tools** gives at length in `docs/agents/execution-and-config.md`.
-- **Sidebar state** (selection, expanded sections) stored in UserDefaults (`atelier.selection`, `atelier.expandedProjects`, `atelier.expandedGroups`)
+- **Sidebar state** (selection, expanded sections) stored in UserDefaults (`atelier.selection`, `atelier.expandedProjects`, `atelier.collapsedGroups`)
 - **The sidebar is a three-level tree: project, group, workstream.** Every workstream lives in a
   group (`Workstream.groupID`; `Project.housingWorkstreams()` backfills it on decode). **The group
   row is the group's coordinator**: selecting it (`SidebarSelection.group`) shows
   `CoordinatorPaneView`, a Claude Code session at `Project.directory` plus an Info tab, not a
-  workstream pane. `atelier.expandedGroups` holds the expanded set, beside `atelier.expandedProjects`
-  (`SidebarState.loadExpandedGroups`/`saveExpandedGroups`); a memberless group is a bare row with no
+  workstream pane. `atelier.collapsedGroups` holds the **collapsed** set, beside `atelier.expandedProjects`
+  (`SidebarState.loadCollapsedGroups`/`saveCollapsedGroups`), so a group is open unless the user
+  folded it. It is inverted from the project set on purpose: an expanded set (`atelier.expandedGroups`,
+  no longer read) left every group nobody had touched closed — the one backfilled on upgrade, so
+  every existing workstream sat behind a collapsed row, and every group made by adopt. Do not flip it
+  back to an expanded set. A memberless group is a bare row with no
   disclosure. Selecting a group never stamps it: a group's recency under Recent is the max of its own
   `lastAccessedAt` (its creation time) and its newest member's, so a click cannot move the row under
   the cursor. The coordinator's Info tab has no launch log, because `LaunchLogger` writes one and

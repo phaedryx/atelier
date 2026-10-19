@@ -59,7 +59,7 @@ enum SidebarSelection: Hashable, Codable {
 
 enum SidebarState {
     private static let userDefaultsKey = "atelier.expandedProjects"
-    private static let expandedGroupsKey = "atelier.expandedGroups"
+    private static let collapsedGroupsKey = "atelier.collapsedGroups"
 
     static func loadExpanded() -> Set<UUID> {
         guard let data = UserDefaults.standard.data(forKey: userDefaultsKey),
@@ -73,18 +73,25 @@ enum SidebarState {
         UserDefaults.standard.set(data, forKey: userDefaultsKey)
     }
 
-    /// Expanded groups, a separate set from expanded projects: a group's
-    /// disclosure state is its own, and the two sets are opened by different
-    /// things — selection opens a project, creation and selection open a group.
-    static func loadExpandedGroups(defaults: UserDefaults = .standard) -> Set<UUID> {
-        guard let data = defaults.data(forKey: expandedGroupsKey),
+    /// Collapsed groups, a separate set from expanded projects, and stored the
+    /// other way round on purpose: a group is open unless the user folded it.
+    /// An expanded set left every group nobody had touched closed — the group
+    /// backfilled on upgrade, so every existing workstream vanished behind a
+    /// disclosure, and every group made by adopt.
+    static func loadCollapsedGroups(defaults: UserDefaults = .standard) -> Set<UUID> {
+        guard let data = defaults.data(forKey: collapsedGroupsKey),
               let ids = try? JSONDecoder().decode(Set<UUID>.self, from: data)
         else { return [] }
         return ids
     }
 
-    static func saveExpandedGroups(_ ids: Set<UUID>, defaults: UserDefaults = .standard) {
+    static func saveCollapsedGroups(_ ids: Set<UUID>, defaults: UserDefaults = .standard) {
         guard let data = try? JSONEncoder().encode(ids) else { return }
-        defaults.set(data, forKey: expandedGroupsKey)
+        defaults.set(data, forKey: collapsedGroupsKey)
+    }
+
+    /// An id the collapsed set has never seen is expanded.
+    static func isGroupExpanded(_ groupID: UUID, collapsed: Set<UUID>) -> Bool {
+        !collapsed.contains(groupID)
     }
 }

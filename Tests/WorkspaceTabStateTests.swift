@@ -485,16 +485,16 @@ final class SidebarExpansionTests: XCTestCase {
         let other = UUID()
 
         XCTAssertEqual(
-            expandedGroupIDs(afterSelecting: .workstream(workstreamID), current: [other], groupIDByWorkstreamID: [workstreamID: groupID]),
+            collapsedGroupIDs(afterSelecting: .workstream(workstreamID), current: [other, groupID], groupIDByWorkstreamID: [workstreamID: groupID]),
+            [other]
+        )
+        XCTAssertEqual(
+            collapsedGroupIDs(afterSelecting: .group(groupID), current: [other, groupID], groupIDByWorkstreamID: [:]),
             [other, groupID]
         )
         XCTAssertEqual(
-            expandedGroupIDs(afterSelecting: .group(groupID), current: [other], groupIDByWorkstreamID: [:]),
-            [other]
-        )
-        XCTAssertEqual(
-            expandedGroupIDs(afterSelecting: nil, current: [other], groupIDByWorkstreamID: [workstreamID: groupID]),
-            [other]
+            collapsedGroupIDs(afterSelecting: nil, current: [other, groupID], groupIDByWorkstreamID: [workstreamID: groupID]),
+            [other, groupID]
         )
     }
 }

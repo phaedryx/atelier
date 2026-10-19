@@ -60,14 +60,15 @@ func expandedProjectIDs(
     return expanded
 }
 
-/// The groups to open after a selection lands, so the selected row exists.
+/// The collapsed groups after a selection lands, with the selected
+/// workstream's group opened so its row exists.
 ///
 /// A workstream inside a collapsed group has no row: `scrollTo` lands on
 /// nothing and the highlight is invisible. `expandedProjectIDs` opens the
 /// project; this opens the group under it. A group selection needs nothing
 /// here — the group row is its own disclosure's label, visible whenever its
 /// project is open.
-func expandedGroupIDs(
+func collapsedGroupIDs(
     afterSelecting selection: SidebarSelection?,
     current: Set<UUID>,
     groupIDByWorkstreamID: [UUID: UUID]
@@ -75,7 +76,7 @@ func expandedGroupIDs(
     guard case let .workstream(workstreamID) = selection,
           let groupID = groupIDByWorkstreamID[workstreamID]
     else { return current }
-    return current.union([groupID])
+    return current.subtracting([groupID])
 }
 
 /// The directory new projects and clones are created under, or nil if the
@@ -133,10 +134,11 @@ struct ProjectSidebar: View {
     /// has no warning and no button-title rule to share.
     @StateObject private var purgeConfirmation = Workstream.PurgeConfirmation()
     @State private var expandedProjects: Set<UUID> = SidebarState.loadExpanded()
-    /// Expanded groups, persisted under `atelier.expandedGroups`. Like
-    /// `expandedProjects`, the inner `DisclosureGroup` reads it through a
+    /// Collapsed groups, persisted under `atelier.collapsedGroups`: a group is
+    /// open unless it is in here (`SidebarState.loadCollapsedGroups` says why).
+    /// Like `expandedProjects`, the inner `DisclosureGroup` reads it through a
     /// computed binding and owns none of it.
-    @State private var expandedGroups: Set<UUID> = SidebarState.loadExpandedGroups()
+    @State private var collapsedGroups: Set<UUID> = SidebarState.loadCollapsedGroups()
     @State private var cachedSortedIDs: [UUID] = []
     /// Project id → that project's group ids, in sidebar order. Order only.
     @State private var cachedSortedGroupIDs: [UUID: [UUID]] = [:]
@@ -279,9 +281,9 @@ struct ProjectSidebar: View {
                 projectIDByWorkstreamID: projectIDByWorkstreamID,
                 projectIDByGroupID: projectIDByGroupID
             )
-            expandedGroups = expandedGroupIDs(
+            collapsedGroups = collapsedGroupIDs(
                 afterSelecting: selected,
-                current: expandedGroups,
+                current: collapsedGroups,
                 groupIDByWorkstreamID: groupIDByWorkstreamID
             )
             withAnimation {
@@ -323,7 +325,7 @@ struct ProjectSidebar: View {
     /// The project's children are its **groups**, and all three rules apply one
     /// level down unchanged: a group with members is an inner `DisclosureGroup`
     /// whose label is the group row, tagged `.group(id)`, with `isExpanded` a
-    /// computed binding over `expandedGroups`; a memberless group is the bare row.
+    /// computed binding over `collapsedGroups`; a memberless group is the bare row.
     /// A project with no groups has no children at all — except the inline
     /// new-group field while it is pending, which is why `hasChildren` reads
     /// `pendingGroupProjectID` too: without it a group-less project has nowhere
@@ -447,13 +449,13 @@ struct ProjectSidebar: View {
                 if project.workstreams.contains(where: { $0.groupID == groupID }) {
                     DisclosureGroup(
                         isExpanded: Binding(
-                            get: { expandedGroups.contains(groupID) },
+                            get: { SidebarState.isGroupExpanded(groupID, collapsed: collapsedGroups) },
                             set: { on in
                                 withAnimation(.easeInOut(duration: 0.15)) {
                                     if on {
-                                        expandedGroups.insert(groupID)
+                                        collapsedGroups.remove(groupID)
                                     } else {
-                                        expandedGroups.remove(groupID)
+                                        collapsedGroups.insert(groupID)
                                     }
                                 }
                             }
@@ -963,7 +965,7 @@ struct ProjectSidebar: View {
             rebuildSortOrder()
         }
         .onChange(of: expandedProjects) { _, newValue in SidebarState.saveExpanded(newValue) }
-        .onChange(of: expandedGroups) { _, newValue in SidebarState.saveExpandedGroups(newValue) }
+        .onChange(of: collapsedGroups) { _, newValue in SidebarState.saveCollapsedGroups(newValue) }
         .onChange(of: workstreamSortOrder) { _, _ in rebuildSortOrder() }
         .onChange(of: projects.count) { _, _ in
             cachedSortedIDs = recomputeSortedIDs()
@@ -1327,7 +1329,7 @@ struct ProjectSidebar: View {
         existingBranch: String? = nil
     ) {
         expandedProjects.insert(projectID)
-        expandedGroups.insert(groupID)
+        collapsedGroups.remove(groupID)
 
         Task {
             do {
@@ -1418,7 +1420,7 @@ struct ProjectSidebar: View {
               let projectID = workstreamProjectID(for: wsID) else { return }
         expandedProjects.insert(projectID)
         if let groupID = groupIDByWorkstreamIDSnapshot()[wsID] {
-            expandedGroups.insert(groupID)
+            collapsedGroups.remove(groupID)
         }
         renamingWorkstreamID = wsID
     }
@@ -1444,8 +1446,8 @@ struct ProjectSidebar: View {
         guard let pi = projects.firstIndex(where: { $0.id == projectID }) else { return }
         // The app's current permission default, as a new workstream takes it.
         switch projects[pi].addGroup(named: input, bypassPermissions: defaultBypass) {
-        case let .success(group):
-            expandedGroups.insert(group.id)
+        case .success:
+            // Open already: a group is expanded unless it is in `collapsedGroups`.
             onProjectsChanged()
             rebuildSortOrder()
         case let .failure(refusal):
@@ -1490,7 +1492,7 @@ struct ProjectSidebar: View {
             agentStateTracker: agentStateTracker,
             tmuxPath: appEnv.toolStatus.tmux.path
         )
-        expandedGroups.remove(groupID)
+        collapsedGroups.remove(groupID)
         if selection == .group(groupID) {
             selection = .project(projectID)
         }
