@@ -763,4 +763,35 @@ final class ProjectTests: XCTestCase {
         XCTAssertEqual(loaded[0].groups?.first?.bypassPermissions, true)
         XCTAssertEqual(loaded[0].workstreams[0].groupID, g.id)
     }
+
+    // MARK: - Group sort order
+
+    /// A group's recency is the newest of its own access and its members'. Group A
+    /// was itself last touched before B, but a member of A was touched after both.
+    func testGroupRecentOrderUsesTheNewestMemberAccess() {
+        let a = Workstream.Group(name: "A", lastAccessedAt: Date(timeIntervalSince1970: 0))
+        let b = Workstream.Group(name: "B", lastAccessedAt: Date(timeIntervalSince1970: 1))
+        let project = Project(
+            name: "app",
+            directory: "/app",
+            workstreams: [
+                Workstream(name: "member", worktreePath: "/app/member", lastAccessedAt: Date(timeIntervalSince1970: 2), groupID: a.id),
+            ],
+            groups: [b, a]
+        )
+
+        XCTAssertEqual(Project.SortOrder.recent.sorted([b, a], in: project).map(\.id), [a.id, b.id])
+    }
+
+    func testGroupAlphabeticalOrderIsCaseInsensitive() {
+        let beta = Workstream.Group(name: "beta")
+        let alpha = Workstream.Group(name: "Alpha")
+        let charlie = Workstream.Group(name: "charlie")
+        let project = Project(name: "app", directory: "/app", groups: [beta, charlie, alpha])
+
+        XCTAssertEqual(
+            Project.SortOrder.alphabetical.sorted([beta, charlie, alpha], in: project).map(\.id),
+            [alpha.id, beta.id, charlie.id]
+        )
+    }
 }

@@ -52,29 +52,39 @@ func renderableWorkstreamID(
     } ? selectedWorkstreamID : nil
 }
 
-/// The workstream ⌘[ / ⌘] lands on next.
+/// The sidebar row ⌘[ / ⌘] lands on next, within one project.
+///
+/// The walk is the rows the sidebar draws under the project: each group in
+/// group order, followed by that group's renderable workstreams in workstream
+/// order. A group is always a stop, even with no renderable workstreams —
+/// its row is its coordinator, which is selectable whether or not any member
+/// is ready. A selection the walk does not contain (the project row, or a
+/// workstream still preparing) enters at the first stop going forward and the
+/// last going back.
 ///
 /// `order` has no default on purpose: it must be the same `Project.SortOrder` the
 /// sidebar drew with, and a default here would let a caller silently walk the rows
 /// in an order nobody is looking at.
-func cycledWorkstreamID(
+func cycledSelection(
     in project: Project,
-    selectedWorkstreamID: UUID?,
+    selected: SidebarSelection?,
     direction: Int,
     order: Project.SortOrder,
     pathExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
-) -> UUID? {
-    let sorted = order.sorted(
-        project.workstreams.filter { workstreamHasUsablePath($0, pathExists: pathExists) }
-    )
-    guard !sorted.isEmpty else { return nil }
-    guard let selectedWorkstreamID,
-          let currentIndex = sorted.firstIndex(where: { $0.id == selectedWorkstreamID })
-    else {
-        return direction > 0 ? sorted.first?.id : sorted.last?.id
+) -> SidebarSelection? {
+    var stops: [SidebarSelection] = []
+    for group in order.sorted(project.sortedGroups, in: project) {
+        stops.append(.group(group.id))
+        let members = project.workstreams(in: group.id)
+            .filter { workstreamHasUsablePath($0, pathExists: pathExists) }
+        stops.append(contentsOf: order.sorted(members).map { .workstream($0.id) })
     }
-    let next = (currentIndex + direction + sorted.count) % sorted.count
-    return sorted[next].id
+    guard !stops.isEmpty else { return nil }
+    guard let selected, let currentIndex = stops.firstIndex(of: selected) else {
+        return direction > 0 ? stops.first : stops.last
+    }
+    let next = (currentIndex + direction + stops.count) % stops.count
+    return stops[next]
 }
 
 /// What a ⌘-chord the key monitor swallows should do.
@@ -470,15 +480,12 @@ struct ContentView: View {
                 if newValue != .settings, newValue != .help {
                     newValue?.save()
                 }
-                let wsID: UUID? = {
-                    if case let .workstream(id) = newValue {
-                        return id
-                    }
-                    return nil
-                }()
-                agentStateTracker.currentSelection = wsID
-                if let wsID {
-                    agentStateTracker.markSeen(workstreamID: wsID)
+                // A group's coordinator is keyed by the group id, so a
+                // selected group counts as looked-at exactly as a workstream does.
+                let seenID = newValue?.agentStateID
+                agentStateTracker.currentSelection = seenID
+                if let seenID {
+                    agentStateTracker.markSeen(workstreamID: seenID)
                 }
                 // The verification family belongs to whichever project is now
                 // selected; see `syncVerificationCommands`.
@@ -1235,19 +1242,19 @@ struct ContentView: View {
         }
     }
 
-    /// Cycle through workstreams within the active project.
-    /// Only acts when a project or workstream is selected (not settings/help).
+    /// Cycle through the active project's groups and workstreams.
+    /// Only acts when a project, group or workstream is selected (not settings/help).
     private func cycleWorkstream(direction: Int) {
         guard let project = activeProject else { return }
 
-        if selection?.workstreamID != nil || selection?.projectID != nil {
-            guard let id = cycledWorkstreamID(
+        if selection?.workstreamID != nil || selection?.projectID != nil || selection?.groupID != nil {
+            guard let target = cycledSelection(
                 in: project,
-                selectedWorkstreamID: selection?.workstreamID,
+                selected: selection,
                 direction: direction,
                 order: workstreamSortOrder
             ) else { return }
-            deferSelection(.workstream(id))
+            deferSelection(target)
         }
     }
 

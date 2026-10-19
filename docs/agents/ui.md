@@ -84,10 +84,11 @@ keyboard shortcut tables that have to be reconciled by hand.
   unauthenticated `gh`. The process-compose row is fed by
   `ProcessCompose.Settings.resolveBinary()` and never by `ToolStatus.findBinary`, for the
   reason **Detected Tools** gives at length in `docs/agents/execution-and-config.md`.
-- **Sidebar state** (selection, expanded sections) stored in UserDefaults (`atelier.selection`, `atelier.expandedProjects`)
-- **No sidebar row is ever resolved by position.** `ProjectSidebar` caches a sort
-  order per project (`cachedSortedWorkstreamIDs`) and a project order
-  (`cachedSortedIDs`), and both are **one frame behind by construction**: they are
+- **Sidebar state** (selection, expanded sections) stored in UserDefaults (`atelier.selection`, `atelier.expandedProjects`, `atelier.expandedGroups`)
+- **No sidebar row is ever resolved by position.** `ProjectSidebar` caches a group
+  order per project (`cachedSortedGroupIDs`), a workstream order per **group**
+  (`cachedSortedWorkstreamIDs`) and a project order (`cachedSortedIDs`), and all
+  are **one frame behind by construction**: they are
   refilled from `onChange`, which runs after the body that already saw the mutated
   `projects`. Every add, remove, purge and project deletion therefore renders once
   against a cache that disagrees with the model.

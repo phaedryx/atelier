@@ -32,6 +32,14 @@ enum SidebarSelection: Hashable, Codable {
         return nil
     }
 
+    /// The id the agent-state tracker treats as "being looked at": a
+    /// workstream's own id, or a group's, because a coordinator's state is
+    /// keyed by its group id. Without the group half a selected group's idle
+    /// coordinator kept reading "just finished".
+    var agentStateID: UUID? {
+        workstreamID ?? groupID
+    }
+
     // MARK: - Persistence
 
     private static let userDefaultsKey = "atelier.selection"
@@ -51,6 +59,7 @@ enum SidebarSelection: Hashable, Codable {
 
 enum SidebarState {
     private static let userDefaultsKey = "atelier.expandedProjects"
+    private static let expandedGroupsKey = "atelier.expandedGroups"
 
     static func loadExpanded() -> Set<UUID> {
         guard let data = UserDefaults.standard.data(forKey: userDefaultsKey),
@@ -62,5 +71,20 @@ enum SidebarState {
     static func saveExpanded(_ ids: Set<UUID>) {
         guard let data = try? JSONEncoder().encode(ids) else { return }
         UserDefaults.standard.set(data, forKey: userDefaultsKey)
+    }
+
+    /// Expanded groups, a separate set from expanded projects: a group's
+    /// disclosure state is its own, and the two sets are opened by different
+    /// things — selection opens a project, creation and selection open a group.
+    static func loadExpandedGroups(defaults: UserDefaults = .standard) -> Set<UUID> {
+        guard let data = defaults.data(forKey: expandedGroupsKey),
+              let ids = try? JSONDecoder().decode(Set<UUID>.self, from: data)
+        else { return [] }
+        return ids
+    }
+
+    static func saveExpandedGroups(_ ids: Set<UUID>, defaults: UserDefaults = .standard) {
+        guard let data = try? JSONEncoder().encode(ids) else { return }
+        defaults.set(data, forKey: expandedGroupsKey)
     }
 }

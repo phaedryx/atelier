@@ -68,4 +68,28 @@ final class SidebarRowOrderTests: XCTestCase {
     func testPurgingEveryWorkstreamLeavesNoRows() {
         XCTAssertEqual(sidebarRowOrder(cached: ids(3), actual: []), [])
     }
+
+    // MARK: - Expanded groups persistence
+
+    func testExpandedGroupsRoundTripThroughDefaults() throws {
+        let suiteName = "atelier.tests.expandedGroups"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let saved: Set<UUID> = Set(ids(2))
+        SidebarState.saveExpandedGroups(saved, defaults: defaults)
+
+        XCTAssertEqual(SidebarState.loadExpandedGroups(defaults: defaults), saved)
+        XCTAssertNotNil(defaults.data(forKey: "atelier.expandedGroups"))
+    }
+
+    func testExpandedGroupsLoadEmptyWhenNothingWasSaved() throws {
+        let suiteName = "atelier.tests.expandedGroupsEmpty"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        XCTAssertEqual(SidebarState.loadExpandedGroups(defaults: defaults), [])
+    }
 }

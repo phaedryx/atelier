@@ -413,5 +413,27 @@ extension Project {
                 workstreams.sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
             }
         }
+
+        /// Orders a project's groups the way the sidebar draws them.
+        ///
+        /// `.recent` ranks a group by the newest of its own `lastAccessedAt` and
+        /// its members', so a group whose workstream was just used rises with it
+        /// even though nobody selected the group row itself. `.alphabetical` is
+        /// case-insensitive on the name, matching the workstream rule.
+        func sorted(_ groups: [Workstream.Group], in project: Project) -> [Workstream.Group] {
+            switch self {
+            case .recent:
+                let newest = Dictionary(
+                    project.workstreams.compactMap { ws in ws.groupID.map { ($0, ws.lastAccessedAt) } },
+                    uniquingKeysWith: max
+                )
+                func recency(_ group: Workstream.Group) -> Date {
+                    max(group.lastAccessedAt, newest[group.id] ?? .distantPast)
+                }
+                return groups.sorted { recency($0) > recency($1) }
+            case .alphabetical:
+                return groups.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            }
+        }
     }
 }
