@@ -130,7 +130,21 @@ extension Workstream {
                     agentStateTracker: agentStateTracker
                 )
             }
-            guard let tmuxPath, !workstreamNames.isEmpty else { return }
+            // The coordinators go after their members: `removeGroup` refuses a
+            // group that still has any. Same nil-tmux reasoning as above, with
+            // the group sessions joining the one serialized batch.
+            var groupSessions: [String] = []
+            for group in project.groups ?? [] {
+                groupSessions.append(coordinatorSessionName(projectName: projectName, groupName: group.name))
+                removeGroup(
+                    group.id,
+                    from: &project,
+                    surfaceCache: surfaceCache,
+                    agentStateTracker: agentStateTracker,
+                    tmuxPath: nil
+                )
+            }
+            guard let tmuxPath, !(workstreamNames.isEmpty && groupSessions.isEmpty) else { return }
             // One queue, one thread, the kills serialized on it — rather than
             // `Task.detached`, which is the cooperative pool the paragraph above
             // is about. The names were snapshotted before the loop, because
@@ -141,7 +155,69 @@ extension Workstream {
                         tmuxPath: tmuxPath, project: projectName, workstream: workstreamName
                     )
                 }
+                for session in groupSessions {
+                    TmuxSession.killSession(tmuxPath: tmuxPath, sessionName: session)
+                }
             }
+        }
+
+        enum GroupRemovalRefusal: Equatable { case hasMembers(Int) }
+
+        /// Pure: whether `removeGroup` may run. A group with members is refused;
+        /// its workstreams are removed or purged first.
+        static func groupRemovalRefusal(_ group: Workstream.Group, in project: Project) -> GroupRemovalRefusal? {
+            let count = project.workstreams(in: group.id).count
+            return count > 0 ? .hasMembers(count) : nil
+        }
+
+        /// The tmux session a group's coordinator runs in. One definition, shared
+        /// with `CoordinatorPaneView`'s spelling of the workstream name.
+        private static func coordinatorSessionName(projectName: String, groupName: String) -> String {
+            TmuxSession.sessionName(project: projectName, workstream: "group-\(groupName)", role: "agent")
+        }
+
+        /// Tears down a group's coordinator and drops the group from the project.
+        /// Does nothing if the group has members (`groupRemovalRefusal`); the UI
+        /// disables the item, but the rule is held here too.
+        ///
+        /// Everything is keyed by the group id, which is the coordinator's surface
+        /// id and session id. Steps run in `detachWorkstream`'s order: permission
+        /// holds first, then the tmux kill, the surface, the config, status-line
+        /// and launch-log files, the record, and agent state last (it posts
+        /// `.agentPermissionResolved`, so it stays in the same main-actor turn as
+        /// the record's removal). Task claims are released as well: a coordinator
+        /// can hold project-task claims, which `IPC.Service` keys by surface id.
+        ///
+        /// Deliberately absent from `detachWorkstream`: the whiteboard host and
+        /// directory (a group has no board), the workstream removal (a group is
+        /// not a `Workstream`), and verification, `Initialization.Runner` state
+        /// and `clearWorkstreamState` (a group has no worktree, checks or
+        /// initialization).
+        @MainActor
+        static func removeGroup(
+            _ groupID: UUID,
+            from project: inout Project,
+            surfaceCache: TerminalSurfaceCache,
+            agentStateTracker: Workstream.AgentStateTracker,
+            tmuxPath: String?
+        ) {
+            guard let group = project.group(with: groupID),
+                  groupRemovalRefusal(group, in: project) == nil
+            else { return }
+            PermissionApprovalStore.shared.releaseAll(workstreamID: groupID)
+            if let tmuxPath {
+                let session = coordinatorSessionName(projectName: project.name, groupName: group.name)
+                Task.detached {
+                    TmuxSession.killSession(tmuxPath: tmuxPath, sessionName: session)
+                }
+            }
+            surfaceCache.removeSurface(for: groupID)
+            Task { await IPC.Service.shared.releaseTaskClaims(inWorkstream: groupID) }
+            IPC.Config.remove(for: groupID)
+            StatusLine.Config.remove(for: groupID)
+            LaunchLogger.removeLog(for: groupID)
+            project.groups?.removeAll { $0.id == groupID }
+            clearAgentState(groupID, tracker: agentStateTracker)
         }
 
         /// Everything both archive paths do to end a workstream in the app,

@@ -103,6 +103,41 @@ fallback that used to stand there reached `removeWorktree`, `deleteLocalBranch`
 and `dispose` against the user's main checkout. `purgeOrphanWorktree` is the same
 operation for a worktree no workstream owns, with its own `orphanPurgeWarning`.
 
+### Groups and the coordinator
+A `Workstream.Group` sits between a project and its workstreams, and each group has a
+coordinator agent. The coordinator is **not a `Workstream`**: it has no worktree, no port,
+no slot and no initialization, `ProjectStore.save` would drop it for lacking a
+`worktreePath`, and nothing in the table above applies to it.
+
+It runs at `Project.directory`, the project root, **not** `Project.checkout`. In the
+`.bare` container layout the root is the parent of every worktree, so the coordinator
+sits above all the workstreams it coordinates; the checkout is just one peer trunk among
+them, and a coordinator launched there would read as that worktree's agent. Several
+coordinators therefore share one cwd, which is why its identity is the group id (its
+surface id, session id and agent-state key), never the directory.
+
+`Archiver.removeGroup` is the whole teardown, in this order: permission holds, the tmux
+session (`TmuxSession.sessionName(project:, workstream: "group-<name>", role: "agent")`,
+killed from a `Task.detached` as `remove` does), the surface, project task claims, the
+`IPC.Config` and `StatusLine.Config` files, the launch log, the record itself, and agent
+state last. It is refused, silently, for a group that still has members
+(`groupRemovalRefusal`); the menu item is disabled for that case but the rule lives in
+the function.
+
+What it deliberately omits from `detachWorkstream`: the whiteboard host and directory (a
+group has no board), the workstream removal (it is not one), and everything verification
+and initialization related (`Verification.Runner.forget`, `Initialization.Runner.clearState`,
+`clearWorkstreamState`; there is no worktree, no checks, no init run). Do not add them
+"for symmetry".
+
+The three project-deletion paths reach it through `removeAllWorkstreams`, which removes
+members first and then each group, with the group tmux kills joining the one serialized
+batch rather than N `Task.detached`.
+
+**Remove and Purge share one selection fallback**, `RemoveConfirmation.fallbackSelection`:
+the next workstream in the *same group*, then the group, then the project. Remove used to
+take `projects[index].workstreams.first`, which could land in a different group.
+
 ### Base branch
 `BaseBranchSetting` (`atelier.baseBranch`, Settings → General) chooses the branch new worktrees
 are cut from: `main`, `master`, `trunk`, `develop`, or `repositoryDefault`, which asks

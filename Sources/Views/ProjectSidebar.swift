@@ -698,13 +698,12 @@ struct ProjectSidebar: View {
                 if case let .workstream(id) = selection, id == wsID {
                     // The first row the user can see in the same group, which under
                     // `.recent` is not storage order; then the group itself.
-                    if let groupID, let next = cachedSortedWorkstreamIDs[groupID]?.first {
-                        selection = .workstream(next)
-                    } else if let groupID, projects.contains(where: { $0.group(with: groupID) != nil }) {
-                        selection = .group(groupID)
-                    } else {
-                        selection = .project(projectID)
-                    }
+                    selection = Workstream.RemoveConfirmation.fallbackSelection(
+                        projectID: projectID,
+                        groupID: groupID,
+                        nextInGroup: groupID.flatMap { cachedSortedWorkstreamIDs[$0]?.first },
+                        groupExists: groupID.map { id in projects.contains(where: { $0.group(with: id) != nil }) } ?? false
+                    )
                 }
                 onProjectsChanged()
             }
@@ -1468,15 +1467,19 @@ struct ProjectSidebar: View {
         onProjectsChanged()
     }
 
-    /// Task 10: a stub that only drops the record of a memberless group. Task 10
-    /// replaces it with `Workstream.Archiver.removeGroup`, the full teardown of the
-    /// coordinator (its surfaces, tmux session and agent state). The context menu
-    /// already refuses a group with members, and this refuses it again.
+    /// The context menu already refuses a group with members, and
+    /// `Archiver.removeGroup` refuses it again.
     private func removeGroup(projectID: UUID, groupID: UUID) {
         guard let pi = projects.firstIndex(where: { $0.id == projectID }),
               projects[pi].workstreams(in: groupID).isEmpty
         else { return }
-        projects[pi].groups?.removeAll { $0.id == groupID }
+        Workstream.Archiver.removeGroup(
+            groupID,
+            from: &projects[pi],
+            surfaceCache: surfaceCache,
+            agentStateTracker: agentStateTracker,
+            tmuxPath: appEnv.toolStatus.tmux.path
+        )
         expandedGroups.remove(groupID)
         if selection == .group(groupID) {
             selection = .project(projectID)
