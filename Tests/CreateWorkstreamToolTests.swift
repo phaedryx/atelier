@@ -30,14 +30,16 @@ final class CreateWorkstreamToolTests: XCTestCase {
 
     private func client(
         project: String?,
-        workstreamID: UUID? = nil
+        workstreamID: UUID? = nil,
+        groupID: UUID? = nil
     ) -> IPC.ClientIdentity {
         IPC.ClientIdentity(
             workstreamID: workstreamID?.uuidString,
             workstreamName: "bold-crimson-parser",
             projectDirectory: project,
             surfaceID: UUID().uuidString,
-            peerID: nil
+            peerID: nil,
+            groupID: groupID?.uuidString
         )
     }
 
@@ -47,9 +49,8 @@ final class CreateWorkstreamToolTests: XCTestCase {
         )
     }
 
-    /// A caller that sits in a workstream, and so in a group. Creation needs a
-    /// group and `group` is not an argument yet (Task 4), so any test that must
-    /// get past the group resolution acts as this caller.
+    /// A caller that sits in a workstream, and so in a group, so any test that
+    /// must get past the group resolution without naming one acts as this caller.
     private func groupedApp(workstreams: [Workstream] = []) -> (project: Project, caller: IPC.ClientIdentity) {
         let group = Workstream.Group(name: "app")
         let caller = Workstream(name: "caller", worktreePath: "/repos/app/caller", groupID: group.id)
@@ -120,6 +121,46 @@ final class CreateWorkstreamToolTests: XCTestCase {
             as: client(project: "/repos/nowhere-at-all")
         )
         XCTAssertTrue(response.error?.contains("bypass_permissions") ?? false, "expected the argument error, got: \(response.error ?? "nil")")
+    }
+
+    // MARK: - Group resolution
+
+    func testCallerWithOnlyAProjectDirectoryMustNameAGroup() async {
+        install([Project(name: "app", directory: "/p", groups: [Workstream.Group(name: "A")])])
+        let silence = SilenceCheck()
+        let response = await create([:], as: client(project: "/p"))
+        XCTAssertEqual(response.error, Workstream.Launcher.Failure.groupRequired.localizedDescription)
+        XCTAssertTrue(silence.posted.isEmpty)
+    }
+
+    func testUnknownGroupIsRefusedBeforeAnyWorktreeExists() async {
+        let (project, caller) = groupedApp()
+        install([project])
+        let silence = SilenceCheck()
+        let response = await create(["group": "Nope"], as: caller)
+        XCTAssertEqual(response.error, Workstream.Launcher.Failure.groupNotFound("Nope").localizedDescription)
+        XCTAssertTrue(silence.posted.isEmpty)
+    }
+
+    /// A coordinator has a group and no workstream. The group is resolved
+    /// before the agent preconditions, so passing a prompt with no `claude`
+    /// installed reaches the agent refusal, never `groupRequired`.
+    func testCoordinatorCallerDefaultsToItsOwnGroup() async {
+        let group = Workstream.Group(name: "A")
+        install([Project(name: "app", directory: "/p", groups: [group])])
+        WorkspaceActions.shared.appEnvironment = nil
+        let silence = SilenceCheck()
+        let response = await create(["prompt": "go"], as: client(project: "/p", groupID: group.id))
+        XCTAssertNotEqual(response.error, Workstream.Launcher.Failure.groupRequired.localizedDescription)
+        XCTAssertTrue(response.error?.contains("claude") ?? false, "expected the missing-binary refusal, got: \(response.error ?? "nil")")
+        XCTAssertTrue(silence.posted.isEmpty)
+    }
+
+    func testCoordinatorInAGroupThatIsNotThisProjectsIsRefused() async {
+        let stranger = UUID()
+        install([Project(name: "app", directory: "/p", groups: [Workstream.Group(name: "A")])])
+        let response = await create([:], as: client(project: "/p", groupID: stranger))
+        XCTAssertEqual(response.error, Workstream.Launcher.Failure.groupNotFound(stranger.uuidString).localizedDescription)
     }
 
     // MARK: - Caller refusals

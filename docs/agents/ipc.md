@@ -370,6 +370,16 @@ working key but hide the button" — chrome, not capability. The token is the re
 a missing or revoked one arrives as `Shortcut.Error`'s own message, which is the only thing that
 says which of the two it is.
 
+**Which group.** `create_workstream` and `create_shortcut_workstream` take an optional `group`,
+and the workstream lands in the first of these that applies: the `group` argument (a UUID first,
+then a trimmed name), the group of the workstream the caller is running in, the group the caller
+coordinates (`ClientIdentity.groupID`), else a refusal that says to pass `group`. A coordinator
+identity naming a group that is not this project's is refused too, not trusted: it comes from an
+environment variable. `creationPlan` resolves it against the `Target` it already holds, after the
+project and **before** the agent preconditions, so an unknown group costs no Shortcut fetch and no
+worktree. Do not look the project up a second time to resolve it; the target's `groups` and
+`existingWorkstreams` are the list the launch uses.
+
 **`create_workstream` inherits `bootstrap`'s policy by not touching it.** Creating a
 workstream runs the project's `bootstrap` namespace — the thing `PhasePolicy.plan` exists to
 decide. The

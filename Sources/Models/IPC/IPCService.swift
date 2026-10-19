@@ -479,6 +479,12 @@ extension IPC {
             request.client.workstreamID.flatMap(UUID.init(uuidString:))
         }
 
+        /// The group the caller is a coordinator of, when it is one. A coordinator
+        /// has no workstream, so this is the only way its identity names a group.
+        func callerGroupID(_ request: Request) -> UUID? {
+            request.client.groupID.flatMap(UUID.init(uuidString:))
+        }
+
         /// Surface id → the peer registered from it.
         ///
         /// Built from `contexts`, which is the only place the binding lives. This

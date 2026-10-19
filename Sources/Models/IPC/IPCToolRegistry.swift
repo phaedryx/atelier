@@ -250,7 +250,7 @@ extension IPC.Tool {
                         name: "name",
                         kind: .string,
                         isRequired: false,
-                        description: "Short handle other agents will address you by. Defaults to your workstream name."
+                        description: "Short handle other agents will address you by. Defaults to your workstream name, or your group's name if you are a coordinator."
                     ),
                     IPC.ArgumentSpec(
                         name: "role",
@@ -568,6 +568,9 @@ extension IPC.Tool {
                 the sidebar and whatever they are looking at stays put. Returns the
                 workstream's name and path, and the new agent's surface id; poll
                 list_peers for a peer reporting that surface before messaging it.
+                The workstream joins the caller's group: the group of the workstream you
+                are in, or your own group if you are a coordinator. Pass `group` to put
+                it in another group of this project instead.
                 """,
                 arguments: [
                     IPC.ArgumentSpec(
@@ -587,6 +590,12 @@ extension IPC.Tool {
                         kind: .boolean,
                         isRequired: false,
                         description: "\"true\" to start the agent with --dangerously-skip-permissions. Omit for \"false\". Any other value is an error."
+                    ),
+                    IPC.ArgumentSpec(
+                        name: "group",
+                        kind: .string,
+                        isRequired: false,
+                        description: "The group to create the workstream in, by name or id. Defaults to the caller's own group. Required for a caller that is in neither a workstream nor a group."
                     ),
                 ]
             )
@@ -610,6 +619,9 @@ extension IPC.Tool {
                 view. Returns the workstream's name and path, and the new agent's
                 surface id; poll list_peers for a peer reporting that surface
                 before messaging it.
+                The workstream joins the caller's group: the group of the workstream you
+                are in, or your own group if you are a coordinator. Pass `group` to put
+                it in another group of this project instead.
                 """,
                 arguments: [
                     IPC.ArgumentSpec(
@@ -629,6 +641,12 @@ extension IPC.Tool {
                         kind: .boolean,
                         isRequired: false,
                         description: "\"true\" to start the agent with --dangerously-skip-permissions. Omit for \"false\". Any other value is an error."
+                    ),
+                    IPC.ArgumentSpec(
+                        name: "group",
+                        kind: .string,
+                        isRequired: false,
+                        description: "The group to create the workstream in, by name or id. Defaults to the caller's own group. Required for a caller that is in neither a workstream nor a group."
                     ),
                 ]
             )

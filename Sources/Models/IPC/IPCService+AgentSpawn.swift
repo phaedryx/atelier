@@ -462,7 +462,8 @@ extension IPC.Service {
     }
 
     /// The preconditions both creation tools check, in the order that keeps
-    /// their refusals true: the argument, then the project, then the agent.
+    /// their refusals true: the argument, then the project, then the group,
+    /// then the agent.
     ///
     /// Every one of them happens before anything is created. The worktree is
     /// a directory on disk and a branch in the repository; refusing after it
@@ -475,21 +476,18 @@ extension IPC.Service {
         let bypass = try arguments.boolean("bypass_permissions")
 
         let callerWorkstreamID = callerWorkstreamID(request)
-        // Task 4 replaces `callerGroupID: nil` and `requestedGroup: nil` with the
-        // caller's coordinator group and the tool's `group` argument.
+        let callerGroupID = callerGroupID(request)
+        let requestedGroup = arguments.optionalTrimmed("group")
         let (target, groupID) = try await MainActor.run {
             let target = try Workstream.Launcher.shared.target(
                 callerWorkstreamID: callerWorkstreamID,
                 projectDirectory: request.client.projectDirectory
             )
-            guard let project = Workstream.Launcher.shared.projectList?.items.first(where: { $0.id == target.projectID }) else {
-                throw Workstream.Launcher.Failure.projectNotFound(target.directory)
-            }
             let groupID = try Workstream.Launcher.resolveGroup(
                 callerWorkstreamID: callerWorkstreamID,
-                callerGroupID: nil,
-                requestedGroup: nil,
-                in: project
+                callerGroupID: callerGroupID,
+                requestedGroup: requestedGroup,
+                in: target
             ).get()
             return (target, groupID)
         }
@@ -569,9 +567,12 @@ extension IPC.Service {
                 }
             )
 
+            let groupName = plan.target.groups.first { $0.id == launched.groupID }?.name ?? launched.groupID.uuidString
+            let location = "\(launched.worktreePath) in group \(groupName)"
+
             guard plan.prompt?.isEmpty == false else {
                 return .success(id: request.id, .text(
-                    "Created workstream \(launched.name) at \(launched.worktreePath). "
+                    "Created workstream \(launched.name) at \(location). "
                         + "Its initialization is running in the background. No agent was started — pass `prompt` to start one."
                 ))
             }
@@ -581,13 +582,13 @@ extension IPC.Service {
             // as an error would tell the caller nothing was created.
             guard outcome.started else {
                 return .success(id: request.id, .text(
-                    "Created workstream \(launched.name) at \(launched.worktreePath), but no agent was started. "
+                    "Created workstream \(launched.name) at \(location), but no agent was started. "
                         + (outcome.failure ?? "Atelier gave no reason.")
                 ))
             }
 
             return .success(id: request.id, .text(
-                "Created workstream \(launched.name) at \(launched.worktreePath) and started an agent in its "
+                "Created workstream \(launched.name) at \(location) and started an agent in its "
                     + "Coding Agent tab, surface \(launched.workstreamID.uuidString). Its initialization may still be "
                     + "running, so the worktree's dependencies may not be installed yet. The agent is not "
                     + "addressable until it registers: poll list_peers until a peer reports that surface id, then "

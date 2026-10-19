@@ -529,7 +529,7 @@ final class WorkstreamLauncherTests: XCTestCase {
         ws.groupID = h.id
         let p = Project(name: "P", directory: "/p", workstreams: [ws], groups: [g, h])
         XCTAssertEqual(
-            Workstream.Launcher.resolveGroup(callerWorkstreamID: ws.id, callerGroupID: g.id, requestedGroup: nil, in: p),
+            Workstream.Launcher.resolveGroup(callerWorkstreamID: ws.id, callerGroupID: g.id, requestedGroup: nil, in: Workstream.Launcher.target(for: p)),
             .success(h.id)
         )
     }
@@ -538,7 +538,7 @@ final class WorkstreamLauncherTests: XCTestCase {
         let g = Workstream.Group(name: "A"), h = Workstream.Group(name: "B")
         let p = Project(name: "P", directory: "/p", groups: [g, h])
         XCTAssertEqual(
-            Workstream.Launcher.resolveGroup(callerWorkstreamID: nil, callerGroupID: g.id, requestedGroup: nil, in: p),
+            Workstream.Launcher.resolveGroup(callerWorkstreamID: nil, callerGroupID: g.id, requestedGroup: nil, in: Workstream.Launcher.target(for: p)),
             .success(g.id)
         )
     }
@@ -549,11 +549,11 @@ final class WorkstreamLauncherTests: XCTestCase {
         ws.groupID = h.id
         let p = Project(name: "P", directory: "/p", workstreams: [ws], groups: [g, h])
         XCTAssertEqual(
-            Workstream.Launcher.resolveGroup(callerWorkstreamID: ws.id, callerGroupID: h.id, requestedGroup: "A", in: p),
+            Workstream.Launcher.resolveGroup(callerWorkstreamID: ws.id, callerGroupID: h.id, requestedGroup: "A", in: Workstream.Launcher.target(for: p)),
             .success(g.id)
         )
         XCTAssertEqual(
-            Workstream.Launcher.resolveGroup(callerWorkstreamID: ws.id, callerGroupID: h.id, requestedGroup: g.id.uuidString, in: p),
+            Workstream.Launcher.resolveGroup(callerWorkstreamID: ws.id, callerGroupID: h.id, requestedGroup: g.id.uuidString, in: Workstream.Launcher.target(for: p)),
             .success(g.id)
         )
     }
@@ -561,7 +561,7 @@ final class WorkstreamLauncherTests: XCTestCase {
     func testCallerWithOnlyAProjectDirectoryMustNameAGroup() {
         let p = Project(name: "P", directory: "/p", groups: [Workstream.Group(name: "A")])
         XCTAssertEqual(
-            Workstream.Launcher.resolveGroup(callerWorkstreamID: nil, callerGroupID: nil, requestedGroup: nil, in: p),
+            Workstream.Launcher.resolveGroup(callerWorkstreamID: nil, callerGroupID: nil, requestedGroup: nil, in: Workstream.Launcher.target(for: p)),
             .failure(.groupRequired)
         )
     }
@@ -569,8 +569,17 @@ final class WorkstreamLauncherTests: XCTestCase {
     func testUnknownRequestedGroupIsRefusedByName() {
         let p = Project(name: "P", directory: "/p", groups: [Workstream.Group(name: "A")])
         XCTAssertEqual(
-            Workstream.Launcher.resolveGroup(callerWorkstreamID: nil, callerGroupID: nil, requestedGroup: "Nope", in: p),
+            Workstream.Launcher.resolveGroup(callerWorkstreamID: nil, callerGroupID: nil, requestedGroup: "Nope", in: Workstream.Launcher.target(for: p)),
             .failure(.groupNotFound("Nope"))
+        )
+    }
+
+    func testResolveGroupRefusesACallerGroupThatIsNotInThisProject() {
+        let stranger = UUID()
+        let p = Project(name: "P", directory: "/p", groups: [Workstream.Group(name: "A")])
+        XCTAssertEqual(
+            Workstream.Launcher.resolveGroup(callerWorkstreamID: nil, callerGroupID: stranger, requestedGroup: nil, in: Workstream.Launcher.target(for: p)),
+            .failure(.groupNotFound(stranger.uuidString))
         )
     }
 

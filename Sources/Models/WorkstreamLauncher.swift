@@ -270,27 +270,37 @@ extension Workstream {
         /// the one it named. An explicit `requestedGroup` overrides both, by id
         /// first and then by trimmed name. A caller with none of the three is
         /// refused rather than defaulted: there is no right guess.
+        ///
+        /// Resolved against the `Target` the launch is about to use rather than a
+        /// second lookup of the project, so the group chosen and the list the
+        /// launch sees cannot disagree. A `callerGroupID` that is not one of this
+        /// target's groups is refused: a coordinator's identity comes from its
+        /// environment and can name a group of another project, or one deleted
+        /// since it launched.
         nonisolated static func resolveGroup(
             callerWorkstreamID: UUID?,
             callerGroupID: UUID?,
             requestedGroup: String?,
-            in project: Project
+            in target: Target
         ) -> Result<UUID, Failure> {
             if let requested = requestedGroup?.trimmingCharacters(in: .whitespacesAndNewlines), !requested.isEmpty {
-                if let id = UUID(uuidString: requested), let group = project.group(with: id) {
+                if let id = UUID(uuidString: requested), let group = target.groups.first(where: { $0.id == id }) {
                     return .success(group.id)
                 }
-                if let group = project.group(named: requested) {
+                if let group = target.groups.first(where: { $0.name == requested }) {
                     return .success(group.id)
                 }
                 return .failure(.groupNotFound(requested))
             }
             if let callerWorkstreamID,
-               let groupID = project.workstreams.first(where: { $0.id == callerWorkstreamID })?.groupID
+               let groupID = target.existingWorkstreams.first(where: { $0.id == callerWorkstreamID })?.groupID
             {
                 return .success(groupID)
             }
             if let callerGroupID {
+                guard target.groups.contains(where: { $0.id == callerGroupID }) else {
+                    return .failure(.groupNotFound(callerGroupID.uuidString))
+                }
                 return .success(callerGroupID)
             }
             return .failure(.groupRequired)
