@@ -135,7 +135,7 @@ extension Workstream {
             // the group sessions joining the one serialized batch.
             var groupSessions: [String] = []
             for group in project.groups ?? [] {
-                groupSessions.append(coordinatorSessionName(projectName: projectName, groupName: group.name))
+                groupSessions.append(group.coordinatorSessionName(projectName: projectName))
                 removeGroup(
                     group.id,
                     from: &project,
@@ -170,12 +170,6 @@ extension Workstream {
             return count > 0 ? .hasMembers(count) : nil
         }
 
-        /// The tmux session a group's coordinator runs in. One definition, shared
-        /// with `CoordinatorPaneView`'s spelling of the workstream name.
-        private static func coordinatorSessionName(projectName: String, groupName: String) -> String {
-            TmuxSession.sessionName(project: projectName, workstream: "group-\(groupName)", role: "agent")
-        }
-
         /// Tears down a group's coordinator and drops the group from the project.
         /// Does nothing if the group has members (`groupRemovalRefusal`); the UI
         /// disables the item, but the rule is held here too.
@@ -206,7 +200,7 @@ extension Workstream {
             else { return }
             PermissionApprovalStore.shared.releaseAll(workstreamID: groupID)
             if let tmuxPath {
-                let session = coordinatorSessionName(projectName: project.name, groupName: group.name)
+                let session = group.coordinatorSessionName(projectName: project.name)
                 Task.detached {
                     TmuxSession.killSession(tmuxPath: tmuxPath, sessionName: session)
                 }

@@ -74,13 +74,13 @@ enum CoordinatorLaunch {
             mcpConfigPath: mcpConfigPath,
             settingsPath: settingsPath
         )
-        // `group-` keeps the session apart from a workstream that happens to
-        // share the group's name.
+        // Keyed on the group id, not its name: see `coordinatorTmuxSegment`,
+        // which `Archiver` reads too, so the session it kills is this one.
         let finalCommand = Workstream.AgentCommand.tmuxWrapped(
             command,
             tmuxPath: inputs.tmuxMode ? inputs.tmuxPath : nil,
             projectName: project.name,
-            workstreamName: "group-\(group.name)",
+            workstreamName: group.coordinatorTmuxSegment,
             environmentVars: environment
         )
         return Plan(command: finalCommand, environment: environment, workingDirectory: project.directory)

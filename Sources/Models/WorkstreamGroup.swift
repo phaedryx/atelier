@@ -69,3 +69,25 @@ extension Workstream.Group {
         return clash ? .failure(.taken(trimmed)) : .success(trimmed)
     }
 }
+
+extension Workstream.Group {
+    /// The workstream segment of this group's coordinator tmux session:
+    /// `group-` and the first eight hex characters of the lowercased id.
+    ///
+    /// The one spelling, used by `CoordinatorLaunch.plan` (through
+    /// `AgentCommand.tmuxWrapped`) and by `Archiver` to kill it. Keyed on the id
+    /// rather than the name: `TmuxSession.sanitize` maps only `:`, `.` and
+    /// space, so "Q4 audit" and "Q4-audit" shared one session — the second pane
+    /// attached to the first coordinator through `new-session -A`, and removing
+    /// either killed both — and a rename made Remove kill a name nothing ran
+    /// under, leaking the live coordinator. The `group-` prefix keeps it apart
+    /// from any workstream's session.
+    var coordinatorTmuxSegment: String {
+        "group-" + id.uuidString.lowercased().prefix(8)
+    }
+
+    /// The full tmux session name `coordinatorTmuxSegment` produces.
+    func coordinatorSessionName(projectName: String) -> String {
+        TmuxSession.sessionName(project: projectName, workstream: coordinatorTmuxSegment, role: "agent")
+    }
+}

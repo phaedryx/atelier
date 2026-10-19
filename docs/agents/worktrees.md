@@ -117,10 +117,15 @@ coordinators therefore share one cwd, which is why its identity is the group id 
 surface id, session id and agent-state key), never the directory.
 
 `Archiver.removeGroup` is the whole teardown, in this order: permission holds, the tmux
-session (`TmuxSession.sessionName(project:, workstream: "group-<name>", role: "agent")`,
-killed from a `Task.detached` as `remove` does), the surface, project task claims, the
+session (`Workstream.Group.coordinatorSessionName(projectName:)`, whose workstream segment
+is `group-<first 8 hex of the lowercased group id>`, killed from a `Task.detached` as
+`remove` does), the surface, project task claims, the
 `IPC.Config` and `StatusLine.Config` files, the launch log, the record itself, and agent
-state last. It is refused, silently, for a group that still has members
+state last. The session is keyed on the **id, never the name**, and `CoordinatorLaunch.plan`
+reads the same `coordinatorTmuxSegment`: `TmuxSession.sanitize` maps only `:`, `.` and space,
+so a name-keyed session let "Q4 audit" and "Q4-audit" share one coordinator (the second pane
+attached through `new-session -A`, and removing either killed both), and a rename made Remove
+kill a name nothing ran under and leak the live one. It is refused, silently, for a group that still has members
 (`groupRemovalRefusal`); the menu item is disabled for that case but the rule lives in
 the function.
 

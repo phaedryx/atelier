@@ -50,7 +50,7 @@ final class CoordinatorPaneTests: XCTestCase {
         XCTAssertNil(plan.environment["ATELIER_WORKTREE_DIR"])
     }
 
-    func testPlanWrapsInTmuxUnderAGroupPrefixedSession() throws {
+    func testPlanWrapsInTmuxUnderTheGroupIDsSession() throws {
         let plan = try XCTUnwrap(CoordinatorLaunch.plan(
             project: project,
             group: group,
@@ -58,7 +58,27 @@ final class CoordinatorPaneTests: XCTestCase {
             mcpConfigPath: nil,
             settingsPath: nil
         ))
-        XCTAssertTrue(plan.command.contains("/group-Billing/agent"), plan.command)
+        let segment = "group-" + group.id.uuidString.lowercased().prefix(8)
+        XCTAssertTrue(plan.command.contains("/\(segment)/agent"), plan.command)
+        XCTAssertFalse(plan.command.contains("group-Billing"), plan.command)
+        XCTAssertTrue(plan.command.contains(group.coordinatorSessionName(projectName: project.name)), plan.command)
+    }
+
+    /// Keyed on the id, not the free-text name: `TmuxSession.sanitize` maps only
+    /// a few characters, so "Q4 audit" and "Q4-audit" used to share one session,
+    /// and a rename made Remove kill a session that no longer existed.
+    func testCoordinatorSessionIgnoresTheNameAndSurvivesARename() throws {
+        let id = try XCTUnwrap(UUID(uuidString: "ABCDEF12-3456-7890-ABCD-EF1234567890"))
+        let spaced = Workstream.Group(name: "Q4 audit", id: id)
+        var hyphened = Workstream.Group(name: "Q4-audit")
+        XCTAssertNotEqual(
+            spaced.coordinatorSessionName(projectName: "app"),
+            hyphened.coordinatorSessionName(projectName: "app")
+        )
+        XCTAssertEqual(spaced.coordinatorTmuxSegment, "group-abcdef12")
+        let before = hyphened.coordinatorSessionName(projectName: "app")
+        hyphened.name = "renamed"
+        XCTAssertEqual(hyphened.coordinatorSessionName(projectName: "app"), before)
     }
 
     func testPlanDoesNotWrapWhenTmuxModeIsOff() throws {
