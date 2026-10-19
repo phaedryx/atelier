@@ -242,6 +242,38 @@ extension Workstream {
         /// Set by `ContentView` whenever the project list changes.
         var workstreamLookup: ((String) -> UUID?)?
 
+        /// Resolves a surface id to the id its events are attributed to: a
+        /// workstream for its own surfaces, a group for its coordinator. Asked
+        /// before `workstreamLookup`, because every Atelier-launched surface
+        /// exports its id and several coordinators share one directory, which
+        /// the directory lookup cannot tell apart. Must answer nil for an id
+        /// Atelier does not own.
+        var surfaceOwnerLookup: ((UUID) -> UUID?)?
+
+        /// The one place the order is written down: surface id first, then the
+        /// directory. Event handling, the status line and the permission path
+        /// all call it.
+        nonisolated static func resolveOwner(
+            surfaceID: UUID?,
+            projectDir: String,
+            surfaceOwner: ((UUID) -> UUID?)?,
+            directoryOwner: ((String) -> UUID?)?
+        ) -> UUID? {
+            if let surfaceID, let owner = surfaceOwner?(surfaceID) {
+                return owner
+            }
+            return directoryOwner?(projectDir)
+        }
+
+        func owner(surfaceID: UUID?, projectDir: String) -> UUID? {
+            Self.resolveOwner(
+                surfaceID: surfaceID,
+                projectDir: projectDir,
+                surfaceOwner: surfaceOwnerLookup,
+                directoryOwner: workstreamLookup
+            )
+        }
+
         /// Currently selected workstream — `Stop` while selected goes straight to
         /// `.idle` because the user is already looking at it.
         var currentSelection: UUID?
@@ -402,6 +434,7 @@ extension Workstream {
             surfaceLastUserPromptAt.clearAll()
             surfacesExpectingSyntheticPrompt.removeAll()
             workstreamLookup = nil
+            surfaceOwnerLookup = nil
             currentSelection = nil
             onProlongedSilence = nil
         }
@@ -438,7 +471,7 @@ extension Workstream {
         // MARK: - Event Handling
 
         func handle(projectDir: String, event: AgentEvent) {
-            guard let lookup = workstreamLookup, let wsID = lookup(projectDir) else {
+            guard let wsID = owner(surfaceID: event.surfaceID.flatMap(UUID.init(uuidString:)), projectDir: projectDir) else {
                 // Common: Claude sessions running outside any tracked workstream.
                 logger.debug("No workstream match for projectDir: \(projectDir, privacy: .public)")
                 return
@@ -711,7 +744,7 @@ extension Workstream {
         /// cannot be attributed to the main session must not be attributed to it
         /// by default — the bar would then show a second agent's fill level.
         func handleStatusLine(projectDir: String, surfaceID: String?, reading: StatusLine.Reading) {
-            guard let lookup = workstreamLookup, let wsID = lookup(projectDir) else { return }
+            guard let wsID = owner(surfaceID: surfaceID.flatMap(UUID.init(uuidString:)), projectDir: projectDir) else { return }
             if let surfaceID, UUID(uuidString: surfaceID) != wsID {
                 return
             }

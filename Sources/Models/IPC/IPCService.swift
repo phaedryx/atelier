@@ -150,6 +150,8 @@ extension IPC {
         }
 
         /// Replaces the member-workstream-to-group-name map `list_peers` reads.
+        /// It replaces the whole map, not one entry: a caller pushes every
+        /// housed workstream each time, and a workstream left out loses its group.
         func setGroupNames(_ names: [UUID: String]) {
             groupNameByWorkstreamID = names
         }

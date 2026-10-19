@@ -876,6 +876,35 @@ struct ContentView: View {
         agentStateTracker.workstreamLookup = { projectDir in
             index[Workstream.AgentStateTracker.normalize(projectDir)]
         }
+
+        // Surface id first: a coordinator runs at the project root, so several
+        // share one directory and only the id they export tells them apart. An id
+        // nobody here owns is nil, never passed through.
+        var workstreamIDs: Set<UUID> = []
+        var groupIDs: Set<UUID> = []
+        var groupNames: [UUID: String] = [:]
+        for project in projects {
+            for group in project.groups ?? [] {
+                groupIDs.insert(group.id)
+            }
+            for ws in project.workstreams {
+                workstreamIDs.insert(ws.id)
+                if let groupID = ws.groupID, let group = project.group(with: groupID) {
+                    groupNames[ws.id] = group.name
+                }
+            }
+        }
+        let cache = surfaceCache
+        agentStateTracker.surfaceOwnerLookup = { surfaceID in
+            if workstreamIDs.contains(surfaceID) || groupIDs.contains(surfaceID) {
+                return surfaceID
+            }
+            if let owner = cache.workstreamID(owningSurface: surfaceID), workstreamIDs.contains(owner) {
+                return owner
+            }
+            return nil
+        }
+        Task { await IPC.Service.shared.setGroupNames(groupNames) }
     }
 
     /// Shows the "waiting for approval" banner for a workstream that just

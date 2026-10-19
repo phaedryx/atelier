@@ -370,6 +370,14 @@ working key but hide the button" — chrome, not capability. The token is the re
 a missing or revoked one arrives as `Shortcut.Error`'s own message, which is the only thing that
 says which of the two it is.
 
+**`list_peers` reports a `group`, and member group names arrive as a pushed map.** A coordinator
+carries its group's name in its identity (`ClientIdentity.groupName`). A member's group is not in
+its identity: `info(for:)` has to stay synchronous and off the main actor, and the group lives in
+`Project`, which the main actor owns. So `ContentView.refreshAgentStateLookup` pushes a
+`[workstreamID: groupName]` map with `IPC.Service.setGroupNames` whenever the project list changes,
+and `info(for:)` reads that copy. The push **replaces the whole map**, so it always carries every
+housed workstream.
+
 **Which group.** `create_workstream` and `create_shortcut_workstream` take an optional `group`,
 and the workstream lands in the first of these that applies: the `group` argument (a UUID first,
 then a trimmed name), the group of the workstream the caller is running in, the group the caller

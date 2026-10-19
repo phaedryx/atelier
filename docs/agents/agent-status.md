@@ -219,6 +219,21 @@ Four consequences worth keeping:
    is what decides whether a row may speak at all, which `HookChannelBanner`
    depends on.
 
+**Who owns a hook event: surface id first, then directory.** Every
+Atelier-launched surface exports `ATELIER_SURFACE_ID`, and the hook forwards it,
+so `AgentStateTracker.resolveOwner` asks `surfaceOwnerLookup` with that id first
+and only then falls back to `workstreamLookup(project_dir)`. The directory used
+to be the only key, and it cannot survive groups: a group's coordinator runs at
+the project root, so several coordinators share one cwd, and a coordinator's
+surface id is its group id. `ContentView.refreshAgentStateLookup` answers an id
+only if it is a known workstream id, a surface `workstreamID(owningSurface:)`
+maps to a known workstream, or a known group id; anything else is nil, so an
+unclaimed id falls through to the directory rather than being attributed to
+nobody's state. Event handling, `handleStatusLine` and the permission-request
+handler in `AtelierApp` all go through that one function — do not write the
+order out a fourth time. `handleStatusLine` keeps its "only the owner's own
+surface" rule, which for a coordinator means `surfaceID == groupID`.
+
 **The transcript is the fallback and stays one.** `TranscriptContextReader`
 parses `message.usage` out of the JSONL tail, which works, but Claude Code's own
 documentation says that entry format is internal and changes between versions.

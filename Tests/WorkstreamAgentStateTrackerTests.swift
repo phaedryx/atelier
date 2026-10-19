@@ -1131,4 +1131,74 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
 
         XCTAssertEqual(tracker.state(for: wsID), .needsAttention(.permission))
     }
+
+    // MARK: - Surface-first attribution
+
+    func testEventsForTwoSurfacesInOneDirectoryAttributeSeparately() {
+        let a = UUID(), b = UUID()
+        tracker.surfaceOwnerLookup = { $0 == a ? a : ($0 == b ? b : nil) }
+        tracker.workstreamLookup = { _ in a } // the directory fallback would say a for everything
+        var ea = AgentEvent.waiting(agentId: "main"); ea.surfaceID = a.uuidString
+        var eb = AgentEvent.waiting(agentId: "main"); eb.surfaceID = b.uuidString
+        tracker.handle(projectDir: "/p", event: ea)
+        tracker.handle(projectDir: "/p", event: eb)
+        XCTAssertEqual(tracker.runs(for: a).count, 1)
+        XCTAssertEqual(tracker.runs(for: b).count, 1)
+    }
+
+    func testAnEventWithNoSurfaceStillAttributesByDirectory() {
+        let other = UUID()
+        tracker.surfaceOwnerLookup = { _ in other }
+        tracker.workstreamLookup = { _ in self.wsID }
+        tracker.handle(projectDir: "/p", event: .waiting(agentId: "main"))
+        XCTAssertEqual(tracker.runs(for: wsID).count, 1)
+        XCTAssertEqual(tracker.runs(for: other).count, 0)
+    }
+
+    func testAnEventWhoseSurfaceNobodyClaimsFallsBackToTheDirectory() {
+        tracker.surfaceOwnerLookup = { _ in nil }
+        tracker.workstreamLookup = { _ in self.wsID }
+        var e = AgentEvent.waiting(agentId: "main"); e.surfaceID = UUID().uuidString
+        tracker.handle(projectDir: "/p", event: e)
+        XCTAssertEqual(tracker.runs(for: wsID).count, 1)
+    }
+
+    func testStatusLineForACoordinatorSurfaceIsAttributedToTheGroup() {
+        let g = UUID()
+        tracker.surfaceOwnerLookup = { $0 == g ? g : nil }
+        tracker.workstreamLookup = { _ in self.wsID }
+        tracker.handleStatusLine(
+            projectDir: "/p",
+            surfaceID: g.uuidString,
+            reading: StatusLine.Reading(usedTokens: 10, limitTokens: 100)
+        )
+        XCTAssertEqual(tracker.contextUsage[g]?.usedTokens, 10)
+        XCTAssertNil(tracker.contextUsage[wsID])
+    }
+
+    func testStatusLineFromAnotherSurfaceOfTheOwnerIsStillIgnored() {
+        let tab = UUID()
+        tracker.surfaceOwnerLookup = { $0 == tab ? self.wsID : nil }
+        tracker.workstreamLookup = { _ in self.wsID }
+        tracker.handleStatusLine(
+            projectDir: "/p",
+            surfaceID: tab.uuidString,
+            reading: StatusLine.Reading(usedTokens: 10, limitTokens: 100)
+        )
+        XCTAssertNil(tracker.contextUsage[wsID])
+    }
+
+    func testOwnerResolutionIsSurfaceFirstThenDirectory() {
+        let a = UUID(), dirOwner = UUID()
+        let bySurface: (UUID) -> UUID? = { $0 == a ? a : nil }
+        let byDir: (String) -> UUID? = { _ in dirOwner }
+        typealias T = Workstream.AgentStateTracker
+        XCTAssertEqual(T.resolveOwner(surfaceID: a, projectDir: "/p", surfaceOwner: bySurface, directoryOwner: byDir), a)
+        XCTAssertEqual(T.resolveOwner(surfaceID: UUID(), projectDir: "/p", surfaceOwner: bySurface, directoryOwner: byDir), dirOwner)
+        XCTAssertEqual(T.resolveOwner(surfaceID: nil, projectDir: "/p", surfaceOwner: bySurface, directoryOwner: byDir), dirOwner)
+        XCTAssertEqual(T.resolveOwner(surfaceID: a, projectDir: "/p", surfaceOwner: nil, directoryOwner: byDir), dirOwner)
+        XCTAssertEqual(T.resolveOwner(surfaceID: a, projectDir: "/p", surfaceOwner: bySurface, directoryOwner: nil), a)
+        XCTAssertNil(T.resolveOwner(surfaceID: UUID(), projectDir: "/p", surfaceOwner: bySurface, directoryOwner: nil))
+        XCTAssertNil(T.resolveOwner(surfaceID: nil, projectDir: "/p", surfaceOwner: nil, directoryOwner: nil))
+    }
 }
