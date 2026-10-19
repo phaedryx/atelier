@@ -154,6 +154,7 @@ from.
 | Shortcut | Action |
 |----------|--------|
 | ⌘N | New workstream, or new project when none is selected |
+| ⌘⌥N | New group in the selected project |
 | ⌘⇧N | New project |
 | ⌘, | Settings |
 | ⌘/ | Help |

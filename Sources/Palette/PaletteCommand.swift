@@ -8,6 +8,9 @@ import Foundation
 /// view state.
 struct PaletteContext {
     var workstreamActive: Bool
+    /// A group row is selected. A workstream joins a group, so this and
+    /// `workstreamActive` together say whether "new workstream" has a target.
+    var groupActive: Bool = false
     var editorActive: Bool
     /// Why the active workstream's Coding Agent cannot take typed input right
     /// now, or `.ready` when it can (see `PromptInjector.deliverability`).

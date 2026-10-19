@@ -232,6 +232,25 @@ extension Project {
         return groups?.first { $0.name == trimmed }
     }
 
+    /// The one place a group is made, for the sidebar's field and adopt's "New
+    /// group" alike: validates the name against this project's groups and appends
+    /// the group. `bypassPermissions` is the app's current default, which the
+    /// caller reads from `@AppStorage("atelier.bypassPermissions")`.
+    @discardableResult
+    mutating func addGroup(
+        named input: String,
+        bypassPermissions: Bool
+    ) -> Result<Workstream.Group, Workstream.Group.NameRefusal> {
+        switch Workstream.Group.validateName(input, siblings: groups ?? []) {
+        case let .success(name):
+            let group = Workstream.Group(name: name, bypassPermissions: bypassPermissions)
+            groups = (groups ?? []) + [group]
+            return .success(group)
+        case let .failure(refusal):
+            return .failure(refusal)
+        }
+    }
+
     func group(with id: UUID) -> Workstream.Group? {
         groups?.first { $0.id == id }
     }

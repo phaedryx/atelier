@@ -43,6 +43,16 @@ extension Workstream.Group {
     enum NameRefusal: Error, Equatable {
         case empty
         case taken(String)
+
+        /// The wording shown for a refused name, shared by every field that asks for one.
+        var message: String {
+            switch self {
+            case .empty:
+                NSLocalizedString("Group name can't be empty.", comment: "Group name refusal")
+            case .taken:
+                NSLocalizedString("A group with this name already exists.", comment: "Group name refusal")
+            }
+        }
     }
 
     /// Trims, refuses empty, and refuses a name another group in `siblings`

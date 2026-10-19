@@ -392,6 +392,12 @@ struct AtelierApp: App {
                 }
                 .keyboardShortcut("n", modifiers: .command)
 
+                // Cmd+Option+N: add a group to the selected project
+                Button("New Group") {
+                    NotificationCenter.default.post(name: .addGroup, object: nil)
+                }
+                .keyboardShortcut("n", modifiers: [.command, .option])
+
                 // Cmd+Shift+N: always add project
                 Button("New Project") {
                     NotificationCenter.default.post(name: .addProject, object: nil)

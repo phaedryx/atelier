@@ -64,4 +64,26 @@ final class WorkstreamGroupTests: XCTestCase {
         XCTAssertEqual(p.group(with: g.id)?.name, "Billing")
         XCTAssertEqual(p.sortedGroups.map(\.id), [g.id])
     }
+
+    func testAddGroupValidatesAppendsAndTakesTheGivenPermission() {
+        var p = Project(name: "P", directory: "/p")
+        guard case let .success(g) = p.addGroup(named: "  Billing ", bypassPermissions: true) else {
+            return XCTFail("expected success")
+        }
+        XCTAssertEqual(g.name, "Billing")
+        XCTAssertTrue(g.bypassPermissions)
+        XCTAssertEqual(p.group(with: g.id)?.name, "Billing")
+        XCTAssertEqual(p.addGroup(named: "Billing", bypassPermissions: false).failureValue, .taken("Billing"))
+        XCTAssertEqual(p.addGroup(named: "   ", bypassPermissions: false).failureValue, .empty)
+        XCTAssertEqual(p.sortedGroups.count, 1)
+    }
+}
+
+private extension Result {
+    var failureValue: Failure? {
+        if case let .failure(e) = self {
+            return e
+        }
+        return nil
+    }
 }

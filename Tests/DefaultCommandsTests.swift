@@ -185,6 +185,34 @@ final class DefaultCommandsTests: XCTestCase {
         }
     }
 
+    /// ⌘N makes a workstream, and a workstream joins a group: with a project (or
+    /// nothing) selected the three variants say why they cannot run rather than
+    /// vanishing. A selected group is as good as a selected workstream.
+    @MainActor
+    func testCreateWorkstreamCommandsNeedAWorkstreamOrAGroup() throws {
+        let commands = defaultPaletteCommands()
+        let neither = PaletteContext(workstreamActive: false, groupActive: false, editorActive: false)
+        let group = PaletteContext(workstreamActive: false, groupActive: true, editorActive: false)
+        let workstream = PaletteContext(workstreamActive: true, groupActive: false, editorActive: false)
+        for id in ["create.new", "create.newFullPermissions", "create.newWithPrompts"] {
+            let command = try XCTUnwrap(commands.first { $0.id == id }, id)
+            XCTAssertFalse(command.isAvailable(neither), id)
+            XCTAssertNotNil(command.availability(neither).reason, id)
+            XCTAssertTrue(command.isAvailable(group), id)
+            XCTAssertTrue(command.isAvailable(workstream), id)
+        }
+    }
+
+    @MainActor
+    func testNewGroupCommandPostsAddGroup() throws {
+        let command = try XCTUnwrap(defaultPaletteCommands().first { $0.id == "create.newGroup" })
+        XCTAssertEqual(command.shortcut, "⌘⌥N")
+        XCTAssertTrue(command.isAvailable(PaletteContext(workstreamActive: false, groupActive: false, editorActive: false)))
+        let posted = expectation(forNotification: .addGroup, object: nil)
+        command.action()
+        wait(for: [posted], timeout: 1)
+    }
+
     func testCreateCommandsPostAddNotifications() throws {
         let commands = defaultPaletteCommands()
         let new = try XCTUnwrap(commands.first { $0.id == "create.new" })

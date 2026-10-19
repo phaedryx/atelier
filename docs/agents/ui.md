@@ -239,6 +239,15 @@ which is what ⌘N and every other producer wants; the palette's two variant row
 `true` and `false`. Reading a missing payload as `false` would silently strip
 permissions from ⌘N.
 
+**The three `create.new*` palette rows are `.disabled` unless a workstream or a group
+is selected** (`PaletteContext.groupActive`, from `selection?.groupID`). A workstream
+joins a group, so a selected project or nothing names no target; the rows stay listed
+with a reason instead of posting `.addNew` into a receiver that can only show a hint.
+`create.newGroup` (⌘⌥N, `.addGroup`) is ungated: the sidebar resolves the project from
+the selection and does nothing with none. Adopt (project overview) picks a group in a
+sheet; with no groups it makes one through `Project.addGroup`, the same function the
+sidebar's field calls, and persists it before `Launcher.adopt` posts `.workstreamCreated`.
+
 The two are on different transports, and the split is by *receiver*, not by importance.
 **`AppCommand` is the typed channel for the commands `ContentView` receives** — the
 twenty-one app-level ones, and the grouping is the source's own `// MARK`s: the six
@@ -300,9 +309,10 @@ Current shortcuts:
 Global — available everywhere:
 - **Cmd+comma**: Settings
 - **Cmd+/**: Help
-- **Cmd+N**: New workstream, or new project when none is selected. The absent
+- **Cmd+N**: New workstream (in the selected group), or new project when nothing is selected. The absent
   payload means "the `atelier.bypassPermissions` default" — see `AppCommand`.
 - **Cmd+Shift+N**: New project, always
+- **Cmd+Option+N**: New group in the selected project (the inline name field)
 - **Cmd+Shift+C**: Toggle sidebar
 - **Cmd+Shift+P**: Command Palette
 

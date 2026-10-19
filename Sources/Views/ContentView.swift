@@ -185,6 +185,7 @@ struct ContentView: View {
     private var paletteContext: PaletteContext {
         PaletteContext(
             workstreamActive: activeWorkstream != nil,
+            groupActive: selection?.groupID != nil,
             editorActive: editorTabActive,
             // Requires a live agent surface, not just a selected workstream:
             // the workspace is unmounted while a worktree is still being

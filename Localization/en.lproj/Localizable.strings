@@ -776,3 +776,7 @@
    count is .accessibilityLabel("\(count) groups"), which SwiftUI keys as
    "%lld groups", and it is a plural — so it lives in Localizable.stringsdict
    beside "%lld workstreams", for the reason given above. */
+"Select a workstream or group first" = "Select a workstream or group first";
+"Adopt Worktree" = "Adopt Worktree";
+"New group…" = "New group…";
+"Adopt" = "Adopt";

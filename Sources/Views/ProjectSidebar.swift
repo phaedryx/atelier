@@ -101,6 +101,7 @@ func projectBaseDirectory(from setting: String) -> URL? {
 extension Notification.Name {
     static let addProject = Notification.Name("atelier.addProject")
     static let addNew = Notification.Name("atelier.addNew")
+    static let addGroup = Notification.Name("atelier.addGroup")
 }
 
 struct ProjectSidebar: View {
@@ -747,14 +748,7 @@ struct ProjectSidebar: View {
     /// The localized text for a refused group name. `validateName` is the only
     /// validation; this is only its wording.
     private var groupNameRefusalTitle: String {
-        switch groupNameRefusal {
-        case .empty:
-            NSLocalizedString("Group name can't be empty.", comment: "Group name refusal")
-        case .taken:
-            NSLocalizedString("A group with this name already exists.", comment: "Group name refusal")
-        case nil:
-            ""
-        }
+        groupNameRefusal?.message ?? ""
     }
 
     private var sidebar: some View {
@@ -888,6 +882,24 @@ struct ProjectSidebar: View {
                     showGroupRequiredHint = true
                 case .settings, .help, nil:
                     showingAddProjectChoice = true
+                }
+            }
+            // The project of the selection (a workstream's, a group's, or the
+            // selected project itself) begins the inline group-name field. With
+            // nothing selected there is no project to name, so it does nothing.
+            .onReceive(NotificationCenter.default.publisher(for: .addGroup)) { _ in
+                let project: Project? = switch selection {
+                case let .workstream(wsID):
+                    projects.first { $0.workstreams.contains { $0.id == wsID } }
+                case let .group(groupID):
+                    projects.first { $0.group(with: groupID) != nil }
+                case let .project(projectID):
+                    projects.first { $0.id == projectID }
+                case .settings, .help, nil:
+                    nil
+                }
+                if let project {
+                    beginNewGroup(in: project.id)
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .renameWorkstream)) { _ in
@@ -1430,11 +1442,9 @@ struct ProjectSidebar: View {
     /// coordinator, and making a group is not asking for one.
     private func createGroup(in projectID: UUID, input: String) {
         guard let pi = projects.firstIndex(where: { $0.id == projectID }) else { return }
-        switch Workstream.Group.validateName(input, siblings: projects[pi].groups ?? []) {
-        case let .success(name):
-            // The app's current permission default, as a new workstream takes it.
-            let group = Workstream.Group(name: name, bypassPermissions: defaultBypass)
-            projects[pi].groups = (projects[pi].groups ?? []) + [group]
+        // The app's current permission default, as a new workstream takes it.
+        switch projects[pi].addGroup(named: input, bypassPermissions: defaultBypass) {
+        case let .success(group):
             expandedGroups.insert(group.id)
             onProjectsChanged()
             rebuildSortOrder()
