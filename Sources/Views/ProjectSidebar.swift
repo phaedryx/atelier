@@ -35,7 +35,12 @@ func sidebarRowOrder(cached: [UUID]?, actual: [UUID]) -> [UUID] {
     return order
 }
 
-func expandedProjectIDs(afterSelecting selection: SidebarSelection?, current: Set<UUID>, projectIDByWorkstreamID: [UUID: UUID]) -> Set<UUID> {
+func expandedProjectIDs(
+    afterSelecting selection: SidebarSelection?,
+    current: Set<UUID>,
+    projectIDByWorkstreamID: [UUID: UUID],
+    projectIDByGroupID: [UUID: UUID]
+) -> Set<UUID> {
     guard let selection else { return current }
     var expanded = current
     switch selection {
@@ -43,6 +48,10 @@ func expandedProjectIDs(afterSelecting selection: SidebarSelection?, current: Se
         expanded.insert(projectID)
     case let .workstream(workstreamID):
         if let projectID = projectIDByWorkstreamID[workstreamID] {
+            expanded.insert(projectID)
+        }
+    case let .group(groupID):
+        if let projectID = projectIDByGroupID[groupID] {
             expanded.insert(projectID)
         }
     case .settings, .help:
@@ -186,13 +195,29 @@ struct ProjectSidebar: View {
         return map
     }
 
-    private func deferSelectionExpansion(_ selected: SidebarSelection, projectIDByWorkstreamID: [UUID: UUID], scrollProxy: ScrollViewProxy) {
+    private func projectIDByGroupIDSnapshot() -> [UUID: UUID] {
+        var map: [UUID: UUID] = [:]
+        for project in projects {
+            for group in project.groups ?? [] {
+                map[group.id] = project.id
+            }
+        }
+        return map
+    }
+
+    private func deferSelectionExpansion(
+        _ selected: SidebarSelection,
+        projectIDByWorkstreamID: [UUID: UUID],
+        projectIDByGroupID: [UUID: UUID],
+        scrollProxy: ScrollViewProxy
+    ) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             guard selection == selected else { return }
             expandedProjects = expandedProjectIDs(
                 afterSelecting: selected,
                 current: expandedProjects,
-                projectIDByWorkstreamID: projectIDByWorkstreamID
+                projectIDByWorkstreamID: projectIDByWorkstreamID,
+                projectIDByGroupID: projectIDByGroupID
             )
             withAnimation {
                 scrollProxy.scrollTo(selected, anchor: .center)
@@ -682,7 +707,12 @@ struct ProjectSidebar: View {
                 .listStyle(.sidebar)
                 .onChange(of: selection) { _, sel in
                     guard let sel else { return }
-                    deferSelectionExpansion(sel, projectIDByWorkstreamID: projectIDByWorkstreamIDSnapshot(), scrollProxy: scrollProxy)
+                    deferSelectionExpansion(
+                        sel,
+                        projectIDByWorkstreamID: projectIDByWorkstreamIDSnapshot(),
+                        projectIDByGroupID: projectIDByGroupIDSnapshot(),
+                        scrollProxy: scrollProxy
+                    )
                 }
             } // ScrollViewReader
 

@@ -307,7 +307,8 @@ final class SidebarExpansionTests: XCTestCase {
         let expanded = expandedProjectIDs(
             afterSelecting: .project(selectedProjectID),
             current: [existingProjectID],
-            projectIDByWorkstreamID: [:]
+            projectIDByWorkstreamID: [:],
+            projectIDByGroupID: [:]
         )
 
         XCTAssertEqual(expanded, [existingProjectID, selectedProjectID])
@@ -320,7 +321,8 @@ final class SidebarExpansionTests: XCTestCase {
         let expanded = expandedProjectIDs(
             afterSelecting: .workstream(workstreamID),
             current: [],
-            projectIDByWorkstreamID: [workstreamID: projectID]
+            projectIDByWorkstreamID: [workstreamID: projectID],
+            projectIDByGroupID: [:]
         )
 
         XCTAssertEqual(expanded, [projectID])
@@ -332,9 +334,24 @@ final class SidebarExpansionTests: XCTestCase {
         let expanded = expandedProjectIDs(
             afterSelecting: .workstream(workstreamID),
             current: [],
-            projectIDByWorkstreamID: [:]
+            projectIDByWorkstreamID: [:],
+            projectIDByGroupID: [:]
         )
 
         XCTAssertEqual(expanded, [])
+    }
+
+    func testSelectionExpansionAddsParentProjectForGroup() throws {
+        let groupID = try XCTUnwrap(UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"))
+        let projectID = try XCTUnwrap(UUID(uuidString: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB"))
+
+        let expanded = expandedProjectIDs(
+            afterSelecting: .group(groupID),
+            current: [],
+            projectIDByWorkstreamID: [:],
+            projectIDByGroupID: [groupID: projectID]
+        )
+
+        XCTAssertEqual(expanded, [projectID])
     }
 }

@@ -751,3 +751,10 @@
    reads "1 workstreams" aloud for a single-workstream project — so it lives in
    Localizable.stringsdict, which takes precedence over this file for a key
    present in both. */
+
+/* Coordinator pane - the group's Info tab */
+"Group" = "Group";
+"Name" = "Name";
+"Root directory" = "Root directory";
+"Members" = "Members";
+"No workstreams in this group yet." = "No workstreams in this group yet.";

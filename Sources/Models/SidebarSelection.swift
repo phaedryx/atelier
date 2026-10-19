@@ -1,11 +1,13 @@
 // ABOUTME: Represents the selected item in the sidebar.
-// ABOUTME: Can be either a project or a workstream, enabling single-selection across both.
+// ABOUTME: A project, a workstream or a workstream group, enabling single-selection across all three.
 
 import Foundation
 
 enum SidebarSelection: Hashable, Codable {
     case project(UUID)
     case workstream(UUID)
+    /// A workstream group, whose detail pane is its coordinator.
+    case group(UUID)
     case settings
     case help
 
@@ -18,6 +20,13 @@ enum SidebarSelection: Hashable, Codable {
 
     var workstreamID: UUID? {
         if case let .workstream(id) = self {
+            return id
+        }
+        return nil
+    }
+
+    var groupID: UUID? {
+        if case let .group(id) = self {
             return id
         }
         return nil

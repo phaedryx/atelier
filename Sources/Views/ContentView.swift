@@ -249,6 +249,12 @@ struct ContentView: View {
                 logger.warning("[Atelier] activeProject: workstream \(wsID, privacy: .public) not found in any project")
             }
             return found
+        case let .group(groupID):
+            let found = projects.first(where: { $0.group(with: groupID) != nil })
+            if found == nil {
+                logger.warning("[Atelier] activeProject: group \(groupID, privacy: .public) not found in any project")
+            }
+            return found
         case .settings, .help:
             return nil
         }
@@ -305,6 +311,14 @@ struct ContentView: View {
                 .navigationTitle(appEnvironment.taskDescription(for: workstream.worktreePath) ?? workstream.label)
                 .navigationSubtitle(workstreamSubtitle(project: project, workstream: workstream))
             }
+        } else if let groupID = selection?.groupID,
+                  let project = activeProject,
+                  let group = project.group(with: groupID)
+        {
+            CoordinatorPaneView(project: project, group: group, isActive: true)
+                .id(groupID)
+                .navigationTitle(group.name)
+                .navigationSubtitle(project.name)
         } else if let project = activeProject,
                   let projectIndex = projects.firstIndex(where: { $0.id == project.id })
         {
@@ -441,7 +455,7 @@ struct ContentView: View {
                 if let sel = selection, case let .project(pid) = sel, missing.contains(pid) {
                     selection = nil
                 }
-                if let sel = selection, case .workstream = sel, activeProject == nil {
+                if let sel = selection, sel.workstreamID != nil || sel.groupID != nil, activeProject == nil {
                     selection = nil
                 }
                 ProjectStore.save(projects)
@@ -918,9 +932,29 @@ struct ContentView: View {
             isAppActive: NSApp.isActive,
             selection: selection,
             workstreamID: wsID
-        ),
-            let project = projects.first(where: { $0.workstreams.contains(where: { $0.id == wsID }) }),
-            let workstream = project.workstreams.first(where: { $0.id == wsID })
+        ) else { return }
+
+        // A coordinator: the id is its group's, and it has no branch, so the
+        // subtitle is the project alone.
+        if let project = projects.first(where: { $0.group(with: wsID) != nil }),
+           let group = project.group(with: wsID)
+        {
+            Workstream.PermissionNotifier.shared.notify(
+                workstreamID: wsID,
+                title: group.name,
+                body: String(
+                    format: NSLocalizedString(
+                        "Waiting for approval — %@",
+                        comment: "Blocked-agent notification body; %@ is the project and branch"
+                    ),
+                    project.name
+                )
+            )
+            return
+        }
+
+        guard let project = projects.first(where: { $0.workstreams.contains(where: { $0.id == wsID }) }),
+              let workstream = project.workstreams.first(where: { $0.id == wsID })
         else { return }
 
         Workstream.PermissionNotifier.shared.notify(
@@ -1057,6 +1091,12 @@ struct ContentView: View {
                 selection = .project(project.id)
             }
         case let .focusWorkstream(wsID):
+            // A coordinator's notifications carry its group id, the id its
+            // agent state is keyed by, so a click on one selects the group.
+            if projects.contains(where: { $0.group(with: wsID) != nil }) {
+                selection = .group(wsID)
+                return
+            }
             guard projects.contains(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
             selection = .workstream(wsID)
         case let .focusProject(projectID):
