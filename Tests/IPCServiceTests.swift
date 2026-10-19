@@ -32,6 +32,25 @@ final class IPCServiceTests: XCTestCase {
         )
     }
 
+    /// A caller with no worktree: a group's coordinator, or a member when `workstreamID` is given.
+    private func groupClient(
+        project: String?,
+        groupName: String? = "Billing",
+        workstreamID: UUID? = nil,
+        workstreamName: String? = nil,
+        peerID: String? = nil
+    ) -> IPC.ClientIdentity {
+        IPC.ClientIdentity(
+            workstreamID: workstreamID?.uuidString,
+            workstreamName: workstreamName,
+            projectDirectory: project,
+            surfaceID: UUID().uuidString,
+            peerID: peerID,
+            groupID: workstreamID == nil ? UUID().uuidString : nil,
+            groupName: groupName
+        )
+    }
+
     private func call(_ tool: IPC.Tool, _ arguments: [String: String] = [:], as client: IPC.ClientIdentity) async -> IPC.Response {
         await service.handle(IPC.Request(token: "unused", tool: tool, arguments: arguments, client: client))
     }
@@ -50,6 +69,44 @@ final class IPCServiceTests: XCTestCase {
             throw XCTSkip("expected a peers payload, got \(String(describing: response.payload ?? nil))")
         }
         return peers
+    }
+
+    // MARK: - Groups
+
+    func test_coordinatorRegistersUnderItsGroupNameByDefault() async {
+        let response = await call(.registerPeer, [:], as: groupClient(project: projectA))
+        guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
+        XCTAssertEqual(peer.name, "Billing")
+    }
+
+    func test_registerPeer_prefersTheWorkstreamNameOverTheGroupName() async {
+        let response = await call(.registerPeer, [:], as: groupClient(project: projectA, workstreamName: "wry-amber-lexer"))
+        guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
+        XCTAssertEqual(peer.name, "wry-amber-lexer")
+    }
+
+    func test_listPeersReportsACoordinatorWithNoWorkstreamAndItsGroup() async throws {
+        _ = await call(.registerPeer, [:], as: groupClient(project: projectA))
+        let listed = try await peers(of: call(.listPeers, as: client(project: projectA)))
+        XCTAssertEqual(listed.count, 1)
+        XCTAssertNil(listed[0].workstream)
+        XCTAssertEqual(listed[0].group, "Billing")
+    }
+
+    func test_listPeersReportsAMembersGroupFromTheMap() async throws {
+        let workstreamID = UUID()
+        await service.setGroupNames([workstreamID: "Billing"])
+        _ = await call(.registerPeer, [:], as: groupClient(project: projectA, groupName: nil, workstreamID: workstreamID, workstreamName: "wry-amber-lexer"))
+        let listed = try await peers(of: call(.listPeers, as: client(project: projectA)))
+        XCTAssertEqual(listed.count, 1)
+        XCTAssertEqual(listed[0].workstream, "wry-amber-lexer")
+        XCTAssertEqual(listed[0].group, "Billing")
+    }
+
+    func test_listPeersReportsNoGroupForAnUngroupedMember() async throws {
+        _ = try await register(name: "solo", project: projectA)
+        let listed = try await peers(of: call(.listPeers, as: client(project: projectA)))
+        XCTAssertNil(listed[0].group)
     }
 
     // MARK: - Registration

@@ -19,6 +19,25 @@ extension IPC {
             /// The terminal surface this peer runs in, when Atelier launched it.
             /// Nil means pull-only: there is nowhere to type a notice.
             let surfaceID: UUID?
+            /// Set only for a group's coordinator, which has no workstream.
+            let groupID: UUID?
+            let groupName: String?
+
+            init(
+                workstreamID: String?,
+                workstreamName: String?,
+                projectDirectory: String?,
+                surfaceID: UUID?,
+                groupID: UUID? = nil,
+                groupName: String? = nil
+            ) {
+                self.workstreamID = workstreamID
+                self.workstreamName = workstreamName
+                self.projectDirectory = projectDirectory
+                self.surfaceID = surfaceID
+                self.groupID = groupID
+                self.groupName = groupName
+            }
         }
 
         // MARK: - The names the tool bodies use
@@ -104,6 +123,13 @@ extension IPC {
 
         typealias StoryFetch = @Sendable (Int) async throws -> Shortcut.Story
 
+        /// Group name by member workstream id, pushed by the app.
+        ///
+        /// A push rather than a project lookup because `info(for:pending:now:)`
+        /// must stay synchronous and off the main actor (see its doc comment);
+        /// reading `Workstream.Launcher.shared.projectList` would need a hop.
+        var groupNameByWorkstreamID: [UUID: String] = [:]
+
         init(store: Store = Store(), tasks: TaskStore = TaskStore()) {
             self.store = store
             self.tasks = tasks
@@ -121,6 +147,11 @@ extension IPC {
         /// Replaces the Shortcut read. Tests only; production takes the default.
         func setStoryFetch(_ fetch: @escaping StoryFetch) {
             fetchStory = fetch
+        }
+
+        /// Replaces the member-workstream-to-group-name map `list_peers` reads.
+        func setGroupNames(_ names: [UUID: String]) {
+            groupNameByWorkstreamID = names
         }
 
         // MARK: - Dispatch
@@ -362,7 +393,9 @@ extension IPC {
                 workstreamID: client.workstreamID,
                 workstreamName: client.workstreamName,
                 projectDirectory: client.projectDirectory,
-                surfaceID: client.surfaceID.flatMap(UUID.init(uuidString:))
+                surfaceID: client.surfaceID.flatMap(UUID.init(uuidString:)),
+                groupID: client.groupID.flatMap(UUID.init(uuidString:)),
+                groupName: client.groupName
             )
         }
 
@@ -419,6 +452,9 @@ extension IPC {
             let lastUserPromptSecondsAgo = surfaceID
                 .flatMap { Workstream.AgentStateTracker.shared.lastUserPromptAt(forSurface: $0) }
                 .map { Int(now.timeIntervalSince($0)) }
+            let context = contexts[peer.id]
+            let group = context?.groupName
+                ?? context?.workstreamID.flatMap(UUID.init(uuidString:)).flatMap { groupNameByWorkstreamID[$0] }
             return PeerInfo(
                 id: peer.id.uuidString,
                 name: peer.name,
@@ -427,7 +463,8 @@ extension IPC {
                 surfaceID: surfaceID?.uuidString,
                 lastSeenSecondsAgo: Int(now.timeIntervalSince(peer.lastSeen)),
                 pendingMessages: pending,
-                lastUserPromptSecondsAgo: lastUserPromptSecondsAgo
+                lastUserPromptSecondsAgo: lastUserPromptSecondsAgo,
+                group: group
             )
         }
 
