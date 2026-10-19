@@ -143,7 +143,9 @@ extension IPC.Service {
     }
 
     func requestAttention(for request: Request) async -> Response {
-        guard let workstreamID = callerWorkstreamID(request) else {
+        // The notifier's id is an opaque key (cooldown and notification identifier), so a
+        // coordinator's group id serves where a member's workstream id would.
+        guard let workstreamID = callerWorkstreamID(request) ?? callerGroupID(request) else {
             return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
         }
         // Sanitized *before* the emptiness check, not after: a reason of
@@ -153,8 +155,9 @@ extension IPC.Service {
         guard !reason.isEmpty else {
             return .failure(id: request.id, ToolError.missingArgument("reason").localizedDescription)
         }
-        let name = request.client.workstreamName ?? "Atelier"
+        let name = request.client.workstreamName ?? request.client.groupName ?? "Atelier"
         let outcome = await MainActor.run {
+            // Clicking the banner for a group id focuses nothing yet: Task 8 adds group selection.
             Workstream.AttentionNotifier.shared.notify(
                 workstreamID: workstreamID,
                 workstreamName: name,

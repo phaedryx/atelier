@@ -881,6 +881,17 @@ final class IPCServiceTests: XCTestCase {
         }
     }
 
+    /// The notifier needs a real notification center, so this goes down the refusal path the
+    /// other request_attention tests use: no reason. Reaching the missing-argument check
+    /// means the identity guard let the coordinator through.
+    func test_requestAttention_fromACoordinator_isNotRefusedAsHavingNoWorkstream() async {
+        let response = await call(.requestAttention, [:], as: groupClient(project: projectA))
+
+        XCTAssertNotEqual(response.error, IPC.ToolError.notInWorkstream.errorDescription)
+        XCTAssertNotEqual(response.error, coordinatorRefusal(.requestAttention))
+        XCTAssertEqual(response.error, IPC.ToolError.missingArgument("reason").errorDescription)
+    }
+
     func test_coordinatorHasNoWorkstream_namesTheToolByItsWireName() {
         XCTAssertEqual(
             IPC.ToolError.coordinatorHasNoWorkstream(tool: "list_tabs").errorDescription,
