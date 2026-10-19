@@ -1503,6 +1503,8 @@ extension IPC {
         case emptyArgument(tool: String, name: String)
         case invalidArgument(name: String, reason: String)
         case notInWorkstream
+        /// A group coordinator has a group and no workstream. `tool` is the wire name.
+        case coordinatorHasNoWorkstream(tool: String)
         case refused(String)
 
         var errorDescription: String? {
@@ -1515,6 +1517,9 @@ extension IPC {
                 "Invalid `\(name)`: \(reason)"
             case .notInWorkstream:
                 "This tool only works from an agent running inside an Atelier workstream."
+            case let .coordinatorHasNoWorkstream(tool):
+                "You are a group coordinator and have no workstream of your own, so \(tool) has nothing to act on. "
+                    + "It acts on the calling agent's workstream; send_message a member to do this in theirs."
             case let .refused(message):
                 message
             }

@@ -5,8 +5,10 @@ import Foundation
 
 extension IPC.Service {
     func listTabs(for request: Request) async -> Response {
-        guard let workstreamID = callerWorkstreamID(request) else {
-            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
+        let workstreamID: UUID
+        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
+        case let .success(id): workstreamID = id
+        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
         }
         let callerSurfaceID = request.client.surfaceID.flatMap(UUID.init(uuidString:))
         let peers = await peersBySurface()
@@ -25,8 +27,10 @@ extension IPC.Service {
     }
 
     func readReviewComments(for request: Request) async -> Response {
-        guard let workstreamID = callerWorkstreamID(request) else {
-            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
+        let workstreamID: UUID
+        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
+        case let .success(id): workstreamID = id
+        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
         }
         do {
             let comments = try await MainActor.run {
@@ -39,8 +43,10 @@ extension IPC.Service {
     }
 
     func openEditor(for request: Request) async -> Response {
-        guard let workstreamID = callerWorkstreamID(request) else {
-            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
+        let workstreamID: UUID
+        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
+        case let .success(id): workstreamID = id
+        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
         }
         // `line` is optional, but a value that is present and unparseable is
         // a mistake worth reporting rather than silently ignoring — which is
@@ -74,8 +80,10 @@ extension IPC.Service {
     /// `request_attention`. Saying "opened" and leaving the rest implied is
     /// how an agent ends up waiting for a reaction to something nobody saw.
     func openTab(for request: Request) async -> Response {
-        guard let workstreamID = callerWorkstreamID(request) else {
-            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
+        let workstreamID: UUID
+        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
+        case let .success(id): workstreamID = id
+        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
         }
         let kind: String
         do {
@@ -107,8 +115,10 @@ extension IPC.Service {
     /// currently owns is success rather than an error.
     func closeTab(for request: Request) async -> Response {
         let arguments = ToolArguments(request)
-        guard let workstreamID = callerWorkstreamID(request) else {
-            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
+        let workstreamID: UUID
+        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
+        case let .success(id): workstreamID = id
+        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
         }
         do {
             let result = try await MainActor.run {

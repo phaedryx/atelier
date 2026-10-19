@@ -638,6 +638,13 @@ has stopped a run from `.workspaceAction` since it stopped being refused. A fift
 trust argument distinct from the four that exist, and this has none; the reads sit in
 `.workspaceRead` and the five mutators beside `start_verification` in `.workspaceAction`.
 
+**A group coordinator is refused by every one of them**, for the reason that trust story gives:
+they act on the caller's own workstream and no other, and a coordinator (a group id, no
+workstream) has none. It is told so by name (`ToolError.coordinatorHasNoWorkstream`, which says to
+`send_message` a member instead) rather than "not in a workstream", which would send it looking for
+one. `callerWorkstreamIDOrRefusal` on `IPC.Service` is the one place that decision is made; every
+workstream-scoped handler's guard calls it, so a new one does not re-derive the wording.
+
 **No approval gate**, on the rule `verification.yaml` and `initialization.yaml` already state:
 `execution.process-compose.yaml` lives in the project directory, outside every work tree, so it
 cannot have arrived with a clone. The known hole is the one all three accept — for an ordinary

@@ -847,6 +847,65 @@ final class IPCServiceTests: XCTestCase {
         }
     }
 
+    // MARK: - A group coordinator has no workstream
+
+    /// Every tool that acts on "the caller's own workstream", with the arguments
+    /// it would need if it got past the guard (it never does, so none).
+    private static let workstreamScopedTools: [IPC.Tool] = [
+        .listTabs, .readReviewComments, .openEditor, .openTab, .closeTab, .openAgentTab,
+        .listVerificationChecks, .startVerification, .checkVerification,
+        .listProcesses, .readProcessLogs, .startProcess, .stopProcess, .restartProcess,
+        .startExecution, .stopExecution,
+        .readWhiteboard, .whiteboardAdd, .whiteboardAddLayout, .whiteboardUpdate, .whiteboardDelete,
+        .getInitializationState, .getShortcutStory, .getSessionCheckpoint, .updateSessionCheckpoint,
+    ]
+
+    private func coordinatorRefusal(_ tool: IPC.Tool) -> String {
+        "You are a group coordinator and have no workstream of your own, so \(tool.rawValue) has nothing to act on. "
+            + "It acts on the calling agent's workstream; send_message a member to do this in theirs."
+    }
+
+    func test_workstreamScopedTools_refuseACoordinator_withASentenceThatNamesIt() async {
+        let coordinator = groupClient(project: projectA)
+        for tool in Self.workstreamScopedTools {
+            let response = await call(tool, [:], as: coordinator)
+            XCTAssertNil(response.payload, "\(tool.rawValue) answered a coordinator")
+            XCTAssertEqual(response.error, coordinatorRefusal(tool), "\(tool.rawValue)")
+        }
+    }
+
+    func test_workstreamScopedTools_stillRefuseABareIdentity_asNotInWorkstream() async {
+        for tool in Self.workstreamScopedTools {
+            let response = await call(tool, [:], as: stranger)
+            XCTAssertEqual(response.error, IPC.ToolError.notInWorkstream.errorDescription, "\(tool.rawValue)")
+        }
+    }
+
+    func test_coordinatorHasNoWorkstream_namesTheToolByItsWireName() {
+        XCTAssertEqual(
+            IPC.ToolError.coordinatorHasNoWorkstream(tool: "list_tabs").errorDescription,
+            coordinatorRefusal(.listTabs)
+        )
+    }
+
+    func test_callerWorkstreamIDOrRefusal_distinguishesCoordinatorBareAndMember() async {
+        let member = UUID()
+        func request(_ client: IPC.ClientIdentity) -> IPC.Request {
+            IPC.Request(token: "unused", tool: .listTabs, arguments: [:], client: client)
+        }
+        let asMember = await service.callerWorkstreamIDOrRefusal(
+            request(groupClient(project: projectA, workstreamID: member)), tool: .listTabs
+        )
+        let asCoordinator = await service.callerWorkstreamIDOrRefusal(
+            request(groupClient(project: projectA)), tool: .listTabs
+        )
+        let asBare = await service.callerWorkstreamIDOrRefusal(request(stranger), tool: .listTabs)
+
+        XCTAssertEqual(asMember, .success(member))
+        XCTAssertEqual(asCoordinator, .failure(.coordinatorHasNoWorkstream(tool: "list_tabs")))
+        XCTAssertEqual(asBare, .failure(.notInWorkstream))
+    }
+
     // MARK: - list_tabs
 
     /// In a workstream, but with no live app behind it: the refusal must be the

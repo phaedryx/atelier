@@ -479,6 +479,21 @@ extension IPC {
             request.client.workstreamID.flatMap(UUID.init(uuidString:))
         }
 
+        /// The workstream the caller is running in, or the refusal to send back.
+        ///
+        /// The one place a workstream-scoped tool decides what to say to a caller
+        /// with no workstream: a coordinator (a group id, no workstream) is told
+        /// so by name, and a caller with neither gets `notInWorkstream`.
+        func callerWorkstreamIDOrRefusal(_ request: Request, tool: Tool) -> Result<UUID, ToolError> {
+            if let id = callerWorkstreamID(request) {
+                return .success(id)
+            }
+            if callerGroupID(request) != nil {
+                return .failure(.coordinatorHasNoWorkstream(tool: tool.rawValue))
+            }
+            return .failure(.notInWorkstream)
+        }
+
         /// The group the caller is a coordinator of, when it is one. A coordinator
         /// has no workstream, so this is the only way its identity names a group.
         func callerGroupID(_ request: Request) -> UUID? {

@@ -15,8 +15,10 @@ extension IPC.Service {
     /// existed a name could only be found by guessing one and reading
     /// `start_verification`'s refusal.
     func listVerificationChecks(for request: Request) async -> Response {
-        guard let workstreamID = callerWorkstreamID(request) else {
-            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
+        let workstreamID: UUID
+        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
+        case let .success(id): workstreamID = id
+        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
         }
         guard let runner = verification else {
             return .failure(id: request.id, VerificationFailure.notAvailable.localizedDescription)
@@ -48,8 +50,10 @@ extension IPC.Service {
     /// repository. A refusal arrives as the runner's error and is passed through
     /// verbatim.
     func startVerification(for request: Request) async -> Response {
-        guard let workstreamID = callerWorkstreamID(request) else {
-            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
+        let workstreamID: UUID
+        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
+        case let .success(id): workstreamID = id
+        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
         }
         guard let runner = verification else {
             return .failure(id: request.id, VerificationFailure.notAvailable.localizedDescription)
@@ -153,8 +157,10 @@ extension IPC.Service {
     /// it is not its run rather than handed somebody else's results. Which is
     /// also what every other tool in this group does.
     func checkVerification(for request: Request) async -> Response {
-        guard let workstreamID = callerWorkstreamID(request) else {
-            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
+        let workstreamID: UUID
+        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
+        case let .success(id): workstreamID = id
+        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
         }
         guard let runner = verification else {
             return .failure(id: request.id, VerificationFailure.notAvailable.localizedDescription)

@@ -37,8 +37,10 @@ extension IPC.Service {
     /// and no question of whether the pane was interruptible — the tab does
     /// not exist until it exists running the right thing.
     func openAgentTab(for request: Request) async -> Response {
-        guard let workstreamID = callerWorkstreamID(request) else {
-            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
+        let workstreamID: UUID
+        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
+        case let .success(id): workstreamID = id
+        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
         }
         let arguments = ToolArguments(request)
         let title = Names.sanitized(arguments.optional("title") ?? "", limit: 40, fallback: "")

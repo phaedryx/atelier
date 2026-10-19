@@ -25,8 +25,10 @@ extension IPC.Service {
     /// file IO, so a board whose tab has never been opened in this launch
     /// still reads, from whatever the last one saved.
     func readWhiteboard(for request: Request) -> Response {
-        guard let workstreamID = callerWorkstreamID(request) else {
-            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
+        let workstreamID: UUID
+        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
+        case let .success(id): workstreamID = id
+        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
         }
         return .success(
             id: request.id,
@@ -45,8 +47,10 @@ extension IPC.Service {
             + "you need them to come and look."
 
     func whiteboardAdd(for request: Request) async -> Response {
-        guard let workstreamID = callerWorkstreamID(request) else {
-            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
+        let workstreamID: UUID
+        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
+        case let .success(id): workstreamID = id
+        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
         }
         let elements: String
         do {
@@ -132,8 +136,10 @@ extension IPC.Service {
     /// anything beside what it just drew without a `read_whiteboard` round
     /// trip.
     func whiteboardAddLayout(for request: Request) async -> Response {
-        guard let workstreamID = callerWorkstreamID(request) else {
-            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
+        let workstreamID: UUID
+        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
+        case let .success(id): workstreamID = id
+        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
         }
         let arguments = ToolArguments(request)
         let layout: String
@@ -164,8 +170,10 @@ extension IPC.Service {
     }
 
     func whiteboardUpdate(for request: Request) async -> Response {
-        guard let workstreamID = callerWorkstreamID(request) else {
-            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
+        let workstreamID: UUID
+        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
+        case let .success(id): workstreamID = id
+        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
         }
         let arguments = ToolArguments(request)
         let id: String
@@ -198,8 +206,10 @@ extension IPC.Service {
     }
 
     func whiteboardDelete(for request: Request) async -> Response {
-        guard let workstreamID = callerWorkstreamID(request) else {
-            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
+        let workstreamID: UUID
+        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
+        case let .success(id): workstreamID = id
+        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
         }
         let ids = ToolArguments(request).list("ids")
         do {
