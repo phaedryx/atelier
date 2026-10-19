@@ -435,8 +435,11 @@ struct ProjectOverviewView: View {
     /// pre-existence travels with it.
     private func adoptWorktree(_ worktree: Worktree.Info) {
         let name = worktree.branch ?? worktree.path.components(separatedBy: "/").last ?? "workstream"
+        // Placeholder: Task 11 replaces this with the adopt group picker.
+        guard let groupID = project.sortedGroups.first?.id else { return }
         Workstream.Launcher.shared.adopt(
             projectID: project.id,
+            groupID: groupID,
             name: name,
             worktreePath: worktree.path
         )

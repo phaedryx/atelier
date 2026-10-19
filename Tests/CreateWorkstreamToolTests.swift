@@ -47,6 +47,16 @@ final class CreateWorkstreamToolTests: XCTestCase {
         )
     }
 
+    /// A caller that sits in a workstream, and so in a group. Creation needs a
+    /// group and `group` is not an argument yet (Task 4), so any test that must
+    /// get past the group resolution acts as this caller.
+    private func groupedApp(workstreams: [Workstream] = []) -> (project: Project, caller: IPC.ClientIdentity) {
+        let group = Workstream.Group(name: "app")
+        let caller = Workstream(name: "caller", worktreePath: "/repos/app/caller", groupID: group.id)
+        let project = Project(name: "app", directory: "/repos/app", workstreams: [caller] + workstreams, groups: [group])
+        return (project, client(project: "/repos/app", workstreamID: caller.id))
+    }
+
     /// Installs the bridge these tests act through. Always called, so no test
     /// sees the list a previous one left on the singleton.
     private func install(_ projects: [Project]) {
@@ -159,12 +169,11 @@ final class CreateWorkstreamToolTests: XCTestCase {
     }
 
     func test_aNameAlreadyTaken_isRefusedAndCreatesNothing() async {
-        install([
-            Project(name: "app", directory: "/repos/app", workstreams: [Workstream(name: "feat-ipc")]),
-        ])
+        let app = groupedApp(workstreams: [Workstream(name: "feat-ipc")])
+        install([app.project])
         let silence = SilenceCheck()
 
-        let response = await create(["name": "feat-ipc"], as: client(project: "/repos/app"))
+        let response = await create(["name": "feat-ipc"], as: app.caller)
 
         XCTAssertNil(response.payload)
         XCTAssertTrue(response.error?.contains("feat-ipc") ?? false, "the refusal must name the collision: \(response.error ?? "nil")")
@@ -176,10 +185,11 @@ final class CreateWorkstreamToolTests: XCTestCase {
     /// collision is detected in `app`, the project the caller actually belongs
     /// to, rather than missed in `other`.
     func test_theCallersWorkstreamWinsOverTheDirectoryItReports() async {
-        let mine = Workstream(name: "feat-ipc")
+        let group = Workstream.Group(name: "app")
+        let mine = Workstream(name: "feat-ipc", groupID: group.id)
         install([
             Project(name: "other", directory: "/repos/other"),
-            Project(name: "app", directory: "/repos/app", workstreams: [mine]),
+            Project(name: "app", directory: "/repos/app", workstreams: [mine], groups: [group]),
         ])
 
         let response = await create(
@@ -198,11 +208,12 @@ final class CreateWorkstreamToolTests: XCTestCase {
     /// — before `launch` — is what makes the refusal text true: nothing was
     /// created, so "omit `prompt`" is advice the caller can still take.
     func test_aPromptWithNoClaude_isRefusedBeforeAnythingIsCreated() async {
-        install([Project(name: "app", directory: "/repos/app")])
+        let app = groupedApp()
+        install([app.project])
         WorkspaceActions.shared.appEnvironment = nil
         let silence = SilenceCheck()
 
-        let response = await create(["prompt": "write the tests"], as: client(project: "/repos/app"))
+        let response = await create(["prompt": "write the tests"], as: app.caller)
 
         XCTAssertNil(response.payload)
         XCTAssertTrue(response.error?.contains("claude") ?? false, "expected the missing-binary refusal, got: \(response.error ?? "nil")")
@@ -222,14 +233,15 @@ final class CreateWorkstreamToolTests: XCTestCase {
     /// refusal: reporting "an agent started" with no surface running it would be
     /// a lie the caller then waits on.
     func test_aPromptWithNoTerminal_isRefusedBeforeAnythingIsCreated() async {
-        install([Project(name: "app", directory: "/repos/app")])
+        let app = groupedApp()
+        install([app.project])
         let environment = AppEnvironment()
         environment.toolStatus.claude = .found("/usr/local/bin/claude")
         WorkspaceActions.shared.appEnvironment = environment
         defer { WorkspaceActions.shared.appEnvironment = nil }
         let silence = SilenceCheck()
 
-        let response = await create(["prompt": "write the tests"], as: client(project: "/repos/app"))
+        let response = await create(["prompt": "write the tests"], as: app.caller)
 
         XCTAssertNil(response.payload)
         XCTAssertTrue(
@@ -327,11 +339,12 @@ final class CreateWorkstreamToolTests: XCTestCase {
     /// its own Shortcut tooling handed it — a bare id, `sc-`, or a pasted URL.
     func test_aStoryMayArriveBare_prefixed_orAsAURL() async {
         for spelling in ["17411", "sc-17411", "https://app.shortcut.com/sixfifty/story/17411/some-title"] {
-            install([Project(name: "app", directory: "/repos/app")])
+            let app = groupedApp()
+            install([app.project])
             let fetches = FetchCount()
             await service.setStoryFetch(fetches.answering(Self.story()))
 
-            _ = await createFromShortcut(["story": spelling], as: client(project: "/repos/app"))
+            _ = await createFromShortcut(["story": spelling], as: app.caller)
 
             XCTAssertEqual(fetches.ids, [17411], "\(spelling) should have been read as story 17411")
         }
@@ -358,11 +371,12 @@ final class CreateWorkstreamToolTests: XCTestCase {
     /// being flattened into "the story could not be read".
     func test_aFailedFetch_reportsShortcutsOwnMessageAndCreatesNothing() async {
         pinBranchTemplate("sc-${STORY_ID}")
-        install([Project(name: "app", directory: "/repos/app")])
+        let app = groupedApp()
+        install([app.project])
         await service.setStoryFetch { _ in throw Shortcut.Error.noToken }
         let silence = SilenceCheck()
 
-        let response = await createFromShortcut(["story": "17411"], as: client(project: "/repos/app"))
+        let response = await createFromShortcut(["story": "17411"], as: app.caller)
 
         XCTAssertNil(response.payload)
         XCTAssertEqual(response.error, Shortcut.Error.noToken.message)
@@ -371,17 +385,12 @@ final class CreateWorkstreamToolTests: XCTestCase {
 
     func test_aStoryThatAlreadyHasAWorkstream_isRefusedAndCreatesNothing() async {
         pinBranchTemplate("sc-${STORY_ID}")
-        install([
-            Project(
-                name: "app",
-                directory: "/repos/app",
-                workstreams: [Workstream(name: "already-on-it", shortcutStoryID: 17411)]
-            ),
-        ])
+        let app = groupedApp(workstreams: [Workstream(name: "already-on-it", shortcutStoryID: 17411)])
+        install([app.project])
         await service.setStoryFetch { _ in Self.story() }
         let silence = SilenceCheck()
 
-        let response = await createFromShortcut(["story": "17411"], as: client(project: "/repos/app"))
+        let response = await createFromShortcut(["story": "17411"], as: app.caller)
 
         XCTAssertNil(response.payload)
         XCTAssertTrue(
@@ -396,13 +405,12 @@ final class CreateWorkstreamToolTests: XCTestCase {
     /// "this story's workstream" would be wrong.
     func test_aRenderedNameAlreadyTaken_isRefusedAndCreatesNothing() async {
         pinBranchTemplate("sc-${STORY_ID}")
-        install([
-            Project(name: "app", directory: "/repos/app", workstreams: [Workstream(name: "sc-17411")]),
-        ])
+        let app = groupedApp(workstreams: [Workstream(name: "sc-17411")])
+        install([app.project])
         await service.setStoryFetch { _ in Self.story() }
         let silence = SilenceCheck()
 
-        let response = await createFromShortcut(["story": "17411"], as: client(project: "/repos/app"))
+        let response = await createFromShortcut(["story": "17411"], as: app.caller)
 
         XCTAssertNil(response.payload)
         XCTAssertTrue(
@@ -416,7 +424,8 @@ final class CreateWorkstreamToolTests: XCTestCase {
     /// *before* the fetch — so a caller told its agent could not start has not
     /// also spent a round trip finding that out.
     func test_aPromptWithNoClaude_isRefusedBeforeTheStoryIsFetched() async {
-        install([Project(name: "app", directory: "/repos/app")])
+        let app = groupedApp()
+        install([app.project])
         WorkspaceActions.shared.appEnvironment = nil
         let fetches = FetchCount()
         await service.setStoryFetch(fetches.answering(Self.story()))
@@ -424,7 +433,7 @@ final class CreateWorkstreamToolTests: XCTestCase {
 
         let response = await createFromShortcut(
             ["story": "17411", "prompt": "write the tests"],
-            as: client(project: "/repos/app")
+            as: app.caller
         )
 
         XCTAssertNil(response.payload)

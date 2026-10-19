@@ -115,6 +115,8 @@ struct ProjectSidebar: View {
     @State private var newWorkstreamPlaceholder = ""
     @State private var pendingWorkstreamProjectID: UUID?
     @State private var pendingWorkstreamBypass: Bool?
+    /// The group the pending creation joins, set alongside `pendingWorkstreamProjectID`.
+    @State private var pendingWorkstreamGroupID: UUID?
 
     @AppStorage(Shortcut.Settings.buttonEnabledKey) private var shortcutButtonEnabled: Bool = true
     @AppStorage(Shortcut.Settings.branchTemplateKey) private var branchTemplate: String = ""
@@ -275,15 +277,15 @@ struct ProjectSidebar: View {
             project: project,
             isGitRepo: appEnv.isGitRepo(project.directory),
             githubURL: appEnv.githubURL(for: project.directory),
-            onAdd: { logger.warning("[Atelier] onAdd button tapped for project \(project.name, privacy: .public)"); addWorkstream(for: project.id) },
-            onAddWithPermissions: { addWorkstream(for: project.id, bypassPermissions: true) },
-            onAddWithoutPermissions: { addWorkstream(for: project.id, bypassPermissions: false) },
+            onAdd: { logger.warning("[Atelier] onAdd button tapped for project \(project.name, privacy: .public)"); addWorkstream(for: project.id, groupID: placeholderGroupID(project)) },
+            onAddWithPermissions: { addWorkstream(for: project.id, groupID: placeholderGroupID(project), bypassPermissions: true) },
+            onAddWithoutPermissions: { addWorkstream(for: project.id, groupID: placeholderGroupID(project), bypassPermissions: false) },
             showShortcutButton: Shortcut.Settings.shouldShowButton(
                 isGitRepo: appEnv.isGitRepo(project.directory),
                 toggleEnabled: shortcutButtonEnabled,
                 hasToken: hasShortcutToken
             ),
-            onAddFromShortcut: { addWorkstreamFromShortcut(for: project.id) },
+            onAddFromShortcut: { addWorkstreamFromShortcut(for: project.id, groupID: placeholderGroupID(project)) },
             // Both halves are already cached in AppEnvironment and refreshed on its own
             // schedule — asking git or gh from a row body would spawn a subprocess per render.
             // `hasGitHubRemote` is the half that genuinely is: the path-validity sweep
@@ -293,7 +295,7 @@ struct ProjectSidebar: View {
                 isGitRepo: appEnv.isGitRepo(project.directory),
                 hasGitHubRemote: appEnv.hasGitHubRemote(project.directory)
             ),
-            onAddFromGitHub: { addWorkstreamFromGitHub(for: project.id) },
+            onAddFromGitHub: { addWorkstreamFromGitHub(for: project.id, groupID: placeholderGroupID(project)) },
             isSelected: selection == .project(project.id),
             isRenaming: Binding(
                 get: { renamingProjectID == project.id },
@@ -630,9 +632,13 @@ struct ProjectSidebar: View {
                 if case let .workstream(wsID) = selection,
                    let project = projects.first(where: { $0.workstreams.contains(where: { $0.id == wsID }) })
                 {
-                    addWorkstream(for: project.id, bypassPermissions: bypass)
-                } else if case let .project(pid) = selection {
-                    addWorkstream(for: pid, bypassPermissions: bypass)
+                    let groupID = project.workstreams.first(where: { $0.id == wsID })?.groupID ?? placeholderGroupID(project)
+                    addWorkstream(for: project.id, groupID: groupID, bypassPermissions: bypass)
+                } else if case let .project(pid) = selection,
+                          let project = projects.first(where: { $0.id == pid })
+                {
+                    // Placeholder: Task 9 replaces this with the group the selection names.
+                    addWorkstream(for: pid, groupID: placeholderGroupID(project), bypassPermissions: bypass)
                 } else {
                     showingAddProjectChoice = true
                 }
@@ -732,7 +738,14 @@ struct ProjectSidebar: View {
 
     @AppStorage("atelier.bypassPermissions") private var defaultBypass: Bool = false
 
-    private func addWorkstream(for projectID: UUID, bypassPermissions: Bool? = nil) {
+    /// Placeholder for the project-header buttons and the project selection: the
+    /// project's first group. Task 9 replaces the header buttons with per-group ones.
+    private func placeholderGroupID(_ project: Project) -> UUID? {
+        project.sortedGroups.first?.id
+    }
+
+    private func addWorkstream(for projectID: UUID, groupID: UUID?, bypassPermissions: Bool? = nil) {
+        guard let groupID else { return }
         logger.warning("[Atelier] addWorkstream called for projectID=\(projectID, privacy: .public)")
         guard let index = projects.firstIndex(where: { $0.id == projectID }) else {
             logger.warning("[Atelier] addWorkstream: project not found")
@@ -753,11 +766,13 @@ struct ProjectSidebar: View {
         newWorkstreamError = ""
         newWorkstreamPlaceholder = NameGenerator.generate(avoiding: existingNames)
         pendingWorkstreamProjectID = projectID
+        pendingWorkstreamGroupID = groupID
         pendingWorkstreamBypass = bypassPermissions
         showingNewWorkstreamName = true
     }
 
-    private func addWorkstreamFromShortcut(for projectID: UUID) {
+    private func addWorkstreamFromShortcut(for projectID: UUID, groupID: UUID?) {
+        guard let groupID else { return }
         guard let index = projects.firstIndex(where: { $0.id == projectID }) else { return }
         guard Git.Operations.isGitRepo(at: projects[index].checkout) else {
             showNotGitRepoError = true
@@ -767,6 +782,7 @@ struct ProjectSidebar: View {
         shortcutError = ""
         shortcutFetching = false
         pendingWorkstreamProjectID = projectID
+        pendingWorkstreamGroupID = groupID
         showingShortcutStory = true
     }
 
@@ -774,6 +790,7 @@ struct ProjectSidebar: View {
     /// branch name. Nothing is created if the fetch fails.
     private func createWorkstreamFromShortcut() {
         guard let projectID = pendingWorkstreamProjectID,
+              let groupID = pendingWorkstreamGroupID,
               let index = projects.firstIndex(where: { $0.id == projectID })
         else { return }
 
@@ -833,6 +850,7 @@ struct ProjectSidebar: View {
                 startLaunch(
                     project: project,
                     projectID: projectID,
+                    groupID: groupID,
                     name: name,
                     bypass: bypass,
                     shortcutStoryID: story.id
@@ -851,7 +869,8 @@ struct ProjectSidebar: View {
         }
     }
 
-    private func addWorkstreamFromGitHub(for projectID: UUID) {
+    private func addWorkstreamFromGitHub(for projectID: UUID, groupID: UUID?) {
+        guard let groupID else { return }
         guard let index = projects.firstIndex(where: { $0.id == projectID }) else { return }
         guard Git.Operations.isGitRepo(at: projects[index].checkout) else {
             showNotGitRepoError = true
@@ -861,6 +880,7 @@ struct ProjectSidebar: View {
         gitHubBranchError = ""
         gitHubBranchChecking = false
         pendingWorkstreamProjectID = projectID
+        pendingWorkstreamGroupID = groupID
         showingGitHubBranch = true
     }
 
@@ -879,6 +899,7 @@ struct ProjectSidebar: View {
     /// a workstream exists. Nothing is created if either check fails.
     private func createWorkstreamFromGitHubBranch() {
         guard let projectID = pendingWorkstreamProjectID,
+              let groupID = pendingWorkstreamGroupID,
               let index = projects.firstIndex(where: { $0.id == projectID })
         else { return }
 
@@ -947,6 +968,7 @@ struct ProjectSidebar: View {
                 startLaunch(
                     project: project,
                     projectID: projectID,
+                    groupID: groupID,
                     name: branch,
                     bypass: bypass,
                     existingBranch: branch
@@ -956,7 +978,9 @@ struct ProjectSidebar: View {
     }
 
     private func createWorkstream() {
-        guard let projectID = pendingWorkstreamProjectID else { return }
+        guard let projectID = pendingWorkstreamProjectID,
+              let groupID = pendingWorkstreamGroupID
+        else { return }
         guard let index = projects.firstIndex(where: { $0.id == projectID }) else {
             showingNewWorkstreamName = false
             return
@@ -989,7 +1013,7 @@ struct ProjectSidebar: View {
         showingNewWorkstreamName = false
         pendingWorkstreamProjectID = nil
         pendingWorkstreamBypass = nil
-        startLaunch(project: project, projectID: projectID, name: name, bypass: bypass)
+        startLaunch(project: project, projectID: projectID, groupID: groupID, name: name, bypass: bypass)
     }
 
     /// Hands the creation sequence to `Workstream.Launcher`, which owns it for
@@ -1017,6 +1041,7 @@ struct ProjectSidebar: View {
     private func startLaunch(
         project: Project,
         projectID: UUID,
+        groupID: UUID,
         name: String,
         bypass: Bool,
         shortcutStoryID: Int? = nil,
@@ -1028,6 +1053,7 @@ struct ProjectSidebar: View {
             do {
                 _ = try await Workstream.Launcher.shared.launch(
                     in: Workstream.Launcher.target(for: project),
+                    groupID: groupID,
                     requestedName: name,
                     bypassPermissions: bypass,
                     select: true,

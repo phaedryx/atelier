@@ -455,6 +455,7 @@ extension IPC.Service {
     /// What both creation tools resolve before anything exists on disk.
     private struct CreationPlan {
         let target: Workstream.Launcher.Target
+        let groupID: UUID
         let prompt: String?
         let bypass: Bool
         let inputs: AgentLaunchInputs
@@ -474,11 +475,23 @@ extension IPC.Service {
         let bypass = try arguments.boolean("bypass_permissions")
 
         let callerWorkstreamID = callerWorkstreamID(request)
-        let target = try await MainActor.run {
-            try Workstream.Launcher.shared.target(
+        // Task 4 replaces `callerGroupID: nil` and `requestedGroup: nil` with the
+        // caller's coordinator group and the tool's `group` argument.
+        let (target, groupID) = try await MainActor.run {
+            let target = try Workstream.Launcher.shared.target(
                 callerWorkstreamID: callerWorkstreamID,
                 projectDirectory: request.client.projectDirectory
             )
+            guard let project = Workstream.Launcher.shared.projectList?.items.first(where: { $0.id == target.projectID }) else {
+                throw Workstream.Launcher.Failure.projectNotFound(target.directory)
+            }
+            let groupID = try Workstream.Launcher.resolveGroup(
+                callerWorkstreamID: callerWorkstreamID,
+                callerGroupID: nil,
+                requestedGroup: nil,
+                in: project
+            ).get()
+            return (target, groupID)
         }
 
         let inputs = await MainActor.run { AgentLaunchInputs.read() }
@@ -486,7 +499,7 @@ extension IPC.Service {
             throw ToolError.refused(refusal)
         }
 
-        return CreationPlan(target: target, prompt: prompt, bypass: bypass, inputs: inputs)
+        return CreationPlan(target: target, groupID: groupID, prompt: prompt, bypass: bypass, inputs: inputs)
     }
 
     /// The half of a creation that does not care why it was asked for:
@@ -518,6 +531,7 @@ extension IPC.Service {
             let outcome = AgentStartOutcome()
             let launched = try await Workstream.Launcher.shared.launch(
                 in: plan.target,
+                groupID: plan.groupID,
                 requestedName: name,
                 bypassPermissions: plan.bypass,
                 shortcutStoryID: shortcutStoryID,
