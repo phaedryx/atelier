@@ -1188,6 +1188,57 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         XCTAssertNil(tracker.contextUsage[wsID])
     }
 
+    // MARK: - Owner index (ContentView.syncAgentLookupsAndGroupNames)
+
+    func testOwnerIndexAnswersKnownIDsAndNothingElse() {
+        let group = Workstream.Group(name: "A")
+        var ws = Workstream(name: "fix-a")
+        ws.groupID = group.id
+        ws.worktreePath = "/p/fix-a"
+        let project = Project(name: "app", directory: "/p", workstreams: [ws], groups: [group])
+        let tab = UUID(), strangerTab = UUID(), stranger = UUID()
+        let index = Workstream.AgentStateTracker.ownerIndex(
+            for: [project],
+            workstreamOwningSurface: { $0 == tab ? ws.id : ($0 == strangerTab ? stranger : nil) }
+        )
+        XCTAssertEqual(index.surfaceOwner(ws.id), ws.id)
+        XCTAssertEqual(index.surfaceOwner(tab), ws.id)
+        XCTAssertEqual(index.surfaceOwner(group.id), group.id)
+        XCTAssertNil(index.surfaceOwner(strangerTab), "a surface mapped to an unknown workstream is nobody's")
+        XCTAssertNil(index.surfaceOwner(UUID()))
+        XCTAssertEqual(index.directoryOwner("/p/fix-a"), ws.id)
+        XCTAssertNil(index.directoryOwner("/p"))
+        XCTAssertEqual(index.groupNameByWorkstreamID, [ws.id: "A"])
+    }
+
+    /// The C1 regression: a group created after the first build was never
+    /// seen, because `Project ==` compares ids and the list observer did not
+    /// fire. Rebuilding through the same `ownerIndex` + `install` the app's
+    /// `projectsMutatedInPlace` runs is what makes it resolve.
+    func testAGroupAddedAfterTheFirstBuildResolvesOnceRebuilt() {
+        var project = Project(name: "app", directory: "/p", groups: [Workstream.Group(name: "A")])
+        typealias T = Workstream.AgentStateTracker
+        tracker.install(T.ownerIndex(for: [project], workstreamOwningSurface: { _ in nil }))
+
+        guard case let .success(added) = project.addGroup(named: "B", bypassPermissions: false) else {
+            return XCTFail("addGroup refused")
+        }
+        XCTAssertNil(tracker.owner(surfaceID: added.id, projectDir: "/p"), "the stale index does not know the group")
+
+        tracker.install(T.ownerIndex(for: [project], workstreamOwningSurface: { _ in nil }))
+        XCTAssertEqual(tracker.owner(surfaceID: added.id, projectDir: "/p"), added.id)
+    }
+
+    func testOwnerIndexCarriesARenamedGroupsNewName() {
+        var group = Workstream.Group(name: "A")
+        var ws = Workstream(name: "fix-a")
+        ws.groupID = group.id
+        group.name = "Renamed"
+        let project = Project(name: "app", directory: "/p", workstreams: [ws], groups: [group])
+        let index = Workstream.AgentStateTracker.ownerIndex(for: [project], workstreamOwningSurface: { _ in nil })
+        XCTAssertEqual(index.groupNameByWorkstreamID[ws.id], "Renamed")
+    }
+
     func testOwnerResolutionIsSurfaceFirstThenDirectory() {
         let a = UUID(), dirOwner = UUID()
         let bySurface: (UUID) -> UUID? = { $0 == a ? a : nil }

@@ -373,9 +373,10 @@ says which of the two it is.
 **`list_peers` reports a `group`, and member group names arrive as a pushed map.** A coordinator
 carries its group's name in its identity (`ClientIdentity.groupName`). A member's group is not in
 its identity: `info(for:)` has to stay synchronous and off the main actor, and the group lives in
-`Project`, which the main actor owns. So `ContentView.refreshAgentStateLookup` pushes a
-`[workstreamID: groupName]` map with `IPC.Service.setGroupNames` whenever the project list changes,
-and `info(for:)` reads that copy. The push **replaces the whole map**, so it always carries every
+`Project`, which the main actor owns. So `ContentView.syncAgentLookupsAndGroupNames` pushes a
+`[workstreamID: groupName]` map with `IPC.Service.setGroupNames` whenever the project list changes —
+including an in-place group rename, which fires no `onChange(of:)` and is routed through
+`projectsMutatedInPlace` for that reason — and `info(for:)` reads that copy. The push **replaces the whole map**, so it always carries every
 housed workstream.
 
 **Which group.** `create_workstream` and `create_shortcut_workstream` take an optional `group`,

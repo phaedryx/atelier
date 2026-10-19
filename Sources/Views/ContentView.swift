@@ -338,10 +338,7 @@ struct ContentView: View {
                 onSelectWorkstream: { wsID in selection = .workstream(wsID) },
                 onRemoveWorkstream: { wsID in removeConfirmation.confirm(workstreamID: wsID) },
                 onPurgeWorkstream: { wsID in confirmPurge(wsID) },
-                onProjectChanged: {
-                    ProjectStore.save(projects)
-                    syncHeadWatcher(projects: projects)
-                }
+                onProjectChanged: { projectsMutatedInPlace() }
             )
             .navigationTitle(project.name)
             .navigationSubtitle(AppConstants.appName)
@@ -385,7 +382,7 @@ struct ContentView: View {
                 let work = DispatchWorkItem { ProjectStore.save(newValue) }
                 saveWork = work
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
-                refreshAgentStateLookup(projects: newValue)
+                syncAgentLookupsAndGroupNames(projects: newValue)
                 syncHeadWatcher(projects: newValue)
                 syncShortcutStoryIDs(projects: newValue)
             }
@@ -537,10 +534,7 @@ struct ContentView: View {
                 projects: $projectList.items,
                 selection: $selection,
                 verificationRunner: verificationRunner,
-                onProjectsChanged: {
-                    ProjectStore.save(projects)
-                    syncHeadWatcher(projects: projects)
-                }
+                onProjectsChanged: { projectsMutatedInPlace() }
             )
             .navigationSplitViewColumnWidth(min: 160, ideal: 200, max: 350)
         } detail: {
@@ -616,7 +610,7 @@ struct ContentView: View {
             reconcileStrandedWorkstreams()
             appEnvironment.fetchOrigin(projects: projects)
             Task { await usageStore.refresh() }
-            refreshAgentStateLookup(projects: projects)
+            syncAgentLookupsAndGroupNames(projects: projects)
             startHeadWatcher()
             // Apply saved appearance
             switch UserDefaults.standard.string(forKey: "atelier.appearance") ?? "system" {
@@ -778,7 +772,7 @@ struct ContentView: View {
         ProjectStore.save(projects)
         appEnvironment.refreshPathValidity(projects: projects)
         // So hook events for this workstream can resolve to its UUID.
-        refreshAgentStateLookup(projects: projects)
+        syncAgentLookupsAndGroupNames(projects: projects)
         // A newly-pathed worktree is exactly the one whose branch an agent is about
         // to rename, so it has to start being watched now.
         syncHeadWatcher(projects: projects)
@@ -883,50 +877,33 @@ struct ContentView: View {
         logger.warning("[Atelier] reconcile: no worktree for \(name, privacy: .public); forgetting the record")
     }
 
-    /// Rebuilds the projectDir → workstream-UUID lookup used by the agent
-    /// state tracker. Paths are normalized via `Workstream.AgentStateTracker.normalize`
-    /// (resolves symlinks) so hook payloads match regardless of how Claude
-    /// reports the path on macOS.
-    private func refreshAgentStateLookup(projects: [Project]) {
-        var index: [String: UUID] = [:]
-        for project in projects {
-            for ws in project.workstreams {
-                guard let path = ws.worktreePath else { continue }
-                index[Workstream.AgentStateTracker.normalize(path)] = ws.id
-            }
-        }
-        agentStateTracker.workstreamLookup = { projectDir in
-            index[Workstream.AgentStateTracker.normalize(projectDir)]
-        }
-
-        // Surface id first: a coordinator runs at the project root, so several
-        // share one directory and only the id they export tells them apart. An id
-        // nobody here owns is nil, never passed through.
-        var workstreamIDs: Set<UUID> = []
-        var groupIDs: Set<UUID> = []
-        var groupNames: [UUID: String] = [:]
-        for project in projects {
-            for group in project.groups ?? [] {
-                groupIDs.insert(group.id)
-            }
-            for ws in project.workstreams {
-                workstreamIDs.insert(ws.id)
-                if let groupID = ws.groupID, let group = project.group(with: groupID) {
-                    groupNames[ws.id] = group.name
-                }
-            }
-        }
+    /// Rebuilds the agent-state tracker's owner lookups and pushes the
+    /// member-to-group-name map `list_peers` reads, both from one
+    /// `Workstream.AgentStateTracker.ownerIndex` so they agree on which ids exist.
+    ///
+    /// Called from `onChange(of: projectList.items)`, startup,
+    /// `attachWorktreePath` and `projectsMutatedInPlace`. The last is the one
+    /// that matters for groups: `Project` equates by id, so a group added,
+    /// renamed or removed leaves the list "equal" and the observer never fires.
+    private func syncAgentLookupsAndGroupNames(projects: [Project]) {
         let cache = surfaceCache
-        agentStateTracker.surfaceOwnerLookup = { surfaceID in
-            if workstreamIDs.contains(surfaceID) || groupIDs.contains(surfaceID) {
-                return surfaceID
-            }
-            if let owner = cache.workstreamID(owningSurface: surfaceID), workstreamIDs.contains(owner) {
-                return owner
-            }
-            return nil
-        }
-        Task { await IPC.Service.shared.setGroupNames(groupNames) }
+        let index = Workstream.AgentStateTracker.ownerIndex(
+            for: projects,
+            workstreamOwningSurface: { cache.workstreamID(owningSurface: $0) }
+        )
+        agentStateTracker.install(index)
+        Task { await IPC.Service.shared.setGroupNames(index.groupNameByWorkstreamID) }
+    }
+
+    /// What every in-place edit of the project list runs: the sidebar's
+    /// `onProjectsChanged` and the overview's `onProjectChanged` (adopt's new
+    /// group) both land here. Same reason as `syncHeadWatcher`'s doc — an edit
+    /// that keeps every id fires no `onChange(of:)`, so nothing downstream
+    /// notices unless it is told.
+    private func projectsMutatedInPlace() {
+        ProjectStore.save(projects)
+        syncHeadWatcher(projects: projects)
+        syncAgentLookupsAndGroupNames(projects: projects)
     }
 
     /// Shows the "waiting for approval" banner for a workstream that just

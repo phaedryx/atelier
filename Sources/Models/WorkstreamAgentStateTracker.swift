@@ -992,3 +992,72 @@ extension Workstream {
         }
     }
 }
+
+extension Workstream.AgentStateTracker {
+    /// Everything `ContentView` derives from the project list for owner
+    /// attribution and for `list_peers`, built in one pass so the two cannot
+    /// disagree about which ids exist.
+    struct OwnerIndex {
+        /// A hook's `project_dir` → the workstream whose worktree it is.
+        let directoryOwner: (String) -> UUID?
+        /// A surface id → the id its events are attributed to, or nil.
+        let surfaceOwner: (UUID) -> UUID?
+        /// Every housed workstream → its group's name, for `IPC.Service.setGroupNames`.
+        let groupNameByWorkstreamID: [UUID: String]
+    }
+
+    /// The rule behind `surfaceOwnerLookup`, pure over the project list.
+    ///
+    /// A surface id resolves only if it is a known workstream id, a surface
+    /// `workstreamOwningSurface` maps to a known workstream, or a known group
+    /// id (a coordinator's surface id is its group id). Anything else is nil, so
+    /// an unclaimed id falls through to the directory rather than being
+    /// attributed to nobody's state. Surface id is asked first because
+    /// coordinators run at the project root, so several share one directory.
+    ///
+    /// `Project` equates by id alone, so adding, renaming or removing a group
+    /// does not fire `onChange(of: projectList.items)`. Every path that mutates
+    /// a project in place must rebuild this, not just the observer.
+    static func ownerIndex(
+        for projects: [Project],
+        workstreamOwningSurface: @escaping (UUID) -> UUID?
+    ) -> OwnerIndex {
+        var directories: [String: UUID] = [:]
+        var workstreamIDs: Set<UUID> = []
+        var groupIDs: Set<UUID> = []
+        var groupNames: [UUID: String] = [:]
+        for project in projects {
+            for group in project.groups ?? [] {
+                groupIDs.insert(group.id)
+            }
+            for ws in project.workstreams {
+                workstreamIDs.insert(ws.id)
+                if let path = ws.worktreePath {
+                    directories[normalize(path)] = ws.id
+                }
+                if let groupID = ws.groupID, let group = project.group(with: groupID) {
+                    groupNames[ws.id] = group.name
+                }
+            }
+        }
+        return OwnerIndex(
+            directoryOwner: { directories[normalize($0)] },
+            surfaceOwner: { surfaceID in
+                if workstreamIDs.contains(surfaceID) || groupIDs.contains(surfaceID) {
+                    return surfaceID
+                }
+                if let owner = workstreamOwningSurface(surfaceID), workstreamIDs.contains(owner) {
+                    return owner
+                }
+                return nil
+            },
+            groupNameByWorkstreamID: groupNames
+        )
+    }
+
+    /// Points both lookups at `index`.
+    func install(_ index: OwnerIndex) {
+        workstreamLookup = index.directoryOwner
+        surfaceOwnerLookup = index.surfaceOwner
+    }
+}

@@ -225,11 +225,17 @@ so `AgentStateTracker.resolveOwner` asks `surfaceOwnerLookup` with that id first
 and only then falls back to `workstreamLookup(project_dir)`. The directory used
 to be the only key, and it cannot survive groups: a group's coordinator runs at
 the project root, so several coordinators share one cwd, and a coordinator's
-surface id is its group id. `ContentView.refreshAgentStateLookup` answers an id
-only if it is a known workstream id, a surface `workstreamID(owningSurface:)`
-maps to a known workstream, or a known group id; anything else is nil, so an
-unclaimed id falls through to the directory rather than being attributed to
-nobody's state. Event handling, `handleStatusLine` and the permission-request
+surface id is its group id. `AgentStateTracker.ownerIndex(for:workstreamOwningSurface:)`
+answers an id only if it is a known workstream id, a surface
+`workstreamID(owningSurface:)` maps to a known workstream, or a known group id;
+anything else is nil, so an unclaimed id falls through to the directory rather
+than being attributed to nobody's state. `ContentView.syncAgentLookupsAndGroupNames`
+installs it, and it must run after **every** in-place edit of the project list,
+not only from `onChange(of: projectList.items)`: `Project` equates by id, so
+adding, renaming or removing a group fires no observer, and a group the lookup
+has never seen gets no state dot, no meter and no permission banner. Both
+in-place edit closures (the sidebar's `onProjectsChanged`, the overview's
+`onProjectChanged`) go through `ContentView.projectsMutatedInPlace` for that. Event handling, `handleStatusLine` and the permission-request
 handler in `AtelierApp` all go through that one function — do not write the
 order out a fourth time. `handleStatusLine` keeps its "only the owner's own
 surface" rule, which for a coordinator means `surfaceID == groupID`.
