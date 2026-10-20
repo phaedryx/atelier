@@ -753,6 +753,29 @@ final class ProjectTests: XCTestCase {
         XCTAssertEqual(first.groups?.first?.lastAccessedAt, first.lastAccessedAt)
     }
 
+    /// One unreadable group must not cost the project: `groups` decodes element by
+    /// element, like `workstreams`, and the dropped group's members are re-housed
+    /// by the backfill into the first surviving group.
+    func testOneMalformedGroupIsDroppedAndItsMembersReHoused() throws {
+        let good = UUID(), bad = UUID()
+        let json = """
+        {"id":"\(UUID().uuidString)","name":"Atelier","directory":"/p","checkoutDirectory":"/p/main",
+         "lastAccessedAt":0,
+         "groups":[
+           {"id":"\(good.uuidString)","name":"Good","createdAt":0,"lastAccessedAt":0,"bypassPermissions":false},
+           {"id":"\(bad.uuidString)","createdAt":0,"lastAccessedAt":0,"bypassPermissions":false}
+         ],
+         "workstreams":[
+           {"id":"\(UUID().uuidString)","name":"fix-a","worktreePath":"/p/fix-a","bypassPermissions":false,"lastAccessedAt":0,"groupID":"\(good.uuidString)"},
+           {"id":"\(UUID().uuidString)","name":"fix-b","worktreePath":"/p/fix-b","bypassPermissions":false,"lastAccessedAt":0,"groupID":"\(bad.uuidString)"}
+         ]}
+        """.data(using: .utf8)!
+        let project = try JSONDecoder().decode(Project.self, from: json)
+        XCTAssertEqual(project.groups?.map(\.id), [good])
+        XCTAssertEqual(project.workstreams.count, 2)
+        XCTAssertEqual(project.workstreams.map(\.groupID), [good, good])
+    }
+
     func testGroupsRoundTripThroughTheStore() {
         let g = Workstream.Group(name: "Billing", bypassPermissions: true)
         var ws = Workstream(name: "fix-a", worktreePath: "/p/fix-a"); ws.groupID = g.id

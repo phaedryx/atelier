@@ -162,7 +162,10 @@ struct Project: Identifiable, Hashable, Codable {
         }
         lastAccessedAt = try container.decode(Date.self, forKey: .lastAccessedAt)
         let decodedWorkstreams = try container.decodeLossyArray(Workstream.self, forKey: .workstreams)
-        let decodedGroups = try container.decodeIfPresent([Workstream.Group].self, forKey: .groups)
+        // Element by element too, for the first reason above: one malformed group
+        // is dropped, not the project, and `housingWorkstreams()` re-houses its
+        // members in the first surviving group.
+        let decodedGroups = try container.decodeLossyArrayIfPresent(Workstream.Group.self, forKey: .groups)
 
         var housing = Project(
             name: name,

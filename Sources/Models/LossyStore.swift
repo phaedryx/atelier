@@ -84,4 +84,10 @@ extension KeyedDecodingContainer {
     func decodeLossyArray<T: Decodable>(_: T.Type, forKey key: Key) throws -> [T] {
         try decode([Lossy<T>].self, forKey: key).compactMap(\.value)
     }
+
+    /// `decodeLossyArray` for an optional key: nil when the key is absent (an
+    /// older blob that never had the field), element-lossy when it is present.
+    func decodeLossyArrayIfPresent<T: Decodable>(_: T.Type, forKey key: Key) throws -> [T]? {
+        try decodeIfPresent([Lossy<T>].self, forKey: key)?.compactMap(\.value)
+    }
 }
