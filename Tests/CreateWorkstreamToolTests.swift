@@ -148,6 +148,8 @@ final class CreateWorkstreamToolTests: XCTestCase {
     func testCoordinatorCallerDefaultsToItsOwnGroup() async {
         let group = Workstream.Group(name: "A")
         install([Project(name: "app", directory: "/p", groups: [group])])
+        let savedEnvironment = WorkspaceActions.shared.appEnvironment
+        defer { WorkspaceActions.shared.appEnvironment = savedEnvironment }
         WorkspaceActions.shared.appEnvironment = nil
         let silence = SilenceCheck()
         let response = await create(["prompt": "go"], as: client(project: "/p", groupID: group.id))

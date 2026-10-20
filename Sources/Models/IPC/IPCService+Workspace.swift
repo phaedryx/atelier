@@ -157,7 +157,6 @@ extension IPC.Service {
         }
         let name = request.client.workstreamName ?? request.client.groupName ?? "Atelier"
         let outcome = await MainActor.run {
-            // Clicking the banner for a group id focuses nothing yet: Task 8 adds group selection.
             Workstream.AttentionNotifier.shared.notify(
                 workstreamID: workstreamID,
                 workstreamName: name,

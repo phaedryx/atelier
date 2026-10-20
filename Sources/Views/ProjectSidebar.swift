@@ -477,6 +477,11 @@ struct ProjectSidebar: View {
                     accessibilityID: "new-group-field",
                     onCommit: { value in
                         pendingGroupProjectID = nil
+                        // `InlineTextField` commits on end-editing, so clicking
+                        // away from an untouched field arrives here empty. That
+                        // is a cancel, not a request for the "can't be empty"
+                        // alert; a taken name is still refused by `createGroup`.
+                        guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
                         createGroup(in: project.id, input: value)
                     },
                     onCancel: { pendingGroupProjectID = nil }

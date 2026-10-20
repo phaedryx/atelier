@@ -618,7 +618,9 @@ workstream.
 `groupName`; it exports **no** `ATELIER_WORKSTREAM_ID`, `ATELIER_WORKSTREAM`, `ATELIER_WORKTREE_DIR`
 or `ATELIER_PORT`, because exporting empty ones would make a script believe it was in a worktree.
 Members export no group variables. Its `ATELIER_SURFACE_ID` is the group id, so it is the one peer
-whose surface id and group id coincide. It registers under its group's name, and `list_peers`
+whose surface id and group id are the same UUID — spelled differently: `ATELIER_GROUP_ID` is
+lowercased, `ATELIER_SURFACE_ID` is the uppercase `uuidString`, so compare them as `UUID`s, never as
+strings. It registers under its group's name, and `list_peers`
 reports its `role` as `coordinator` unless it registered one of its own — derived in
 `Service.info(for:pending:now:)` from the context (a `groupID`, no `workstreamID`, an empty stored
 role), not written into the store, so a later explicit role has no default to fight. Two coordinators share

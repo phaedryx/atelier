@@ -236,8 +236,8 @@ adding, renaming or removing a group fires no observer, and a group the lookup
 has never seen gets no state dot, no meter and no permission banner. Both
 in-place edit closures (the sidebar's `onProjectsChanged`, the overview's
 `onProjectChanged`) go through `ContentView.projectsMutatedInPlace` for that. Event handling, `handleStatusLine` and the permission-request
-handler in `AtelierApp` all go through that one function — do not write the
-order out a fourth time. `handleStatusLine` keeps its "only the owner's own
+handler in `AtelierApp` all go through that one function — do not restate the
+order at a call site. `handleStatusLine` keeps its "only the owner's own
 surface" rule, which for a coordinator means `surfaceID == groupID`.
 
 **The transcript is the fallback and stays one.** `TranscriptContextReader`
