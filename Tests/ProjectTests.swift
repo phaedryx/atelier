@@ -725,4 +725,96 @@ final class ProjectTests: XCTestCase {
         XCTAssertEqual(decoded.first?.workstreams.count, 1)
         XCTAssertNil(decoded.first?.workstreams.first?.shortcutStoryID)
     }
+
+    func testDecodingABlobWithoutGroupsHousesEveryWorkstream() throws {
+        // A blob written before `groups` and `groupID` existed.
+        let json = """
+        {"id":"\(UUID().uuidString)","name":"Atelier","directory":"/p","checkoutDirectory":"/p/main",
+         "lastAccessedAt":0,
+         "workstreams":[{"id":"\(UUID().uuidString)","name":"fix-a","worktreePath":"/p/fix-a","bypassPermissions":false,"lastAccessedAt":0}]}
+        """.data(using: .utf8)!
+        let project = try JSONDecoder().decode(Project.self, from: json)
+        XCTAssertEqual(project.workstreams.count, 1)
+        XCTAssertEqual(project.groups?.count, 1)
+        XCTAssertEqual(project.groups?.first?.name, "Atelier")
+        XCTAssertEqual(project.workstreams[0].groupID, project.groups?.first?.id)
+    }
+
+    func testTwoDecodesOfTheSameBlobWithoutGroupsBackfillTheSameGroupID() throws {
+        let json = """
+        {"id":"\(UUID().uuidString)","name":"Atelier","directory":"/p","checkoutDirectory":"/p/main",
+         "lastAccessedAt":0,
+         "workstreams":[{"id":"\(UUID().uuidString)","name":"fix-a","worktreePath":"/p/fix-a","bypassPermissions":false,"lastAccessedAt":0}]}
+        """.data(using: .utf8)!
+        let first = try JSONDecoder().decode(Project.self, from: json)
+        let second = try JSONDecoder().decode(Project.self, from: json)
+        XCTAssertEqual(first.groups?.first?.id, second.groups?.first?.id)
+        XCTAssertEqual(first.groups?.first?.createdAt, first.lastAccessedAt)
+        XCTAssertEqual(first.groups?.first?.lastAccessedAt, first.lastAccessedAt)
+    }
+
+    /// One unreadable group must not cost the project: `groups` decodes element by
+    /// element, like `workstreams`, and the dropped group's members are re-housed
+    /// by the backfill into the first surviving group.
+    func testOneMalformedGroupIsDroppedAndItsMembersReHoused() throws {
+        let good = UUID(), bad = UUID()
+        let json = """
+        {"id":"\(UUID().uuidString)","name":"Atelier","directory":"/p","checkoutDirectory":"/p/main",
+         "lastAccessedAt":0,
+         "groups":[
+           {"id":"\(good.uuidString)","name":"Good","createdAt":0,"lastAccessedAt":0,"bypassPermissions":false},
+           {"id":"\(bad.uuidString)","createdAt":0,"lastAccessedAt":0,"bypassPermissions":false}
+         ],
+         "workstreams":[
+           {"id":"\(UUID().uuidString)","name":"fix-a","worktreePath":"/p/fix-a","bypassPermissions":false,"lastAccessedAt":0,"groupID":"\(good.uuidString)"},
+           {"id":"\(UUID().uuidString)","name":"fix-b","worktreePath":"/p/fix-b","bypassPermissions":false,"lastAccessedAt":0,"groupID":"\(bad.uuidString)"}
+         ]}
+        """.data(using: .utf8)!
+        let project = try JSONDecoder().decode(Project.self, from: json)
+        XCTAssertEqual(project.groups?.map(\.id), [good])
+        XCTAssertEqual(project.workstreams.count, 2)
+        XCTAssertEqual(project.workstreams.map(\.groupID), [good, good])
+    }
+
+    func testGroupsRoundTripThroughTheStore() {
+        let g = Workstream.Group(name: "Billing", bypassPermissions: true)
+        var ws = Workstream(name: "fix-a", worktreePath: "/p/fix-a"); ws.groupID = g.id
+        let project = Project(name: "P", directory: "/p", workstreams: [ws], groups: [g])
+        ProjectStore.save([project], defaults: testDefaults)
+        let loaded = ProjectStore.load(defaults: testDefaults)
+        XCTAssertEqual(loaded[0].groups?.first?.id, g.id)
+        XCTAssertEqual(loaded[0].groups?.first?.bypassPermissions, true)
+        XCTAssertEqual(loaded[0].workstreams[0].groupID, g.id)
+    }
+
+    // MARK: - Group sort order
+
+    /// A group's recency is the newest of its own access and its members'. Group A
+    /// was itself last touched before B, but a member of A was touched after both.
+    func testGroupRecentOrderUsesTheNewestMemberAccess() {
+        let a = Workstream.Group(name: "A", lastAccessedAt: Date(timeIntervalSince1970: 0))
+        let b = Workstream.Group(name: "B", lastAccessedAt: Date(timeIntervalSince1970: 1))
+        let project = Project(
+            name: "app",
+            directory: "/app",
+            workstreams: [
+                Workstream(name: "member", worktreePath: "/app/member", lastAccessedAt: Date(timeIntervalSince1970: 2), groupID: a.id),
+            ],
+            groups: [b, a]
+        )
+
+        XCTAssertEqual(Project.SortOrder.recent.sorted([b, a], in: project).map(\.id), [a.id, b.id])
+    }
+
+    func testGroupAlphabeticalOrderIsCaseInsensitive() {
+        let beta = Workstream.Group(name: "beta")
+        let alpha = Workstream.Group(name: "Alpha")
+        let charlie = Workstream.Group(name: "charlie")
+        let project = Project(name: "app", directory: "/app", groups: [beta, charlie, alpha])
+
+        XCTAssertEqual(
+            Project.SortOrder.alphabetical.sorted([beta, charlie, alpha], in: project).map(\.id),
+            [alpha.id, beta.id, charlie.id]
+        )
+    }
 }

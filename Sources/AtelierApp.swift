@@ -238,14 +238,17 @@ struct AtelierApp: App {
         // nobody here can decide.
         HookEventReceiver.shared.onPermissionRequest = { projectDir, request, respond in
             MainActor.assumeIsolated {
-                // `workstreamLookup` is nil until ContentView installs it, and a
+                // Both lookups are nil until ContentView installs it, and a
                 // nil lookup has to mean "not ours", never "hold until one turns
                 // up". This hook is registered in the user's global
                 // settings.json, so during launch that would be every Claude
                 // session on the machine, blocked on a window that has not
                 // drawn yet.
                 guard PermissionApprovalSettings.isEnabled,
-                      let workstreamID = Workstream.AgentStateTracker.shared.workstreamLookup?(projectDir)
+                      let workstreamID = Workstream.AgentStateTracker.shared.owner(
+                          surfaceID: request.surfaceID,
+                          projectDir: projectDir
+                      )
                 else {
                     respond(nil)
                     return
@@ -388,6 +391,12 @@ struct AtelierApp: App {
                     NotificationCenter.default.post(name: .addNew, object: nil)
                 }
                 .keyboardShortcut("n", modifiers: .command)
+
+                // Cmd+Option+N: add a group to the selected project
+                Button("New Group") {
+                    NotificationCenter.default.post(name: .addGroup, object: nil)
+                }
+                .keyboardShortcut("n", modifiers: [.command, .option])
 
                 // Cmd+Shift+N: always add project
                 Button("New Project") {

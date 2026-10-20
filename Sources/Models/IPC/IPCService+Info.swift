@@ -13,8 +13,10 @@ extension IPC.Service {
     /// main actor and the state read on `Initialization.Runner`, which is
     /// its own actor and is reachable from here directly.
     func getInitializationState(for request: Request) async -> Response {
-        guard let workstreamID = callerWorkstreamID(request) else {
-            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
+        let workstreamID: UUID
+        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
+        case let .success(id): workstreamID = id
+        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
         }
         do {
             let info = try await WorkspaceActions.shared.initializationState(workstreamID: workstreamID)
@@ -30,8 +32,10 @@ extension IPC.Service {
     /// each arrives as a `.success` carrying an `unavailableReason`, not as
     /// a failure: "this workstream has no story" is an answer, not a refusal.
     func getShortcutStory(for request: Request) async -> Response {
-        guard let workstreamID = callerWorkstreamID(request) else {
-            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
+        let workstreamID: UUID
+        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
+        case let .success(id): workstreamID = id
+        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
         }
         do {
             let info = try await WorkspaceActions.shared.shortcutStory(workstreamID: workstreamID)
@@ -57,8 +61,10 @@ extension IPC.Service {
     /// has been recorded yet, so it knows to write one rather than assume
     /// there was never anything worth saving.
     func getSessionCheckpoint(for request: Request) async -> Response {
-        guard let workstreamID = callerWorkstreamID(request) else {
-            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
+        let workstreamID: UUID
+        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
+        case let .success(id): workstreamID = id
+        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
         }
         guard let checkpoint = IPC.CheckpointStore.read(for: workstreamID) else {
             return .success(id: request.id, .text(
@@ -76,8 +82,10 @@ extension IPC.Service {
     /// doc comment. Two agents in one workstream read and write the same
     /// blob, and the tool's own description says so.
     func updateSessionCheckpoint(for request: Request) async -> Response {
-        guard let workstreamID = callerWorkstreamID(request) else {
-            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
+        let workstreamID: UUID
+        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
+        case let .success(id): workstreamID = id
+        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
         }
         do {
             let content = try ToolArguments(request).nonEmpty("content")

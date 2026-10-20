@@ -22,6 +22,21 @@ final class IPCProtocolTests: XCTestCase {
         XCTAssertEqual(identity.peerID, "some-peer")
     }
 
+    func testClientIdentityReadsGroupFromEnvironment() {
+        let id = IPC.ClientIdentity.fromEnvironment(["ATELIER_GROUP_ID": "0B8E", "ATELIER_GROUP": "Billing", "ATELIER_PROJECT_DIR": "/p"])
+        XCTAssertEqual(id.groupID, "0B8E")
+        XCTAssertEqual(id.groupName, "Billing")
+        XCTAssertNil(id.workstreamID)
+    }
+
+    func testPeerInfoEncodesGroup() throws {
+        let info = IPC.PeerInfo(id: "i", name: "n", role: "", workstream: nil, surfaceID: nil, lastSeenSecondsAgo: 0, pendingMessages: 0, lastUserPromptSecondsAgo: nil, group: "Billing")
+        let json = try String(decoding: JSONEncoder().encode(info), as: UTF8.self)
+        XCTAssertTrue(json.contains("\"group\":\"Billing\""), json)
+        let decoded = try JSONDecoder().decode(IPC.PeerInfo.self, from: Data(json.utf8))
+        XCTAssertEqual(decoded.group, "Billing")
+    }
+
     func test_identity_outsideAWorkstream_isEmptyRatherThanWrong() {
         let identity = IPC.ClientIdentity.fromEnvironment([:])
         XCTAssertNil(identity.workstreamID)

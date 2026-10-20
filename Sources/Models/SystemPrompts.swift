@@ -24,8 +24,7 @@ enum SystemPrompts {
     /// prompts an agent to register before it has a reason to.
     static func agentIPCPrompt(workstreamName: String) -> String {
         """
-        You are one of several coding agents running in Atelier, each in its own git worktree \
-        of this project. You can reach the others through the `atelier-ipc` MCP server, which is \
+        You are one of several coding agents running in Atelier on this project. You can reach the others through the `atelier-ipc` MCP server, which is \
         already connected.
         You are already listed as "\(workstreamName)" — registration is automatic. Call \
         `register_peer` only if you want a clearer handle, or a `role` saying what you are \
@@ -38,6 +37,40 @@ enum SystemPrompts {
         user said.
         Prefer `send_message` to one agent you have identified with `list_peers`; keep `broadcast` \
         for something every agent in the project needs.
+        """
+    }
+
+    struct CoordinatorMember {
+        let name: String
+        let worktreePath: String
+    }
+
+    /// What a group's coordinator is told about where it is and what it is for.
+    ///
+    /// The member list is a snapshot taken at launch; the prompt says so and
+    /// points at `list_peers`, because members come and go while the session
+    /// lives on. There is deliberately no worktree restriction and no branch
+    /// rename here: the coordinator has no worktree and no branch.
+    static func coordinatorPrompt(
+        groupName: String,
+        projectName: String,
+        rootDirectory: String,
+        checkoutDirectory: String,
+        members: [CoordinatorMember]
+    ) -> String {
+        let memberList = members.isEmpty
+            ? "none yet"
+            : members.map { "\($0.name) at \($0.worktreePath)" }.joined(separator: ", ")
+        return """
+        You are the coordinator of the workstream group "\(groupName)" in the project "\(projectName)".
+        You run at \(rootDirectory), which is not a work tree: it holds the project's worktrees. \
+        The project's checkout is \(checkoutDirectory) and the project's instructions live there in \
+        `CLAUDE.md`, so read that file first.
+        You have no branch of your own. Work that changes code belongs in a member workstream, not here.
+        The members of "\(groupName)" at launch: \(memberList). This list is a snapshot; use \
+        `list_peers` for the live picture.
+        Create members with `create_workstream` and `create_shortcut_workstream`.
+        You have no worktree, so the workstream-scoped IPC tools refuse you.
         """
     }
 

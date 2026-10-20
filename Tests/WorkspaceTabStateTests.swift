@@ -231,29 +231,32 @@ final class WorkspaceTabStateTests: XCTestCase {
         XCTAssertNil(id)
     }
 
-    func testCycleWorkstreamWrapsToPreviousExistingWorktree() throws {
+    /// A workstream with no worktree on disk is not a stop; the walk steps over it.
+    func testCycleSkipsAWorkstreamWithNoWorktree() throws {
         let firstID = try XCTUnwrap(UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"))
         let missingID = try XCTUnwrap(UUID(uuidString: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB"))
         let previousID = try XCTUnwrap(UUID(uuidString: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC"))
+        let group = Workstream.Group(name: "app")
         let project = Project(
             name: "app",
             directory: "/app",
             workstreams: [
-                Workstream(name: "first", worktreePath: "/app/first", id: firstID, lastAccessedAt: Date(timeIntervalSince1970: 30)),
-                Workstream(name: "missing", worktreePath: "/app/missing", id: missingID, lastAccessedAt: Date(timeIntervalSince1970: 20)),
-                Workstream(name: "previous", worktreePath: "/app/previous", id: previousID, lastAccessedAt: Date(timeIntervalSince1970: 10)),
-            ]
+                Workstream(name: "first", worktreePath: "/app/first", id: firstID, lastAccessedAt: Date(timeIntervalSince1970: 30), groupID: group.id),
+                Workstream(name: "missing", worktreePath: "/app/missing", id: missingID, lastAccessedAt: Date(timeIntervalSince1970: 20), groupID: group.id),
+                Workstream(name: "previous", worktreePath: "/app/previous", id: previousID, lastAccessedAt: Date(timeIntervalSince1970: 10), groupID: group.id),
+            ],
+            groups: [group]
         )
 
-        let id = cycledWorkstreamID(
+        let next = cycledSelection(
             in: project,
-            selectedWorkstreamID: firstID,
-            direction: -1,
+            selected: .workstream(firstID),
+            direction: 1,
             order: .recent,
             pathExists: { $0 != "/app/missing" }
         )
 
-        XCTAssertEqual(id, previousID)
+        XCTAssertEqual(next, .workstream(previousID))
     }
 
     /// The cycle must walk the rows the sidebar drew. The fixture is chosen so the
@@ -264,25 +267,134 @@ final class WorkspaceTabStateTests: XCTestCase {
         let alphaID = try XCTUnwrap(UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"))
         let mikeID = try XCTUnwrap(UUID(uuidString: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB"))
         let zuluID = try XCTUnwrap(UUID(uuidString: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC"))
+        let group = Workstream.Group(name: "app")
 
         let project = Project(
             name: "app",
             directory: "/app",
             workstreams: [
-                Workstream(name: "alpha", worktreePath: "/app/alpha", id: alphaID, lastAccessedAt: Date(timeIntervalSince1970: 30)),
-                Workstream(name: "zulu", worktreePath: "/app/zulu", id: zuluID, lastAccessedAt: Date(timeIntervalSince1970: 20)),
-                Workstream(name: "mike", worktreePath: "/app/mike", id: mikeID, lastAccessedAt: Date(timeIntervalSince1970: 10)),
-            ]
+                Workstream(name: "alpha", worktreePath: "/app/alpha", id: alphaID, lastAccessedAt: Date(timeIntervalSince1970: 30), groupID: group.id),
+                Workstream(name: "zulu", worktreePath: "/app/zulu", id: zuluID, lastAccessedAt: Date(timeIntervalSince1970: 20), groupID: group.id),
+                Workstream(name: "mike", worktreePath: "/app/mike", id: mikeID, lastAccessedAt: Date(timeIntervalSince1970: 10), groupID: group.id),
+            ],
+            groups: [group]
         )
 
         XCTAssertEqual(
-            cycledWorkstreamID(in: project, selectedWorkstreamID: alphaID, direction: 1, order: .recent, pathExists: { _ in true }),
-            zuluID
+            cycledSelection(in: project, selected: .workstream(alphaID), direction: 1, order: .recent, pathExists: { _ in true }),
+            .workstream(zuluID)
         )
         XCTAssertEqual(
-            cycledWorkstreamID(in: project, selectedWorkstreamID: alphaID, direction: 1, order: .alphabetical, pathExists: { _ in true }),
-            mikeID
+            cycledSelection(in: project, selected: .workstream(alphaID), direction: 1, order: .alphabetical, pathExists: { _ in true }),
+            .workstream(mikeID)
         )
+    }
+
+    /// Two groups, alphabetical so the order is fixed by name: "first" holds
+    /// `missing` (no worktree) then `one`; "second" holds `two`.
+    private func twoGroupProject() -> (Project, Workstream.Group, Workstream.Group, missing: UUID, one: UUID, two: UUID) {
+        let first = Workstream.Group(name: "first")
+        let second = Workstream.Group(name: "second")
+        let missing = Workstream(name: "a-missing", worktreePath: "/app/missing", groupID: first.id)
+        let one = Workstream(name: "b-one", worktreePath: "/app/one", groupID: first.id)
+        let two = Workstream(name: "c-two", worktreePath: "/app/two", groupID: second.id)
+        let project = Project(
+            name: "app",
+            directory: "/app",
+            workstreams: [two, one, missing],
+            groups: [second, first]
+        )
+        return (project, first, second, missing.id, one.id, two.id)
+    }
+
+    func testCyclingForwardFromAGroupLandsOnItsFirstRenderableWorkstream() {
+        let (project, first, _, _, one, _) = twoGroupProject()
+
+        XCTAssertEqual(
+            cycledSelection(in: project, selected: .group(first.id), direction: 1, order: .alphabetical, pathExists: { $0 != "/app/missing" }),
+            .workstream(one)
+        )
+    }
+
+    func testCyclingForwardFromTheLastWorkstreamWrapsToTheFirstGroup() {
+        let (project, first, _, _, _, two) = twoGroupProject()
+
+        XCTAssertEqual(
+            cycledSelection(in: project, selected: .workstream(two), direction: 1, order: .alphabetical, pathExists: { _ in true }),
+            .group(first.id)
+        )
+    }
+
+    /// Under `.recent` the walk must reach every group in both directions. The
+    /// member timestamps differ, so any write that stamped a group or member on
+    /// the way past would reorder the groups and make the walk loop short.
+    func testRecentCycleThroughThreeGroupsReachesEveryGroupBothWays() {
+        let created = Date(timeIntervalSince1970: 0)
+        let g1 = Workstream.Group(name: "g1", createdAt: created, lastAccessedAt: created)
+        let g2 = Workstream.Group(name: "g2", createdAt: created, lastAccessedAt: created)
+        let g3 = Workstream.Group(name: "g3", createdAt: created, lastAccessedAt: created)
+        let w1 = Workstream(name: "w1", worktreePath: "/app/w1", lastAccessedAt: Date(timeIntervalSince1970: 30), groupID: g1.id)
+        let w2 = Workstream(name: "w2", worktreePath: "/app/w2", lastAccessedAt: Date(timeIntervalSince1970: 20), groupID: g2.id)
+        let w3 = Workstream(name: "w3", worktreePath: "/app/w3", lastAccessedAt: Date(timeIntervalSince1970: 10), groupID: g3.id)
+        let project = Project(name: "app", directory: "/app", workstreams: [w3, w1, w2], groups: [g3, g1, g2])
+
+        func walk(_ direction: Int) -> [SidebarSelection] {
+            var current: SidebarSelection = .group(g1.id)
+            var visited: [SidebarSelection] = [current]
+            for _ in 0 ..< 6 {
+                guard let next = cycledSelection(in: project, selected: current, direction: direction, order: .recent, pathExists: { _ in true }) else { break }
+                current = next
+                visited.append(next)
+            }
+            return visited
+        }
+
+        XCTAssertEqual(walk(1), [
+            .group(g1.id), .workstream(w1.id), .group(g2.id), .workstream(w2.id),
+            .group(g3.id), .workstream(w3.id), .group(g1.id),
+        ])
+        XCTAssertEqual(walk(-1), [
+            .group(g1.id), .workstream(w3.id), .group(g3.id), .workstream(w2.id),
+            .group(g2.id), .workstream(w1.id), .group(g1.id),
+        ])
+    }
+
+    func testAGroupWithNoRenderableWorkstreamsIsStillAStop() {
+        let first = Workstream.Group(name: "first")
+        let second = Workstream.Group(name: "second")
+        let unready = Workstream(name: "unready", worktreePath: "/app/unready", groupID: first.id)
+        let project = Project(name: "app", directory: "/app", workstreams: [unready], groups: [first, second])
+        let pathExists: (String) -> Bool = { _ in false }
+
+        XCTAssertEqual(
+            cycledSelection(in: project, selected: .group(first.id), direction: 1, order: .alphabetical, pathExists: pathExists),
+            .group(second.id)
+        )
+        XCTAssertEqual(
+            cycledSelection(in: project, selected: .group(second.id), direction: 1, order: .alphabetical, pathExists: pathExists),
+            .group(first.id)
+        )
+    }
+
+    /// From the project row (or anything not in the walk) forward lands on the
+    /// first stop and backward on the last, as the single-project walk did.
+    func testCyclingFromTheProjectEntersAtEitherEnd() {
+        let (project, first, _, _, _, two) = twoGroupProject()
+
+        XCTAssertEqual(
+            cycledSelection(in: project, selected: .project(project.id), direction: 1, order: .alphabetical, pathExists: { _ in true }),
+            .group(first.id)
+        )
+        XCTAssertEqual(
+            cycledSelection(in: project, selected: .project(project.id), direction: -1, order: .alphabetical, pathExists: { _ in true }),
+            .workstream(two)
+        )
+    }
+
+    func testCyclingAProjectWithNoGroupsGoesNowhere() {
+        let project = Project(name: "app", directory: "/app")
+
+        XCTAssertNil(cycledSelection(in: project, selected: .project(project.id), direction: 1, order: .recent, pathExists: { _ in true }))
     }
 
     /// A renamed workstream sorts under its label, not the branch name behind it.
@@ -307,7 +419,8 @@ final class SidebarExpansionTests: XCTestCase {
         let expanded = expandedProjectIDs(
             afterSelecting: .project(selectedProjectID),
             current: [existingProjectID],
-            projectIDByWorkstreamID: [:]
+            projectIDByWorkstreamID: [:],
+            projectIDByGroupID: [:]
         )
 
         XCTAssertEqual(expanded, [existingProjectID, selectedProjectID])
@@ -320,7 +433,8 @@ final class SidebarExpansionTests: XCTestCase {
         let expanded = expandedProjectIDs(
             afterSelecting: .workstream(workstreamID),
             current: [],
-            projectIDByWorkstreamID: [workstreamID: projectID]
+            projectIDByWorkstreamID: [workstreamID: projectID],
+            projectIDByGroupID: [:]
         )
 
         XCTAssertEqual(expanded, [projectID])
@@ -332,9 +446,55 @@ final class SidebarExpansionTests: XCTestCase {
         let expanded = expandedProjectIDs(
             afterSelecting: .workstream(workstreamID),
             current: [],
-            projectIDByWorkstreamID: [:]
+            projectIDByWorkstreamID: [:],
+            projectIDByGroupID: [:]
         )
 
         XCTAssertEqual(expanded, [])
+    }
+
+    func testSelectionExpansionAddsParentProjectForGroup() throws {
+        let groupID = try XCTUnwrap(UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"))
+        let projectID = try XCTUnwrap(UUID(uuidString: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB"))
+
+        let expanded = expandedProjectIDs(
+            afterSelecting: .group(groupID),
+            current: [],
+            projectIDByWorkstreamID: [:],
+            projectIDByGroupID: [groupID: projectID]
+        )
+
+        XCTAssertEqual(expanded, [projectID])
+    }
+
+    /// The id the agent-state tracker treats as "being looked at": a workstream's
+    /// own id, or a group's — the coordinator's state is keyed by the group id.
+    func testAgentStateIDFollowsWorkstreamsAndGroups() {
+        let id = UUID()
+        XCTAssertEqual(SidebarSelection.workstream(id).agentStateID, id)
+        XCTAssertEqual(SidebarSelection.group(id).agentStateID, id)
+        XCTAssertNil(SidebarSelection.project(id).agentStateID)
+        XCTAssertNil(SidebarSelection.settings.agentStateID)
+    }
+
+    /// A workstream inside a collapsed group has no row, so selecting one (from
+    /// ⌘[ / ⌘], a notification, `focusWorkstream`) must open its group too.
+    func testSelectingAWorkstreamExpandsItsGroup() {
+        let workstreamID = UUID()
+        let groupID = UUID()
+        let other = UUID()
+
+        XCTAssertEqual(
+            collapsedGroupIDs(afterSelecting: .workstream(workstreamID), current: [other, groupID], groupIDByWorkstreamID: [workstreamID: groupID]),
+            [other]
+        )
+        XCTAssertEqual(
+            collapsedGroupIDs(afterSelecting: .group(groupID), current: [other, groupID], groupIDByWorkstreamID: [:]),
+            [other, groupID]
+        )
+        XCTAssertEqual(
+            collapsedGroupIDs(afterSelecting: nil, current: [other, groupID], groupIDByWorkstreamID: [workstreamID: groupID]),
+            [other, groupID]
+        )
     }
 }

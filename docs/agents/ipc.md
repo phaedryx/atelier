@@ -370,6 +370,25 @@ working key but hide the button" — chrome, not capability. The token is the re
 a missing or revoked one arrives as `Shortcut.Error`'s own message, which is the only thing that
 says which of the two it is.
 
+**`list_peers` reports a `group`, and member group names arrive as a pushed map.** A coordinator
+carries its group's name in its identity (`ClientIdentity.groupName`). A member's group is not in
+its identity: `info(for:)` has to stay synchronous and off the main actor, and the group lives in
+`Project`, which the main actor owns. So `ContentView.syncAgentLookupsAndGroupNames` pushes a
+`[workstreamID: groupName]` map with `IPC.Service.setGroupNames` whenever the project list changes —
+including an in-place group rename, which fires no `onChange(of:)` and is routed through
+`projectsMutatedInPlace` for that reason — and `info(for:)` reads that copy. The push **replaces the whole map**, so it always carries every
+housed workstream.
+
+**Which group.** `create_workstream` and `create_shortcut_workstream` take an optional `group`,
+and the workstream lands in the first of these that applies: the `group` argument (a UUID first,
+then a trimmed name), the group of the workstream the caller is running in, the group the caller
+coordinates (`ClientIdentity.groupID`), else a refusal that says to pass `group`. A coordinator
+identity naming a group that is not this project's is refused too, not trusted: it comes from an
+environment variable. `creationPlan` resolves it against the `Target` it already holds, after the
+project and **before** the agent preconditions, so an unknown group costs no Shortcut fetch and no
+worktree. Do not look the project up a second time to resolve it; the target's `groups` and
+`existingWorkstreams` are the list the launch uses.
+
 **`create_workstream` inherits `bootstrap`'s policy by not touching it.** Creating a
 workstream runs the project's `bootstrap` namespace — the thing `PhasePolicy.plan` exists to
 decide. The
@@ -593,6 +612,24 @@ is the only way a caller turns a tab it just created into a peer it can address.
 worktree cannot hold is two *branches*, which is why work needing its own branch needs its own
 workstream.
 
+**A coordinator's identity is a group, not a workstream.** The coordinator exports
+`ATELIER_GROUP_ID` (lowercased UUID) and `ATELIER_GROUP` (the name) through
+`Workstream.Environment.coordinatorVariables`, which `ClientIdentity` reads as `groupID` and
+`groupName`; it exports **no** `ATELIER_WORKSTREAM_ID`, `ATELIER_WORKSTREAM`, `ATELIER_WORKTREE_DIR`
+or `ATELIER_PORT`, because exporting empty ones would make a script believe it was in a worktree.
+Members export no group variables. Its `ATELIER_SURFACE_ID` is the group id, so it is the one peer
+whose surface id and group id are the same UUID — spelled differently: `ATELIER_GROUP_ID` is
+lowercased, `ATELIER_SURFACE_ID` is the uppercase `uuidString`, so compare them as `UUID`s, never as
+strings. It registers under its group's name, and `list_peers`
+reports its `role` as `coordinator` unless it registered one of its own — derived in
+`Service.info(for:pending:now:)` from the context (a `groupID`, no `workstreamID`, an empty stored
+role), not written into the store, so a later explicit role has no default to fight. Two coordinators share
+a cwd (the project root), which is why nothing about it may be resolved by directory. What it may
+call: `request_attention` accepts it, keyed on the group id (an opaque key for the notifier's
+cooldown, and the id a click on the banner selects the group by); every other workstream-scoped tool
+refuses it, `open_agent_tab` included, because the coordinator pane has no terminal-tab strip for a
+new tab to land in. `create_workstream` is how it acts on the project (see "Which group").
+
 **Retiring a peer clears the tracker state for its surface — unless a live peer has already
 taken that surface over.** Closing a helper's socket is how a peer is retired
 (`IPC.Server.forget` → `retire` → `Service.release`), and the clear exists because a surface
@@ -627,6 +664,13 @@ other, which is exactly what `.workspaceRead` and `.workspaceAction` already mea
 has stopped a run from `.workspaceAction` since it stopped being refused. A fifth surface needs a
 trust argument distinct from the four that exist, and this has none; the reads sit in
 `.workspaceRead` and the five mutators beside `start_verification` in `.workspaceAction`.
+
+**A group coordinator is refused by every one of them**, for the reason that trust story gives:
+they act on the caller's own workstream and no other, and a coordinator (a group id, no
+workstream) has none. It is told so by name (`ToolError.coordinatorHasNoWorkstream`, which says to
+`send_message` a member instead) rather than "not in a workstream", which would send it looking for
+one. `callerWorkstreamIDOrRefusal` on `IPC.Service` is the one place that decision is made; every
+workstream-scoped handler's guard calls it, so a new one does not re-derive the wording.
 
 **No approval gate**, on the rule `verification.yaml` and `initialization.yaml` already state:
 `execution.process-compose.yaml` lives in the project directory, outside every work tree, so it

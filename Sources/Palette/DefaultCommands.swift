@@ -8,6 +8,11 @@ import Foundation
 @MainActor
 func defaultPaletteCommands() -> [PaletteCommand] {
     let workstream: @MainActor @Sendable (PaletteContext) -> Bool = { $0.workstreamActive }
+    let workstreamOrGroup: @MainActor @Sendable (PaletteContext) -> PaletteAvailability = { context in
+        context.workstreamActive || context.groupActive
+            ? .available
+            : .disabled(NSLocalizedString("Select a workstream or group first", comment: "Palette reason"))
+    }
     let editor: @MainActor @Sendable (PaletteContext) -> Bool = { $0.workstreamActive && $0.editorActive }
 
     // Two helpers, because the conversion to `AppCommand` is half done by
@@ -33,13 +38,16 @@ func defaultPaletteCommands() -> [PaletteCommand] {
     let git = NSLocalizedString("Git", comment: "Palette category")
 
     let commands: [PaletteCommand] = [
-        // Ungated, and `.addNew` is the reason: its receiver already decides
-        // what "new" means from the current selection — a workstream in the
-        // selected project, or, with nothing selected at all, the add-project
-        // sheet. The title names the common case rather than the File menu's
-        // bare "New", which says nothing in a list searched by title.
+        // A workstream joins a group, so "new workstream" needs a selected
+        // workstream or group to name one. With a project (or nothing) selected
+        // the rows stay listed and say why, rather than posting `.addNew` into a
+        // receiver that can only show a hint. The title names the common case
+        // rather than the File menu's bare "New", which says nothing in a list
+        // searched by title.
         PaletteCommand(id: "create.new", title: NSLocalizedString("New Workstream", comment: ""), category: create,
-                       shortcut: "⌘N", action: post(.addNew)),
+                       shortcut: "⌘N", availability: workstreamOrGroup, action: post(.addNew)),
+        PaletteCommand(id: "create.newGroup", title: NSLocalizedString("New Group", comment: ""), category: create,
+                       shortcut: "⌘⌥N", action: post(.addGroup)),
         PaletteCommand(id: "create.newProject", title: NSLocalizedString("New Project", comment: ""), category: create,
                        shortcut: "⌘⇧N", action: post(.addProject)),
         // The two variants the sidebar's add menu offers. `.addNew` carries the
@@ -48,12 +56,12 @@ func defaultPaletteCommands() -> [PaletteCommand] {
         // above posts and what every other producer of this notification wants.
         PaletteCommand(id: "create.newFullPermissions",
                        title: NSLocalizedString("New Workstream (Full Permissions)", comment: ""),
-                       category: create, action: {
+                       category: create, availability: workstreamOrGroup, action: {
                            NotificationCenter.default.post(name: .addNew, object: true)
                        }),
         PaletteCommand(id: "create.newWithPrompts",
                        title: NSLocalizedString("New Workstream (With Prompts)", comment: ""),
-                       category: create, action: {
+                       category: create, availability: workstreamOrGroup, action: {
                            NotificationCenter.default.post(name: .addNew, object: false)
                        }),
 

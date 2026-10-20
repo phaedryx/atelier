@@ -188,6 +188,7 @@ it receives only the `X.Y.Z` core; the suffix naming the commit rides on
   Types that do not cluster stay top-level — do not invent a `Core` bucket for
   them. `ProcessRunner` and `AppEnvironment` stay top-level permanently:
   `Process` and `Environment` would collide with Foundation and SwiftUI.
+- `Sources/Models/WorkstreamGroup.swift` - `Workstream.Group`: the named set of workstreams under a project, whose agent is the coordinator (see `docs/agents/worktrees.md`, "Groups and the coordinator")
 - `Sources/Models/ProcessCompose/` - The process-compose layer (config location, phases, ports, the process table, the per-workstream run session)
 - `Sources/Terminal/` - Ghostty integration (TerminalApp singleton, TerminalView NSView)
 - `Sources/Views/` - SwiftUI views (sidebar, settings, project overview, workspace, browser, editor)
@@ -244,6 +245,7 @@ All user-facing strings MUST use localization. Never hardcode strings directly i
 - Use "directory" not "folder" in all user-facing text.
 - Use "Coding Agent" for the claude terminal tab.
 - Use "workstream" for the sub-units of a project.
+- Use "group" for a set of workstreams under a project; its agent is the coordinator.
 
 ## Task Tracking
 There is no tracker. Bugs, features and deferred work are raised in

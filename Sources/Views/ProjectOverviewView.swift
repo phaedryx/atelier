@@ -33,6 +33,13 @@ struct ProjectOverviewView: View {
     @State private var isPulling = false
     @State private var pullErrorMessage: String?
     @State private var showPullError = false
+    /// The orphan worktree the adopt sheet is open for.
+    @State private var adoptTarget: Worktree.Info?
+    @State private var adoptGroupID: UUID?
+    @State private var adoptNewGroupName = ""
+    @State private var adoptNameRefusal: Workstream.Group.NameRefusal?
+    /// The app's permission default, which a group made here takes as the sidebar's does.
+    @AppStorage("atelier.bypassPermissions") private var defaultBypass: Bool = false
     @State private var pruneErrorMessage: String?
     @State private var showPruneError = false
 
@@ -251,7 +258,7 @@ struct ProjectOverviewView: View {
                                 projectDirectory: project.directory,
                                 isWorkstream: workstreamPaths.contains(Self.standardizedPath(wt.path)),
                                 isPurging: purgingPaths.contains(Self.standardizedPath(wt.path)),
-                                onAdopt: { adoptWorktree(wt) },
+                                onAdopt: { beginAdopt(wt) },
                                 onPurge: { confirmPurgeWorktree(wt) }
                             )
                         }
@@ -342,6 +349,9 @@ struct ProjectOverviewView: View {
             purgingPaths = Workstream.Archiver.archivingPaths
             refreshWorktrees()
         }
+        .sheet(item: $adoptTarget) { worktree in
+            adoptSheet(for: worktree)
+        }
         .alert("Prune Worktrees", isPresented: $showingPruneConfirm) {
             Button("Cancel", role: .cancel) {}
             Button("Prune", role: .destructive) { pruneWorktrees() }
@@ -426,6 +436,47 @@ struct ProjectOverviewView: View {
         }
     }
 
+    /// Opens the group picker for an orphan worktree. A project with groups
+    /// preselects the first; one with none asks for a name to make the first.
+    private func beginAdopt(_ worktree: Worktree.Info) {
+        adoptGroupID = project.sortedGroups.first?.id
+        adoptNewGroupName = ""
+        adoptNameRefusal = nil
+        adoptTarget = worktree
+    }
+
+    private func adoptSheet(for worktree: Worktree.Info) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Adopt Worktree")
+                .font(.headline)
+            if project.sortedGroups.isEmpty {
+                TextField("New group…", text: $adoptNewGroupName)
+                    .onSubmit { commitAdopt(worktree) }
+                if let refusal = adoptNameRefusal {
+                    Text(refusal.message)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            } else {
+                Picker("Group", selection: $adoptGroupID) {
+                    ForEach(project.sortedGroups) { group in
+                        Text(group.name).tag(UUID?.some(group.id))
+                    }
+                }
+            }
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { adoptTarget = nil }
+                    .keyboardShortcut(.cancelAction)
+                Button("Adopt") { commitAdopt(worktree) }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(project.sortedGroups.isEmpty ? false : adoptGroupID == nil)
+            }
+        }
+        .padding(20)
+        .frame(width: 340)
+    }
+
     /// Registers a worktree git already has as a workstream.
     ///
     /// Through `Workstream.Launcher` rather than by posting `.workstreamCreated`
@@ -433,10 +484,28 @@ struct ProjectOverviewView: View {
     /// seam that knew only half of it — see `Launcher.adopt` for what the missing
     /// `.workstreamWorktreeReady` was skipping, and for why the tree's
     /// pre-existence travels with it.
-    private func adoptWorktree(_ worktree: Worktree.Info) {
+    ///
+    /// A group made here is persisted **before** `adopt` posts `.workstreamCreated`,
+    /// so the workstream's `groupID` names a group that exists on disk.
+    private func commitAdopt(_ worktree: Worktree.Info) {
+        let groupID: UUID
+        if let chosen = adoptGroupID, project.group(with: chosen) != nil {
+            groupID = chosen
+        } else {
+            switch project.addGroup(named: adoptNewGroupName, bypassPermissions: defaultBypass) {
+            case let .success(group):
+                onProjectChanged()
+                groupID = group.id
+            case let .failure(refusal):
+                adoptNameRefusal = refusal
+                return
+            }
+        }
+        adoptTarget = nil
         let name = worktree.branch ?? worktree.path.components(separatedBy: "/").last ?? "workstream"
         Workstream.Launcher.shared.adopt(
             projectID: project.id,
+            groupID: groupID,
             name: name,
             worktreePath: worktree.path
         )

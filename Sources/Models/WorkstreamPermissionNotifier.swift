@@ -59,6 +59,9 @@ extension Workstream {
         /// a backgrounded app is the main case this feature exists for, and a
         /// frontmost app showing some *other* workstream's pane says nothing
         /// about this one.
+        ///
+        /// `workstreamID` may be a group id: a coordinator's agent state is
+        /// keyed by its group, so a selected `.group` suppresses the same way.
         static func shouldNotify(
             enabled: Bool,
             isAppActive: Bool,
@@ -66,7 +69,8 @@ extension Workstream {
             workstreamID: UUID
         ) -> Bool {
             guard enabled else { return false }
-            return !(isAppActive && selection?.workstreamID == workstreamID)
+            let selectedID = selection?.workstreamID ?? selection?.groupID
+            return !(isAppActive && selectedID == workstreamID)
         }
 
         // MARK: - Delivery

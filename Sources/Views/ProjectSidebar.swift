@@ -35,7 +35,12 @@ func sidebarRowOrder(cached: [UUID]?, actual: [UUID]) -> [UUID] {
     return order
 }
 
-func expandedProjectIDs(afterSelecting selection: SidebarSelection?, current: Set<UUID>, projectIDByWorkstreamID: [UUID: UUID]) -> Set<UUID> {
+func expandedProjectIDs(
+    afterSelecting selection: SidebarSelection?,
+    current: Set<UUID>,
+    projectIDByWorkstreamID: [UUID: UUID],
+    projectIDByGroupID: [UUID: UUID]
+) -> Set<UUID> {
     guard let selection else { return current }
     var expanded = current
     switch selection {
@@ -45,10 +50,33 @@ func expandedProjectIDs(afterSelecting selection: SidebarSelection?, current: Se
         if let projectID = projectIDByWorkstreamID[workstreamID] {
             expanded.insert(projectID)
         }
+    case let .group(groupID):
+        if let projectID = projectIDByGroupID[groupID] {
+            expanded.insert(projectID)
+        }
     case .settings, .help:
         break
     }
     return expanded
+}
+
+/// The collapsed groups after a selection lands, with the selected
+/// workstream's group opened so its row exists.
+///
+/// A workstream inside a collapsed group has no row: `scrollTo` lands on
+/// nothing and the highlight is invisible. `expandedProjectIDs` opens the
+/// project; this opens the group under it. A group selection needs nothing
+/// here — the group row is its own disclosure's label, visible whenever its
+/// project is open.
+func collapsedGroupIDs(
+    afterSelecting selection: SidebarSelection?,
+    current: Set<UUID>,
+    groupIDByWorkstreamID: [UUID: UUID]
+) -> Set<UUID> {
+    guard case let .workstream(workstreamID) = selection,
+          let groupID = groupIDByWorkstreamID[workstreamID]
+    else { return current }
+    return current.subtracting([groupID])
 }
 
 /// The directory new projects and clones are created under, or nil if the
@@ -74,6 +102,7 @@ func projectBaseDirectory(from setting: String) -> URL? {
 extension Notification.Name {
     static let addProject = Notification.Name("atelier.addProject")
     static let addNew = Notification.Name("atelier.addNew")
+    static let addGroup = Notification.Name("atelier.addGroup")
 }
 
 struct ProjectSidebar: View {
@@ -105,7 +134,15 @@ struct ProjectSidebar: View {
     /// has no warning and no button-title rule to share.
     @StateObject private var purgeConfirmation = Workstream.PurgeConfirmation()
     @State private var expandedProjects: Set<UUID> = SidebarState.loadExpanded()
+    /// Collapsed groups, persisted under `atelier.collapsedGroups`: a group is
+    /// open unless it is in here (`SidebarState.loadCollapsedGroups` says why).
+    /// Like `expandedProjects`, the inner `DisclosureGroup` reads it through a
+    /// computed binding and owns none of it.
+    @State private var collapsedGroups: Set<UUID> = SidebarState.loadCollapsedGroups()
     @State private var cachedSortedIDs: [UUID] = []
+    /// Project id → that project's group ids, in sidebar order. Order only.
+    @State private var cachedSortedGroupIDs: [UUID: [UUID]] = [:]
+    /// **Group** id → that group's workstream ids, in sidebar order. Order only.
     @State private var cachedSortedWorkstreamIDs: [UUID: [UUID]] = [:]
     @State private var showWorktreeError = false
     @State private var showNotGitRepoError = false
@@ -115,6 +152,15 @@ struct ProjectSidebar: View {
     @State private var newWorkstreamPlaceholder = ""
     @State private var pendingWorkstreamProjectID: UUID?
     @State private var pendingWorkstreamBypass: Bool?
+    /// The group the pending creation joins, set alongside `pendingWorkstreamProjectID`
+    /// and cleared wherever it is.
+    @State private var pendingWorkstreamGroupID: UUID?
+    /// The project whose inline new-group field is showing; at most one at a time.
+    @State private var pendingGroupProjectID: UUID?
+    /// A refused group name, from creation or rename; drives the alert.
+    @State private var groupNameRefusal: Workstream.Group.NameRefusal?
+    /// ⌘N with a project row selected: a workstream needs a group to join.
+    @State private var showGroupRequiredHint = false
 
     @AppStorage(Shortcut.Settings.buttonEnabledKey) private var shortcutButtonEnabled: Bool = true
     @AppStorage(Shortcut.Settings.branchTemplateKey) private var branchTemplate: String = ""
@@ -145,6 +191,7 @@ struct ProjectSidebar: View {
     /// don't drop the edit state when rows rebuild.
     @State private var renamingWorkstreamID: UUID?
     @State private var renamingProjectID: UUID?
+    @State private var renamingGroupID: UUID?
 
     @AppStorage(Project.SortOrder.storageKey) private var workstreamSortOrder: Project.SortOrder = .recent
 
@@ -162,16 +209,41 @@ struct ProjectSidebar: View {
     /// and points at a real, wrong workstream rather than at nothing. `sidebarRowOrder`
     /// makes the display side immune to a stale order; nothing resolves a workstream by
     /// position any more. Do not reintroduce the index.
+    ///
+    /// Two caches, both order only: project → groups, and group → workstreams.
+    /// The second is keyed by **group** id, so a workstream's row order is
+    /// resolved within the group it is drawn under.
     private func rebuildSortOrder() {
+        var sortedGroups: [UUID: [UUID]] = [:]
         var sortedWS: [UUID: [UUID]] = [:]
         for project in projects {
-            sortedWS[project.id] = workstreamSortOrder.sorted(project.workstreams).map(\.id)
+            sortedGroups[project.id] = workstreamSortOrder.sorted(project.sortedGroups, in: project).map(\.id)
+            for group in project.sortedGroups {
+                sortedWS[group.id] = workstreamSortOrder.sorted(project.workstreams(in: group.id)).map(\.id)
+            }
         }
+        cachedSortedGroupIDs = sortedGroups
         cachedSortedWorkstreamIDs = sortedWS
     }
 
     private func totalWorkstreamCount() -> Int {
         projects.reduce(0) { $0 + $1.workstreams.count }
+    }
+
+    private func totalGroupCount() -> Int {
+        projects.reduce(0) { $0 + ($1.groups?.count ?? 0) }
+    }
+
+    private func groupIDByWorkstreamIDSnapshot() -> [UUID: UUID] {
+        var map: [UUID: UUID] = [:]
+        for project in projects {
+            for workstream in project.workstreams {
+                if let groupID = workstream.groupID {
+                    map[workstream.id] = groupID
+                }
+            }
+        }
+        return map
     }
 
     private func projectIDByWorkstreamIDSnapshot() -> [UUID: UUID] {
@@ -184,13 +256,35 @@ struct ProjectSidebar: View {
         return map
     }
 
-    private func deferSelectionExpansion(_ selected: SidebarSelection, projectIDByWorkstreamID: [UUID: UUID], scrollProxy: ScrollViewProxy) {
+    private func projectIDByGroupIDSnapshot() -> [UUID: UUID] {
+        var map: [UUID: UUID] = [:]
+        for project in projects {
+            for group in project.groups ?? [] {
+                map[group.id] = project.id
+            }
+        }
+        return map
+    }
+
+    private func deferSelectionExpansion(
+        _ selected: SidebarSelection,
+        projectIDByWorkstreamID: [UUID: UUID],
+        projectIDByGroupID: [UUID: UUID],
+        groupIDByWorkstreamID: [UUID: UUID],
+        scrollProxy: ScrollViewProxy
+    ) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             guard selection == selected else { return }
             expandedProjects = expandedProjectIDs(
                 afterSelecting: selected,
                 current: expandedProjects,
-                projectIDByWorkstreamID: projectIDByWorkstreamID
+                projectIDByWorkstreamID: projectIDByWorkstreamID,
+                projectIDByGroupID: projectIDByGroupID
+            )
+            collapsedGroups = collapsedGroupIDs(
+                afterSelecting: selected,
+                current: collapsedGroups,
+                groupIDByWorkstreamID: groupIDByWorkstreamID
             )
             withAnimation {
                 scrollProxy.scrollTo(selected, anchor: .center)
@@ -227,6 +321,15 @@ struct ProjectSidebar: View {
     /// `.listStyle(.sidebar)` over `DisclosureGroup` with tagged children is not new
     /// here — `ChangesFileTreeSidebar` shipped exactly that shape and only moved to
     /// `.plain` later, for the vibrancy reason its own comment gives.
+    ///
+    /// The project's children are its **groups**, and all three rules apply one
+    /// level down unchanged: a group with members is an inner `DisclosureGroup`
+    /// whose label is the group row, tagged `.group(id)`, with `isExpanded` a
+    /// computed binding over `collapsedGroups`; a memberless group is the bare row.
+    /// A project with no groups has no children at all — except the inline
+    /// new-group field while it is pending, which is why `hasChildren` reads
+    /// `pendingGroupProjectID` too: without it a group-less project has nowhere
+    /// to draw the field its own plus asked for.
     private func projectRows() -> some View {
         let rowIDs = sidebarRowOrder(cached: cachedSortedIDs, actual: projects.map(\.id))
         return ForEach(rowIDs, id: \.self) { projectID in
@@ -235,7 +338,7 @@ struct ProjectSidebar: View {
             // UUID on every evaluation — a blank, untitled row whose selection tag
             // changed identity each render.
             if let project = projects.first(where: { $0.id == projectID }) {
-                let hasChildren = !project.workstreams.isEmpty
+                let hasChildren = !project.sortedGroups.isEmpty || pendingGroupProjectID == projectID
                 let isFirst = projectID == rowIDs.first
 
                 if hasChildren {
@@ -253,7 +356,7 @@ struct ProjectSidebar: View {
                             }
                         )
                     ) {
-                        workstreamRows(project: project)
+                        groupRows(project: project)
                     } label: {
                         projectHeaderRow(project: project, isFirst: isFirst)
                             .tag(SidebarSelection.project(project.id))
@@ -273,27 +376,8 @@ struct ProjectSidebar: View {
     private func projectHeaderRow(project: Project, isFirst: Bool) -> some View {
         ProjectHeaderRow(
             project: project,
-            isGitRepo: appEnv.isGitRepo(project.directory),
             githubURL: appEnv.githubURL(for: project.directory),
-            onAdd: { logger.warning("[Atelier] onAdd button tapped for project \(project.name, privacy: .public)"); addWorkstream(for: project.id) },
-            onAddWithPermissions: { addWorkstream(for: project.id, bypassPermissions: true) },
-            onAddWithoutPermissions: { addWorkstream(for: project.id, bypassPermissions: false) },
-            showShortcutButton: Shortcut.Settings.shouldShowButton(
-                isGitRepo: appEnv.isGitRepo(project.directory),
-                toggleEnabled: shortcutButtonEnabled,
-                hasToken: hasShortcutToken
-            ),
-            onAddFromShortcut: { addWorkstreamFromShortcut(for: project.id) },
-            // Both halves are already cached in AppEnvironment and refreshed on its own
-            // schedule — asking git or gh from a row body would spawn a subprocess per render.
-            // `hasGitHubRemote` is the half that genuinely is: the path-validity sweep
-            // probes every project's own directory every 15s. `githubURL`, which used to
-            // stand here, is not — see `shouldShowBranchButton`.
-            showGitHubButton: GitHub.Operations.shouldShowBranchButton(
-                isGitRepo: appEnv.isGitRepo(project.directory),
-                hasGitHubRemote: appEnv.hasGitHubRemote(project.directory)
-            ),
-            onAddFromGitHub: { addWorkstreamFromGitHub(for: project.id) },
+            onAddGroup: { beginNewGroup(in: project.id) },
             isSelected: selection == .project(project.id),
             isRenaming: Binding(
                 get: { renamingProjectID == project.id },
@@ -328,9 +412,142 @@ struct ProjectSidebar: View {
         /// segments meet instead of leaving a dotted trail down the group. Half the
         /// inter-row spacing at each end.
         static let spineOverhang: CGFloat = 3
+        /// The extra step a workstream row under a group takes past the group's
+        /// own spine, so its second spine reads as one level deeper.
+        static let groupIndent: CGFloat = 12
     }
 
-    /// The workstreams of one project, as the content of its `DisclosureGroup`.
+    /// One spine segment down the leading edge of a row, the tree guide the
+    /// group rows draw under their project and the workstream rows draw under
+    /// their group. See `workstreamRows` for why each row draws its own.
+    private func spined(_ row: some View, extraIndent: CGFloat = 0) -> some View {
+        row
+            .padding(.leading, Layout.spineGap)
+            .overlay(alignment: .leading) {
+                Rectangle()
+                    .fill(.quaternary)
+                    .frame(width: 1)
+                    .padding(.vertical, -Layout.spineOverhang)
+            }
+            .padding(.leading, Layout.workstreamIndentTrim + extraIndent)
+    }
+
+    /// The groups of one project, as the content of its `DisclosureGroup`, then the
+    /// inline new-group field when this project's plus asked for one.
+    ///
+    /// Membership is reconciled by `sidebarRowOrder` exactly as projects and
+    /// workstreams are, and each row resolves its group by id out of this
+    /// project's own `groups` — never by a cached position.
+    @ViewBuilder
+    private func groupRows(project: Project) -> some View {
+        let rowIDs = sidebarRowOrder(
+            cached: cachedSortedGroupIDs[project.id],
+            actual: project.sortedGroups.map(\.id)
+        )
+        ForEach(rowIDs, id: \.self) { groupID in
+            if let group = project.group(with: groupID) {
+                if project.workstreams.contains(where: { $0.groupID == groupID }) {
+                    DisclosureGroup(
+                        isExpanded: Binding(
+                            get: { SidebarState.isGroupExpanded(groupID, collapsed: collapsedGroups) },
+                            set: { on in
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    if on {
+                                        collapsedGroups.remove(groupID)
+                                    } else {
+                                        collapsedGroups.insert(groupID)
+                                    }
+                                }
+                            }
+                        )
+                    ) {
+                        workstreamRows(project: project, group: group)
+                    } label: {
+                        groupRow(project: project, group: group)
+                    }
+                } else {
+                    groupRow(project: project, group: group)
+                }
+            }
+        }
+        if pendingGroupProjectID == project.id {
+            spined(
+                InlineTextField(
+                    initialText: "",
+                    accessibilityID: "new-group-field",
+                    onCommit: { value in
+                        pendingGroupProjectID = nil
+                        // `InlineTextField` commits on end-editing, so clicking
+                        // away from an untouched field arrives here empty. That
+                        // is a cancel, not a request for the "can't be empty"
+                        // alert; a taken name is still refused by `createGroup`.
+                        guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                        createGroup(in: project.id, input: value)
+                    },
+                    onCancel: { pendingGroupProjectID = nil }
+                )
+                .help(Text("New Group"))
+                .padding(.vertical, 2)
+            )
+            // An untagged sibling inside `List(selection:)` is otherwise a phantom
+            // row — highlightable and arrow-key reachable. This one is transient,
+            // but it must not take the selection while it is up.
+            .selectionDisabled(true)
+        }
+    }
+
+    private func groupRow(project: Project, group: Workstream.Group) -> some View {
+        let members = project.workstreams(in: group.id)
+        let runs = agentStateTracker.runs(for: group.id)
+        let mainRun = runs.first(where: \.isMain)
+        let isGitRepo = appEnv.isGitRepo(project.directory)
+        return spined(
+            GroupRow(
+                name: group.name,
+                memberCount: members.count,
+                isSelected: selection == .group(group.id),
+                agentState: agentStateTracker.state(for: group.id),
+                hasLiveSession: agentStateTracker.hasLiveSession(for: group.id),
+                channelDown: channelProbe.state.isDown,
+                mainActivity: mainRun?.activity,
+                mainContextUsage: agentStateTracker.mainContextUsage(for: group.id),
+                startedAt: mainRun?.startedAt,
+                showShortcutButton: Shortcut.Settings.shouldShowButton(
+                    isGitRepo: isGitRepo,
+                    toggleEnabled: shortcutButtonEnabled,
+                    hasToken: hasShortcutToken
+                ),
+                // Both halves are already cached in AppEnvironment and refreshed on its own
+                // schedule — asking git or gh from a row body would spawn a subprocess per render.
+                // `hasGitHubRemote` is the half that genuinely is: the path-validity sweep
+                // probes every project's own directory every 15s. `githubURL`, which used to
+                // stand here, is not — see `shouldShowBranchButton`.
+                showGitHubButton: GitHub.Operations.shouldShowBranchButton(
+                    isGitRepo: isGitRepo,
+                    hasGitHubRemote: appEnv.hasGitHubRemote(project.directory)
+                ),
+                onAdd: { addWorkstream(for: project.id, groupID: group.id) },
+                onAddWithPermissions: { addWorkstream(for: project.id, groupID: group.id, bypassPermissions: true) },
+                onAddWithoutPermissions: { addWorkstream(for: project.id, groupID: group.id, bypassPermissions: false) },
+                onAddFromShortcut: { addWorkstreamFromShortcut(for: project.id, groupID: group.id) },
+                onAddFromGitHub: { addWorkstreamFromGitHub(for: project.id, groupID: group.id) },
+                isRenaming: Binding(
+                    get: { renamingGroupID == group.id },
+                    set: { renamingGroupID = $0 ? group.id : nil }
+                ),
+                onRenameCommit: { commitGroupRename(projectID: project.id, groupID: group.id, input: $0) },
+                bypassPermissions: group.bypassPermissions,
+                onToggleBypass: { toggleGroupBypass(projectID: project.id, groupID: group.id) },
+                onRemove: { removeGroup(projectID: project.id, groupID: group.id) },
+                removeDisabledReason: members.isEmpty
+                    ? nil
+                    : NSLocalizedString("Remove or purge its workstreams first", comment: "Why Remove Group is disabled")
+            )
+        )
+        .tag(SidebarSelection.group(group.id))
+    }
+
+    /// The workstreams of one group, as the content of its `DisclosureGroup`.
     ///
     /// Each row draws its own segment of the tree-guide spine. That is not a
     /// stylistic choice: these rows are siblings of the `List`, so there is no
@@ -338,24 +555,25 @@ struct ProjectSidebar: View {
     /// them into a single row and take per-workstream selection with it. The
     /// segments are given a negative vertical padding so they overlap into their
     /// neighbours and read as one continuous line.
-    private func workstreamRows(project: Project) -> some View {
+    private func workstreamRows(project: Project, group: Workstream.Group) -> some View {
+        let members = project.workstreams(in: group.id)
         let rowIDs = sidebarRowOrder(
-            cached: cachedSortedWorkstreamIDs[project.id],
-            actual: project.workstreams.map(\.id)
+            cached: cachedSortedWorkstreamIDs[group.id],
+            actual: members.map(\.id)
         )
         return ForEach(rowIDs, id: \.self) { workstreamID in
-            // Resolved by id, from this project's own workstreams — never by a cached
+            // Resolved by id, from this group's own members — never by a cached
             // `(project, workstream)` index pair. A positional pair is global, so a stale
             // one could make one project's group render another's rows while that project
             // rendered them too, and tag both copies alike.
-            if let workstream = project.workstreams.first(where: { $0.id == workstreamID }) {
+            if let workstream = members.first(where: { $0.id == workstreamID }) {
                 let facts = appEnv.facts(for: workstream.worktreePath)
                 let pr = appEnv.pullRequest(forWorktree: workstream.worktreePath, in: project.directory)
                 let wsRuns = agentStateTracker.runs(for: workstream.id)
                 let mainRun = wsRuns.first(where: \.isMain)
                 let subRuns = wsRuns.filter { !$0.isMain }
 
-                VStack(alignment: .leading, spacing: 2) {
+                spined(VStack(alignment: .leading, spacing: 2) {
                     WorkstreamRow(
                         name: workstream.label,
                         branchName: facts?.branch,
@@ -392,16 +610,8 @@ struct ProjectSidebar: View {
                         }
                         .padding(.leading, 6)
                     }
-                }
-                .padding(.leading, Layout.spineGap)
-                .overlay(alignment: .leading) {
-                    Rectangle()
-                        .fill(.quaternary)
-                        .frame(width: 1)
-                        .padding(.vertical, -Layout.spineOverhang)
-                }
-                .padding(.leading, Layout.workstreamIndentTrim)
-                .tag(SidebarSelection.workstream(workstream.id))
+                }, extraIndent: Layout.groupIndent)
+                    .tag(SidebarSelection.workstream(workstream.id))
             }
         }
     }
@@ -489,12 +699,19 @@ struct ProjectSidebar: View {
                 )
             ) { completion in
                 guard case let .workstream(wsID, projectID) = completion else { return }
+                // Read before the rebuild: the model no longer holds the purged
+                // workstream, and this cache is the one place its group is still named.
+                let groupID = cachedSortedWorkstreamIDs.first(where: { $0.value.contains(wsID) })?.key
                 rebuildSortOrder()
                 if case let .workstream(id) = selection, id == wsID {
-                    // The first row the user can see, which under `.recent` is not
-                    // `workstreams.first` — that is storage order.
-                    selection = cachedSortedWorkstreamIDs[projectID]?.first
-                        .map { SidebarSelection.workstream($0) } ?? .project(projectID)
+                    // The first row the user can see in the same group, which under
+                    // `.recent` is not storage order; then the group itself.
+                    selection = Workstream.RemoveConfirmation.fallbackSelection(
+                        projectID: projectID,
+                        groupID: groupID,
+                        nextInGroup: groupID.flatMap { cachedSortedWorkstreamIDs[$0]?.first },
+                        groupExists: groupID.map { id in projects.contains(where: { $0.group(with: id) != nil }) } ?? false
+                    )
                 }
                 onProjectsChanged()
             }
@@ -514,6 +731,31 @@ struct ProjectSidebar: View {
             } message: {
                 Text("Workstreams require a git repository. Initialize one with git init or select a different directory.")
             }
+            .alert(
+                "Select a group to add a workstream to.",
+                isPresented: $showGroupRequiredHint
+            ) {
+                Button("OK", role: .cancel) {}
+            }
+            .alert(
+                groupNameRefusalTitle,
+                isPresented: Binding(
+                    get: { groupNameRefusal != nil },
+                    set: {
+                        if !$0 {
+                            groupNameRefusal = nil
+                        }
+                    }
+                )
+            ) {
+                Button("OK", role: .cancel) { groupNameRefusal = nil }
+            }
+    }
+
+    /// The localized text for a refused group name. `validateName` is the only
+    /// validation; this is only its wording.
+    private var groupNameRefusalTitle: String {
+        groupNameRefusal?.message ?? ""
     }
 
     private var sidebar: some View {
@@ -574,6 +816,7 @@ struct ProjectSidebar: View {
                     onCancel: {
                         showingNewWorkstreamName = false
                         pendingWorkstreamProjectID = nil
+                        pendingWorkstreamGroupID = nil
                         pendingWorkstreamBypass = nil
                     }
                 )
@@ -596,6 +839,7 @@ struct ProjectSidebar: View {
                         shortcutFetching = false
                         showingShortcutStory = false
                         pendingWorkstreamProjectID = nil
+                        pendingWorkstreamGroupID = nil
                     }
                 )
             }
@@ -612,6 +856,7 @@ struct ProjectSidebar: View {
                         gitHubBranchChecking = false
                         showingGitHubBranch = false
                         pendingWorkstreamProjectID = nil
+                        pendingWorkstreamGroupID = nil
                     }
                 )
             }
@@ -625,16 +870,43 @@ struct ProjectSidebar: View {
             // menu's two variants make; the palette posts it for those two rows.
             // Absent means "use the `atelier.bypassPermissions` default", which is
             // what every other producer of this notification wants.
+            //
+            // A workstream joins a group, so the target is the selected workstream's
+            // group or the selected group. A selected *project* names no group — it
+            // may have several, or none — so it says so rather than guessing one.
             .onReceive(NotificationCenter.default.publisher(for: .addNew)) { note in
                 let bypass = note.object as? Bool
-                if case let .workstream(wsID) = selection,
-                   let project = projects.first(where: { $0.workstreams.contains(where: { $0.id == wsID }) })
-                {
-                    addWorkstream(for: project.id, bypassPermissions: bypass)
-                } else if case let .project(pid) = selection {
-                    addWorkstream(for: pid, bypassPermissions: bypass)
-                } else {
+                switch selection {
+                case let .workstream(wsID):
+                    guard let project = projects.first(where: { $0.workstreams.contains(where: { $0.id == wsID }) }),
+                          let groupID = project.workstreams.first(where: { $0.id == wsID })?.groupID
+                    else { return }
+                    addWorkstream(for: project.id, groupID: groupID, bypassPermissions: bypass)
+                case let .group(groupID):
+                    guard let project = projects.first(where: { $0.group(with: groupID) != nil }) else { return }
+                    addWorkstream(for: project.id, groupID: groupID, bypassPermissions: bypass)
+                case .project:
+                    showGroupRequiredHint = true
+                case .settings, .help, nil:
                     showingAddProjectChoice = true
+                }
+            }
+            // The project of the selection (a workstream's, a group's, or the
+            // selected project itself) begins the inline group-name field. With
+            // nothing selected there is no project to name, so it does nothing.
+            .onReceive(NotificationCenter.default.publisher(for: .addGroup)) { _ in
+                let project: Project? = switch selection {
+                case let .workstream(wsID):
+                    projects.first { $0.workstreams.contains { $0.id == wsID } }
+                case let .group(groupID):
+                    projects.first { $0.group(with: groupID) != nil }
+                case let .project(projectID):
+                    projects.first { $0.id == projectID }
+                case .settings, .help, nil:
+                    nil
+                }
+                if let project {
+                    beginNewGroup(in: project.id)
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .renameWorkstream)) { _ in
@@ -676,7 +948,13 @@ struct ProjectSidebar: View {
                 .listStyle(.sidebar)
                 .onChange(of: selection) { _, sel in
                     guard let sel else { return }
-                    deferSelectionExpansion(sel, projectIDByWorkstreamID: projectIDByWorkstreamIDSnapshot(), scrollProxy: scrollProxy)
+                    deferSelectionExpansion(
+                        sel,
+                        projectIDByWorkstreamID: projectIDByWorkstreamIDSnapshot(),
+                        projectIDByGroupID: projectIDByGroupIDSnapshot(),
+                        groupIDByWorkstreamID: groupIDByWorkstreamIDSnapshot(),
+                        scrollProxy: scrollProxy
+                    )
                 }
             } // ScrollViewReader
 
@@ -685,34 +963,23 @@ struct ProjectSidebar: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .terminalActivity)) { notification in
             guard let wsID = notification.object as? UUID else { return }
-            guard let pi = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }),
-                  let wi = projects[pi].workstreams.firstIndex(where: { $0.id == wsID })
-            else { return }
-            let now = Date()
-            projects[pi].lastAccessedAt = now
-            projects[pi].workstreams[wi].lastAccessedAt = now
-            onProjectsChanged()
-            // Only `.recent` can be reordered by a timestamp write, and this fires on
-            // every burst of terminal output — so under `.alphabetical` the re-sort is
-            // pure work for an order that cannot have changed. Projects themselves are
-            // always A–Z and never re-sorted here.
-            if workstreamSortOrder == .recent {
-                cachedSortedWorkstreamIDs[projects[pi].id] = workstreamSortOrder
-                    .sorted(projects[pi].workstreams)
-                    .map(\.id)
-            }
+            recordTerminalActivity(workstreamID: wsID)
         }
         .onAppear {
             cachedSortedIDs = recomputeSortedIDs()
             rebuildSortOrder()
         }
         .onChange(of: expandedProjects) { _, newValue in SidebarState.saveExpanded(newValue) }
+        .onChange(of: collapsedGroups) { _, newValue in SidebarState.saveCollapsedGroups(newValue) }
         .onChange(of: workstreamSortOrder) { _, _ in rebuildSortOrder() }
         .onChange(of: projects.count) { _, _ in
             cachedSortedIDs = recomputeSortedIDs()
             rebuildSortOrder()
         }
         .onChange(of: totalWorkstreamCount()) { _, _ in
+            rebuildSortOrder()
+        }
+        .onChange(of: totalGroupCount()) { _, _ in
             rebuildSortOrder()
         }
         .overlay {
@@ -728,11 +995,41 @@ struct ProjectSidebar: View {
         }
     }
 
+    /// Stamps a workstream (and its project) as just used, from `.terminalActivity`,
+    /// and re-sorts what that stamp can move.
+    private func recordTerminalActivity(workstreamID wsID: UUID) {
+        guard let pi = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }),
+              let wi = projects[pi].workstreams.firstIndex(where: { $0.id == wsID })
+        else { return }
+        let now = Date()
+        projects[pi].lastAccessedAt = now
+        projects[pi].workstreams[wi].lastAccessedAt = now
+        onProjectsChanged()
+        // Only `.recent` can be reordered by a timestamp write, and this fires on
+        // every burst of terminal output — so under `.alphabetical` the re-sort is
+        // pure work for an order that cannot have changed. Projects themselves are
+        // always A–Z and never re-sorted here.
+        //
+        // A member's timestamp is also its group's recency, so the group row can
+        // move too.
+        if workstreamSortOrder == .recent {
+            let project = projects[pi]
+            if let groupID = project.workstreams[wi].groupID {
+                cachedSortedWorkstreamIDs[groupID] = workstreamSortOrder
+                    .sorted(project.workstreams(in: groupID))
+                    .map(\.id)
+            }
+            cachedSortedGroupIDs[project.id] = workstreamSortOrder
+                .sorted(project.sortedGroups, in: project)
+                .map(\.id)
+        }
+    }
+
     // MARK: - Workstream management
 
     @AppStorage("atelier.bypassPermissions") private var defaultBypass: Bool = false
 
-    private func addWorkstream(for projectID: UUID, bypassPermissions: Bool? = nil) {
+    private func addWorkstream(for projectID: UUID, groupID: UUID, bypassPermissions: Bool? = nil) {
         logger.warning("[Atelier] addWorkstream called for projectID=\(projectID, privacy: .public)")
         guard let index = projects.firstIndex(where: { $0.id == projectID }) else {
             logger.warning("[Atelier] addWorkstream: project not found")
@@ -753,11 +1050,12 @@ struct ProjectSidebar: View {
         newWorkstreamError = ""
         newWorkstreamPlaceholder = NameGenerator.generate(avoiding: existingNames)
         pendingWorkstreamProjectID = projectID
+        pendingWorkstreamGroupID = groupID
         pendingWorkstreamBypass = bypassPermissions
         showingNewWorkstreamName = true
     }
 
-    private func addWorkstreamFromShortcut(for projectID: UUID) {
+    private func addWorkstreamFromShortcut(for projectID: UUID, groupID: UUID) {
         guard let index = projects.firstIndex(where: { $0.id == projectID }) else { return }
         guard Git.Operations.isGitRepo(at: projects[index].checkout) else {
             showNotGitRepoError = true
@@ -767,6 +1065,7 @@ struct ProjectSidebar: View {
         shortcutError = ""
         shortcutFetching = false
         pendingWorkstreamProjectID = projectID
+        pendingWorkstreamGroupID = groupID
         showingShortcutStory = true
     }
 
@@ -774,6 +1073,7 @@ struct ProjectSidebar: View {
     /// branch name. Nothing is created if the fetch fails.
     private func createWorkstreamFromShortcut() {
         guard let projectID = pendingWorkstreamProjectID,
+              let groupID = pendingWorkstreamGroupID,
               let index = projects.firstIndex(where: { $0.id == projectID })
         else { return }
 
@@ -827,12 +1127,14 @@ struct ProjectSidebar: View {
 
                 showingShortcutStory = false
                 pendingWorkstreamProjectID = nil
+                pendingWorkstreamGroupID = nil
                 // Keep the story we just fetched: it carries the description, and the
                 // worktree path it will be cached under does not exist yet.
                 appEnv.stageShortcutStory(story)
                 startLaunch(
                     project: project,
                     projectID: projectID,
+                    groupID: groupID,
                     name: name,
                     bypass: bypass,
                     shortcutStoryID: story.id
@@ -851,7 +1153,7 @@ struct ProjectSidebar: View {
         }
     }
 
-    private func addWorkstreamFromGitHub(for projectID: UUID) {
+    private func addWorkstreamFromGitHub(for projectID: UUID, groupID: UUID) {
         guard let index = projects.firstIndex(where: { $0.id == projectID }) else { return }
         guard Git.Operations.isGitRepo(at: projects[index].checkout) else {
             showNotGitRepoError = true
@@ -861,6 +1163,7 @@ struct ProjectSidebar: View {
         gitHubBranchError = ""
         gitHubBranchChecking = false
         pendingWorkstreamProjectID = projectID
+        pendingWorkstreamGroupID = groupID
         showingGitHubBranch = true
     }
 
@@ -879,6 +1182,7 @@ struct ProjectSidebar: View {
     /// a workstream exists. Nothing is created if either check fails.
     private func createWorkstreamFromGitHubBranch() {
         guard let projectID = pendingWorkstreamProjectID,
+              let groupID = pendingWorkstreamGroupID,
               let index = projects.firstIndex(where: { $0.id == projectID })
         else { return }
 
@@ -944,9 +1248,11 @@ struct ProjectSidebar: View {
             case .ready:
                 showingGitHubBranch = false
                 pendingWorkstreamProjectID = nil
+                pendingWorkstreamGroupID = nil
                 startLaunch(
                     project: project,
                     projectID: projectID,
+                    groupID: groupID,
                     name: branch,
                     bypass: bypass,
                     existingBranch: branch
@@ -956,7 +1262,9 @@ struct ProjectSidebar: View {
     }
 
     private func createWorkstream() {
-        guard let projectID = pendingWorkstreamProjectID else { return }
+        guard let projectID = pendingWorkstreamProjectID,
+              let groupID = pendingWorkstreamGroupID
+        else { return }
         guard let index = projects.firstIndex(where: { $0.id == projectID }) else {
             showingNewWorkstreamName = false
             return
@@ -988,8 +1296,9 @@ struct ProjectSidebar: View {
 
         showingNewWorkstreamName = false
         pendingWorkstreamProjectID = nil
+        pendingWorkstreamGroupID = nil
         pendingWorkstreamBypass = nil
-        startLaunch(project: project, projectID: projectID, name: name, bypass: bypass)
+        startLaunch(project: project, projectID: projectID, groupID: groupID, name: name, bypass: bypass)
     }
 
     /// Hands the creation sequence to `Workstream.Launcher`, which owns it for
@@ -999,7 +1308,8 @@ struct ProjectSidebar: View {
     /// This function used to *be* that sequence, on its own `DispatchQueue`,
     /// with its own rollback. What is left is what only a mounted view can do:
     /// expanding the project's row so the optimistic workstream is visible, and
-    /// raising the alert when the launch refuses. `rebuildSortOrder()` is no
+    /// raising the alert when the launch refuses. Its group is expanded too, or the
+    /// optimistic row would be drawn inside a collapsed group. `rebuildSortOrder()` is no
     /// longer called here and is not lost — the `.onChange(of:
     /// totalWorkstreamCount())` and `.onChange(of: projects.count)` handlers
     /// above fire in the same update cycle, and the explicit call was already
@@ -1017,17 +1327,20 @@ struct ProjectSidebar: View {
     private func startLaunch(
         project: Project,
         projectID: UUID,
+        groupID: UUID,
         name: String,
         bypass: Bool,
         shortcutStoryID: Int? = nil,
         existingBranch: String? = nil
     ) {
         expandedProjects.insert(projectID)
+        collapsedGroups.remove(groupID)
 
         Task {
             do {
                 _ = try await Workstream.Launcher.shared.launch(
                     in: Workstream.Launcher.target(for: project),
+                    groupID: groupID,
                     requestedName: name,
                     bypassPermissions: bypass,
                     select: true,
@@ -1111,6 +1424,9 @@ struct ProjectSidebar: View {
         guard case let .workstream(wsID) = selection,
               let projectID = workstreamProjectID(for: wsID) else { return }
         expandedProjects.insert(projectID)
+        if let groupID = groupIDByWorkstreamIDSnapshot()[wsID] {
+            collapsedGroups.remove(groupID)
+        }
         renamingWorkstreamID = wsID
     }
 
@@ -1119,6 +1435,74 @@ struct ProjectSidebar: View {
             return project.id
         }
         return nil
+    }
+
+    // MARK: - Group management
+
+    /// Opens the inline new-group field as the last child of the project.
+    private func beginNewGroup(in projectID: UUID) {
+        expandedProjects.insert(projectID)
+        pendingGroupProjectID = projectID
+    }
+
+    /// Creating a group does **not** select it: selecting a group row starts its
+    /// coordinator, and making a group is not asking for one.
+    private func createGroup(in projectID: UUID, input: String) {
+        guard let pi = projects.firstIndex(where: { $0.id == projectID }) else { return }
+        // The app's current permission default, as a new workstream takes it.
+        switch projects[pi].addGroup(named: input, bypassPermissions: defaultBypass) {
+        case .success:
+            // Open already: a group is expanded unless it is in `collapsedGroups`.
+            onProjectsChanged()
+            rebuildSortOrder()
+        case let .failure(refusal):
+            groupNameRefusal = refusal
+        }
+    }
+
+    private func commitGroupRename(projectID: UUID, groupID: UUID, input: String) {
+        guard let pi = projects.firstIndex(where: { $0.id == projectID }),
+              let gi = projects[pi].groups?.firstIndex(where: { $0.id == groupID })
+        else { return }
+        switch Workstream.Group.validateName(input, siblings: projects[pi].groups ?? [], excluding: groupID) {
+        case let .success(name):
+            guard projects[pi].groups?[gi].name != name else { return }
+            projects[pi].groups?[gi].name = name
+            onProjectsChanged()
+            // `.alphabetical` sorts on the name, which this just changed.
+            rebuildSortOrder()
+        case let .failure(refusal):
+            groupNameRefusal = refusal
+        }
+    }
+
+    private func toggleGroupBypass(projectID: UUID, groupID: UUID) {
+        guard let pi = projects.firstIndex(where: { $0.id == projectID }),
+              let gi = projects[pi].groups?.firstIndex(where: { $0.id == groupID })
+        else { return }
+        projects[pi].groups?[gi].bypassPermissions.toggle()
+        onProjectsChanged()
+    }
+
+    /// The context menu already refuses a group with members, and
+    /// `Archiver.removeGroup` refuses it again.
+    private func removeGroup(projectID: UUID, groupID: UUID) {
+        guard let pi = projects.firstIndex(where: { $0.id == projectID }),
+              projects[pi].workstreams(in: groupID).isEmpty
+        else { return }
+        Workstream.Archiver.removeGroup(
+            groupID,
+            from: &projects[pi],
+            surfaceCache: surfaceCache,
+            agentStateTracker: agentStateTracker,
+            tmuxPath: appEnv.toolStatus.tmux.path
+        )
+        collapsedGroups.remove(groupID)
+        if selection == .group(groupID) {
+            selection = .project(projectID)
+        }
+        rebuildSortOrder()
+        onProjectsChanged()
     }
 
     // MARK: - Project management
@@ -1148,6 +1532,11 @@ struct ProjectSidebar: View {
         }
         if case let .workstream(wsID) = selection,
            !projects.contains(where: { $0.workstreams.contains(where: { $0.id == wsID }) })
+        {
+            selection = nil
+        }
+        if case let .group(groupID) = selection,
+           !projects.contains(where: { $0.group(with: groupID) != nil })
         {
             selection = nil
         }
@@ -1351,15 +1740,9 @@ func openDirectoryInTerminal(_ directory: String) {
 
 private struct ProjectHeaderRow: View {
     let project: Project
-    let isGitRepo: Bool
     var githubURL: URL?
-    let onAdd: () -> Void
-    let onAddWithPermissions: () -> Void
-    let onAddWithoutPermissions: () -> Void
-    let showShortcutButton: Bool
-    let onAddFromShortcut: () -> Void
-    let showGitHubButton: Bool
-    let onAddFromGitHub: () -> Void
+    /// Opens the inline new-group field; the only way to add a group.
+    let onAddGroup: () -> Void
     /// Whether this row is the sidebar's current selection. Gates the
     /// double-click-to-rename gesture — see `body`.
     let isSelected: Bool
@@ -1402,15 +1785,9 @@ private struct ProjectHeaderRow: View {
                             )
                     }
 
-                    if !isRenaming, !project.workstreams.isEmpty {
-                        Text("\(project.workstreams.count)")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(.quaternary)
-                            .clipShape(Capsule())
-                            .accessibilityLabel("\(project.workstreams.count) workstreams")
+                    if !isRenaming, !project.sortedGroups.isEmpty {
+                        SidebarCountBadge(count: project.sortedGroups.count)
+                            .accessibilityLabel("\(project.sortedGroups.count) groups")
                     }
                 }
 
@@ -1422,35 +1799,11 @@ private struct ProjectHeaderRow: View {
 
             Spacer()
 
-            // 4pt, not 8, so the buttons fit without crowding the project name
-            // and path. Below 4 the buttons' hover backgrounds touch.
-            //
-            // Ordered least-permanent first, farthest from the edge: this row is
-            // right-anchored, so a Shortcut button that disappears when the token goes
-            // would otherwise shift the buttons beside it out from under the cursor.
-            HStack(spacing: 4) {
-                if showShortcutButton {
-                    SidebarIconButton(image: "shortcut", action: onAddFromShortcut)
-                        .accessibilityLabel("New workstream from Shortcut story in \(project.name)")
-                }
-                if showGitHubButton {
-                    SidebarIconButton(image: "github", action: onAddFromGitHub)
-                        .accessibilityLabel("New workstream from GitHub branch in \(project.name)")
-                }
-                if isGitRepo {
-                    SidebarIconButton(icon: "plus", action: onAdd)
-                        .accessibilityLabel("Add workstream to \(project.name)")
-                        .contextMenu {
-                            Button(action: onAddWithPermissions) {
-                                Label("New workstream (full permissions)", systemImage: "lock.open")
-                            }
-                            Button(action: onAddWithoutPermissions) {
-                                Label("New workstream (with prompts)", systemImage: "lock.shield")
-                            }
-                        }
-                }
-            }
-            .opacity(isHovering ? 1 : 0)
+            // Workstreams are added from their group's row; the project's one
+            // button adds a group.
+            SidebarIconButton(icon: "plus", action: onAddGroup)
+                .accessibilityLabel("Add group to \(project.name)")
+                .opacity(isHovering ? 1 : 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 1)
@@ -1487,6 +1840,215 @@ private struct ProjectHeaderRow: View {
             Button(role: .destructive, action: onDelete) {
                 Label("Remove Project", systemImage: "trash")
             }
+        }
+    }
+}
+
+/// The small capsule count beside a row's name.
+private struct SidebarCountBadge: View {
+    let count: Int
+
+    var body: some View {
+        Text("\(count)")
+            .font(.system(size: 9, weight: .medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(.quaternary)
+            .clipShape(Capsule())
+    }
+}
+
+/// "● Working · Editing AuthView.swift · 4m" — colored dot + localized status
+/// word, current tool activity while active, and time since the run started.
+/// Shared by the workstream row and the group row, whose coordinator is an
+/// agent like any other.
+private struct AgentStatusMeta: View {
+    let word: LocalizedStringKey
+    let color: Color
+    let isAgentActive: Bool
+    let activity: String?
+    let startedAt: Date?
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Circle()
+                .fill(color)
+                .frame(width: 5, height: 5)
+                .padding(.trailing, 4)
+
+            Text(word)
+                .foregroundStyle(color)
+
+            if isAgentActive, let activity {
+                separator
+                Text(activity)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+
+            if let startedAt {
+                separator
+                ElapsedLabel(startedAt: startedAt, fontSize: 9)
+            }
+        }
+        .font(.system(size: 9, design: .monospaced))
+        .lineLimit(1)
+    }
+
+    private var separator: some View {
+        Text("·")
+            .foregroundStyle(.quaternary)
+            .padding(.horizontal, 3)
+    }
+}
+
+/// A workstream group's row, which is also its coordinator's: selecting it opens
+/// the coordinator pane, and its status line is the coordinator's agent state,
+/// keyed by the group id.
+///
+/// The add buttons moved here from `ProjectHeaderRow` when workstreams began to
+/// live in groups — a new workstream joins the group whose plus was pressed.
+private struct GroupRow: View {
+    let name: String
+    let memberCount: Int
+    /// Gates the double-click-to-rename gesture, as on `WorkstreamRow`.
+    let isSelected: Bool
+    let agentState: Workstream.AgentStateTracker.AgentRunState
+    let hasLiveSession: Bool
+    let channelDown: Bool
+    let mainActivity: String?
+    let mainContextUsage: Workstream.AgentStateTracker.ContextUsage?
+    let startedAt: Date?
+    let showShortcutButton: Bool
+    let showGitHubButton: Bool
+    let onAdd: () -> Void
+    let onAddWithPermissions: () -> Void
+    let onAddWithoutPermissions: () -> Void
+    let onAddFromShortcut: () -> Void
+    let onAddFromGitHub: () -> Void
+    @Binding var isRenaming: Bool
+    let onRenameCommit: (String) -> Void
+    let bypassPermissions: Bool
+    let onToggleBypass: () -> Void
+    let onRemove: () -> Void
+    /// Why Remove Group is unavailable, or nil when it is available.
+    let removeDisabledReason: String?
+
+    @State private var isHovering = false
+
+    private var isAgentActive: Bool {
+        switch agentState {
+        case .working, .stalled: true
+        case .idle, .needsAttention: false
+        }
+    }
+
+    private var statusLabel: AgentStatusLabel? {
+        AgentStatusLabel.resolve(
+            agentState: agentState,
+            hasLiveSession: hasLiveSession,
+            channelDown: channelDown
+        )
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 6) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 4) {
+                    if isRenaming {
+                        InlineTextField(
+                            initialText: name,
+                            accessibilityID: "group-rename-field",
+                            fontWeight: .medium,
+                            onCommit: { value in
+                                isRenaming = false
+                                onRenameCommit(value)
+                            },
+                            onCancel: { isRenaming = false }
+                        )
+                    } else {
+                        Text(name)
+                            .font(.system(size: 11, weight: .medium))
+                            .lineLimit(1)
+                            // As on `WorkstreamRow`: armed only on the selected row, and
+                            // simultaneous, so a first click still selects. This row is a
+                            // `DisclosureGroup` label too, like the project header.
+                            .simultaneousGesture(
+                                TapGesture(count: 2).onEnded { isRenaming = true },
+                                including: isSelected ? .gesture : .none
+                            )
+                    }
+
+                    if !isRenaming, memberCount > 0 {
+                        SidebarCountBadge(count: memberCount)
+                            .accessibilityLabel("\(memberCount) workstreams")
+                    }
+                }
+
+                if let statusLabel {
+                    AgentStatusMeta(
+                        word: statusLabel.text,
+                        color: statusLabel.color,
+                        isAgentActive: isAgentActive,
+                        activity: mainActivity,
+                        startedAt: startedAt
+                    )
+                }
+
+                if hasLiveSession, let usage = mainContextUsage {
+                    ContextMeter(usage: usage, isActive: isAgentActive)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            // 4pt, not 8, so the buttons fit without crowding the group name.
+            // Below 4 the buttons' hover backgrounds touch.
+            //
+            // Ordered least-permanent first, farthest from the edge: this row is
+            // right-anchored, so a Shortcut button that disappears when the token goes
+            // would otherwise shift the buttons beside it out from under the cursor.
+            HStack(spacing: 4) {
+                if showShortcutButton {
+                    SidebarIconButton(image: "shortcut", action: onAddFromShortcut)
+                        .accessibilityLabel("New workstream from Shortcut story in \(name)")
+                }
+                if showGitHubButton {
+                    SidebarIconButton(image: "github", action: onAddFromGitHub)
+                        .accessibilityLabel("New workstream from GitHub branch in \(name)")
+                }
+                SidebarIconButton(icon: "plus", action: onAdd)
+                    .accessibilityLabel("Add workstream to \(name)")
+                    .contextMenu {
+                        Button(action: onAddWithPermissions) {
+                            Label("New workstream (full permissions)", systemImage: "lock.open")
+                        }
+                        Button(action: onAddWithoutPermissions) {
+                            Label("New workstream (with prompts)", systemImage: "lock.shield")
+                        }
+                    }
+            }
+            .opacity(isHovering ? 1 : 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 1)
+        .contentShape(Rectangle())
+        .onHover { isHovering = $0 }
+        .contextMenu {
+            Button { isRenaming = true } label: {
+                Label("Rename…", systemImage: "pencil")
+            }
+            Toggle("Full Permissions", isOn: Binding(
+                get: { bypassPermissions },
+                set: { _ in onToggleBypass() }
+            ))
+            Divider()
+            Button(role: .destructive, action: onRemove) {
+                Label("Remove Group", systemImage: "trash")
+            }
+            .disabled(removeDisabledReason != nil)
+            .help(removeDisabledReason ?? "")
         }
     }
 }
@@ -1582,42 +2144,6 @@ private struct WorkstreamRow: View {
         )
     }
 
-    /// "● Working · Editing AuthView.swift · 4m" — colored dot + localized
-    /// status word, current tool activity while active, and time since the
-    /// run started. Rendered only for workstreams with a live session.
-    private func statusMeta(word: LocalizedStringKey, color: Color) -> some View {
-        HStack(spacing: 0) {
-            Circle()
-                .fill(color)
-                .frame(width: 5, height: 5)
-                .padding(.trailing, 4)
-
-            Text(word)
-                .foregroundStyle(color)
-
-            if isAgentActive, let activity = mainActivity {
-                metaSeparator
-                Text(activity)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-
-            if let startedAt {
-                metaSeparator
-                ElapsedLabel(startedAt: startedAt, fontSize: 9)
-            }
-        }
-        .font(.system(size: 9, design: .monospaced))
-        .lineLimit(1)
-    }
-
-    private var metaSeparator: some View {
-        Text("·")
-            .foregroundStyle(.quaternary)
-            .padding(.horizontal, 3)
-    }
-
     var body: some View {
         HStack(alignment: .center, spacing: 6) {
             // No status dot here: the meta line below the name already
@@ -1685,7 +2211,14 @@ private struct WorkstreamRow: View {
                 }
 
                 if let statusLabel {
-                    statusMeta(word: statusLabel.text, color: statusLabel.color)
+                    // Rendered only for workstreams with a live session.
+                    AgentStatusMeta(
+                        word: statusLabel.text,
+                        color: statusLabel.color,
+                        isAgentActive: isAgentActive,
+                        activity: mainActivity,
+                        startedAt: startedAt
+                    )
                 }
 
                 if showsMainContextMeter, let usage = mainContextUsage {

@@ -32,6 +32,25 @@ final class IPCServiceTests: XCTestCase {
         )
     }
 
+    /// A caller with no worktree: a group's coordinator, or a member when `workstreamID` is given.
+    private func groupClient(
+        project: String?,
+        groupName: String? = "Billing",
+        workstreamID: UUID? = nil,
+        workstreamName: String? = nil,
+        peerID: String? = nil
+    ) -> IPC.ClientIdentity {
+        IPC.ClientIdentity(
+            workstreamID: workstreamID?.uuidString,
+            workstreamName: workstreamName,
+            projectDirectory: project,
+            surfaceID: UUID().uuidString,
+            peerID: peerID,
+            groupID: workstreamID == nil ? UUID().uuidString : nil,
+            groupName: groupName
+        )
+    }
+
     private func call(_ tool: IPC.Tool, _ arguments: [String: String] = [:], as client: IPC.ClientIdentity) async -> IPC.Response {
         await service.handle(IPC.Request(token: "unused", tool: tool, arguments: arguments, client: client))
     }
@@ -50,6 +69,68 @@ final class IPCServiceTests: XCTestCase {
             throw XCTSkip("expected a peers payload, got \(String(describing: response.payload ?? nil))")
         }
         return peers
+    }
+
+    // MARK: - Groups
+
+    func test_coordinatorRegistersUnderItsGroupNameByDefault() async {
+        let response = await call(.registerPeer, [:], as: groupClient(project: projectA))
+        guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
+        XCTAssertEqual(peer.name, "Billing")
+    }
+
+    func test_registerPeer_prefersTheWorkstreamNameOverTheGroupName() async {
+        let response = await call(.registerPeer, [:], as: groupClient(project: projectA, workstreamName: "wry-amber-lexer"))
+        guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
+        XCTAssertEqual(peer.name, "wry-amber-lexer")
+    }
+
+    func test_listPeersReportsACoordinatorWithNoWorkstreamAndItsGroup() async throws {
+        _ = await call(.registerPeer, [:], as: groupClient(project: projectA))
+        let listed = try await peers(of: call(.listPeers, as: client(project: projectA)))
+        XCTAssertEqual(listed.count, 1)
+        XCTAssertNil(listed[0].workstream)
+        XCTAssertEqual(listed[0].group, "Billing")
+    }
+
+    func test_listPeersReportsAMembersGroupFromTheMap() async throws {
+        let workstreamID = UUID()
+        await service.setGroupNames([workstreamID: "Billing"])
+        _ = await call(.registerPeer, [:], as: groupClient(project: projectA, groupName: nil, workstreamID: workstreamID, workstreamName: "wry-amber-lexer"))
+        let listed = try await peers(of: call(.listPeers, as: client(project: projectA)))
+        XCTAssertEqual(listed.count, 1)
+        XCTAssertEqual(listed[0].workstream, "wry-amber-lexer")
+        XCTAssertEqual(listed[0].group, "Billing")
+    }
+
+    /// Spec §3: a coordinator is listed with the role `coordinator` unless it
+    /// registered a different one. Derived when listed, not stored, so a later
+    /// explicit role is not fighting a baked-in default.
+    func test_listPeersReportsACoordinatorsRoleAsCoordinatorByDefault() async throws {
+        _ = await call(.registerPeer, [:], as: groupClient(project: projectA))
+        let listed = try await peers(of: call(.listPeers, as: client(project: projectA)))
+        XCTAssertEqual(listed.first?.role, "coordinator")
+    }
+
+    func test_listPeersKeepsARoleTheCoordinatorRegistered() async throws {
+        _ = await call(.registerPeer, ["role": "release captain"], as: groupClient(project: projectA))
+        let listed = try await peers(of: call(.listPeers, as: client(project: projectA)))
+        XCTAssertEqual(listed.first?.role, "release captain")
+    }
+
+    func test_listPeersGivesAMemberNoCoordinatorRole() async throws {
+        await service.setGroupNames([UUID(): "Billing"])
+        _ = await call(.registerPeer, [:], as: groupClient(project: projectA, groupName: nil, workstreamID: UUID(), workstreamName: "wry-amber-lexer"))
+        _ = try await register(name: "solo", project: projectA)
+        let listed = try await peers(of: call(.listPeers, as: client(project: projectA)))
+        XCTAssertEqual(listed.count, 2)
+        XCTAssertTrue(listed.allSatisfy(\.role.isEmpty), "\(listed.map(\.role))")
+    }
+
+    func test_listPeersReportsNoGroupForAnUngroupedMember() async throws {
+        _ = try await register(name: "solo", project: projectA)
+        let listed = try await peers(of: call(.listPeers, as: client(project: projectA)))
+        XCTAssertNil(listed[0].group)
     }
 
     // MARK: - Registration
@@ -788,6 +869,76 @@ final class IPCServiceTests: XCTestCase {
                 "\(tool.rawValue) refuses in its own words rather than the one boundary error"
             )
         }
+    }
+
+    // MARK: - A group coordinator has no workstream
+
+    /// Every tool that acts on "the caller's own workstream", with the arguments
+    /// it would need if it got past the guard (it never does, so none).
+    private static let workstreamScopedTools: [IPC.Tool] = [
+        .listTabs, .readReviewComments, .openEditor, .openTab, .closeTab, .openAgentTab,
+        .listVerificationChecks, .startVerification, .checkVerification,
+        .listProcesses, .readProcessLogs, .startProcess, .stopProcess, .restartProcess,
+        .startExecution, .stopExecution,
+        .readWhiteboard, .whiteboardAdd, .whiteboardAddLayout, .whiteboardUpdate, .whiteboardDelete,
+        .getInitializationState, .getShortcutStory, .getSessionCheckpoint, .updateSessionCheckpoint,
+    ]
+
+    private func coordinatorRefusal(_ tool: IPC.Tool) -> String {
+        "You are a group coordinator and have no workstream of your own, so \(tool.rawValue) has nothing to act on. "
+            + "It acts on the calling agent's workstream; send_message a member to do this in theirs."
+    }
+
+    func test_workstreamScopedTools_refuseACoordinator_withASentenceThatNamesIt() async {
+        let coordinator = groupClient(project: projectA)
+        for tool in Self.workstreamScopedTools {
+            let response = await call(tool, [:], as: coordinator)
+            XCTAssertNil(response.payload, "\(tool.rawValue) answered a coordinator")
+            XCTAssertEqual(response.error, coordinatorRefusal(tool), "\(tool.rawValue)")
+        }
+    }
+
+    func test_workstreamScopedTools_stillRefuseABareIdentity_asNotInWorkstream() async {
+        for tool in Self.workstreamScopedTools {
+            let response = await call(tool, [:], as: stranger)
+            XCTAssertEqual(response.error, IPC.ToolError.notInWorkstream.errorDescription, "\(tool.rawValue)")
+        }
+    }
+
+    /// The notifier needs a real notification center, so this goes down the refusal path the
+    /// other request_attention tests use: no reason. Reaching the missing-argument check
+    /// means the identity guard let the coordinator through.
+    func test_requestAttention_fromACoordinator_isNotRefusedAsHavingNoWorkstream() async {
+        let response = await call(.requestAttention, [:], as: groupClient(project: projectA))
+
+        XCTAssertNotEqual(response.error, IPC.ToolError.notInWorkstream.errorDescription)
+        XCTAssertNotEqual(response.error, coordinatorRefusal(.requestAttention))
+        XCTAssertEqual(response.error, IPC.ToolError.missingArgument("reason").errorDescription)
+    }
+
+    func test_coordinatorHasNoWorkstream_namesTheToolByItsWireName() {
+        XCTAssertEqual(
+            IPC.ToolError.coordinatorHasNoWorkstream(tool: "list_tabs").errorDescription,
+            coordinatorRefusal(.listTabs)
+        )
+    }
+
+    func test_callerWorkstreamIDOrRefusal_distinguishesCoordinatorBareAndMember() async {
+        let member = UUID()
+        func request(_ client: IPC.ClientIdentity) -> IPC.Request {
+            IPC.Request(token: "unused", tool: .listTabs, arguments: [:], client: client)
+        }
+        let asMember = await service.callerWorkstreamIDOrRefusal(
+            request(groupClient(project: projectA, workstreamID: member)), tool: .listTabs
+        )
+        let asCoordinator = await service.callerWorkstreamIDOrRefusal(
+            request(groupClient(project: projectA)), tool: .listTabs
+        )
+        let asBare = await service.callerWorkstreamIDOrRefusal(request(stranger), tool: .listTabs)
+
+        XCTAssertEqual(asMember, .success(member))
+        XCTAssertEqual(asCoordinator, .failure(.coordinatorHasNoWorkstream(tool: "list_tabs")))
+        XCTAssertEqual(asBare, .failure(.notInWorkstream))
     }
 
     // MARK: - list_tabs

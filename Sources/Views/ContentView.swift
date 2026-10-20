@@ -52,29 +52,39 @@ func renderableWorkstreamID(
     } ? selectedWorkstreamID : nil
 }
 
-/// The workstream ⌘[ / ⌘] lands on next.
+/// The sidebar row ⌘[ / ⌘] lands on next, within one project.
+///
+/// The walk is the rows the sidebar draws under the project: each group in
+/// group order, followed by that group's renderable workstreams in workstream
+/// order. A group is always a stop, even with no renderable workstreams —
+/// its row is its coordinator, which is selectable whether or not any member
+/// is ready. A selection the walk does not contain (the project row, or a
+/// workstream still preparing) enters at the first stop going forward and the
+/// last going back.
 ///
 /// `order` has no default on purpose: it must be the same `Project.SortOrder` the
 /// sidebar drew with, and a default here would let a caller silently walk the rows
 /// in an order nobody is looking at.
-func cycledWorkstreamID(
+func cycledSelection(
     in project: Project,
-    selectedWorkstreamID: UUID?,
+    selected: SidebarSelection?,
     direction: Int,
     order: Project.SortOrder,
     pathExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
-) -> UUID? {
-    let sorted = order.sorted(
-        project.workstreams.filter { workstreamHasUsablePath($0, pathExists: pathExists) }
-    )
-    guard !sorted.isEmpty else { return nil }
-    guard let selectedWorkstreamID,
-          let currentIndex = sorted.firstIndex(where: { $0.id == selectedWorkstreamID })
-    else {
-        return direction > 0 ? sorted.first?.id : sorted.last?.id
+) -> SidebarSelection? {
+    var stops: [SidebarSelection] = []
+    for group in order.sorted(project.sortedGroups, in: project) {
+        stops.append(.group(group.id))
+        let members = project.workstreams(in: group.id)
+            .filter { workstreamHasUsablePath($0, pathExists: pathExists) }
+        stops.append(contentsOf: order.sorted(members).map { .workstream($0.id) })
     }
-    let next = (currentIndex + direction + sorted.count) % sorted.count
-    return sorted[next].id
+    guard !stops.isEmpty else { return nil }
+    guard let selected, let currentIndex = stops.firstIndex(of: selected) else {
+        return direction > 0 ? stops.first : stops.last
+    }
+    let next = (currentIndex + direction + stops.count) % stops.count
+    return stops[next]
 }
 
 /// What a ⌘-chord the key monitor swallows should do.
@@ -175,6 +185,7 @@ struct ContentView: View {
     private var paletteContext: PaletteContext {
         PaletteContext(
             workstreamActive: activeWorkstream != nil,
+            groupActive: selection?.groupID != nil,
             editorActive: editorTabActive,
             // Requires a live agent surface, not just a selected workstream:
             // the workspace is unmounted while a worktree is still being
@@ -249,6 +260,12 @@ struct ContentView: View {
                 logger.warning("[Atelier] activeProject: workstream \(wsID, privacy: .public) not found in any project")
             }
             return found
+        case let .group(groupID):
+            let found = projects.first(where: { $0.group(with: groupID) != nil })
+            if found == nil {
+                logger.warning("[Atelier] activeProject: group \(groupID, privacy: .public) not found in any project")
+            }
+            return found
         case .settings, .help:
             return nil
         }
@@ -305,6 +322,14 @@ struct ContentView: View {
                 .navigationTitle(appEnvironment.taskDescription(for: workstream.worktreePath) ?? workstream.label)
                 .navigationSubtitle(workstreamSubtitle(project: project, workstream: workstream))
             }
+        } else if let groupID = selection?.groupID,
+                  let project = activeProject,
+                  let group = project.group(with: groupID)
+        {
+            CoordinatorPaneView(project: project, group: group, isActive: true)
+                .id(groupID)
+                .navigationTitle(group.name)
+                .navigationSubtitle(project.name)
         } else if let project = activeProject,
                   let projectIndex = projects.firstIndex(where: { $0.id == project.id })
         {
@@ -313,10 +338,7 @@ struct ContentView: View {
                 onSelectWorkstream: { wsID in selection = .workstream(wsID) },
                 onRemoveWorkstream: { wsID in removeConfirmation.confirm(workstreamID: wsID) },
                 onPurgeWorkstream: { wsID in confirmPurge(wsID) },
-                onProjectChanged: {
-                    ProjectStore.save(projects)
-                    syncHeadWatcher(projects: projects)
-                }
+                onProjectChanged: { projectsMutatedInPlace() }
             )
             .navigationTitle(project.name)
             .navigationSubtitle(AppConstants.appName)
@@ -360,7 +382,7 @@ struct ContentView: View {
                 let work = DispatchWorkItem { ProjectStore.save(newValue) }
                 saveWork = work
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
-                refreshAgentStateLookup(projects: newValue)
+                syncAgentLookupsAndGroupNames(projects: newValue)
                 syncHeadWatcher(projects: newValue)
                 syncShortcutStoryIDs(projects: newValue)
             }
@@ -441,7 +463,7 @@ struct ContentView: View {
                 if let sel = selection, case let .project(pid) = sel, missing.contains(pid) {
                     selection = nil
                 }
-                if let sel = selection, case .workstream = sel, activeProject == nil {
+                if let sel = selection, sel.workstreamID != nil || sel.groupID != nil, activeProject == nil {
                     selection = nil
                 }
                 ProjectStore.save(projects)
@@ -456,15 +478,12 @@ struct ContentView: View {
                 if newValue != .settings, newValue != .help {
                     newValue?.save()
                 }
-                let wsID: UUID? = {
-                    if case let .workstream(id) = newValue {
-                        return id
-                    }
-                    return nil
-                }()
-                agentStateTracker.currentSelection = wsID
-                if let wsID {
-                    agentStateTracker.markSeen(workstreamID: wsID)
+                // A group's coordinator is keyed by the group id, so a
+                // selected group counts as looked-at exactly as a workstream does.
+                let seenID = newValue?.agentStateID
+                agentStateTracker.currentSelection = seenID
+                if let seenID {
+                    agentStateTracker.markSeen(workstreamID: seenID)
                 }
                 // The verification family belongs to whichever project is now
                 // selected; see `syncVerificationCommands`.
@@ -515,10 +534,7 @@ struct ContentView: View {
                 projects: $projectList.items,
                 selection: $selection,
                 verificationRunner: verificationRunner,
-                onProjectsChanged: {
-                    ProjectStore.save(projects)
-                    syncHeadWatcher(projects: projects)
-                }
+                onProjectsChanged: { projectsMutatedInPlace() }
             )
             .navigationSplitViewColumnWidth(min: 160, ideal: 200, max: 350)
         } detail: {
@@ -594,7 +610,7 @@ struct ContentView: View {
             reconcileStrandedWorkstreams()
             appEnvironment.fetchOrigin(projects: projects)
             Task { await usageStore.refresh() }
-            refreshAgentStateLookup(projects: projects)
+            syncAgentLookupsAndGroupNames(projects: projects)
             startHeadWatcher()
             // Apply saved appearance
             switch UserDefaults.standard.string(forKey: "atelier.appearance") ?? "system" {
@@ -756,7 +772,7 @@ struct ContentView: View {
         ProjectStore.save(projects)
         appEnvironment.refreshPathValidity(projects: projects)
         // So hook events for this workstream can resolve to its UUID.
-        refreshAgentStateLookup(projects: projects)
+        syncAgentLookupsAndGroupNames(projects: projects)
         // A newly-pathed worktree is exactly the one whose branch an agent is about
         // to rename, so it has to start being watched now.
         syncHeadWatcher(projects: projects)
@@ -861,21 +877,33 @@ struct ContentView: View {
         logger.warning("[Atelier] reconcile: no worktree for \(name, privacy: .public); forgetting the record")
     }
 
-    /// Rebuilds the projectDir → workstream-UUID lookup used by the agent
-    /// state tracker. Paths are normalized via `Workstream.AgentStateTracker.normalize`
-    /// (resolves symlinks) so hook payloads match regardless of how Claude
-    /// reports the path on macOS.
-    private func refreshAgentStateLookup(projects: [Project]) {
-        var index: [String: UUID] = [:]
-        for project in projects {
-            for ws in project.workstreams {
-                guard let path = ws.worktreePath else { continue }
-                index[Workstream.AgentStateTracker.normalize(path)] = ws.id
-            }
-        }
-        agentStateTracker.workstreamLookup = { projectDir in
-            index[Workstream.AgentStateTracker.normalize(projectDir)]
-        }
+    /// Rebuilds the agent-state tracker's owner lookups and pushes the
+    /// member-to-group-name map `list_peers` reads, both from one
+    /// `Workstream.AgentStateTracker.ownerIndex` so they agree on which ids exist.
+    ///
+    /// Called from `onChange(of: projectList.items)`, startup,
+    /// `attachWorktreePath` and `projectsMutatedInPlace`. The last is the one
+    /// that matters for groups: `Project` equates by id, so a group added,
+    /// renamed or removed leaves the list "equal" and the observer never fires.
+    private func syncAgentLookupsAndGroupNames(projects: [Project]) {
+        let cache = surfaceCache
+        let index = Workstream.AgentStateTracker.ownerIndex(
+            for: projects,
+            workstreamOwningSurface: { cache.workstreamID(owningSurface: $0) }
+        )
+        agentStateTracker.install(index)
+        Task { await IPC.Service.shared.setGroupNames(index.groupNameByWorkstreamID) }
+    }
+
+    /// What every in-place edit of the project list runs: the sidebar's
+    /// `onProjectsChanged` and the overview's `onProjectChanged` (adopt's new
+    /// group) both land here. Same reason as `syncHeadWatcher`'s doc — an edit
+    /// that keeps every id fires no `onChange(of:)`, so nothing downstream
+    /// notices unless it is told.
+    private func projectsMutatedInPlace() {
+        ProjectStore.save(projects)
+        syncHeadWatcher(projects: projects)
+        syncAgentLookupsAndGroupNames(projects: projects)
     }
 
     /// Shows the "waiting for approval" banner for a workstream that just
@@ -889,9 +917,29 @@ struct ContentView: View {
             isAppActive: NSApp.isActive,
             selection: selection,
             workstreamID: wsID
-        ),
-            let project = projects.first(where: { $0.workstreams.contains(where: { $0.id == wsID }) }),
-            let workstream = project.workstreams.first(where: { $0.id == wsID })
+        ) else { return }
+
+        // A coordinator: the id is its group's, and it has no branch, so the
+        // subtitle is the project alone.
+        if let project = projects.first(where: { $0.group(with: wsID) != nil }),
+           let group = project.group(with: wsID)
+        {
+            Workstream.PermissionNotifier.shared.notify(
+                workstreamID: wsID,
+                title: group.name,
+                body: String(
+                    format: NSLocalizedString(
+                        "Waiting for approval — %@",
+                        comment: "Blocked-agent notification body; %@ is the project and branch"
+                    ),
+                    project.name
+                )
+            )
+            return
+        }
+
+        guard let project = projects.first(where: { $0.workstreams.contains(where: { $0.id == wsID }) }),
+              let workstream = project.workstreams.first(where: { $0.id == wsID })
         else { return }
 
         Workstream.PermissionNotifier.shared.notify(
@@ -1028,6 +1076,12 @@ struct ContentView: View {
                 selection = .project(project.id)
             }
         case let .focusWorkstream(wsID):
+            // A coordinator's notifications carry its group id, the id its
+            // agent state is keyed by, so a click on one selects the group.
+            if projects.contains(where: { $0.group(with: wsID) != nil }) {
+                selection = .group(wsID)
+                return
+            }
             guard projects.contains(where: { $0.workstreams.contains(where: { $0.id == wsID }) }) else { return }
             selection = .workstream(wsID)
         case let .focusProject(projectID):
@@ -1166,19 +1220,19 @@ struct ContentView: View {
         }
     }
 
-    /// Cycle through workstreams within the active project.
-    /// Only acts when a project or workstream is selected (not settings/help).
+    /// Cycle through the active project's groups and workstreams.
+    /// Only acts when a project, group or workstream is selected (not settings/help).
     private func cycleWorkstream(direction: Int) {
         guard let project = activeProject else { return }
 
-        if selection?.workstreamID != nil || selection?.projectID != nil {
-            guard let id = cycledWorkstreamID(
+        if selection?.workstreamID != nil || selection?.projectID != nil || selection?.groupID != nil {
+            guard let target = cycledSelection(
                 in: project,
-                selectedWorkstreamID: selection?.workstreamID,
+                selected: selection,
                 direction: direction,
                 order: workstreamSortOrder
             ) else { return }
-            deferSelection(.workstream(id))
+            deferSelection(target)
         }
     }
 

@@ -37,8 +37,10 @@ extension IPC.Service {
     /// and no question of whether the pane was interruptible — the tab does
     /// not exist until it exists running the right thing.
     func openAgentTab(for request: Request) async -> Response {
-        guard let workstreamID = callerWorkstreamID(request) else {
-            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
+        let workstreamID: UUID
+        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
+        case let .success(id): workstreamID = id
+        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
         }
         let arguments = ToolArguments(request)
         let title = Names.sanitized(arguments.optional("title") ?? "", limit: 40, fallback: "")
@@ -455,13 +457,15 @@ extension IPC.Service {
     /// What both creation tools resolve before anything exists on disk.
     private struct CreationPlan {
         let target: Workstream.Launcher.Target
+        let groupID: UUID
         let prompt: String?
         let bypass: Bool
         let inputs: AgentLaunchInputs
     }
 
     /// The preconditions both creation tools check, in the order that keeps
-    /// their refusals true: the argument, then the project, then the agent.
+    /// their refusals true: the argument, then the project, then the group,
+    /// then the agent.
     ///
     /// Every one of them happens before anything is created. The worktree is
     /// a directory on disk and a branch in the repository; refusing after it
@@ -474,11 +478,20 @@ extension IPC.Service {
         let bypass = try arguments.boolean("bypass_permissions")
 
         let callerWorkstreamID = callerWorkstreamID(request)
-        let target = try await MainActor.run {
-            try Workstream.Launcher.shared.target(
+        let callerGroupID = callerGroupID(request)
+        let requestedGroup = arguments.optionalTrimmed("group")
+        let (target, groupID) = try await MainActor.run {
+            let target = try Workstream.Launcher.shared.target(
                 callerWorkstreamID: callerWorkstreamID,
                 projectDirectory: request.client.projectDirectory
             )
+            let groupID = try Workstream.Launcher.resolveGroup(
+                callerWorkstreamID: callerWorkstreamID,
+                callerGroupID: callerGroupID,
+                requestedGroup: requestedGroup,
+                in: target
+            ).get()
+            return (target, groupID)
         }
 
         let inputs = await MainActor.run { AgentLaunchInputs.read() }
@@ -486,7 +499,7 @@ extension IPC.Service {
             throw ToolError.refused(refusal)
         }
 
-        return CreationPlan(target: target, prompt: prompt, bypass: bypass, inputs: inputs)
+        return CreationPlan(target: target, groupID: groupID, prompt: prompt, bypass: bypass, inputs: inputs)
     }
 
     /// The half of a creation that does not care why it was asked for:
@@ -518,6 +531,7 @@ extension IPC.Service {
             let outcome = AgentStartOutcome()
             let launched = try await Workstream.Launcher.shared.launch(
                 in: plan.target,
+                groupID: plan.groupID,
                 requestedName: name,
                 bypassPermissions: plan.bypass,
                 shortcutStoryID: shortcutStoryID,
@@ -555,9 +569,12 @@ extension IPC.Service {
                 }
             )
 
+            let groupName = plan.target.groups.first { $0.id == launched.groupID }?.name ?? launched.groupID.uuidString
+            let location = "\(launched.worktreePath) in group \(groupName)"
+
             guard plan.prompt?.isEmpty == false else {
                 return .success(id: request.id, .text(
-                    "Created workstream \(launched.name) at \(launched.worktreePath). "
+                    "Created workstream \(launched.name) at \(location). "
                         + "Its initialization is running in the background. No agent was started — pass `prompt` to start one."
                 ))
             }
@@ -567,13 +584,13 @@ extension IPC.Service {
             // as an error would tell the caller nothing was created.
             guard outcome.started else {
                 return .success(id: request.id, .text(
-                    "Created workstream \(launched.name) at \(launched.worktreePath), but no agent was started. "
+                    "Created workstream \(launched.name) at \(location), but no agent was started. "
                         + (outcome.failure ?? "Atelier gave no reason.")
                 ))
             }
 
             return .success(id: request.id, .text(
-                "Created workstream \(launched.name) at \(launched.worktreePath) and started an agent in its "
+                "Created workstream \(launched.name) at \(location) and started an agent in its "
                     + "Coding Agent tab, surface \(launched.workstreamID.uuidString). Its initialization may still be "
                     + "running, so the worktree's dependencies may not be installed yet. The agent is not "
                     + "addressable until it registers: poll list_peers until a peer reports that surface id, then "

@@ -309,6 +309,30 @@ extension IPC {
         let surfaceID: String?
         /// The peer this session registered, once it has one.
         let peerID: String?
+        /// `ATELIER_GROUP_ID`: set only for a group's coordinator, which has no
+        /// workstream. Strings, not a model type, because this file is compiled
+        /// into the helper.
+        let groupID: String?
+        /// `ATELIER_GROUP`, for display.
+        let groupName: String?
+
+        init(
+            workstreamID: String?,
+            workstreamName: String?,
+            projectDirectory: String?,
+            surfaceID: String?,
+            peerID: String?,
+            groupID: String? = nil,
+            groupName: String? = nil
+        ) {
+            self.workstreamID = workstreamID
+            self.workstreamName = workstreamName
+            self.projectDirectory = projectDirectory
+            self.surfaceID = surfaceID
+            self.peerID = peerID
+            self.groupID = groupID
+            self.groupName = groupName
+        }
 
         static func fromEnvironment(_ env: [String: String] = ProcessInfo.processInfo.environment, peerID: String? = nil) -> ClientIdentity {
             ClientIdentity(
@@ -316,7 +340,9 @@ extension IPC {
                 workstreamName: env["ATELIER_WORKSTREAM"],
                 projectDirectory: env["ATELIER_PROJECT_DIR"],
                 surfaceID: env["ATELIER_SURFACE_ID"],
-                peerID: peerID
+                peerID: peerID,
+                groupID: env["ATELIER_GROUP_ID"],
+                groupName: env["ATELIER_GROUP"]
             )
         }
     }
@@ -352,6 +378,33 @@ extension IPC {
         /// a peer has had direct human input since; Atelier has no notion of
         /// "dispatch" of its own to compare against.
         let lastUserPromptSecondsAgo: Int?
+        /// The name of the group this peer coordinates or belongs to. A
+        /// coordinator reports it from its own identity (and has no
+        /// `workstream`); a member's comes from the map the app pushes through
+        /// `Service.setGroupNames`. Nil for an ungrouped peer.
+        let group: String?
+
+        init(
+            id: String,
+            name: String,
+            role: String,
+            workstream: String?,
+            surfaceID: String?,
+            lastSeenSecondsAgo: Int,
+            pendingMessages: Int,
+            lastUserPromptSecondsAgo: Int?,
+            group: String? = nil
+        ) {
+            self.id = id
+            self.name = name
+            self.role = role
+            self.workstream = workstream
+            self.surfaceID = surfaceID
+            self.lastSeenSecondsAgo = lastSeenSecondsAgo
+            self.pendingMessages = pendingMessages
+            self.lastUserPromptSecondsAgo = lastUserPromptSecondsAgo
+            self.group = group
+        }
     }
 
     /// A delivered message as reported to an agent.

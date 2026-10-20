@@ -242,6 +242,38 @@ extension Workstream {
         /// Set by `ContentView` whenever the project list changes.
         var workstreamLookup: ((String) -> UUID?)?
 
+        /// Resolves a surface id to the id its events are attributed to: a
+        /// workstream for its own surfaces, a group for its coordinator. Asked
+        /// before `workstreamLookup`, because every Atelier-launched surface
+        /// exports its id and several coordinators share one directory, which
+        /// the directory lookup cannot tell apart. Must answer nil for an id
+        /// Atelier does not own.
+        var surfaceOwnerLookup: ((UUID) -> UUID?)?
+
+        /// The one place the order is written down: surface id first, then the
+        /// directory. Event handling, the status line and the permission path
+        /// all call it.
+        nonisolated static func resolveOwner(
+            surfaceID: UUID?,
+            projectDir: String,
+            surfaceOwner: ((UUID) -> UUID?)?,
+            directoryOwner: ((String) -> UUID?)?
+        ) -> UUID? {
+            if let surfaceID, let owner = surfaceOwner?(surfaceID) {
+                return owner
+            }
+            return directoryOwner?(projectDir)
+        }
+
+        func owner(surfaceID: UUID?, projectDir: String) -> UUID? {
+            Self.resolveOwner(
+                surfaceID: surfaceID,
+                projectDir: projectDir,
+                surfaceOwner: surfaceOwnerLookup,
+                directoryOwner: workstreamLookup
+            )
+        }
+
         /// Currently selected workstream — `Stop` while selected goes straight to
         /// `.idle` because the user is already looking at it.
         var currentSelection: UUID?
@@ -402,6 +434,7 @@ extension Workstream {
             surfaceLastUserPromptAt.clearAll()
             surfacesExpectingSyntheticPrompt.removeAll()
             workstreamLookup = nil
+            surfaceOwnerLookup = nil
             currentSelection = nil
             onProlongedSilence = nil
         }
@@ -438,7 +471,7 @@ extension Workstream {
         // MARK: - Event Handling
 
         func handle(projectDir: String, event: AgentEvent) {
-            guard let lookup = workstreamLookup, let wsID = lookup(projectDir) else {
+            guard let wsID = owner(surfaceID: event.surfaceID.flatMap(UUID.init(uuidString:)), projectDir: projectDir) else {
                 // Common: Claude sessions running outside any tracked workstream.
                 logger.debug("No workstream match for projectDir: \(projectDir, privacy: .public)")
                 return
@@ -711,7 +744,7 @@ extension Workstream {
         /// cannot be attributed to the main session must not be attributed to it
         /// by default — the bar would then show a second agent's fill level.
         func handleStatusLine(projectDir: String, surfaceID: String?, reading: StatusLine.Reading) {
-            guard let lookup = workstreamLookup, let wsID = lookup(projectDir) else { return }
+            guard let wsID = owner(surfaceID: surfaceID.flatMap(UUID.init(uuidString:)), projectDir: projectDir) else { return }
             if let surfaceID, UUID(uuidString: surfaceID) != wsID {
                 return
             }
@@ -957,5 +990,74 @@ extension Workstream {
                 onProlongedSilence?()
             }
         }
+    }
+}
+
+extension Workstream.AgentStateTracker {
+    /// Everything `ContentView` derives from the project list for owner
+    /// attribution and for `list_peers`, built in one pass so the two cannot
+    /// disagree about which ids exist.
+    struct OwnerIndex {
+        /// A hook's `project_dir` → the workstream whose worktree it is.
+        let directoryOwner: (String) -> UUID?
+        /// A surface id → the id its events are attributed to, or nil.
+        let surfaceOwner: (UUID) -> UUID?
+        /// Every housed workstream → its group's name, for `IPC.Service.setGroupNames`.
+        let groupNameByWorkstreamID: [UUID: String]
+    }
+
+    /// The rule behind `surfaceOwnerLookup`, pure over the project list.
+    ///
+    /// A surface id resolves only if it is a known workstream id, a surface
+    /// `workstreamOwningSurface` maps to a known workstream, or a known group
+    /// id (a coordinator's surface id is its group id). Anything else is nil, so
+    /// an unclaimed id falls through to the directory rather than being
+    /// attributed to nobody's state. Surface id is asked first because
+    /// coordinators run at the project root, so several share one directory.
+    ///
+    /// `Project` equates by id alone, so adding, renaming or removing a group
+    /// does not fire `onChange(of: projectList.items)`. Every path that mutates
+    /// a project in place must rebuild this, not just the observer.
+    static func ownerIndex(
+        for projects: [Project],
+        workstreamOwningSurface: @escaping (UUID) -> UUID?
+    ) -> OwnerIndex {
+        var directories: [String: UUID] = [:]
+        var workstreamIDs: Set<UUID> = []
+        var groupIDs: Set<UUID> = []
+        var groupNames: [UUID: String] = [:]
+        for project in projects {
+            for group in project.groups ?? [] {
+                groupIDs.insert(group.id)
+            }
+            for ws in project.workstreams {
+                workstreamIDs.insert(ws.id)
+                if let path = ws.worktreePath {
+                    directories[normalize(path)] = ws.id
+                }
+                if let groupID = ws.groupID, let group = project.group(with: groupID) {
+                    groupNames[ws.id] = group.name
+                }
+            }
+        }
+        return OwnerIndex(
+            directoryOwner: { directories[normalize($0)] },
+            surfaceOwner: { surfaceID in
+                if workstreamIDs.contains(surfaceID) || groupIDs.contains(surfaceID) {
+                    return surfaceID
+                }
+                if let owner = workstreamOwningSurface(surfaceID), workstreamIDs.contains(owner) {
+                    return owner
+                }
+                return nil
+            },
+            groupNameByWorkstreamID: groupNames
+        )
+    }
+
+    /// Points both lookups at `index`.
+    func install(_ index: OwnerIndex) {
+        workstreamLookup = index.directoryOwner
+        surfaceOwnerLookup = index.surfaceOwner
     }
 }

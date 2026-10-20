@@ -47,6 +47,83 @@ extension Workstream {
             return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
         }
 
+        /// The coordinator's `--append-system-prompt` value.
+        ///
+        /// Never nil, unlike `systemPrompt`: the coordinator prompt is what
+        /// tells it what it is. No worktree restriction and no branch rename,
+        /// since it has neither a worktree nor a branch. The IPC part is gated
+        /// on the written MCP config for the same reason as `systemPrompt`.
+        static func coordinatorSystemPrompt(
+            groupName: String,
+            projectName: String,
+            rootDirectory: String,
+            checkoutDirectory: String,
+            members: [SystemPrompts.CoordinatorMember],
+            mcpConfigWritten: Bool
+        ) -> String {
+            var parts = [
+                SystemPrompts.coordinatorPrompt(
+                    groupName: groupName,
+                    projectName: projectName,
+                    rootDirectory: rootDirectory,
+                    checkoutDirectory: checkoutDirectory,
+                    members: members
+                ),
+            ]
+            if mcpConfigWritten {
+                parts.append(SystemPrompts.agentIPCPrompt(workstreamName: groupName))
+            }
+            return parts.joined(separator: "\n\n")
+        }
+
+        /// The coordinator's command: resume the group's session, else start it.
+        ///
+        /// The Coding Agent tab's shape, with the group id as the session id.
+        /// Kept as a sibling of `TerminalContainerView.buildClaudeCommand`
+        /// rather than shared with it because that one also wraps for tmux and
+        /// records intermediates; this is the pure half.
+        static func coordinator(
+            claudePath: String,
+            groupID: UUID,
+            groupName: String,
+            supportsSessionName: Bool,
+            bypassPermissions: Bool,
+            systemPrompt: String,
+            mcpConfigPath: String?,
+            settingsPath: String?
+        ) -> String {
+            let sessionID = groupID.uuidString.lowercased()
+
+            func common(_ builder: inout CommandBuilder) {
+                if supportsSessionName {
+                    builder.option("--name", groupName)
+                }
+                if bypassPermissions {
+                    builder.flag("--dangerously-skip-permissions")
+                }
+                builder.option("--append-system-prompt", systemPrompt)
+                if let mcpConfigPath {
+                    builder.option("--mcp-config", mcpConfigPath)
+                }
+                if let settingsPath {
+                    builder.option("--settings", settingsPath)
+                }
+            }
+
+            var resume = CommandBuilder(claudePath)
+            resume.option("--resume", sessionID)
+            common(&resume)
+
+            var fresh = CommandBuilder(claudePath)
+            fresh.option("--session-id", sessionID)
+            common(&fresh)
+
+            return CommandBuilder.withFallback(
+                resume.command, fresh.command,
+                message: "Starting new session..."
+            )
+        }
+
         /// A fresh agent invocation for a surface that has never held one.
         ///
         /// No resume half, deliberately: `--resume` names a session that must

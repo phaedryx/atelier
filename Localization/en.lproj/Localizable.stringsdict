@@ -21,5 +21,23 @@
 			<string>%lld workstreams</string>
 		</dict>
 	</dict>
+	<!-- The sidebar's per-project group count, read aloud by VoiceOver.
+	     The source is .accessibilityLabel("\(project.sortedGroups.count) groups"). -->
+	<key>%lld groups</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@count@</string>
+		<key>count</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>lld</string>
+			<key>one</key>
+			<string>%lld group</string>
+			<key>other</key>
+			<string>%lld groups</string>
+		</dict>
+	</dict>
 </dict>
 </plist>

@@ -84,10 +84,31 @@ keyboard shortcut tables that have to be reconciled by hand.
   unauthenticated `gh`. The process-compose row is fed by
   `ProcessCompose.Settings.resolveBinary()` and never by `ToolStatus.findBinary`, for the
   reason **Detected Tools** gives at length in `docs/agents/execution-and-config.md`.
-- **Sidebar state** (selection, expanded sections) stored in UserDefaults (`atelier.selection`, `atelier.expandedProjects`)
-- **No sidebar row is ever resolved by position.** `ProjectSidebar` caches a sort
-  order per project (`cachedSortedWorkstreamIDs`) and a project order
-  (`cachedSortedIDs`), and both are **one frame behind by construction**: they are
+- **Sidebar state** (selection, expanded sections) stored in UserDefaults (`atelier.selection`, `atelier.expandedProjects`, `atelier.collapsedGroups`)
+- **The sidebar is a three-level tree: project, group, workstream.** Every workstream lives in a
+  group (`Workstream.groupID`; `Project.housingWorkstreams()` backfills it on decode). **The group
+  row is the group's coordinator**: selecting it (`SidebarSelection.group`) shows
+  `CoordinatorPaneView`, a Claude Code session at `Project.directory` plus an Info tab, not a
+  workstream pane. `atelier.collapsedGroups` holds the **collapsed** set, beside `atelier.expandedProjects`
+  (`SidebarState.loadCollapsedGroups`/`saveCollapsedGroups`), so a group is open unless the user
+  folded it. It is inverted from the project set on purpose: an expanded set (`atelier.expandedGroups`,
+  no longer read) left every group nobody had touched closed — the one backfilled on upgrade, so
+  every existing workstream sat behind a collapsed row, and every group made by adopt. Do not flip it
+  back to an expanded set. A memberless group is a bare row with no
+  disclosure. Selecting a group never stamps it: a group's recency under Recent is the max of its own
+  `lastAccessedAt` (its creation time) and its newest member's, so a click cannot move the row under
+  the cursor. The coordinator's Info tab has no launch log, because `LaunchLogger` writes one and
+  nothing reads it back for any pane's display. A new group takes the `atelier.bypassPermissions`
+  default; its Full Permissions toggle only changes the stored `group.bypassPermissions`, which the
+  coordinator reads when it next starts, so a running one is not restarted.
+- **`cycledSelection` (⌘[ / ⌘]) walks groups as stops.** `ContentView.cycledSelection` visits each
+  group row and then its usable members, in the order the sidebar drew (`order` has no default for
+  that reason), so a memberless group is still reachable. Remove Group is disabled while the group has
+  members; `Archiver.removeGroup` refuses it again.
+- **No sidebar row is ever resolved by position.** `ProjectSidebar` caches a group
+  order per project (`cachedSortedGroupIDs`), a workstream order per **group**
+  (`cachedSortedWorkstreamIDs`) and a project order (`cachedSortedIDs`), and all
+  are **one frame behind by construction**: they are
   refilled from `onChange`, which runs after the body that already saw the mutated
   `projects`. Every add, remove, purge and project deletion therefore renders once
   against a cache that disagrees with the model.
@@ -238,6 +259,15 @@ which is what ⌘N and every other producer wants; the palette's two variant row
 `true` and `false`. Reading a missing payload as `false` would silently strip
 permissions from ⌘N.
 
+**The three `create.new*` palette rows are `.disabled` unless a workstream or a group
+is selected** (`PaletteContext.groupActive`, from `selection?.groupID`). A workstream
+joins a group, so a selected project or nothing names no target; the rows stay listed
+with a reason instead of posting `.addNew` into a receiver that can only show a hint.
+`create.newGroup` (⌘⌥N, `.addGroup`) is ungated: the sidebar resolves the project from
+the selection and does nothing with none. Adopt (project overview) picks a group in a
+sheet; with no groups it makes one through `Project.addGroup`, the same function the
+sidebar's field calls, and persists it before `Launcher.adopt` posts `.workstreamCreated`.
+
 The two are on different transports, and the split is by *receiver*, not by importance.
 **`AppCommand` is the typed channel for the commands `ContentView` receives** — the
 twenty-one app-level ones, and the grouping is the source's own `// MARK`s: the six
@@ -299,9 +329,10 @@ Current shortcuts:
 Global — available everywhere:
 - **Cmd+comma**: Settings
 - **Cmd+/**: Help
-- **Cmd+N**: New workstream, or new project when none is selected. The absent
+- **Cmd+N**: New workstream (in the selected group), or new project when nothing is selected. The absent
   payload means "the `atelier.bypassPermissions` default" — see `AppCommand`.
 - **Cmd+Shift+N**: New project, always
+- **Cmd+Option+N**: New group in the selected project (the inline name field)
 - **Cmd+Shift+C**: Toggle sidebar
 - **Cmd+Shift+P**: Command Palette
 

@@ -58,9 +58,26 @@ final class WorkstreamPermissionNotifierTests: XCTestCase {
         ))
     }
 
+    /// A coordinator's id is its group id, so a selected group whose pane is
+    /// frontmost is the coordinator's prompt already on screen.
+    func testSelectedGroupAndActiveIsSuppressed() {
+        XCTAssertFalse(Workstream.PermissionNotifier.shouldNotify(
+            enabled: true,
+            isAppActive: true,
+            selection: .group(wsID),
+            workstreamID: wsID
+        ))
+        XCTAssertTrue(Workstream.PermissionNotifier.shouldNotify(
+            enabled: true,
+            isAppActive: false,
+            selection: .group(wsID),
+            workstreamID: wsID
+        ))
+    }
+
     /// Settings and Help unmount the workspace entirely, so no pane is visible.
     func testNonWorkstreamSelectionNotifies() {
-        for selection: SidebarSelection in [.settings, .help, .project(otherID)] {
+        for selection: SidebarSelection in [.settings, .help, .project(otherID), .group(otherID)] {
             XCTAssertTrue(
                 Workstream.PermissionNotifier.shouldNotify(
                     enabled: true,

@@ -34,6 +34,12 @@ final class IPCToolRegistryTests: XCTestCase {
         }
     }
 
+    func test_bothCreationTools_acceptAGroup() {
+        for tool in [IPC.Tool.createWorkstream, .createShortcutWorkstream] {
+            XCTAssertTrue(tool.spec.arguments.map(\.name).contains("group"), "\(tool.rawValue) must accept group")
+        }
+    }
+
     /// An argument name is a wire key on both sides — advertised by the helper,
     /// read by a handler — so a duplicate silently loses one of them in the
     /// schema's `properties` dictionary.

@@ -45,12 +45,43 @@ extension Workstream {
             // rename here cannot reach them, so both spellings are exported.
             // Runs last, over the final ATELIER_* values (including any portPlan
             // override), so FF_* never lags behind a project's own declaration.
+            mirrorFF(&vars)
+
+            return vars
+        }
+
+        /// The environment for a group coordinator's terminal.
+        ///
+        /// No workstream id, name, worktree directory or port: the coordinator
+        /// has none of them, and exporting empty ones would make a script
+        /// believe it was in a worktree. `ATELIER_SURFACE_ID` is the group id
+        /// in `uuidString` case, as every other surface id is, while
+        /// `ATELIER_GROUP_ID` is lowercased like `ATELIER_WORKSTREAM_ID`.
+        static func coordinatorVariables(
+            groupID: UUID,
+            groupName: String,
+            projectName: String,
+            projectDirectory: String,
+            defaultBranch: String
+        ) -> [String: String] {
+            var vars = [
+                "ATELIER_PROJECT": projectName,
+                "ATELIER_PROJECT_DIR": projectDirectory,
+                "ATELIER_DEFAULT_BRANCH": defaultBranch,
+                "ATELIER_GROUP_ID": groupID.uuidString.lowercased(),
+                "ATELIER_GROUP": groupName,
+                "ATELIER_SURFACE_ID": groupID.uuidString,
+            ]
+            mirrorFF(&vars)
+            return vars
+        }
+
+        /// Adds an `FF_` spelling of every `ATELIER_` variable.
+        private static func mirrorFF(_ vars: inout [String: String]) {
             for (key, value) in Array(vars) {
                 guard let suffix = key.stripping(prefix: "ATELIER_") else { continue }
                 vars["FF_" + suffix] = value
             }
-
-            return vars
         }
     }
 }

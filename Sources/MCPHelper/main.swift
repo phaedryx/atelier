@@ -522,8 +522,9 @@ final class IPCBridge {
     /// model remembering an instruction it had no immediate use for — measured,
     /// and it does not happen. An agent's existence is what makes it reachable,
     /// so the helper claims an identity as soon as it has a connection: name
-    /// defaults to the workstream, and `register_peer` from the agent becomes a
-    /// rename rather than a prerequisite.
+    /// defaults to the workstream's, or the group's for a coordinator, and
+    /// `register_peer` from the agent becomes a rename rather than a
+    /// prerequisite.
     ///
     /// Called on every incoming MCP message, so a session that starts before
     /// Atelier is listening still lands as soon as it is. Claude Code sends
