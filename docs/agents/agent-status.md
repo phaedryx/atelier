@@ -48,6 +48,22 @@ which is why a slow MCP server read as a wedge. MCP calls are ordinary tool call
 the slowest, and belong inside a bracket. Only `Skill` and `ToolSearch` are filtered, on both
 sides.
 
+**Cursor CLI's turn events are aliases, not a second mapper.** `baseHookEvents` reads Cursor's
+`stop` as `Stop` and `beforeSubmitPrompt` as `UserPromptSubmit`; both payloads carry the name in
+`hook_event_name`, the same key Claude Code uses. Nothing else Cursor sends is mapped. Three
+facts behind the wiring, all observed against cursor-agent 2026.10.19:
+
+- **The entry is global, in `~/.cursor/hooks.json`** (`HookInstaller.Cursor`, installed at
+  launch only if `~/.cursor` exists). A `--plugin-dir` may declare hooks, but the TUI fires
+  `stop`/`beforeSubmitPrompt` only when a *user or project* hooks file declares them, the user
+  path is hard-coded, and the project path is the worktree. `-p` fires no hooks at all.
+- **`atelier-hook --cursor` exits silently without `ATELIER_SURFACE_ID`**, because every Cursor
+  session on the machine runs that entry. Cursor exports no `CLAUDE_PROJECT_DIR`, so ownership
+  is the surface id alone.
+- **A Cursor payload's `transcript_path` is dropped** (`mapHookEvent`, keyed on
+  `cursor_version`, which only Cursor sends). It names a Cursor transcript, which the context
+  meter would read as Claude's format.
+
 ### The hook channel is checked, not assumed
 
 `HookChannelProbe` answers the one question absence cannot: **are hook events arriving at all?**

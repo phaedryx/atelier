@@ -9,6 +9,7 @@ final class IPCConfigTests: XCTestCase {
 
     override func tearDown() {
         IPC.Config.remove(for: workstreamID)
+        IPC.CursorPlugin.remove(for: workstreamID)
         super.tearDown()
     }
 
@@ -51,5 +52,54 @@ final class IPCConfigTests: XCTestCase {
         _ = try XCTUnwrap(IPC.Config.write(for: workstreamID, helperPath: "/tmp/atelier-mcp"))
         IPC.Config.remove(for: workstreamID)
         XCTAssertFalse(FileManager.default.fileExists(atPath: IPC.Config.configURL(for: workstreamID).path))
+    }
+
+    // MARK: - Cursor plugin directory
+
+    /// Cursor CLI has no `--mcp-config`; `--plugin-dir` is how one launch gets
+    /// the server without touching `~/.cursor`. It lives beside the Claude
+    /// config, in the cache directory, never in the worktree.
+    func test_cursorPluginDirectory_livesInTheCacheDirectory_notTheWorktree() {
+        let url = IPC.CursorPlugin.directoryURL(for: workstreamID)
+        XCTAssertEqual(url.deletingLastPathComponent().lastPathComponent, workstreamID.uuidString.lowercased())
+        XCTAssertEqual(url.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent, "cursor-plugin")
+        XCTAssertTrue(url.path.hasPrefix(AppConstants.cacheDirectory.path), url.path)
+    }
+
+    /// The manifest Cursor needs to load the directory as a plugin at all, and
+    /// the MCP file in the shape the Claude config already uses.
+    /// Cursor names the agent's tools after the plugin directory, so it is
+    /// `atelier`, never the workstream id.
+    func test_cursorPluginDirectory_isNamedForTheToolsTheModelSees() {
+        XCTAssertEqual(IPC.CursorPlugin.directoryURL(for: workstreamID).lastPathComponent, "atelier")
+    }
+
+    func test_cursorPluginWrite_producesAManifestAndTheMCPServer() throws {
+        let path = try XCTUnwrap(IPC.CursorPlugin.write(for: workstreamID, helperPath: "/tmp/atelier-mcp"))
+        XCTAssertEqual(path, IPC.CursorPlugin.directoryURL(for: workstreamID).path)
+        let root = URL(fileURLWithPath: path)
+
+        let manifestData = try Data(contentsOf: root.appendingPathComponent(".cursor-plugin/plugin.json"))
+        let manifest = try XCTUnwrap(try JSONSerialization.jsonObject(with: manifestData) as? [String: Any])
+        XCTAssertEqual(manifest["name"] as? String, "atelier")
+
+        let mcpData = try Data(contentsOf: root.appendingPathComponent(".mcp.json"))
+        let mcp = try XCTUnwrap(try JSONSerialization.jsonObject(with: mcpData) as? [String: Any])
+        let servers = try XCTUnwrap(mcp["mcpServers"] as? [String: Any])
+        let server = try XCTUnwrap(servers["atelier-ipc"] as? [String: Any])
+        XCTAssertEqual(server["command"] as? String, "/tmp/atelier-mcp")
+        XCTAssertEqual(server["type"] as? String, "stdio")
+    }
+
+    func test_cursorPluginWrite_withoutAHelperBinary_returnsNil() {
+        XCTAssertNil(IPC.CursorPlugin.write(for: workstreamID, helperPath: nil))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: IPC.CursorPlugin.directoryURL(for: workstreamID).path))
+    }
+
+    func test_cursorPluginRemove_deletesTheDirectory() throws {
+        _ = try XCTUnwrap(IPC.CursorPlugin.write(for: workstreamID, helperPath: "/tmp/atelier-mcp"))
+        IPC.CursorPlugin.remove(for: workstreamID)
+        let workstreamDirectory = IPC.CursorPlugin.directoryURL(for: workstreamID).deletingLastPathComponent()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: workstreamDirectory.path))
     }
 }

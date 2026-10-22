@@ -278,6 +278,32 @@ consequences worth keeping:
   `TerminalSurfaceCache.retrySurface` already does), so a tab can be spawned into a workstream
   the user is not looking at. What is view-bound is *rendering*, not surface creation.
 
+**`agent: "cursor"` starts Cursor CLI (`cursor-agent`) instead of Claude Code**, and only here:
+the Coding Agent tab and both create tools stay Claude-only. `IPC.Vocabulary.AgentKind` is the
+vocabulary, matched exactly, and it is checked *before* the workstream is resolved, so a typo is
+answered with the legal values. `agent` or `model` without `prompt` is refused rather than
+ignored — both describe an agent, and a plain shell is not one. `SpawnedAgent` is an enum with
+one case per kind; the Claude case is the command it always was, plus `--model` when given.
+
+Cursor has no `--session-id`, `--settings`, `--mcp-config` or `--append-system-prompt`, which
+forces three differences, each in `Workstream.AgentCommand.cursorFresh`:
+
+- **The system prompt is prepended to the initial prompt** (`cursorInitialPrompt`), rules first.
+  It is still built by `systemPrompt(...)`, so the gate on the IPC part is unchanged — it is on
+  the plugin directory having been written.
+- **The MCP server arrives through `--plugin-dir`**, an `IPC.CursorPlugin` directory in
+  `Caches/…/cursor-plugin/<workstream-id>/atelier/` — named `atelier` because Cursor names the
+  agent's tools after it — holding `.cursor-plugin/plugin.json` and `.mcp.json`.
+  This rather than `~/.cursor/mcp.json`, which every Cursor session on the machine reads: the
+  same reason Claude gets `--mcp-config` rather than a global entry. The archiver removes it.
+- **`--approve-mcps` and `--trust` are always passed.** The surface may be in a workstream
+  nobody is looking at, and an agent stopped on an approval prompt there never reaches
+  atelier-ipc to say so. `--force` is the bypass-permissions spelling.
+
+Identity is `ATELIER_SURFACE_ID` in the environment, as for every surface; there is no session
+id to collide on. Turn-state hooks cannot ride in the plugin directory and are installed
+globally instead — `docs/agents/agent-status.md` has why.
+
 **`close_tab` is `open_tab`/`open_agent_tab`'s counterpart, for the pane an agent's own job
 created rather than one the user did.** A controller that spawns a peer into a new tab for a
 bounded task — a reviewer, a test-writer — had no way to tear that pane down once the job was
