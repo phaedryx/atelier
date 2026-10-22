@@ -1,4 +1,4 @@
-// ABOUTME: Installs and uninstalls atelier-hook commands in ~/.claude/settings.json.
+// ABOUTME: Installs and uninstalls atelier-hook commands in ~/.claude/settings.json and ~/.cursor/hooks.json.
 // ABOUTME: Idempotent — detects our commands by "atelier-hook" and by which of the two
 // ABOUTME: invocations (report or decide) they ask for, and touches only those commands,
 // ABOUTME: never a whole entry a user has appended their own command into.
@@ -358,5 +358,126 @@ enum HookInstaller {
         defer { flock(descriptor, LOCK_UN) }
 
         body()
+    }
+}
+
+extension HookInstaller {
+    /// The Cursor CLI half: `stop` and `beforeSubmitPrompt` in
+    /// `~/.cursor/hooks.json`, so a Cursor agent `open_agent_tab` started has a
+    /// turn state like a Claude one.
+    ///
+    /// **Global, because nothing narrower is read.** A `--plugin-dir` can carry
+    /// hooks, but Cursor's TUI only fires these two when a *user or project*
+    /// hooks file declares them, and the user file's path is hard-coded with no
+    /// environment override. The project file would be the worktree, which is
+    /// the user's checkout. So this is the `~/.claude/settings.json` decision
+    /// again: merge one entry per event, touch nothing else.
+    ///
+    /// The command carries `--cursor`, which makes `atelier-hook` exit at once
+    /// when `ATELIER_SURFACE_ID` is unset — every Cursor session on the machine
+    /// runs this entry, and only Atelier's own surfaces have anything to report.
+    /// It prints nothing either way, which is what `beforeSubmitPrompt` takes
+    /// as "continue".
+    enum Cursor {
+        static let events = ["stop", "beforeSubmitPrompt"]
+        static let argument = "--cursor"
+
+        static var hooksPath: String {
+            FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".cursor/hooks.json").path
+        }
+
+        /// Installs only when `~/.cursor` already exists, so a machine that has
+        /// never run Cursor does not grow a directory for it.
+        static func installIfCursorIsPresent(hookScriptPath: String) {
+            let directory = (hooksPath as NSString).deletingLastPathComponent
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: directory, isDirectory: &isDirectory),
+                  isDirectory.boolValue else { return }
+            install(hookScriptPath: hookScriptPath)
+        }
+
+        static func install(hookScriptPath: String, at path: String = hooksPath) {
+            do {
+                try FileManager.default.createDirectory(
+                    atPath: (path as NSString).deletingLastPathComponent,
+                    withIntermediateDirectories: true
+                )
+            } catch {
+                logger.error("Cannot create the Cursor hooks directory: \(error.localizedDescription, privacy: .public)")
+                return
+            }
+            withSettingsLock(at: path) {
+                guard var file = read(at: path) else { return }
+                var hooks = file["hooks"] as? [String: Any] ?? [:]
+                let quotedPath = hookScriptPath.contains(" ") ? "\"\(hookScriptPath)\"" : hookScriptPath
+                var changed = false
+                for event in events {
+                    var eventEntries = entries(in: hooks[event])
+                    // Any atelier-hook entry counts, whatever its path: one
+                    // pointing at another copy of Atelier is that copy's to
+                    // manage, as in the Claude half.
+                    guard !eventEntries.contains(where: isOurs) else { continue }
+                    eventEntries.append(["command": "\(quotedPath) \(argument)"])
+                    hooks[event] = eventEntries
+                    changed = true
+                }
+                guard changed else { return }
+                file["version"] = file["version"] ?? 1
+                file["hooks"] = hooks
+                write(file, to: path)
+            }
+        }
+
+        /// Removes our entries from `~/.cursor/hooks.json`, keeping everything else.
+        static func uninstall(at path: String = hooksPath) {
+            guard FileManager.default.fileExists(atPath: path) else { return }
+            withSettingsLock(at: path) {
+                guard var file = read(at: path), var hooks = file["hooks"] as? [String: Any] else { return }
+                var changed = false
+                for event in events {
+                    let eventEntries = entries(in: hooks[event])
+                    let kept = eventEntries.filter { !isOurs($0) }
+                    guard kept.count != eventEntries.count else { continue }
+                    changed = true
+                    hooks[event] = kept.isEmpty ? nil : kept
+                }
+                guard changed else { return }
+                file["hooks"] = hooks
+                write(file, to: path)
+            }
+        }
+
+        private static func isOurs(_ entry: [String: Any]) -> Bool {
+            (entry["command"] as? String)?.contains("atelier-hook") == true
+        }
+
+        /// The file's contents, `[:]` when it does not exist, or nil when it
+        /// exists and cannot be read as a JSON object — which is never
+        /// overwritten.
+        private static func read(at path: String) -> [String: Any]? {
+            let fm = FileManager.default
+            guard fm.fileExists(atPath: path) else { return [:] }
+            guard let data = fm.contents(atPath: path),
+                  let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else {
+                logger.warning("~/.cursor/hooks.json is not valid JSON — will not overwrite")
+                return nil
+            }
+            return parsed
+        }
+
+        private static func write(_ file: [String: Any], to path: String) {
+            guard let data = try? JSONSerialization.data(withJSONObject: file, options: [.prettyPrinted, .sortedKeys]) else {
+                logger.error("Failed to serialize ~/.cursor/hooks.json")
+                return
+            }
+            do {
+                try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+                logger.info("Updated atelier-hook entries in ~/.cursor/hooks.json")
+            } catch {
+                logger.error("Failed to write ~/.cursor/hooks.json: \(error.localizedDescription, privacy: .public)")
+            }
+        }
     }
 }

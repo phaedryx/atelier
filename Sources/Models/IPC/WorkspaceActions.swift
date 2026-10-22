@@ -561,6 +561,7 @@ final class WorkspaceActions {
         let slot: Int?
         let bypassPermissions: Bool
         let claudePath: String?
+        let cursorPath: String?
     }
 
     /// What `Verification.Runner.start` needs to identify a workstream.
@@ -669,7 +670,8 @@ final class WorkspaceActions {
             workingDirectory: context.workingDirectory,
             slot: context.workstream.slot,
             bypassPermissions: context.workstream.bypassPermissions,
-            claudePath: appEnvironment?.toolStatus.claude.path
+            claudePath: appEnvironment?.toolStatus.claude.path,
+            cursorPath: appEnvironment?.toolStatus.cursorAgent.path
         )
     }
 

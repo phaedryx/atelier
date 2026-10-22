@@ -360,3 +360,106 @@ final class HookInstallerTests: XCTestCase {
         XCTAssertNil((settings["hooks"] as? [String: Any])?["Stop"])
     }
 }
+
+/// Cursor CLI's TUI fires `stop` and `beforeSubmitPrompt` only when a user or
+/// project hooks file declares them — a plugin's hooks are ignored by that
+/// gate — so the entry has to live in `~/.cursor/hooks.json`, merged.
+final class CursorHookInstallerTests: XCTestCase {
+    private var directory: URL!
+    private var hooksPath: String!
+    private let script = "/Apps/Atelier.app/atelier-hook"
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("cursor-hook-installer-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        hooksPath = directory.appendingPathComponent("hooks.json").path
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: directory)
+        try super.tearDownWithError()
+    }
+
+    private func write(_ object: [String: Any]) throws {
+        let data = try JSONSerialization.data(withJSONObject: object)
+        try data.write(to: URL(fileURLWithPath: hooksPath))
+    }
+
+    private func read() throws -> [String: Any] {
+        let data = try Data(contentsOf: URL(fileURLWithPath: hooksPath))
+        return try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    private func commands(for event: String) throws -> [String] {
+        let hooks = try XCTUnwrap(try read()["hooks"] as? [String: Any])
+        let entries = hooks[event] as? [[String: Any]] ?? []
+        return entries.compactMap { $0["command"] as? String }
+    }
+
+    func testInstallsStopAndBeforeSubmitPromptWhenTheFileDoesNotExist() throws {
+        HookInstaller.Cursor.install(hookScriptPath: script, at: hooksPath)
+
+        XCTAssertEqual(try read()["version"] as? Int, 1)
+        XCTAssertEqual(try commands(for: "stop"), ["\(script) --cursor"])
+        XCTAssertEqual(try commands(for: "beforeSubmitPrompt"), ["\(script) --cursor"])
+    }
+
+    func testInstallIsIdempotent() throws {
+        HookInstaller.Cursor.install(hookScriptPath: script, at: hooksPath)
+        HookInstaller.Cursor.install(hookScriptPath: script, at: hooksPath)
+
+        XCTAssertEqual(try commands(for: "stop").count, 1)
+        XCTAssertEqual(try commands(for: "beforeSubmitPrompt").count, 1)
+    }
+
+    /// The file is the user's: their own hooks and keys survive the merge.
+    func testKeepsTheUsersOwnHooksAndKeys() throws {
+        try write([
+            "version": 1,
+            "hooks": [
+                "stop": [["command": "~/bin/notify-me"]],
+                "afterFileEdit": [["command": "~/bin/format"]],
+            ],
+        ])
+
+        HookInstaller.Cursor.install(hookScriptPath: script, at: hooksPath)
+
+        XCTAssertEqual(try commands(for: "stop"), ["~/bin/notify-me", "\(script) --cursor"])
+        XCTAssertEqual(try commands(for: "afterFileEdit"), ["~/bin/format"])
+    }
+
+    func testAnotherInstallsEntryIsLeftAlone() throws {
+        try write(["version": 1, "hooks": ["stop": [["command": "/other/atelier-hook --cursor"]]]])
+
+        HookInstaller.Cursor.install(hookScriptPath: script, at: hooksPath)
+
+        XCTAssertEqual(try commands(for: "stop"), ["/other/atelier-hook --cursor"])
+    }
+
+    func testRefusesToOverwriteAFileThatIsNotJSON() throws {
+        try Data("{ not json".utf8).write(to: URL(fileURLWithPath: hooksPath))
+
+        HookInstaller.Cursor.install(hookScriptPath: script, at: hooksPath)
+
+        XCTAssertEqual(try String(contentsOfFile: hooksPath, encoding: .utf8), "{ not json")
+    }
+
+    func testAPathWithASpaceIsQuoted() throws {
+        HookInstaller.Cursor.install(hookScriptPath: "/Apps/My Atelier.app/atelier-hook", at: hooksPath)
+
+        XCTAssertEqual(try commands(for: "stop"), ["\"/Apps/My Atelier.app/atelier-hook\" --cursor"])
+    }
+
+    func testUninstallRemovesOnlyOurEntries() throws {
+        try write(["version": 1, "hooks": ["stop": [["command": "~/bin/notify-me"]]]])
+        HookInstaller.Cursor.install(hookScriptPath: script, at: hooksPath)
+
+        HookInstaller.Cursor.uninstall(at: hooksPath)
+
+        XCTAssertEqual(try commands(for: "stop"), ["~/bin/notify-me"])
+        let hooks = try XCTUnwrap(try read()["hooks"] as? [String: Any])
+        XCTAssertNil(hooks["beforeSubmitPrompt"])
+    }
+}

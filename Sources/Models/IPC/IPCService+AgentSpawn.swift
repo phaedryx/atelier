@@ -37,11 +37,6 @@ extension IPC.Service {
     /// and no question of whether the pane was interruptible — the tab does
     /// not exist until it exists running the right thing.
     func openAgentTab(for request: Request) async -> Response {
-        let workstreamID: UUID
-        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
-        case let .success(id): workstreamID = id
-        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
-        }
         let arguments = ToolArguments(request)
         let title = Names.sanitized(arguments.optional("title") ?? "", limit: 40, fallback: "")
         // An empty `prompt` is not a request for an agent, and is now read as
@@ -51,27 +46,42 @@ extension IPC.Service {
         // machine without `claude` was refused a plain terminal it would
         // otherwise have been given.
         let prompt = arguments.optionalTrimmed("prompt")
+        let model = arguments.optionalTrimmed("model")
+        // Before the workstream is resolved, so a typo is answered with the
+        // legal values rather than with whatever the app's readiness is.
+        let kind: IPC.Vocabulary.AgentKind
+        do {
+            kind = try Self.agentKind(arguments, prompt: prompt, model: model)
+        } catch {
+            return .failure(id: request.id, error.localizedDescription)
+        }
+
+        let workstreamID: UUID
+        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
+        case let .success(id): workstreamID = id
+        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
+        }
 
         do {
             let plan = try await MainActor.run {
                 try WorkspaceActions.shared.agentTabPlan(workstreamID: workstreamID)
             }
 
-            // An agent was asked for but there is no `claude` to start. Refuse
-            // rather than opening a bare shell the caller would believe was an
-            // agent — a tab that silently is not what was asked for is worse
-            // than no tab.
-            if prompt != nil, plan.claudePath == nil {
+            // An agent was asked for but there is no binary to start it with.
+            // Refuse rather than opening a bare shell the caller would believe
+            // was an agent — a tab that silently is not what was asked for is
+            // worse than no tab.
+            if prompt != nil, let missing = Self.missingBinary(kind, plan: plan) {
                 return .failure(
                     id: request.id,
-                    "Cannot start an agent: Atelier could not find the `claude` binary. Omit `prompt` to open a plain terminal tab instead."
+                    "Cannot start an agent: Atelier could not find the `\(missing)` binary. Omit `prompt` to open a plain terminal tab instead."
                 )
             }
 
             let startsAgent = prompt?.isEmpty == false
             // Built before the hop, and off this actor as well — see this
             // method's doc comment.
-            let prepared = await Self.prepare(plan: plan, prompt: prompt)
+            let prepared = await Self.prepare(plan: plan, kind: kind, model: model, prompt: prompt)
             let environmentBase = prepared.environment
             let agentCommand = prepared.agent
             let surfaceID = try await MainActor.run {
@@ -97,38 +107,110 @@ extension IPC.Service {
         }
     }
 
+    /// The agent `open_agent_tab` was asked for: `agent` as given, Claude
+    /// when absent.
+    ///
+    /// Matched exactly, case included — `Cursor` reads like it means something,
+    /// and a value that does and does not is worse than a refusal. `agent` and
+    /// `model` only describe an agent, so either one without `prompt` is
+    /// refused rather than silently opening a plain shell.
+    private static func agentKind(
+        _ arguments: ToolArguments,
+        prompt: String?,
+        model: String?
+    ) throws -> IPC.Vocabulary.AgentKind {
+        let given = arguments.optionalTrimmed("agent")
+        if prompt == nil, given != nil || model != nil {
+            throw ToolError.invalidArgument(
+                name: given != nil ? "agent" : "model",
+                reason: "only applies to an agent. Pass `prompt` to start one, or omit it for a plain terminal tab."
+            )
+        }
+        guard let given else { return .claude }
+        guard let kind = IPC.Vocabulary.AgentKind(rawValue: given) else {
+            throw ToolError.invalidArgument(
+                name: "agent",
+                reason: "expected \(IPC.Vocabulary.quotedAgentKinds), received \"\(given)\"."
+            )
+        }
+        return kind
+    }
+
+    /// The binary `kind` needs that this machine does not have, or nil.
+    private static func missingBinary(
+        _ kind: IPC.Vocabulary.AgentKind,
+        plan: WorkspaceActions.AgentTabPlan
+    ) -> String? {
+        switch kind {
+        case .claude: plan.claudePath == nil ? "claude" : nil
+        case .cursor: plan.cursorPath == nil ? "cursor-agent" : nil
+        }
+    }
+
     /// Everything a spawned agent's command line needs except the surface it
     /// will run on.
     ///
-    /// The split exists so the two config files are written and the system
-    /// prompt assembled off the main actor; `openAgentTab`'s doc comment has
-    /// the rest of that argument. What is left here is a `CommandBuilder`
-    /// run, which is string work.
-    private struct SpawnedAgent: Sendable {
-        let claudePath: String
-        let bypassPermissions: Bool
-        let systemPrompt: String?
-        let mcpConfigPath: String?
-        let settingsPath: String?
-        let initialPrompt: String
+    /// The split exists so the config files are written and the system prompt
+    /// assembled off the main actor; `openAgentTab`'s doc comment has the rest
+    /// of that argument. What is left here is a `CommandBuilder` run, which is
+    /// string work.
+    private enum SpawnedAgent: Sendable {
+        case claude(Claude)
+        case cursor(Cursor)
 
-        /// **The session id is the surface's, never the workstream's.** The
-        /// workstream id is the Coding Agent tab's own Claude session; a
+        struct Claude: Sendable {
+            let claudePath: String
+            let model: String?
+            let bypassPermissions: Bool
+            let systemPrompt: String?
+            let mcpConfigPath: String?
+            let settingsPath: String?
+            let initialPrompt: String
+        }
+
+        /// No session id, settings file or MCP config flag: `cursor-agent`
+        /// takes none of them, and the MCP server rides in the plugin directory. The surface reaches it only as
+        /// `ATELIER_SURFACE_ID` in its environment, which is all atelier-ipc and
+        /// `atelier-hook` need to know who it is.
+        struct Cursor: Sendable {
+            let cursorPath: String
+            let model: String?
+            let bypassPermissions: Bool
+            let systemPrompt: String?
+            let pluginDirectory: String?
+            let initialPrompt: String
+        }
+
+        /// **A Claude session id is the surface's, never the workstream's.**
+        /// The workstream id is the Coding Agent tab's own Claude session; a
         /// second agent handed it would fight that tab over one transcript.
         /// The surface id is unique per tab by construction, so it is the
         /// right session identity — which is why this one field, and only
         /// this one, is applied per surface.
         func command(surfaceID: UUID) -> String {
-            Workstream.AgentCommand.fresh(
-                claudePath: claudePath,
-                sessionID: surfaceID.uuidString.lowercased(),
-                sessionName: nil,
-                bypassPermissions: bypassPermissions,
-                systemPrompt: systemPrompt,
-                mcpConfigPath: mcpConfigPath,
-                settingsPath: settingsPath,
-                initialPrompt: initialPrompt
-            )
+            switch self {
+            case let .claude(agent):
+                Workstream.AgentCommand.fresh(
+                    claudePath: agent.claudePath,
+                    sessionID: surfaceID.uuidString.lowercased(),
+                    sessionName: nil,
+                    bypassPermissions: agent.bypassPermissions,
+                    systemPrompt: agent.systemPrompt,
+                    mcpConfigPath: agent.mcpConfigPath,
+                    settingsPath: agent.settingsPath,
+                    initialPrompt: agent.initialPrompt,
+                    model: agent.model
+                )
+            case let .cursor(agent):
+                Workstream.AgentCommand.cursorFresh(
+                    cursorPath: agent.cursorPath,
+                    model: agent.model,
+                    bypassPermissions: agent.bypassPermissions,
+                    systemPrompt: agent.systemPrompt,
+                    pluginDirectory: agent.pluginDirectory,
+                    initialPrompt: agent.initialPrompt
+                )
+            }
         }
     }
 
@@ -152,43 +234,69 @@ extension IPC.Service {
     /// the length of several child processes, so it belongs on neither actor.
     private static func prepare(
         plan: WorkspaceActions.AgentTabPlan,
+        kind: IPC.Vocabulary.AgentKind,
+        model: String?,
         prompt: String?
     ) async -> (environment: [String: String], agent: SpawnedAgent?) {
         await Task.detached(priority: .userInitiated) {
             (
                 environment: WorkspaceActions.environmentBase(for: plan),
-                agent: agentCommand(plan: plan, prompt: prompt)
+                agent: agentCommand(plan: plan, kind: kind, model: model, prompt: prompt)
             )
         }.value
     }
 
     private nonisolated static func agentCommand(
         plan: WorkspaceActions.AgentTabPlan,
+        kind: IPC.Vocabulary.AgentKind,
+        model: String?,
         prompt: String?
     ) -> SpawnedAgent? {
-        guard let prompt, !prompt.isEmpty, let claudePath = plan.claudePath else { return nil }
-        let mcpConfigPath = IPC.AgentSettings.isEnabled ? IPC.Config.write(for: plan.workstreamID) : nil
-        let systemPrompt = Workstream.AgentCommand.systemPrompt(
+        guard let prompt, !prompt.isEmpty else { return nil }
+        switch kind {
+        case .claude:
+            guard let claudePath = plan.claudePath else { return nil }
+            let mcpConfigPath = IPC.AgentSettings.isEnabled ? IPC.Config.write(for: plan.workstreamID) : nil
+            // Resolved against the worktree, so a project that configures its
+            // own status line in `.claude/settings.json` is honoured the same
+            // way the Coding Agent tab honours it.
+            let settingsPath = StatusLine.Config.write(
+                for: plan.workstreamID,
+                cwd: plan.workingDirectory
+            )
+            return .claude(SpawnedAgent.Claude(
+                claudePath: claudePath,
+                model: model,
+                bypassPermissions: plan.bypassPermissions,
+                systemPrompt: systemPrompt(plan: plan, mcpConfigWritten: mcpConfigPath != nil),
+                mcpConfigPath: mcpConfigPath,
+                settingsPath: settingsPath,
+                initialPrompt: prompt
+            ))
+        case .cursor:
+            guard let cursorPath = plan.cursorPath else { return nil }
+            let pluginDirectory = IPC.AgentSettings.isEnabled ? IPC.CursorPlugin.write(for: plan.workstreamID) : nil
+            return .cursor(SpawnedAgent.Cursor(
+                cursorPath: cursorPath,
+                model: model,
+                bypassPermissions: plan.bypassPermissions,
+                systemPrompt: systemPrompt(plan: plan, mcpConfigWritten: pluginDirectory != nil),
+                pluginDirectory: pluginDirectory,
+                initialPrompt: prompt
+            ))
+        }
+    }
+
+    private nonisolated static func systemPrompt(
+        plan: WorkspaceActions.AgentTabPlan,
+        mcpConfigWritten: Bool
+    ) -> String? {
+        Workstream.AgentCommand.systemPrompt(
             allowOutsideWorktree: UserDefaults.standard.bool(forKey: "atelier.allowOutsideWorktree"),
             autoRenameBranch: UserDefaults.standard.bool(forKey: "atelier.autoRenameBranch"),
             worktreePath: plan.workingDirectory,
             workstreamName: plan.workstreamName,
-            mcpConfigWritten: mcpConfigPath != nil
-        )
-        // Resolved against the worktree, so a project that configures its
-        // own status line in `.claude/settings.json` is honoured the same
-        // way the Coding Agent tab honours it.
-        let settingsPath = StatusLine.Config.write(
-            for: plan.workstreamID,
-            cwd: plan.workingDirectory
-        )
-        return SpawnedAgent(
-            claudePath: claudePath,
-            bypassPermissions: plan.bypassPermissions,
-            systemPrompt: systemPrompt,
-            mcpConfigPath: mcpConfigPath,
-            settingsPath: settingsPath,
-            initialPrompt: prompt
+            mcpConfigWritten: mcpConfigWritten
         )
     }
 

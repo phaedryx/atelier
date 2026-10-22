@@ -1027,6 +1027,53 @@ final class IPCServiceTests: XCTestCase {
         XCTAssertNotEqual(response.error, IPC.ToolError.notInWorkstream.errorDescription)
     }
 
+    /// An agent the tool does not know how to start is the caller's mistake,
+    /// and it is told so — with the legal values — before anything about the
+    /// app's readiness. Falling back to Claude would start an agent that is not
+    /// what was asked for.
+    func test_openAgentTab_withAnUnknownAgent_isRefusedNamingTheChoices() async {
+        let response = await call(
+            .openAgentTab, ["agent": "codex", "prompt": "look"], as: client(project: projectA)
+        )
+
+        XCTAssertNil(response.payload)
+        let error = response.error ?? ""
+        XCTAssertTrue(error.contains("agent"), error)
+        XCTAssertTrue(error.contains("codex"), error)
+        XCTAssertTrue(error.contains("\"claude\"") && error.contains("\"cursor\""), error)
+    }
+
+    /// Case is not forgiven: `Cursor` reads like it means something, and a
+    /// value that does and does not is worse than a refusal.
+    func test_openAgentTab_agentIsMatchedExactly() async {
+        let response = await call(
+            .openAgentTab, ["agent": "Cursor", "prompt": "look"], as: client(project: projectA)
+        )
+
+        XCTAssertTrue(response.error?.contains("Cursor") == true, String(describing: response.error))
+    }
+
+    /// The two known agents get past the argument check and are refused for
+    /// the app's reason instead.
+    func test_openAgentTab_withAKnownAgent_getsPastTheArgumentCheck() async {
+        for agent in ["claude", "cursor", ""] {
+            let response = await call(
+                .openAgentTab, ["agent": agent, "model": "gpt-5", "prompt": "look"], as: client(project: projectA)
+            )
+            XCTAssertNil(response.payload)
+            XCTAssertFalse(response.error?.contains("`agent`") == true, String(describing: response.error))
+        }
+    }
+
+    /// `model` and `agent` only mean something for an agent, so a plain
+    /// terminal asked for one is refused rather than silently ignoring it.
+    func test_openAgentTab_withAModelButNoPrompt_isRefused() async {
+        let response = await call(.openAgentTab, ["model": "gpt-5"], as: client(project: projectA))
+
+        XCTAssertNil(response.payload)
+        XCTAssertTrue(response.error?.contains("prompt") == true, String(describing: response.error))
+    }
+
     // MARK: - request_attention
 
     func test_requestAttention_withoutAReason_saysWhichArgumentIsMissing() async {

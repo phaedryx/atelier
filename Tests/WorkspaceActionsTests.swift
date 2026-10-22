@@ -418,4 +418,89 @@ final class AgentCommandTests: XCTestCase {
     func testRunsThroughTheLoginShell() {
         XCTAssertTrue(fresh().contains("-lic"))
     }
+
+    // MARK: - Cursor
+
+    private func cursorFresh(
+        model: String? = nil,
+        bypassPermissions: Bool = false,
+        systemPrompt: String? = nil,
+        pluginDirectory: String? = nil,
+        initialPrompt: String = "review the diff and report back"
+    ) -> String {
+        Workstream.AgentCommand.cursorFresh(
+            cursorPath: "/Users/me/.local/bin/cursor-agent",
+            model: model,
+            bypassPermissions: bypassPermissions,
+            systemPrompt: systemPrompt,
+            pluginDirectory: pluginDirectory,
+            initialPrompt: initialPrompt
+        )
+    }
+
+    /// The plugin directory is how the atelier-ipc server reaches a Cursor
+    /// agent, so it is passed exactly when one was written.
+    func testCursorFreshLoadsThePluginDirectoryWhenOneWasWritten() {
+        XCTAssertFalse(cursorFresh().contains("--plugin-dir"))
+        let command = cursorFresh(pluginDirectory: "/cache/cursor-plugin/ws")
+        XCTAssertTrue(command.contains("--plugin-dir"))
+        XCTAssertTrue(command.contains("/cache/cursor-plugin/ws"))
+    }
+
+    func testCursorFreshRunsCursorAgent() {
+        XCTAssertTrue(cursorFresh().contains("/Users/me/.local/bin/cursor-agent"))
+        XCTAssertTrue(cursorFresh().contains("-lic"))
+    }
+
+    /// An agent started in a surface nobody is watching cannot answer the MCP
+    /// approval prompt or the workspace-trust prompt, so both are pre-answered.
+    func testCursorFreshPreApprovesMCPServersAndTrustsTheWorkspace() {
+        XCTAssertTrue(cursorFresh().contains("--approve-mcps"))
+        XCTAssertTrue(cursorFresh().contains("--trust"))
+    }
+
+    /// Cursor has no Claude session, system-prompt or settings flags; passing
+    /// one would kill it at launch with an unknown-option error.
+    func testCursorFreshCarriesNoClaudeOnlyFlags() {
+        let command = cursorFresh(bypassPermissions: true, systemPrompt: "be nice")
+        for flag in ["--session-id", "--append-system-prompt", "--settings", "--mcp-config", "--dangerously-skip-permissions"] {
+            XCTAssertFalse(command.contains(flag), "\(flag) in: \(command)")
+        }
+    }
+
+    func testCursorFreshForcesOnlyWhenBypassingPermissions() {
+        XCTAssertFalse(cursorFresh().contains("--force"))
+        XCTAssertTrue(cursorFresh(bypassPermissions: true).contains("--force"))
+    }
+
+    func testCursorFreshPassesTheModelOnlyWhenOneIsGiven() {
+        XCTAssertFalse(cursorFresh().contains("--model"))
+        let command = cursorFresh(model: "gpt-5")
+        XCTAssertTrue(command.contains("--model"))
+        XCTAssertTrue(command.contains("gpt-5"))
+    }
+
+    /// With no `--append-system-prompt`, the system prompt rides at the head of
+    /// the initial prompt — ahead of the task, so the rules come first.
+    func testCursorFreshPrependsTheSystemPromptToTheInitialPrompt() throws {
+        let command = cursorFresh(systemPrompt: "SYSTEM RULES", initialPrompt: "THE TASK")
+        let rules = try XCTUnwrap(command.range(of: "SYSTEM RULES"), command)
+        let task = try XCTUnwrap(command.range(of: "THE TASK"), command)
+        XCTAssertTrue(rules.upperBound <= task.lowerBound, command)
+    }
+
+    /// Prompt and rules must reach the CLI as one positional argument, so the
+    /// combined text is quoted as a whole.
+    func testCursorFreshQuotesTheCombinedPromptAsOneArgument() {
+        XCTAssertEqual(
+            Workstream.AgentCommand.cursorInitialPrompt(systemPrompt: "rules", initialPrompt: "task"),
+            "rules\n\ntask"
+        )
+        XCTAssertEqual(
+            Workstream.AgentCommand.cursorInitialPrompt(systemPrompt: nil, initialPrompt: "task"),
+            "task"
+        )
+        let command = cursorFresh(initialPrompt: "review the diff; then report")
+        XCTAssertTrue(command.contains("review the diff; then report"), command)
+    }
 }

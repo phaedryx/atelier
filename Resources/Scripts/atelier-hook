@@ -4,6 +4,14 @@
 # ABOUTME: inherited ATELIER_SURFACE_ID, and POSTs to localhost. With
 # ABOUTME: --permission it waits for a decision and prints it for Claude Code.
 INPUT=$(cat)
+# --cursor is how the global ~/.cursor/hooks.json entry calls this. Every
+# Cursor session on the machine runs it, and only an Atelier surface has
+# anything to report, so it leaves without one. Stdin is drained first so the
+# harness never writes into a closed pipe. Nothing is printed on any path,
+# which beforeSubmitPrompt reads as "continue".
+if [ "$1" = "--cursor" ] && [ -z "$ATELIER_SURFACE_ID" ]; then
+  exit 0
+fi
 PORT_FILE="$HOME/Library/Caches/atelier/hook-port"
 [ -f "$PORT_FILE" ] || exit 0
 PORT=$(cat "$PORT_FILE")
