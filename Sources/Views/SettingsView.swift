@@ -5,9 +5,6 @@ import SwiftUI
 
 struct SettingsView: View {
     @AppStorage(SettingsPane.storageKey) private var selectedPaneRaw: String = SettingsPane.general.rawValue
-    @AppStorage("atelier.defaultTerminal") private var defaultTerminal: String = ""
-
-    @EnvironmentObject private var appEnv: AppEnvironment
 
     private var selectedPane: SettingsPane {
         SettingsPane(rawValue: selectedPaneRaw) ?? .general
@@ -33,15 +30,6 @@ struct SettingsView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Seeds the External Terminal default on any Settings visit, not just
-        // a visit to the pane holding the picker. Panes are built by a switch,
-        // so an .onAppear inside one only ever runs if the user selects it —
-        // and the picker's pane is not the default one.
-        .onAppear {
-            if defaultTerminal.isEmpty, let first = appEnv.installedTerminals.first {
-                defaultTerminal = first.bundleID
-            }
-        }
     }
 }
 
@@ -358,9 +346,28 @@ private struct CodingAgentSettingsPane: View {
     @AppStorage(PermissionApprovalSettings.enabledKey) private var permissionApproval: Bool = false
     @AppStorage(PermissionApprovalSettings.holdKey) private var permissionHold: Double = PermissionApprovalSettings.defaultHold
     @AppStorage("atelier.defaultTerminal") private var defaultTerminal: String = ""
+    @AppStorage(ExternalApp.Kind.editor.defaultsKey) private var defaultEditor: String = ""
     @AppStorage("atelier.defaultBrowser") private var defaultBrowser: String = ""
 
     @EnvironmentObject private var appEnv: AppEnvironment
+
+    /// Each picker shows the app an open would actually use, which with
+    /// nothing stored is the first one installed — so no seeding step is
+    /// needed, and a default whose app was since removed shows its
+    /// replacement rather than a blank picker.
+    private var editorSelection: Binding<String> {
+        Binding(
+            get: { ExternalApp.resolve(stored: defaultEditor, installed: appEnv.installedEditors)?.bundleID ?? "" },
+            set: { defaultEditor = $0 }
+        )
+    }
+
+    private var terminalSelection: Binding<String> {
+        Binding(
+            get: { ExternalApp.resolve(stored: defaultTerminal, installed: appEnv.installedTerminals)?.bundleID ?? "" },
+            set: { defaultTerminal = $0 }
+        )
+    }
 
     var body: some View {
         Form {
@@ -451,7 +458,24 @@ private struct CodingAgentSettingsPane: View {
                         .foregroundStyle(.orange)
                 }
 
-                Picker("External Terminal", selection: $defaultTerminal) {
+                if !appEnv.installedEditors.isEmpty {
+                    Picker("External Editor", selection: editorSelection) {
+                        ForEach(appEnv.installedEditors) { app in
+                            Label {
+                                Text(app.name)
+                            } icon: {
+                                if let icon = app.icon {
+                                    Image(nsImage: icon)
+                                        .resizable()
+                                        .frame(width: 16, height: 16)
+                                }
+                            }
+                            .tag(app.bundleID)
+                        }
+                    }
+                }
+
+                Picker("External Terminal", selection: terminalSelection) {
                     ForEach(appEnv.installedTerminals) { app in
                         Label {
                             Text(app.name)

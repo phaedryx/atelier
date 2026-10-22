@@ -31,6 +31,8 @@ struct PaletteContext {
     var hasPullRequest: Bool = false
     /// A Shortcut story is attached to the active workstream.
     var hasShortcutStory: Bool = false
+    /// At least one external editor `ExternalApp` knows is installed.
+    var hasExternalEditor: Bool = false
 }
 
 /// Whether a command may run, and if not, whether the palette should say so.

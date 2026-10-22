@@ -1,15 +1,13 @@
-// ABOUTME: Opens directories and files in the user's terminal application.
+// ABOUTME: Runs a command on a file in Apple Terminal.
 // ABOUTME: One hardened path, so no view assembles AppleScript or shell text itself.
 
 import AppKit
 import Foundation
 
-/// The one place Atelier hands something to a terminal application.
+/// The one place Atelier hands a *command* to a terminal application.
 ///
-/// Opening a *directory* is an `NSWorkspace` call and carries no injection
-/// risk: the path travels as a `URL`. It lives here because the same eight
-/// lines had been copied into four views, and a fifth copy is how the
-/// hardened path below would eventually be worked around.
+/// Opening a *directory* is an `NSWorkspace` call with no injection risk, and
+/// lives in `ExternalApp` beside the editors, which open the same way.
 ///
 /// Opening a *file in an editor* has to name a command, because that is what
 /// Terminal's `do script` takes. It goes through `AppleScriptRunner`, so the
@@ -18,36 +16,6 @@ import Foundation
 /// script. Neither layer is escaped in Swift because neither layer is
 /// assembled in Swift.
 enum ExternalTerminal {
-    /// The user's chosen terminal, falling back to Apple Terminal.
-    private static func application(preferring bundleID: String) -> URL? {
-        if !bundleID.isEmpty,
-           let chosen = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
-        {
-            return chosen
-        }
-        return NSWorkspace.shared.urlForApplication(withBundleIdentifier: appleTerminalBundleID)
-    }
-
-    static let appleTerminalBundleID = "com.apple.Terminal"
-
-    /// Opens `directory` in the user's terminal.
-    static func open(directory: String, preferredBundleID: String) {
-        guard let appURL = application(preferring: preferredBundleID) else { return }
-        NSWorkspace.shared.open(
-            [URL(fileURLWithPath: directory)],
-            withApplicationAt: appURL,
-            configuration: NSWorkspace.OpenConfiguration()
-        )
-    }
-
-    /// Opens `directory` in the terminal named by `atelier.defaultTerminal`.
-    static func open(directory: String) {
-        open(
-            directory: directory,
-            preferredBundleID: UserDefaults.standard.string(forKey: "atelier.defaultTerminal") ?? ""
-        )
-    }
-
     /// Runs `<executablePath> <filePath>` in a new Apple Terminal window.
     ///
     /// Both paths arrive as AppleScript event parameters and are quoted by the

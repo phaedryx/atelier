@@ -84,6 +84,23 @@ keyboard shortcut tables that have to be reconciled by hand.
   unauthenticated `gh`. The process-compose row is fed by
   `ProcessCompose.Settings.resolveBinary()` and never by `ToolStatus.findBinary`, for the
   reason **Detected Tools** gives at length in `docs/agents/execution-and-config.md`.
+- **External editors and terminals** are `ExternalApp`: a catalog of bundle ids per kind,
+  detected once in `AppEnvironment.refresh()` (`installedEditors`, `installedTerminals`), and
+  one default per kind under `atelier.defaultEditor` / `atelier.defaultTerminal` — the
+  latter's spelling predates the type and is kept so nobody's choice resets. The default
+  **resolves** rather than being seeded: a stored id that is still installed, else the first
+  installed in catalog order, else nothing. Both Settings pickers bind to that resolution, which
+  is why the `.onAppear` that used to seed `atelier.defaultTerminal` on any Settings visit is
+  gone — and why an uninstalled default shows its replacement instead of a blank picker. Editor
+  affordances are omitted when no editor is installed; terminal ones never are, because Apple
+  Terminal is always there. **A wrong bundle id fails silently** — the app is simply never
+  listed, indistinguishable from not installed — so check a new catalog entry against a real
+  install with `osascript -e 'id of app "<Name>"'` before adding it.
+  `OpenInAppMenuItems` / `OpenWithMenu` (`Sources/Views/OpenInAppMenu.swift`) are the
+  context-menu items and the "Open With" picker, and take the installed lists as a parameter
+  rather than reading `AppEnvironment` from inside a `.contextMenu` — picking an app opens it *and* makes it that
+  kind's default. Plain opens re-detect at click time, so they work before startup detection
+  has landed.
 - **Sidebar state** (selection, expanded sections) stored in UserDefaults (`atelier.selection`, `atelier.expandedProjects`, `atelier.collapsedGroups`)
 - **The sidebar is a three-level tree: project, group, workstream.** Every workstream lives in a
   group (`Workstream.groupID`; `Project.housingWorkstreams()` backfills it on decode). **The group
@@ -270,7 +287,7 @@ sidebar's field calls, and persists it before `Launcher.adopt` posts `.workstrea
 
 The two are on different transports, and the split is by *receiver*, not by importance.
 **`AppCommand` is the typed channel for the commands `ContentView` receives** — the
-twenty-one app-level ones, and the grouping is the source's own `// MARK`s: the six
+twenty-two app-level ones, and the grouping is the source's own `// MARK`s: the seven
 application cases, the seven navigation cases, archive and purge, and the six
 selected-workstream actions above.
 `AppCommandChannel.shared.send(_:)` replaces the post, `ContentView.handle(_:)` is the

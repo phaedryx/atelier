@@ -102,7 +102,6 @@ struct CoordinatorPaneView: View {
     @EnvironmentObject private var appEnv: AppEnvironment
     @AppStorage("atelier.tmuxMode") private var tmuxMode: Bool = false
     @AppStorage(IPC.AgentSettings.enabledKey) private var agentIPC: Bool = false
-    @AppStorage("atelier.defaultTerminal") private var defaultTerminal: String = ""
 
     @State private var activeTab: WorkspaceTab = .agent
     /// Built once, after the default branch is known, the way
@@ -243,7 +242,7 @@ struct CoordinatorPaneView: View {
                         .foregroundStyle(.secondary)
                 }
                 LabeledContent("Root directory") {
-                    DirectoryRow(path: project.directory, defaultTerminal: defaultTerminal)
+                    DirectoryRow(path: project.directory)
                 }
             }
             Section("Members") {
@@ -254,8 +253,7 @@ struct CoordinatorPaneView: View {
                     ForEach(members) { workstream in
                         LabeledContent(workstream.name) {
                             DirectoryRow(
-                                path: workstream.workingDirectory(checkout: project.checkout),
-                                defaultTerminal: defaultTerminal
+                                path: workstream.workingDirectory(checkout: project.checkout)
                             )
                         }
                     }

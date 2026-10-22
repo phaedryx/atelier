@@ -25,7 +25,6 @@ struct ProjectOverviewView: View {
     /// context, so this instance only ever holds an orphan target.
     @StateObject private var purgeConfirmation = Workstream.PurgeConfirmation()
 
-    @AppStorage("atelier.defaultTerminal") private var defaultTerminal: String = ""
     @State private var docFiles: [DocFile] = []
     @State private var selectedDoc: String?
     @State private var showRepoChanges = false
@@ -53,7 +52,7 @@ struct ProjectOverviewView: View {
                     .multilineTextAlignment(.center)
                     .onChange(of: project.name) { _, _ in onProjectChanged() }
 
-                DirectoryRow(path: project.directory, defaultTerminal: defaultTerminal, githubURL: appEnv.githubURL(for: project.directory))
+                DirectoryRow(path: project.directory, githubURL: appEnv.githubURL(for: project.directory))
             }
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 20)
@@ -226,6 +225,7 @@ struct ProjectOverviewView: View {
                                 prNumber: pr?.number,
                                 prStatus: pr?.status,
                                 prURL: pr?.url,
+                                externalApps: appEnv.installedExternalApps,
                                 onSelect: { onSelectWorkstream(workstream.id) },
                                 onRemove: { onRemoveWorkstream(workstream.id) },
                                 onPurge: { onPurgeWorkstream(workstream.id) }
@@ -769,6 +769,7 @@ private struct WorkstreamRow: View {
     var prNumber: Int?
     var prStatus: GitHub.PR.Status?
     var prURL: String?
+    var externalApps: [ExternalApp.Kind: [AppInfo]] = [:]
     let onSelect: () -> Void
     let onRemove: () -> Void
     let onPurge: () -> Void
@@ -872,11 +873,7 @@ private struct WorkstreamRow: View {
                 } label: {
                     Label("Reveal in Finder", systemImage: "folder")
                 }
-                Button {
-                    openDirectoryInTerminal(worktreePath)
-                } label: {
-                    Label("Open in External Terminal", systemImage: "terminal")
-                }
+                OpenInAppMenuItems(directory: worktreePath, installed: externalApps)
                 Divider()
             }
             if let branchName {

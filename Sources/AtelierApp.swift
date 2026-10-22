@@ -517,6 +517,15 @@ struct AtelierApp: App {
                 }
                 .keyboardShortcut("b", modifiers: [.command, .option])
 
+                Button("Open in External Editor") {
+                    AppCommandChannel.shared.send(.openExternalEditor)
+                }
+                // Asks LaunchServices directly — a few lookups, no child process
+                // — because `AppEnvironment` belongs to `ContentView` and the menu
+                // is built outside it. Disabled rather than hidden, the menu bar's
+                // convention; every other editor affordance is omitted outright.
+                .disabled(ExternalApp.detect(.editor).isEmpty)
+
                 Button("Open in External Terminal") {
                     AppCommandChannel.shared.send(.openExternalTerminal)
                 }
