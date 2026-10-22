@@ -652,6 +652,22 @@ final class WorkstreamAgentStateTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.state(forSurface: paneB), .working, "one pane finishing says nothing about the other")
     }
 
+    /// What a Cursor tab sends: Cursor exports no `CLAUDE_PROJECT_DIR`, so the
+    /// hook arrives with only the surface id to go on. That has to be enough,
+    /// or a Cursor peer has no turn state and is never nudged.
+    func test_surfaceState_resolvesFromTheSurfaceAloneWithNoProjectDirectory() {
+        let pane = UUID()
+        let mapped = wsID
+        tracker.workstreamLookup = { _ in nil }
+        tracker.surfaceOwnerLookup = { $0 == pane ? mapped : nil }
+
+        tracker.handle(projectDir: "", event: fromSurface(pane, .waiting(agentId: "main")))
+        XCTAssertEqual(tracker.state(forSurface: pane), .working)
+
+        tracker.handle(projectDir: "", event: fromSurface(pane, .idle(agentId: "main")))
+        XCTAssertEqual(tracker.state(forSurface: pane), .idle)
+    }
+
     func test_surfaceState_isNilUntilThatSurfaceReports() {
         handle(.idle(agentId: "main"))
         XCTAssertNil(tracker.state(forSurface: UUID()), "no evidence must read as nil, not as idle")
