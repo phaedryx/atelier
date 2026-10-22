@@ -39,8 +39,15 @@ final class PhaseEnvironmentTests: XCTestCase {
             workstreamName: "amber-otter",
             projectDirectory: projectDirectory.path,
             worktreePath: worktree.path,
-            defaultBranch: "main"
+            defaultBranch: "main",
+            slot: 2
         )
+    }
+
+    /// `dispose`, initialization steps and verification checks see the same
+    /// slot the workstream's terminals do.
+    func testThePhaseEnvironmentCarriesTheSlot() {
+        XCTAssertEqual(variables()["ATELIER_SLOT"], "2")
     }
 
     /// The C1 case, stated directly: a `bootstrap` process must be able to read

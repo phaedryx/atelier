@@ -558,6 +558,7 @@ final class WorkspaceActions {
         /// `Project.directory` — the repository's home, never its checkout.
         let projectDirectory: String
         let workingDirectory: String
+        let slot: Int?
         let bypassPermissions: Bool
         let claudePath: String?
     }
@@ -581,6 +582,7 @@ final class WorkspaceActions {
         /// an agent-started check and a user-started one export the same value —
         /// `Git.Operations.defaultBranch` caches per directory, so asking is cheap.
         let defaultBranch: String
+        let slot: Int?
     }
 
     /// Resolved through `resolve` rather than `context(workstreamID:)`, which
@@ -597,7 +599,8 @@ final class WorkspaceActions {
             projectName: found.project.name,
             projectDirectory: found.project.directory,
             worktreePath: found.workstream.workingDirectory(checkout: found.project.checkout),
-            defaultBranch: Git.Operations.defaultBranch(at: found.project.checkout)
+            defaultBranch: Git.Operations.defaultBranch(at: found.project.checkout),
+            slot: found.workstream.slot
         )
     }
 
@@ -618,6 +621,7 @@ final class WorkspaceActions {
         let projectDirectory: String
         let worktreePath: String
         let defaultBranch: String
+        let slot: Int?
         /// The user's per-workstream dev-command override, which
         /// `ProcessCompose.ResolutionModel.resolve` needs and cannot read itself.
         /// The same value `TerminalContainerView.init` seeds its own state with,
@@ -647,6 +651,7 @@ final class WorkspaceActions {
             projectDirectory: found.project.directory,
             worktreePath: found.workstream.workingDirectory(checkout: found.project.checkout),
             defaultBranch: Git.Operations.defaultBranch(at: found.project.checkout),
+            slot: found.workstream.slot,
             devCommandOverride: DevCommand.Resolver.savedOverride(for: workstreamID),
             tmuxPath: tmuxMode ? appEnvironment?.toolStatus.tmux.path : nil,
             launcherPath: RunLauncher.executableURL()?.path,
@@ -662,6 +667,7 @@ final class WorkspaceActions {
             projectName: context.project.name,
             projectDirectory: context.project.directory,
             workingDirectory: context.workingDirectory,
+            slot: context.workstream.slot,
             bypassPermissions: context.workstream.bypassPermissions,
             claudePath: appEnvironment?.toolStatus.claude.path
         )
@@ -695,7 +701,8 @@ final class WorkspaceActions {
             workstreamName: plan.workstreamName,
             projectDirectory: plan.projectDirectory,
             worktreePath: plan.workingDirectory,
-            defaultBranch: Git.Operations.defaultBranch(at: plan.projectDirectory)
+            defaultBranch: Git.Operations.defaultBranch(at: plan.projectDirectory),
+            slot: plan.slot
         )
         vars["TMUX"] = ""
         vars["TMUX_PANE"] = ""

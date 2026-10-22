@@ -411,6 +411,111 @@ final class WorkstreamLauncherTests: XCTestCase {
         XCTAssertNil(posted?.shortcutStoryID)
     }
 
+    // MARK: - Slots
+
+    @MainActor
+    func testLaunchTakesTheLowestSlotNotHeldByTheLiveProject() async throws {
+        let launcher = makeLauncher([project(
+            directory: "/repos/app",
+            workstreams: [
+                Workstream(name: "a", worktreePath: "/repos/app/a", slot: 1),
+                Workstream(name: "b", worktreePath: "/repos/app/b", slot: 2),
+            ]
+        )])
+
+        let launched = try await launcher.launch(
+            in: target(launcher, projectDirectory: "/repos/app"),
+            groupID: UUID(),
+            requestedName: "c",
+            createWorktree: { _, _, _, name in "/repos/app/\(name)" }
+        )
+
+        XCTAssertEqual(launched.slot, 3)
+    }
+
+    /// A slot retired by a purge whose `dispose` may still be running is not
+    /// handed out.
+    @MainActor
+    func testLaunchTreatsRetiredSlotsAsHeld() async throws {
+        var app = project(directory: "/repos/app")
+        app.retiredSlots = ["/repos/app/purged": 1]
+        let launcher = makeLauncher([app])
+        let recorder = Recorder()
+
+        let launched = try await launcher.launch(
+            in: target(launcher, projectDirectory: "/repos/app"),
+            groupID: UUID(),
+            requestedName: "c",
+            createWorktree: { _, _, _, name in "/repos/app/\(name)" }
+        )
+
+        XCTAssertEqual(launched.slot, 2)
+        XCTAssertEqual(
+            (recorder.events[0].userInfo["workstream"] as? Workstream)?.slot, 2,
+            "the posted row must carry the slot, or the sidebar's copy would have none"
+        )
+    }
+
+    /// Two launches overlap and nothing appends either row, which is the window
+    /// between minting and `ContentView`'s handler. Each launch's worktree
+    /// creation waits for the other's to start, so neither returns, and neither
+    /// leaves the in-flight set, until both have minted. That holds whichever
+    /// order `async let` happens to schedule them in.
+    @MainActor
+    func testOverlappingLaunchesDoNotShareASlot() async throws {
+        let launcher = makeLauncher([project(directory: "/repos/app")])
+        let t = try target(launcher, projectDirectory: "/repos/app")
+        let oneStarted = DispatchSemaphore(value: 0)
+        let twoStarted = DispatchSemaphore(value: 0)
+
+        async let first = launcher.launch(
+            in: t, groupID: UUID(), requestedName: "one",
+            createWorktree: { _, _, _, name in
+                oneStarted.signal()
+                twoStarted.wait()
+                return "/repos/app/\(name)"
+            }
+        )
+        async let second = launcher.launch(
+            in: t, groupID: UUID(), requestedName: "two",
+            createWorktree: { _, _, _, name in
+                twoStarted.signal()
+                oneStarted.wait()
+                return "/repos/app/\(name)"
+            }
+        )
+        let (a, b) = try await (first, second)
+
+        XCTAssertEqual(Set([a.slot, b.slot]), [1, 2])
+    }
+
+    /// Adoption reclaims a retired slot even when the path is spelled
+    /// differently from the one it was retired under.
+    @MainActor
+    func testAdoptReclaimsTheSlotRetiredUnderItsPath() {
+        var app = project(directory: "/repos/app")
+        app.retiredSlots = [Workstream.Slot.key(for: "/repos/app/old"): 4]
+        let launcher = makeLauncher([app])
+
+        let launched = launcher.adopt(projectID: app.id, groupID: UUID(), name: "old", worktreePath: "/repos/app/./old/")
+
+        XCTAssertEqual(launched.slot, 4)
+    }
+
+    @MainActor
+    func testAdoptOfANewPathAllocatesPastRetiredSlots() {
+        var app = project(
+            directory: "/repos/app",
+            workstreams: [Workstream(name: "a", worktreePath: "/repos/app/a", slot: 1)]
+        )
+        app.retiredSlots = ["/repos/app/old": 2]
+        let launcher = makeLauncher([app])
+
+        let launched = launcher.adopt(projectID: app.id, groupID: UUID(), name: "fresh", worktreePath: "/repos/app/fresh")
+
+        XCTAssertEqual(launched.slot, 3)
+    }
+
     /// The GitHub-branch flow does not get its own launch path — it names a
     /// different `WorktreeSource`, and that is the whole of the choice.
     ///

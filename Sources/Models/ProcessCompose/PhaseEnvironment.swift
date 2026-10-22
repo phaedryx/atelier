@@ -33,13 +33,16 @@ extension ProcessCompose {
         ///   surfaces get, which is `Git.Operations.defaultBranch(at:)` — not
         ///   `BaseBranchSetting`, which governs which branch a worktree is *cut
         ///   from* and is a different question.
+        /// - Parameter slot: no default, so that a new caller cannot leave it
+        ///   out; pass the workstream's own. See `Workstream.Slot`.
         static func variables(
             workstreamID: UUID,
             projectName: String,
             workstreamName: String,
             projectDirectory: String,
             worktreePath: String,
-            defaultBranch: String
+            defaultBranch: String,
+            slot: Int?
         ) -> [String: String] {
             Workstream.Environment.variables(
                 workstreamID: workstreamID,
@@ -49,6 +52,7 @@ extension ProcessCompose {
                 workingDirectory: worktreePath,
                 port: Port.Allocator.port(for: worktreePath),
                 defaultBranch: defaultBranch,
+                slot: slot,
                 portPlan: portPlan(projectDirectory: projectDirectory, worktreePath: worktreePath)
             )
         }

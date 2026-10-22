@@ -227,6 +227,7 @@ func workspaceEnvironmentVariables(
     workingDirectory: String,
     port: Int,
     defaultBranch: String,
+    slot: Int?,
     portPlan: ProcessCompose.PortPlan = .empty
 ) -> [String: String] {
     Workstream.Environment.variables(
@@ -237,6 +238,7 @@ func workspaceEnvironmentVariables(
         workingDirectory: workingDirectory,
         port: port,
         defaultBranch: defaultBranch,
+        slot: slot,
         portPlan: portPlan
     )
 }
@@ -265,6 +267,7 @@ struct TerminalContainerView: View {
     let projectDirectory: String
     let projectName: String
     let workstreamName: String
+    let slot: Int?
     let workstreamLabel: String
     let bypassPermissions: Bool
     let isActive: Bool
@@ -364,6 +367,7 @@ struct TerminalContainerView: View {
         projectDirectory: String,
         projectName: String,
         workstreamName: String,
+        slot: Int?,
         workstreamLabel: String? = nil,
         bypassPermissions: Bool,
         isActive: Bool,
@@ -376,6 +380,7 @@ struct TerminalContainerView: View {
         self.projectDirectory = projectDirectory
         self.projectName = projectName
         self.workstreamName = workstreamName
+        self.slot = slot
         self.workstreamLabel = workstreamLabel ?? workstreamName
         self.bypassPermissions = bypassPermissions
         self.isActive = isActive
@@ -849,6 +854,7 @@ struct TerminalContainerView: View {
                 projectDirectory: projectDirectory,
                 projectName: projectName,
                 workstreamName: workstreamName,
+                slot: slot,
                 declaredProcesses: resolved.declaredVerifyChecks,
                 unavailableReason: resolved.verifyUnavailableReason,
                 runner: verificationRunner
@@ -1047,6 +1053,7 @@ struct TerminalContainerView: View {
                 // which is the route AGENTS.md requires of a `@MainActor`
                 // caller, and `verificationTarget` reads the same copy.
                 defaultBranch: defaultBranch,
+                slot: slot,
                 checks: [name]
             )
         } catch {
@@ -1902,6 +1909,7 @@ struct TerminalContainerView: View {
             workingDirectory: workingDirectory,
             port: workstreamPort,
             defaultBranch: defaultBranch,
+            slot: slot,
             portPlan: session.portPlan
         )
         // claudeID is the workstream id, so the Agent surface addresses itself
@@ -1926,13 +1934,15 @@ struct TerminalContainerView: View {
         // stored property would capture the whole view into the Task.
         let capturedProjectName = projectName
         let capturedWorkstreamName = workstreamName
+        let capturedSlot = slot
         Task {
             await Initialization.Runner.shared.run(
                 workstreamID: id,
                 projectName: capturedProjectName,
                 workstreamName: capturedWorkstreamName,
                 projectPath: project,
-                worktreePath: worktree
+                worktreePath: worktree,
+                slot: capturedSlot
             )
         }
     }

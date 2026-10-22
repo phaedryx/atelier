@@ -59,6 +59,7 @@ a decision spelled inline in a row body is one nothing can pin.
 | Reached by | ⌘⇧W, the menu's "Archive Workstream", the palette, the sidebar context menu's "Remove" — and, per workstream through `Archiver.removeAllWorkstreams`, the three paths that delete a whole project: the sidebar's Delete, the sweep that drops a project whose directory has gone, and Clear Projects | the sidebar context menu's "Purge", and the Purge button on `WorkstreamInfoView`'s merged-PR banner |
 | Runs `dispose`? | no | yes, before the worktree goes |
 | Files on disk | **kept** | `git worktree remove`, local branch deleted, default branch re-fetched |
+| `ATELIER_SLOT` | retired under the path — still held | retired under the path — `dispose` still sees it; freed by the sweep once `git worktree remove` has run |
 | Also | kills tmux sessions, releases permission holds, evicts surfaces (including check terminals, via `Verification.Runner.forget` — nothing else can reach them) and the whiteboard host, releases project task claims, drops `IPC.Config`, the status-line settings file and the launch log, clears the initialization state entry, and clears the workstream's agent state | same, plus cancels a running initialization through `Initialization.Runner.cancel`, stops the dev stack, waits out running verification checks through `Verification.Runner.stopAndWait`, then `forget`s that workstream in the runner and runs `clearWorkstreamState`, which drops the Execution checklist's selection key, the per-check verification records, and the saved session checkpoint |
 | Guarded by | nothing — it destroys nothing | `purgeWarning` / `destroyableWorktreePath` |
 
@@ -72,6 +73,16 @@ alone, so a purge left an agent stopped on a permission banner waiting out a
 deadline nothing would service, and leaked its mcp-config and `--settings` files
 into Caches for good. A step added to that function cannot go missing from the
 other path.
+
+**Neither path frees the workstream's slot, and purge is not an exception.**
+`detachWorkstream` retires it into `Project.retiredSlots` via
+`Workstream.Slot.detach`, and `Workstream.Slot.sweep` — on appear and on the 15s
+tick — releases it once the directory is gone. Remove needs that because it
+leaves the dev stack running. Purge needs it because it calls
+`detachWorkstream` synchronously and runs `dispose` afterwards, in its detached
+task: freeing at detach would hand slot n to a workstream created seconds later
+while `dispose` was still flushing slot n's resources. Adopting the directory
+back reclaims the same slot.
 
 Two things both paths run but at *different points*, so they stay at their own
 call sites rather than joining that tail: `Verification.Runner.forget`, which

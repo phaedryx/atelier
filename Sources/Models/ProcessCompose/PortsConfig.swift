@@ -96,6 +96,7 @@ extension ProcessCompose {
         private static let reservedNames: Set<String> = [
             "ATELIER_WORKSTREAM_ID", "ATELIER_PROJECT", "ATELIER_WORKSTREAM",
             "ATELIER_PROJECT_DIR", "ATELIER_WORKTREE_DIR", "ATELIER_DEFAULT_BRANCH",
+            "ATELIER_SLOT",
         ]
 
         /// Three more names Atelier owns, reserved for a different reason from the

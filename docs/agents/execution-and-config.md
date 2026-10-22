@@ -675,7 +675,7 @@ name before allocation, so an assigned port does not move because a YAML key was
 `assigned: false` is an error rather than a no-op, because it reads like it means something.
 
 **Two sets of names are refused, for different reasons, and neither is a reversal of the
-merge-over rule below.** Six `ATELIER_*` names Atelier sets per *workstream*
+merge-over rule below.** Seven `ATELIER_*` names Atelier sets per *workstream*
 (`ATELIER_WORKTREE_DIR` and friends) were the first; `ATELIER_SURFACE_ID`, `TMUX` and
 `TMUX_PANE`, which Atelier sets per *surface*, are the second. `ATELIER_PORT` stays
 declarable, which is the documented exception and the whole of it. What made the second set
@@ -703,6 +703,18 @@ not just the run pane — a port visible only to the run pane is invisible to a 
 terminal tab. Declarations merge *over* Atelier's own variables, so a project that wants
 `ATELIER_PORT` to mean something specific may say so, and the legacy `FF_*` mirror is built
 last so it never lags behind.
+
+**`ATELIER_SLOT` is the one value Atelier allocates rather than hashes.** A
+Redis DB index has sixteen values, so the DJB2 hash behind `ATELIER_PORT` would
+collide within a handful of worktrees; the slot is instead the lowest integer
+≥ 1 not held by a live workstream or a retired directory of the same project
+(`Workstream.Slot`). Because it depends on the sibling set rather than on one
+path, it is decided once — when `Workstream.Launcher` mints the workstream —
+stored on the record (`Workstream.slot`), and carried to every assembler the way
+the workstream id is: `PhaseEnvironment.variables` takes it as a required
+parameter so a new caller cannot drop it. 0 is never handed out, leaving it to
+the project's own checkout. There is no upper bound; a consumer with a ceiling
+enforces it. It is reserved here for the same reason as the other six.
 
 **And every declared name reaches all three namespaces, every initialization step and every
 verification check.**

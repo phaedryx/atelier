@@ -279,7 +279,10 @@ extension Workstream {
             IPC.Config.remove(for: workstreamID)
             StatusLine.Config.remove(for: workstreamID)
             LaunchLogger.removeLog(for: workstreamID)
-            project.workstreams.removeAll { $0.id == workstreamID }
+            // Retires the slot rather than freeing it: remove leaves the dev
+            // stack running, and purge's `dispose` runs after this returns.
+            // `Workstream.Slot.sweep` frees it once the directory is gone.
+            Workstream.Slot.detach(workstreamID, from: &project)
             clearAgentState(workstreamID, tracker: agentStateTracker)
         }
 
@@ -467,6 +470,9 @@ extension Workstream {
                 )
                 let standardizedPath = URL(fileURLWithPath: worktreePath ?? projectDir).standardizedFileURL.path
                 let wsName = ws.name
+                // Captured before detach retires it: `dispose` runs afterwards, in
+                // the task below, and must see the slot it is cleaning up after.
+                let slot = ws.slot
                 let projName = project.name
                 archivingPaths.insert(standardizedPath)
                 NotificationCenter.default.post(name: archivingDidStart, object: nil)
@@ -551,7 +557,8 @@ extension Workstream {
                                     projectName: projName,
                                     workstreamName: wsName,
                                     worktreePath: worktreePath,
-                                    projectDirectory: projectDir
+                                    projectDirectory: projectDir,
+                                    slot: slot
                                 )
                                 // Logged here rather than left to the caller: a purge
                                 // that cannot remove the worktree used to be found out
@@ -697,7 +704,8 @@ extension Workstream {
             projectName: String,
             workstreamName: String,
             worktreePath: String,
-            projectDirectory: String
+            projectDirectory: String,
+            slot: Int?
         ) {
             let plan = disposePlan(worktreePath: worktreePath, projectDirectory: projectDirectory)
             let config: ProcessCompose.Config
@@ -720,7 +728,8 @@ extension Workstream {
                 workstreamName: workstreamName,
                 projectDirectory: projectDirectory,
                 worktreePath: worktreePath,
-                defaultBranch: Git.Operations.defaultBranch(at: projectDirectory)
+                defaultBranch: Git.Operations.defaultBranch(at: projectDirectory),
+                slot: slot
             )
 
             let outcome = ProcessCompose.PhaseExecutor.run(

@@ -87,6 +87,27 @@ final class ProjectTests: XCTestCase {
         XCTAssertEqual(projects, loaded)
     }
 
+    /// An upgrade hands out distinct slots in array order, and two independent
+    /// loads of the same unsaved blob agree — `AtelierApp`, `ProjectList` and
+    /// `ContentView` each load without comparing notes.
+    func testLoadBackfillsSlotsDeterministically() {
+        let json = """
+        [{ "id": "\(UUID().uuidString)", "name": "app", "directory": "/tmp/app",
+           "checkoutDirectory": "/tmp/app", "lastAccessedAt": 0,
+           "workstreams": [
+             { "id": "\(UUID().uuidString)", "name": "a", "worktreePath": "/tmp/app/a", "bypassPermissions": false, "lastAccessedAt": 0 },
+             { "id": "\(UUID().uuidString)", "name": "b", "worktreePath": "/tmp/app/b", "bypassPermissions": false, "lastAccessedAt": 0 }
+           ] }]
+        """
+        testDefaults.set(Data(json.utf8), forKey: "atelier.projects")
+
+        let first = ProjectStore.load(defaults: testDefaults)
+        let second = ProjectStore.load(defaults: testDefaults)
+
+        XCTAssertEqual(first.first?.workstreams.map(\.slot), [1, 2])
+        XCTAssertEqual(second.first?.workstreams.map(\.slot), [1, 2])
+    }
+
     func testProjectDefaultsToNoWorkstreams() {
         let project = Project(name: "test", directory: "/test")
         XCTAssertTrue(project.workstreams.isEmpty)
@@ -676,6 +697,34 @@ final class ProjectTests: XCTestCase {
         let decoded = try JSONDecoder().decode(Workstream.self, from: Data(json.utf8))
         XCTAssertEqual(decoded.name, "legacy")
         XCTAssertTrue(decoded.bypassPermissions)
+    }
+
+    func testWorkstreamWithoutSlotDecodesToNil() throws {
+        let json = """
+        { "id": "\(UUID().uuidString)", "name": "no-slot", "bypassPermissions": false, "lastAccessedAt": 0 }
+        """
+        let decoded = try JSONDecoder().decode(Workstream.self, from: Data(json.utf8))
+        XCTAssertNil(decoded.slot)
+    }
+
+    func testSlotAndRetiredSlotsRoundTrip() throws {
+        let original = Project(
+            name: "app", directory: "/tmp/app",
+            workstreams: [Workstream(name: "a", worktreePath: "/tmp/app/a", slot: 3)],
+            retiredSlots: ["/tmp/app/old": 1]
+        )
+        let decoded = try JSONDecoder().decode(Project.self, from: JSONEncoder().encode(original))
+        XCTAssertEqual(decoded.workstreams.first?.slot, 3)
+        XCTAssertEqual(decoded.retiredSlots, ["/tmp/app/old": 1])
+    }
+
+    func testProjectWithoutRetiredSlotsDecodesToNil() throws {
+        let json = """
+        { "id": "\(UUID().uuidString)", "name": "app", "directory": "/tmp/app",
+          "checkoutDirectory": "/tmp/app", "lastAccessedAt": 0, "workstreams": [] }
+        """
+        let decoded = try JSONDecoder().decode(Project.self, from: Data(json.utf8))
+        XCTAssertNil(decoded.retiredSlots)
     }
 
     func testWorkstreamWithoutShortcutStoryIDDecodesToNil() throws {

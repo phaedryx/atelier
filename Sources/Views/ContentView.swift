@@ -301,6 +301,7 @@ struct ContentView: View {
                     projectDirectory: project.directory,
                     projectName: project.name,
                     workstreamName: workstream.name,
+                    slot: workstream.slot,
                     workstreamLabel: workstream.label,
                     bypassPermissions: workstream.bypassPermissions,
                     isActive: true,
@@ -608,6 +609,7 @@ struct ContentView: View {
             // Costs nothing for a store with no stranded record, which is the
             // normal case; see the doc for the four ways it stays cheap.
             reconcileStrandedWorkstreams()
+            sweepRetiredSlots()
             appEnvironment.fetchOrigin(projects: projects)
             Task { await usageStore.refresh() }
             syncAgentLookupsAndGroupNames(projects: projects)
@@ -639,6 +641,8 @@ struct ContentView: View {
                       let workstream = info["workstream"] as? Workstream,
                       let index = projects.firstIndex(where: { $0.id == projectID }) else { return }
                 projects[index].workstreams.append(workstream)
+                // Adoption hands a retired slot back; drop the entry that held it.
+                Workstream.Slot.claim(workstream, in: &projects[index])
                 // `Workstream.Launcher` is the only producer and always sets
                 // the key: true for the sidebar's three entry points and for
                 // adoption, which are buttons the user just pressed, and false
@@ -676,13 +680,15 @@ struct ContentView: View {
                 // terminals get, and only the project model knows them.
                 let projectName = projects[found.project].name
                 let workstreamName = projects[found.project].workstreams[found.workstream].name
+                let slot = projects[found.project].workstreams[found.workstream].slot
                 Task {
                     await Initialization.Runner.shared.run(
                         workstreamID: workstreamID,
                         projectName: projectName,
                         workstreamName: workstreamName,
                         projectPath: projectPath,
-                        worktreePath: worktreePath
+                        worktreePath: worktreePath,
+                        slot: slot
                     )
                 }
             }
@@ -713,6 +719,7 @@ struct ContentView: View {
                 appEnvironment.refreshAllBranchPRs(projects: projects)
                 appEnvironment.fetchOrigin(projects: projects)
                 syncWorkstreamNamesFromBranches()
+                sweepRetiredSlots()
             }
             .modifier(UsagePolling(store: usageStore))
     }
@@ -780,6 +787,22 @@ struct ContentView: View {
         // story by; without it the story staged at creation is never promoted.
         syncShortcutStoryIDs(projects: projects)
         return (pi, wi)
+    }
+
+    /// Releases retired slots whose directory has gone. Works on a copy and
+    /// writes back only on change: an `inout` through `projects` publishes the
+    /// whole list even when nothing moved, and this runs every 15 seconds.
+    private func sweepRetiredSlots() {
+        var updated = projects
+        var changed = false
+        for index in updated.indices
+            where Workstream.Slot.sweep(&updated[index], exists: { FileManager.default.fileExists(atPath: $0) })
+        {
+            changed = true
+        }
+        guard changed else { return }
+        projects = updated
+        ProjectStore.save(projects)
     }
 
     /// Reattaches workstreams that were persisted with no worktree path to the
@@ -1274,8 +1297,17 @@ enum ProjectStore {
     /// read that discarded the whole list over one unreadable project turned the
     /// user's next edit into a permanent deletion of all of them. See
     /// `LossyStore`.
+    ///
+    /// Every workstream it returns has a slot; see `Workstream.Slot.backfill`.
     static func load(defaults: UserDefaults = .standard) -> [Project] {
-        LossyStore.loadArray(Project.self, forKey: userDefaultsKey, from: defaults) ?? []
+        var projects = LossyStore.loadArray(Project.self, forKey: userDefaultsKey, from: defaults) ?? []
+        // Here rather than at one caller: three places load independently, and
+        // backfill is deterministic, so they agree without coordinating. The
+        // result reaches the store on the next ordinary save.
+        for index in projects.indices {
+            Workstream.Slot.backfill(&projects[index])
+        }
+        return projects
     }
 
     /// **Does not round-trip.** A workstream with no `worktreePath` is dropped on

@@ -55,7 +55,8 @@ final class InitializationRunnerTests: XCTestCase {
             projectName: "proj",
             workstreamName: "ws",
             projectPath: projectDir.path,
-            worktreePath: worktree.path
+            worktreePath: worktree.path,
+            slot: nil
         )
     }
 
@@ -289,7 +290,7 @@ final class InitializationRunnerTests: XCTestCase {
         let running = Task {
             await runner.run(
                 workstreamID: id, projectName: "proj", workstreamName: "ws",
-                projectPath: project, worktreePath: tree
+                projectPath: project, worktreePath: tree, slot: nil
             )
         }
 
@@ -379,7 +380,7 @@ final class InitializationRunnerTests: XCTestCase {
         func go() async {
             await runner.run(
                 workstreamID: id, projectName: "proj", workstreamName: "ws",
-                projectPath: project, worktreePath: tree
+                projectPath: project, worktreePath: tree, slot: nil
             )
         }
         async let first: Void = go()

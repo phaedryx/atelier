@@ -84,6 +84,7 @@ final class ExecutionBridgeTests: XCTestCase {
             projectDirectory: NSTemporaryDirectory(),
             worktreePath: NSTemporaryDirectory(),
             defaultBranch: "main",
+            slot: nil,
             devCommandOverride: nil,
             tmuxPath: nil,
             launcherPath: nil,
