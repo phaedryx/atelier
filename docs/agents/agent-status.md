@@ -60,6 +60,11 @@ facts behind the wiring, all observed against cursor-agent 2026.10.19:
 - **`atelier-hook --cursor` exits silently without `ATELIER_SURFACE_ID`**, because every Cursor
   session on the machine runs that entry. Cursor exports no `CLAUDE_PROJECT_DIR`, so ownership
   is the surface id alone.
+- **Release wins the global entry, and that is not path-blindness left half-done.** An
+  Atelier entry whose script is gone is replaced by any build; one at another *live* path is
+  replaced only by the release build (`reclaimsLiveEntries`). Path-blind (the Claude half's rule)
+  lets a debug build that installed first keep `~/.cursor/hooks.json` pointing into a worktree
+  that will be cleaned; path-greedy has debug and release fighting over it on every launch.
 - **A Cursor payload's `transcript_path` is dropped** (`mapHookEvent`, keyed on
   `cursor_version`, which only Cursor sends). It names a Cursor transcript, which the context
   meter would read as Claude's format.

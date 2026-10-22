@@ -430,12 +430,79 @@ final class CursorHookInstallerTests: XCTestCase {
         XCTAssertEqual(try commands(for: "afterFileEdit"), ["~/bin/format"])
     }
 
-    func testAnotherInstallsEntryIsLeftAlone() throws {
-        try write(["version": 1, "hooks": ["stop": [["command": "/other/atelier-hook --cursor"]]]])
+    /// A script that exists somewhere else on disk, the way another Atelier's
+    /// bundled copy does.
+    private func liveScript(named name: String) throws -> String {
+        let url = directory.appendingPathComponent(name).appendingPathComponent("atelier-hook")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("#!/bin/sh\n".utf8).write(to: url)
+        return url.path
+    }
 
-        HookInstaller.Cursor.install(hookScriptPath: script, at: hooksPath)
+    /// A debug build in a worktree whose build directory was cleaned leaves an
+    /// entry every Cursor session runs and fails on. Any build replaces it.
+    func testAnEntryWhoseScriptIsGoneIsReplaced() throws {
+        try write(["version": 1, "hooks": ["stop": [["command": "/gone/worktree/atelier-hook --cursor"]]]])
 
-        XCTAssertEqual(try commands(for: "stop"), ["/other/atelier-hook --cursor"])
+        HookInstaller.Cursor.install(hookScriptPath: script, at: hooksPath, reclaimsLiveEntries: false)
+
+        XCTAssertEqual(try commands(for: "stop"), ["\(script) --cursor"])
+    }
+
+    /// The release app owns the global file: a live entry another copy of
+    /// Atelier left — a debug build, most often — is taken back.
+    func testTheReleaseBuildReclaimsALiveEntryAtAnotherPath() throws {
+        let other = try liveScript(named: "debug")
+        try write(["version": 1, "hooks": ["stop": [["command": "\(other) --cursor"]]]])
+
+        HookInstaller.Cursor.install(hookScriptPath: script, at: hooksPath, reclaimsLiveEntries: true)
+
+        XCTAssertEqual(try commands(for: "stop"), ["\(script) --cursor"])
+    }
+
+    /// A debug build never displaces a live entry. If it did, debug and release
+    /// running side by side would fight over the file, and a debug launch after
+    /// the release app would put a worktree path back.
+    func testADebugBuildLeavesALiveEntryAtAnotherPathAlone() throws {
+        let other = try liveScript(named: "release")
+        try write(["version": 1, "hooks": ["stop": [["command": "\(other) --cursor"]]]])
+
+        HookInstaller.Cursor.install(hookScriptPath: script, at: hooksPath, reclaimsLiveEntries: false)
+
+        XCTAssertEqual(try commands(for: "stop"), ["\(other) --cursor"])
+    }
+
+    func testAQuotedPathIsReadBackWhole() throws {
+        let other = try liveScript(named: "My Atelier")
+        try write(["version": 1, "hooks": ["stop": [["command": "\"\(other)\" --cursor"]]]])
+
+        HookInstaller.Cursor.install(hookScriptPath: script, at: hooksPath, reclaimsLiveEntries: false)
+
+        XCTAssertEqual(try commands(for: "stop"), ["\"\(other)\" --cursor"], "the quoted path exists, so it is live")
+    }
+
+    /// Ours is the one kept when several Atelier entries piled up, and the
+    /// user's own commands stay where they were.
+    func testDuplicateAtelierEntriesCollapseToOneAndForeignOnesStay() throws {
+        try write(["version": 1, "hooks": ["stop": [
+            ["command": "/gone/a/atelier-hook --cursor"],
+            ["command": "~/bin/notify-me"],
+            ["command": "/gone/b/atelier-hook --cursor"],
+        ]]])
+
+        HookInstaller.Cursor.install(hookScriptPath: script, at: hooksPath, reclaimsLiveEntries: true)
+
+        XCTAssertEqual(try commands(for: "stop"), ["~/bin/notify-me", "\(script) --cursor"])
+    }
+
+    /// A user's command that merely mentions something else is never ours,
+    /// however stale its path.
+    func testAForeignEntryIsNeverReplaced() throws {
+        try write(["version": 1, "hooks": ["stop": [["command": "/gone/bin/notify-me --cursor"]]]])
+
+        HookInstaller.Cursor.install(hookScriptPath: script, at: hooksPath, reclaimsLiveEntries: true)
+
+        XCTAssertEqual(try commands(for: "stop"), ["/gone/bin/notify-me --cursor", "\(script) --cursor"])
     }
 
     func testRefusesToOverwriteAFileThatIsNotJSON() throws {

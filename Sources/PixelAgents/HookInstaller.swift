@@ -397,7 +397,25 @@ extension HookInstaller {
             install(hookScriptPath: hookScriptPath)
         }
 
-        static func install(hookScriptPath: String, at path: String = hooksPath) {
+        /// Who owns an Atelier entry already in the file:
+        ///
+        /// - one whose script no longer exists is replaced by any build — a
+        ///   cleaned worktree's debug build would otherwise break every Cursor
+        ///   session on the machine;
+        /// - one at another path that does exist is replaced only when
+        ///   `reclaimsLiveEntries`, which is the release build. **Release wins.**
+        ///   Path-blind (the Claude half's rule) lets a debug build installed
+        ///   first keep the global file; path-greedy has debug and release
+        ///   fighting over it, the last launched winning. Only the release app
+        ///   is always there to point at.
+        ///
+        /// Several Atelier entries collapse to this one; anything else is never
+        /// touched.
+        static func install(
+            hookScriptPath: String,
+            at path: String = hooksPath,
+            reclaimsLiveEntries: Bool = AppConstants.appID == "atelier"
+        ) {
             do {
                 try FileManager.default.createDirectory(
                     atPath: (path as NSString).deletingLastPathComponent,
@@ -412,14 +430,25 @@ extension HookInstaller {
                 var hooks = file["hooks"] as? [String: Any] ?? [:]
                 let quotedPath = hookScriptPath.contains(" ") ? "\"\(hookScriptPath)\"" : hookScriptPath
                 var changed = false
+                let command = "\(quotedPath) \(argument)"
                 for event in events {
-                    var eventEntries = entries(in: hooks[event])
-                    // Any atelier-hook entry counts, whatever its path: one
-                    // pointing at another copy of Atelier is that copy's to
-                    // manage, as in the Claude half.
-                    guard !eventEntries.contains(where: isOurs) else { continue }
-                    eventEntries.append(["command": "\(quotedPath) \(argument)"])
-                    hooks[event] = eventEntries
+                    let eventEntries = entries(in: hooks[event])
+                    let ours = eventEntries.filter(isOurs)
+                    // A live entry this build may not displace stands, alone.
+                    if !reclaimsLiveEntries,
+                       let standing = ours.first(where: { scriptExists(in: $0) && !isCommand(command, $0) })
+                    {
+                        let updated = eventEntries.filter { !isOurs($0) || isSameEntry($0, standing) }
+                        if updated.count != eventEntries.count {
+                            hooks[event] = updated
+                            changed = true
+                        }
+                        continue
+                    }
+                    if ours.count == 1, isCommand(command, ours[0]) {
+                        continue
+                    }
+                    hooks[event] = eventEntries.filter { !isOurs($0) } + [["command": command]]
                     changed = true
                 }
                 guard changed else { return }
@@ -450,6 +479,27 @@ extension HookInstaller {
 
         private static func isOurs(_ entry: [String: Any]) -> Bool {
             (entry["command"] as? String)?.contains("atelier-hook") == true
+        }
+
+        private static func isCommand(_ command: String, _ entry: [String: Any]) -> Bool {
+            entry["command"] as? String == command
+        }
+
+        private static func isSameEntry(_ lhs: [String: Any], _ rhs: [String: Any]) -> Bool {
+            NSDictionary(dictionary: lhs).isEqual(to: rhs)
+        }
+
+        /// Whether the script an entry runs is still on disk. The path is the
+        /// command's first word, or its first quoted span — the two forms
+        /// `install` writes.
+        static func scriptExists(in entry: [String: Any]) -> Bool {
+            guard let command = entry["command"] as? String else { return false }
+            let path: Substring = if command.hasPrefix("\"") {
+                command.dropFirst().prefix { $0 != "\"" }
+            } else {
+                command.prefix { $0 != " " }
+            }
+            return FileManager.default.fileExists(atPath: String(path))
         }
 
         /// The file's contents, `[:]` when it does not exist, or nil when it
