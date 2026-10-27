@@ -198,6 +198,13 @@ struct AtelierApp: App {
 
         UserDefaults.standard.set(200, forKey: "NSInitialToolTipDelay") // 200ms vs system ~700-1000ms
 
+        // Before anything spawns: every child inherits this process's
+        // environment, and `ATELIER_*` must come from Atelier's own state alone
+        // — see `Workstream.Environment.inheritedAtelierNames`.
+        for name in Workstream.Environment.inheritedAtelierNames(in: ProcessInfo.processInfo.environment) {
+            unsetenv(name)
+        }
+
         // Start the hook event receiver and wire it to the router and the
         // sidebar agent-state tracker. `onEvent` is invoked on the main queue.
         HookEventReceiver.shared.onEvent = { projectDir, event in

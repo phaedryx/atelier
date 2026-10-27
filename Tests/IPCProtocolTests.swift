@@ -226,4 +226,30 @@ final class IPCProtocolTests: XCTestCase {
     func test_theWhiteboardWriteTools_addNoNewSurface() {
         XCTAssertEqual(IPC.Surface.allCases.count, 4)
     }
+
+    // MARK: - Client identity from the environment
+
+    /// A blank value, or a reference a harness left unexpanded, is no value.
+    /// Cursor leaves `${env:NAME}` in place when NAME is unset, and a literal
+    /// like that read as a group id would make a workstream tab a coordinator.
+    func test_clientIdentity_readsBlankAndUnexpandedValuesAsAbsent() {
+        let identity = IPC.ClientIdentity.fromEnvironment([
+            "ATELIER_WORKSTREAM_ID": "abc",
+            "ATELIER_WORKSTREAM": "",
+            "ATELIER_GROUP_ID": "${env:ATELIER_GROUP_ID}",
+            "ATELIER_GROUP": "${ATELIER_GROUP}",
+            "ATELIER_SURFACE_ID": "S",
+        ])
+        XCTAssertEqual(identity.workstreamID, "abc")
+        XCTAssertNil(identity.workstreamName)
+        XCTAssertNil(identity.groupID)
+        XCTAssertNil(identity.groupName)
+        XCTAssertEqual(identity.surfaceID, "S")
+    }
+
+    func test_clientIdentity_carriesThePeerNameASpawnWasGiven() {
+        let identity = IPC.ClientIdentity.fromEnvironment(["ATELIER_PEER_NAME": "reviewer"])
+        XCTAssertEqual(identity.peerName, "reviewer")
+        XCTAssertNil(IPC.ClientIdentity.fromEnvironment([:]).peerName)
+    }
 }

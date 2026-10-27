@@ -395,6 +395,9 @@ extension HookInstaller {
             guard FileManager.default.fileExists(atPath: directory, isDirectory: &isDirectory),
                   isDirectory.boolValue else { return }
             install(hookScriptPath: hookScriptPath)
+            // The same machine-wide decision for the same reason: a spawned
+            // Cursor peer must not stop on an approval nobody sees.
+            IPC.CursorPermissions.install()
         }
 
         /// Who owns an Atelier entry already in the file:

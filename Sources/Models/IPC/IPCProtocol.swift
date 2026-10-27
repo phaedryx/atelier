@@ -315,6 +315,11 @@ extension IPC {
         let groupID: String?
         /// `ATELIER_GROUP`, for display.
         let groupName: String?
+        /// `ATELIER_PEER_NAME`: the name a tab `open_agent_tab` spawned was
+        /// given, which is the default it registers under. Absent for the
+        /// Coding Agent and a coordinator, which default to the workstream's or
+        /// the group's name.
+        let peerName: String?
 
         init(
             workstreamID: String?,
@@ -323,7 +328,8 @@ extension IPC {
             surfaceID: String?,
             peerID: String?,
             groupID: String? = nil,
-            groupName: String? = nil
+            groupName: String? = nil,
+            peerName: String? = nil
         ) {
             self.workstreamID = workstreamID
             self.workstreamName = workstreamName
@@ -332,17 +338,28 @@ extension IPC {
             self.peerID = peerID
             self.groupID = groupID
             self.groupName = groupName
+            self.peerName = peerName
         }
 
+        /// A blank value, or a `${…}` reference a harness left unexpanded, reads
+        /// as absent. Cursor hands this helper its identity through `${env:NAME}`
+        /// references in `.mcp.json` and leaves one literally in place when NAME
+        /// is unset — and a literal group id would make a workstream tab look
+        /// like a coordinator.
         static func fromEnvironment(_ env: [String: String] = ProcessInfo.processInfo.environment, peerID: String? = nil) -> ClientIdentity {
-            ClientIdentity(
-                workstreamID: env["ATELIER_WORKSTREAM_ID"],
-                workstreamName: env["ATELIER_WORKSTREAM"],
-                projectDirectory: env["ATELIER_PROJECT_DIR"],
-                surfaceID: env["ATELIER_SURFACE_ID"],
+            func value(_ name: String) -> String? {
+                guard let value = env[name], !value.isEmpty, !value.hasPrefix("${") else { return nil }
+                return value
+            }
+            return ClientIdentity(
+                workstreamID: value("ATELIER_WORKSTREAM_ID"),
+                workstreamName: value("ATELIER_WORKSTREAM"),
+                projectDirectory: value("ATELIER_PROJECT_DIR"),
+                surfaceID: value("ATELIER_SURFACE_ID"),
                 peerID: peerID,
-                groupID: env["ATELIER_GROUP_ID"],
-                groupName: env["ATELIER_GROUP"]
+                groupID: value("ATELIER_GROUP_ID"),
+                groupName: value("ATELIER_GROUP"),
+                peerName: value("ATELIER_PEER_NAME")
             )
         }
     }

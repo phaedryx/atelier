@@ -81,7 +81,8 @@ extension IPC.Service {
             let startsAgent = prompt?.isEmpty == false
             // Built before the hop, and off this actor as well — see this
             // method's doc comment.
-            let prepared = await Self.prepare(plan: plan, kind: kind, model: model, prompt: prompt)
+            let peerName = Self.spawnedPeerName(title: title, workstreamName: plan.workstreamName, kind: kind)
+            let prepared = await Self.prepare(plan: plan, kind: kind, model: model, prompt: prompt, peerName: peerName)
             let environmentBase = prepared.environment
             let agentCommand = prepared.agent
             let surfaceID = try await MainActor.run {
@@ -134,6 +135,18 @@ extension IPC.Service {
             )
         }
         return kind
+    }
+
+    /// What a spawned agent registers as, and what its system prompt says it
+    /// is listed as: the tab's title when the caller gave one, else the
+    /// workstream and the agent kind. Never the bare workstream name — that is
+    /// the Coding Agent's, usually the spawner's own.
+    static func spawnedPeerName(
+        title: String,
+        workstreamName: String,
+        kind: IPC.Vocabulary.AgentKind
+    ) -> String {
+        title.isEmpty ? "\(workstreamName)-\(kind.rawValue)" : title
     }
 
     /// The binary `kind` needs that this machine does not have, or nil.
@@ -236,13 +249,17 @@ extension IPC.Service {
         plan: WorkspaceActions.AgentTabPlan,
         kind: IPC.Vocabulary.AgentKind,
         model: String?,
-        prompt: String?
+        prompt: String?,
+        peerName: String
     ) async -> (environment: [String: String], agent: SpawnedAgent?) {
         await Task.detached(priority: .userInitiated) {
-            (
-                environment: WorkspaceActions.environmentBase(for: plan),
-                agent: agentCommand(plan: plan, kind: kind, model: model, prompt: prompt)
-            )
+            let agent = agentCommand(plan: plan, kind: kind, model: model, prompt: prompt, peerName: peerName)
+            var environment = WorkspaceActions.environmentBase(for: plan)
+            // The helper's default registration name; see `spawnedPeerName`.
+            if agent != nil {
+                environment["ATELIER_PEER_NAME"] = peerName
+            }
+            return (environment: environment, agent: agent)
         }.value
     }
 
@@ -250,7 +267,8 @@ extension IPC.Service {
         plan: WorkspaceActions.AgentTabPlan,
         kind: IPC.Vocabulary.AgentKind,
         model: String?,
-        prompt: String?
+        prompt: String?,
+        peerName: String
     ) -> SpawnedAgent? {
         guard let prompt, !prompt.isEmpty else { return nil }
         switch kind {
@@ -268,7 +286,7 @@ extension IPC.Service {
                 claudePath: claudePath,
                 model: model,
                 bypassPermissions: plan.bypassPermissions,
-                systemPrompt: systemPrompt(plan: plan, mcpConfigWritten: mcpConfigPath != nil),
+                systemPrompt: systemPrompt(plan: plan, mcpConfigWritten: mcpConfigPath != nil, peerName: peerName),
                 mcpConfigPath: mcpConfigPath,
                 settingsPath: settingsPath,
                 initialPrompt: prompt
@@ -280,7 +298,7 @@ extension IPC.Service {
                 cursorPath: cursorPath,
                 model: model,
                 bypassPermissions: plan.bypassPermissions,
-                systemPrompt: systemPrompt(plan: plan, mcpConfigWritten: pluginDirectory != nil),
+                systemPrompt: systemPrompt(plan: plan, mcpConfigWritten: pluginDirectory != nil, peerName: peerName),
                 pluginDirectory: pluginDirectory,
                 initialPrompt: prompt
             ))
@@ -289,14 +307,16 @@ extension IPC.Service {
 
     private nonisolated static func systemPrompt(
         plan: WorkspaceActions.AgentTabPlan,
-        mcpConfigWritten: Bool
+        mcpConfigWritten: Bool,
+        peerName: String
     ) -> String? {
         Workstream.AgentCommand.systemPrompt(
             allowOutsideWorktree: UserDefaults.standard.bool(forKey: "atelier.allowOutsideWorktree"),
             autoRenameBranch: UserDefaults.standard.bool(forKey: "atelier.autoRenameBranch"),
             worktreePath: plan.workingDirectory,
             workstreamName: plan.workstreamName,
-            mcpConfigWritten: mcpConfigWritten
+            mcpConfigWritten: mcpConfigWritten,
+            listedAs: peerName
         )
     }
 

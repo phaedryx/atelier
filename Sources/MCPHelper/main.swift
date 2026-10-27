@@ -734,12 +734,28 @@ final class IPCBridge {
 let bridge = IPCBridge()
 
 while let line = readLine(strippingNewline: true) {
-    bridge.ensureRegistered()
-
     guard let data = line.data(using: .utf8),
           let message = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let method = message["method"] as? String
-    else { continue }
+    else {
+        bridge.ensureRegistered()
+        continue
+    }
+
+    // Registration is a round trip to the app, so it runs *after* anything the
+    // agent's harness is waiting on that the helper can answer alone. It used
+    // to run first, on every line, which put `initialize` behind it — and
+    // Cursor marks a server failed when `initialize` is slow, losing the peer
+    // its first turn whenever Atelier was busy for a moment. A tool call still
+    // registers first, so it goes out with an identity.
+    if method == "tools/call" {
+        bridge.ensureRegistered()
+    }
+    defer {
+        if method != "tools/call" {
+            bridge.ensureRegistered()
+        }
+    }
 
     let id = message["id"]
 

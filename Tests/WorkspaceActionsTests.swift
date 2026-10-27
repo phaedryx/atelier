@@ -504,3 +504,22 @@ final class AgentCommandTests: XCTestCase {
         XCTAssertTrue(command.contains("review the diff; then report"), command)
     }
 }
+
+/// Atelier's own children get `ATELIER_*` from Atelier's state and nowhere
+/// else. An Atelier launched from inside another one's terminal inherits that
+/// terminal's group, workstream and surface, and every surface it then spawned
+/// carried whichever of them it did not set itself.
+final class InheritedAtelierEnvironmentTests: XCTestCase {
+    func testNamesEveryAtelierVariableAndItsLegacyMirror() {
+        let names = Workstream.Environment.inheritedAtelierNames(in: [
+            "ATELIER_GROUP": "cursor-cli",
+            "ATELIER_SURFACE_ID": "S",
+            "FF_GROUP": "cursor-cli",
+            "FF_PORT": "3000",
+            "PATH": "/usr/bin",
+            "FFMPEG_HOME": "/opt/ffmpeg",
+            "FF_UNRELATED_TOOL": "x",
+        ])
+        XCTAssertEqual(names.sorted(), ["ATELIER_GROUP", "ATELIER_SURFACE_ID", "FF_GROUP", "FF_PORT"])
+    }
+}

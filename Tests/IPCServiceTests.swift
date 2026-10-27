@@ -141,6 +141,23 @@ final class IPCServiceTests: XCTestCase {
         XCTAssertEqual(peer.name, "wry-amber-lexer")
     }
 
+    /// A tab spawned into a workstream is a second agent there, and the name it
+    /// was spawned under is its default — not the workstream's, which is its
+    /// spawner's.
+    func test_registerPeer_defaultsToThePeerNameASpawnWasGiven() async {
+        let spawned = IPC.ClientIdentity(
+            workstreamID: UUID().uuidString,
+            workstreamName: "wry-amber-lexer",
+            projectDirectory: projectA,
+            surfaceID: UUID().uuidString,
+            peerID: nil,
+            peerName: "wry-amber-lexer-cursor"
+        )
+        let response = await call(.registerPeer, [:], as: spawned)
+        guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
+        XCTAssertEqual(peer.name, "wry-amber-lexer-cursor")
+    }
+
     func test_registerPeer_calledAgainWithAnExistingID_renamesRatherThanMinting() async throws {
         let id = try await register(name: "planner", role: "writes plans", project: projectA)
 
@@ -1072,6 +1089,16 @@ final class IPCServiceTests: XCTestCase {
 
         XCTAssertNil(response.payload)
         XCTAssertTrue(response.error?.contains("prompt") == true, String(describing: response.error))
+    }
+
+    /// What a spawned agent is called, which is also what its system prompt
+    /// says it is listed as: the tab's title when the caller gave one, else the
+    /// workstream and the agent kind — never the bare workstream name, which is
+    /// the spawner's.
+    func test_spawnedPeerName_isTheTitleOrTheWorkstreamAndKind() {
+        XCTAssertEqual(IPC.Service.spawnedPeerName(title: "reviewer", workstreamName: "ws", kind: .cursor), "reviewer")
+        XCTAssertEqual(IPC.Service.spawnedPeerName(title: "", workstreamName: "ws", kind: .cursor), "ws-cursor")
+        XCTAssertEqual(IPC.Service.spawnedPeerName(title: "", workstreamName: "ws", kind: .claude), "ws-claude")
     }
 
     // MARK: - request_attention
