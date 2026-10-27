@@ -91,6 +91,37 @@ final class IPCConfigTests: XCTestCase {
         XCTAssertEqual(server["type"] as? String, "stdio")
     }
 
+    /// Cursor starts stdio MCP servers with a scrubbed environment (verified
+    /// against cursor-agent 2026.10.22), so the helper would register with no
+    /// identity at all. The `env` block hands each variable through by
+    /// reference — `${env:NAME}`, which Cursor expands from the agent's own
+    /// environment — so the per-workstream file still carries the per-tab
+    /// surface id.
+    func test_cursorPluginMCP_passesTheHelpersIdentityThroughByReference() throws {
+        let path = try XCTUnwrap(IPC.CursorPlugin.write(for: workstreamID, helperPath: "/tmp/atelier-mcp"))
+        let data = try Data(contentsOf: URL(fileURLWithPath: path).appendingPathComponent(".mcp.json"))
+        let mcp = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let server = try XCTUnwrap((mcp["mcpServers"] as? [String: Any])?["atelier-ipc"] as? [String: Any])
+        let env = try XCTUnwrap(server["env"] as? [String: String])
+
+        XCTAssertEqual(env, [
+            "ATELIER_WORKSTREAM_ID": "${env:ATELIER_WORKSTREAM_ID}",
+            "ATELIER_WORKSTREAM": "${env:ATELIER_WORKSTREAM}",
+            "ATELIER_PROJECT_DIR": "${env:ATELIER_PROJECT_DIR}",
+            "ATELIER_SURFACE_ID": "${env:ATELIER_SURFACE_ID}",
+            "ATELIER_PEER_NAME": "${env:ATELIER_PEER_NAME}",
+        ])
+    }
+
+    /// The group variables are never set on a workstream tab, and Cursor leaves
+    /// an unset reference as the literal `${env:NAME}` — which the helper would
+    /// read as a group id.
+    func test_cursorPluginMCP_neverReferencesAVariableATabDoesNotSet() throws {
+        let path = try XCTUnwrap(IPC.CursorPlugin.write(for: workstreamID, helperPath: "/tmp/atelier-mcp"))
+        let text = try String(contentsOf: URL(fileURLWithPath: path).appendingPathComponent(".mcp.json"), encoding: .utf8)
+        XCTAssertFalse(text.contains("ATELIER_GROUP"), text)
+    }
+
     func test_cursorPluginWrite_withoutAHelperBinary_returnsNil() {
         XCTAssertNil(IPC.CursorPlugin.write(for: workstreamID, helperPath: nil))
         XCTAssertFalse(FileManager.default.fileExists(atPath: IPC.CursorPlugin.directoryURL(for: workstreamID).path))
@@ -101,5 +132,66 @@ final class IPCConfigTests: XCTestCase {
         IPC.CursorPlugin.remove(for: workstreamID)
         let workstreamDirectory = IPC.CursorPlugin.directoryURL(for: workstreamID).deletingLastPathComponent()
         XCTAssertFalse(FileManager.default.fileExists(atPath: workstreamDirectory.path))
+    }
+}
+
+/// Cursor asks before every MCP tool call unless the tool is allowlisted, and a
+/// spawned peer's first call is `register_peer`, in a tab nobody may be
+/// watching. `--approve-mcps` only loads the server. The allowlist that works
+/// per user, without moving Cursor's config dir, is `~/.cursor/permissions.json`.
+final class CursorPermissionsTests: XCTestCase {
+    private var directory: URL!
+    private var path: String!
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("cursor-permissions-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        path = directory.appendingPathComponent("permissions.json").path
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: directory)
+        try super.tearDownWithError()
+    }
+
+    private func read() throws -> [String: Any] {
+        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+        return try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    /// Cursor names a plugin's server `plugin-<plugin>-<server>`, and the
+    /// pattern is matched against that whole id: `atelier-ipc:*` alone does not.
+    func testTheEntryNamesThePluginsServerAndEveryTool() {
+        XCTAssertEqual(IPC.CursorPermissions.allowlistEntry, "plugin-atelier-atelier-ipc:*")
+    }
+
+    func testCreatesTheFileWithTheEntry() throws {
+        IPC.CursorPermissions.install(at: path)
+        XCTAssertEqual(try read()["mcpAllowlist"] as? [String], ["plugin-atelier-atelier-ipc:*"])
+    }
+
+    func testMergesIntoTheUsersOwnAllowlistAndKeys() throws {
+        let existing: [String: Any] = ["mcpAllowlist": ["shortcut:*"], "other": true]
+        try JSONSerialization.data(withJSONObject: existing).write(to: URL(fileURLWithPath: path))
+
+        IPC.CursorPermissions.install(at: path)
+        IPC.CursorPermissions.install(at: path)
+
+        let file = try read()
+        XCTAssertEqual(file["mcpAllowlist"] as? [String], ["shortcut:*", "plugin-atelier-atelier-ipc:*"])
+        XCTAssertEqual(file["other"] as? Bool, true)
+    }
+
+    /// The file is JSONC to Cursor; one with a comment is the user's and is not
+    /// rewritten by a parser that cannot read it.
+    func testLeavesAFileItCannotParseAlone() throws {
+        let jsonc = "{\n  // mine\n  \"mcpAllowlist\": [\"x:*\"],\n}\n"
+        try Data(jsonc.utf8).write(to: URL(fileURLWithPath: path))
+
+        IPC.CursorPermissions.install(at: path)
+
+        XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), jsonc)
     }
 }

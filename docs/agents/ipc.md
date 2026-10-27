@@ -298,10 +298,33 @@ forces three differences, each in `Workstream.AgentCommand.cursorFresh`:
   same reason Claude gets `--mcp-config` rather than a global entry. The archiver removes it.
 - **`--approve-mcps` and `--trust` are always passed.** The surface may be in a workstream
   nobody is looking at, and an agent stopped on an approval prompt there never reaches
-  atelier-ipc to say so. `--force` is the bypass-permissions spelling.
+  atelier-ipc to say so. `--force` is the bypass-permissions spelling. `--approve-mcps` only
+  *loads* the server; each tool call still asks unless allowlisted, so `IPC.CursorPermissions`
+  merges `plugin-atelier-atelier-ipc:*` into `~/.cursor/permissions.json`'s `mcpAllowlist`
+  (installed with the Cursor hooks, when `~/.cursor` exists). The plugin directory cannot carry
+  permissions, no flag grants them, and `CURSOR_CONFIG_DIR` would replace the user's whole CLI
+  config — see that type.
 
 Identity is `ATELIER_SURFACE_ID` in the environment, as for every surface; there is no session
-id to collide on. Turn-state hooks cannot ride in the plugin directory and are installed
+id to collide on. Four facts from the first end-to-end run, each a bug before it was a rule:
+
+- **Cursor starts stdio MCP servers with a scrubbed environment**, so the helper inherits none
+  of `ATELIER_*` and registers as nobody. `IPC.CursorPlugin.mcpJSON` adds an `env` block of
+  `${env:NAME}` references, which Cursor expands from the agent's own environment — so the file
+  stays per workstream while the surface id it delivers is per tab. Cursor leaves an *unset*
+  reference literally, so the block names only `identityVariables`, the ones a spawned tab
+  always has, and `ClientIdentity.fromEnvironment` reads a blank or `${…}` value as absent.
+- **The helper answers before it registers.** Registration is a round trip to the app, and it
+  used to run ahead of every line, `initialize` included; Cursor marks a server failed when
+  `initialize` is slow. A `tools/call` still registers first, so it carries an identity.
+- **A spawned agent has its own name.** It used to auto-register under the workstream's name and
+  its prompt said it was "already listed as" that — its spawner's name. `spawnedPeerName` is the
+  tab title, else `<workstream>-<kind>`; it goes to the prompt and to `ATELIER_PEER_NAME`, which
+  `register_peer` defaults to ahead of the workstream name. Both agent kinds.
+- **`ATELIER_*` comes from Atelier's state alone.** `AtelierApp` unsets every inherited
+  `ATELIER_*` and its `FF_*` mirror at launch (`Workstream.Environment.inheritedAtelierNames`).
+  A debug build opened from an agent's shell inherited that shell's `ATELIER_GROUP`, and every
+  surface it spawned carried it. Turn-state hooks cannot ride in the plugin directory and are installed
 globally instead — `docs/agents/agent-status.md` has why.
 
 **`close_tab` is `open_tab`/`open_agent_tab`'s counterpart, for the pane an agent's own job

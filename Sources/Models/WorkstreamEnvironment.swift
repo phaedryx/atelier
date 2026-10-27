@@ -60,6 +60,30 @@ extension Workstream {
 
             return vars
         }
+
+        /// The suffixes Atelier itself exports, under both prefixes.
+        private static let ownSuffixes: Set<String> = [
+            "WORKSTREAM_ID", "PROJECT", "WORKSTREAM", "PROJECT_DIR", "WORKTREE_DIR", "PORT",
+            "DEFAULT_BRANCH", "SLOT", "SURFACE_ID", "PEER_NAME",
+        ]
+
+        /// The variables in `environment` that only Atelier may set: every
+        /// `ATELIER_*`, and the `FF_*` mirror of each one Atelier exports.
+        ///
+        /// `AtelierApp` unsets these from its own process at launch. An Atelier
+        /// started from inside another one's terminal — a debug build opened
+        /// from an agent's shell — inherits that terminal's identity, and every
+        /// surface it spawns then carries whichever of those it does not set
+        /// itself, such as the launching shell's `ATELIER_PEER_NAME`.
+        static func inheritedAtelierNames(in environment: [String: String]) -> [String] {
+            environment.keys.filter { key in
+                if key.hasPrefix("ATELIER_") {
+                    return true
+                }
+                guard let suffix = key.stripping(prefix: "FF_") else { return false }
+                return ownSuffixes.contains(suffix)
+            }
+        }
     }
 }
 
