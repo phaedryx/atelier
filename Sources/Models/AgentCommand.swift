@@ -33,7 +33,8 @@ extension Workstream {
             worktreePath: String,
             workstreamName: String,
             mcpConfigWritten: Bool,
-            listedAs peerName: String? = nil
+            listedAs peerName: String? = nil,
+            spawnedBy spawner: SystemPrompts.Spawner? = nil
         ) -> String? {
             var parts: [String] = []
             if !allowOutsideWorktree {
@@ -46,7 +47,7 @@ extension Workstream {
                 // A spawned tab is a second agent in the workstream: telling it
                 // it is listed under the workstream's name tells it it is its
                 // spawner.
-                parts.append(SystemPrompts.agentIPCPrompt(workstreamName: peerName ?? workstreamName))
+                parts.append(SystemPrompts.agentIPCPrompt(workstreamName: peerName ?? workstreamName, spawnedBy: spawner))
             }
             return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
         }

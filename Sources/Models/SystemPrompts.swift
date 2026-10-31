@@ -22,8 +22,14 @@ enum SystemPrompts {
     /// agents can be sitting in the same project unable to find each other. The
     /// MCP server's own instructions describe the tools, but nothing in them
     /// prompts an agent to register before it has a reason to.
-    static func agentIPCPrompt(workstreamName: String) -> String {
-        """
+    /// The peer that started a spawned agent, as `open_agent_tab` saw it.
+    struct Spawner: Equatable, Sendable {
+        let name: String
+        let id: String
+    }
+
+    static func agentIPCPrompt(workstreamName: String, spawnedBy spawner: Spawner? = nil) -> String {
+        let base = """
         You are one of several coding agents running in Atelier on this project. You can reach the others through the `atelier-ipc` MCP server, which is \
         already connected.
         You are already listed as "\(workstreamName)" — registration is automatic. Call \
@@ -37,6 +43,14 @@ enum SystemPrompts {
         user said.
         Prefer `send_message` to one agent you have identified with `list_peers`; keep `broadcast` \
         for something every agent in the project needs.
+        """
+        // Nothing in `list_peers` says who spawned whom, so a child told to
+        // report back has to be told where back is, or it guesses.
+        guard let spawner else { return base }
+        return base + """
+
+        You were started by "\(spawner.name)" (peer id \(spawner.id)). Unless told otherwise, \
+        that is the peer to report back to.
         """
     }
 

@@ -25,6 +25,22 @@ final class SystemPromptsTests: XCTestCase {
         XCTAssertTrue(SystemPrompts.agentIPCPrompt(workstreamName: "x").contains("[Atelier]"))
     }
 
+    /// A spawned agent asked to "report back to whoever started you" has no
+    /// way to work that out from `list_peers` — it guessed the coordinator in
+    /// an end-to-end run. The id is what `send_message` takes, so it has to be
+    /// there, not just the name.
+    func test_agentIPCPrompt_namesTheSpawnerByNameAndID() {
+        let spawner = SystemPrompts.Spawner(name: "another-verify", id: "0204CF64-9B32-4768-B36B-A835A4B86AD1")
+        let prompt = SystemPrompts.agentIPCPrompt(workstreamName: "another-verify-cursor", spawnedBy: spawner)
+
+        XCTAssertTrue(prompt.contains("\"another-verify\""))
+        XCTAssertTrue(prompt.contains("0204CF64-9B32-4768-B36B-A835A4B86AD1"))
+    }
+
+    func test_agentIPCPrompt_withoutASpawner_saysNothingAboutOne() {
+        XCTAssertFalse(SystemPrompts.agentIPCPrompt(workstreamName: "x").contains("started by"))
+    }
+
     /// Asserting only that the path appears would pass just as well for a prompt that
     /// told the agent it may work anywhere, including that path. The constraint and
     /// the path have to arrive in the same clause.

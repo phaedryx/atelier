@@ -82,7 +82,15 @@ extension IPC.Service {
             // Built before the hop, and off this actor as well — see this
             // method's doc comment.
             let peerName = Self.spawnedPeerName(title: title, workstreamName: plan.workstreamName, kind: kind)
-            let prepared = await Self.prepare(plan: plan, kind: kind, model: model, prompt: prompt, peerName: peerName)
+            let spawner = await spawner(of: request)
+            let prepared = await Self.prepare(
+                plan: plan,
+                kind: kind,
+                model: model,
+                prompt: prompt,
+                peerName: peerName,
+                spawner: spawner
+            )
             let environmentBase = prepared.environment
             let agentCommand = prepared.agent
             let surfaceID = try await MainActor.run {
@@ -250,10 +258,11 @@ extension IPC.Service {
         kind: IPC.Vocabulary.AgentKind,
         model: String?,
         prompt: String?,
-        peerName: String
+        peerName: String,
+        spawner: SystemPrompts.Spawner?
     ) async -> (environment: [String: String], agent: SpawnedAgent?) {
         await Task.detached(priority: .userInitiated) {
-            let agent = agentCommand(plan: plan, kind: kind, model: model, prompt: prompt, peerName: peerName)
+            let agent = agentCommand(plan: plan, kind: kind, model: model, prompt: prompt, peerName: peerName, spawner: spawner)
             var environment = WorkspaceActions.environmentBase(for: plan)
             // The helper's default registration name; see `spawnedPeerName`.
             if agent != nil {
@@ -268,7 +277,8 @@ extension IPC.Service {
         kind: IPC.Vocabulary.AgentKind,
         model: String?,
         prompt: String?,
-        peerName: String
+        peerName: String,
+        spawner: SystemPrompts.Spawner?
     ) -> SpawnedAgent? {
         guard let prompt, !prompt.isEmpty else { return nil }
         switch kind {
@@ -286,7 +296,7 @@ extension IPC.Service {
                 claudePath: claudePath,
                 model: model,
                 bypassPermissions: plan.bypassPermissions,
-                systemPrompt: systemPrompt(plan: plan, mcpConfigWritten: mcpConfigPath != nil, peerName: peerName),
+                systemPrompt: systemPrompt(plan: plan, mcpConfigWritten: mcpConfigPath != nil, peerName: peerName, spawner: spawner),
                 mcpConfigPath: mcpConfigPath,
                 settingsPath: settingsPath,
                 initialPrompt: prompt
@@ -298,7 +308,7 @@ extension IPC.Service {
                 cursorPath: cursorPath,
                 model: model,
                 bypassPermissions: plan.bypassPermissions,
-                systemPrompt: systemPrompt(plan: plan, mcpConfigWritten: pluginDirectory != nil, peerName: peerName),
+                systemPrompt: systemPrompt(plan: plan, mcpConfigWritten: pluginDirectory != nil, peerName: peerName, spawner: spawner),
                 pluginDirectory: pluginDirectory,
                 initialPrompt: prompt
             ))
@@ -308,7 +318,8 @@ extension IPC.Service {
     private nonisolated static func systemPrompt(
         plan: WorkspaceActions.AgentTabPlan,
         mcpConfigWritten: Bool,
-        peerName: String
+        peerName: String,
+        spawner: SystemPrompts.Spawner?
     ) -> String? {
         Workstream.AgentCommand.systemPrompt(
             allowOutsideWorktree: UserDefaults.standard.bool(forKey: "atelier.allowOutsideWorktree"),
@@ -316,8 +327,18 @@ extension IPC.Service {
             worktreePath: plan.workingDirectory,
             workstreamName: plan.workstreamName,
             mcpConfigWritten: mcpConfigWritten,
-            listedAs: peerName
+            listedAs: peerName,
+            spawnedBy: spawner
         )
+    }
+
+    /// The caller as its child should know it: its live registration, or nil
+    /// when it has none. The helper registers before any `tools/call`, so nil
+    /// means a registration that has since lapsed, and the child is then told
+    /// nothing rather than something stale.
+    func spawner(of request: Request) async -> SystemPrompts.Spawner? {
+        guard let id = registeredPeerID(request), let peer = await store.peerStatus(id: id) else { return nil }
+        return SystemPrompts.Spawner(name: peer.name, id: id.uuidString)
     }
 
     /// Carries the agent-start result out of the launcher's `beforeReady`

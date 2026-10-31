@@ -321,6 +321,13 @@ id to collide on. Four facts from the first end-to-end run, each a bug before it
   its prompt said it was "already listed as" that — its spawner's name. `spawnedPeerName` is the
   tab title, else `<workstream>-<kind>`; it goes to the prompt and to `ATELIER_PEER_NAME`, which
   `register_peer` defaults to ahead of the workstream name. Both agent kinds.
+- **A spawned agent is told who spawned it.** `list_peers` carries no parentage, so a child told
+  to "report back" guessed — in an end-to-end run it picked the `[coordinator]`-tagged peer over
+  its real spawner. `open_agent_tab` puts the caller's registered name and peer id in the child's
+  IPC prompt (`IPC.Service.spawner(of:)`), read from the store rather than from the request, and
+  omits the line when the caller's registration has lapsed. `create_workstream` does not carry
+  it yet — its child lands on another branch and was deliberately left out of this change — and
+  the coordinator, which nothing spawns, never will.
 - **`ATELIER_*` comes from Atelier's state alone.** `AtelierApp` unsets every inherited
   `ATELIER_*` and its `FF_*` mirror at launch (`Workstream.Environment.inheritedAtelierNames`).
   A debug build opened from an agent's shell inherited that shell's `ATELIER_GROUP`, and every

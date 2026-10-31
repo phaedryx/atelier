@@ -1101,6 +1101,24 @@ final class IPCServiceTests: XCTestCase {
         XCTAssertEqual(IPC.Service.spawnedPeerName(title: "", workstreamName: "ws", kind: .claude), "ws-claude")
     }
 
+    /// `open_agent_tab` names its caller to the child it starts, read from the
+    /// caller's live registration rather than from anything it says about itself.
+    func test_spawner_isTheCallersRegisteredNameAndID() async throws {
+        let id = try await register(name: "another-verify", project: projectA)
+        let request = IPC.Request(token: "unused", tool: .openAgentTab, arguments: [:], client: client(project: projectA, peerID: id))
+
+        let spawner = await service.spawner(of: request)
+        XCTAssertEqual(spawner, SystemPrompts.Spawner(name: "another-verify", id: id))
+    }
+
+    /// No registration, no claim: the child is simply not told who started it.
+    func test_spawner_ofAnUnregisteredCaller_isNil() async {
+        let request = IPC.Request(token: "unused", tool: .openAgentTab, arguments: [:], client: client(project: projectA, peerID: UUID().uuidString))
+
+        let spawner = await service.spawner(of: request)
+        XCTAssertNil(spawner)
+    }
+
     // MARK: - request_attention
 
     func test_requestAttention_withoutAReason_saysWhichArgumentIsMissing() async {
