@@ -15,6 +15,12 @@ enum SystemPrompts {
         """
     }
 
+    /// The peer that started a spawned agent, as `open_agent_tab` saw it.
+    struct Spawner: Equatable, Sendable {
+        let name: String
+        let id: String
+    }
+
     /// Tells an agent it has peers, and to register itself.
     ///
     /// Without this the feature only works if a human explains it to each agent
@@ -22,8 +28,8 @@ enum SystemPrompts {
     /// agents can be sitting in the same project unable to find each other. The
     /// MCP server's own instructions describe the tools, but nothing in them
     /// prompts an agent to register before it has a reason to.
-    static func agentIPCPrompt(workstreamName: String) -> String {
-        """
+    static func agentIPCPrompt(workstreamName: String, spawnedBy spawner: Spawner? = nil) -> String {
+        let base = """
         You are one of several coding agents running in Atelier, each in its own git worktree \
         of this project. You can reach the others through the `atelier-ipc` MCP server, which is \
         already connected.
@@ -42,6 +48,14 @@ enum SystemPrompts {
         `list_peers` shows every peer's group and starts with yours, and both it and `broadcast` \
         take a `group` to reach only those. Read it from `list_peers` each time: it can change \
         while you work.
+        """
+        // Nothing in `list_peers` says who spawned whom, so a child told to
+        // report back has to be told where back is, or it guesses.
+        guard let spawner else { return base }
+        return base + """
+
+        You were started by "\(spawner.name)" (peer id \(spawner.id)). Unless told otherwise, \
+        that is the peer to report back to.
         """
     }
 

@@ -305,6 +305,25 @@ final class AgentCommandTests: XCTestCase {
         XCTAssertNotNil(with)
     }
 
+    /// The spawner rides on the IPC prompt, so it is gated with it: an agent
+    /// with no MCP server cannot message anyone, its spawner included.
+    func testSpawnerIsNamedOnlyAlongsideTheIPCPrompt() {
+        let spawner = SystemPrompts.Spawner(name: "planner", id: "AAAAAAAA-0000-0000-0000-000000000000")
+        func prompt(mcpConfigWritten: Bool) -> String? {
+            Workstream.AgentCommand.systemPrompt(
+                allowOutsideWorktree: true,
+                autoRenameBranch: false,
+                worktreePath: "/repos/app/feature",
+                workstreamName: "wry-amber-lexer",
+                mcpConfigWritten: mcpConfigWritten,
+                listedAs: "wry-amber-lexer-claude",
+                spawnedBy: spawner
+            )
+        }
+        XCTAssertTrue(prompt(mcpConfigWritten: true)?.contains("AAAAAAAA-0000-0000-0000-000000000000") ?? false)
+        XCTAssertNil(prompt(mcpConfigWritten: false))
+    }
+
     private func fresh(
         sessionID: String = "11111111-1111-1111-1111-111111111111",
         bypassPermissions: Bool = false,
