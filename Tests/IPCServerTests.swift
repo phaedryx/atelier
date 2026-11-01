@@ -694,6 +694,27 @@ final class IPCServerTests: XCTestCase {
         )
     }
 
+    /// MCP discovery must never wait on the app. Cursor marks a server failed
+    /// when `initialize` is slow, and the helper used to register — a full
+    /// round trip to Atelier — *before* answering it, so an app that was busy
+    /// for a moment cost a Cursor peer its whole first turn.
+    ///
+    /// The stub stalls `register_peer` for its full deadline; `initialize` and
+    /// `tools/list` must still come back at once.
+    func test_helper_answersDiscoveryWithoutWaitingForRegistration() throws {
+        let helper = try XCTUnwrap(MCPHelperLauncher.executableURL(), "atelier-mcp was not found in the host app bundle")
+        let stub = try takeOverTheEndpoint(trickling: .registerPeer, fragmentGap: 6, fragmentCount: 4)
+        defer { stub.stop() }
+
+        let agent = try MCPProcess(helper: helper, environment: stubEnvironment())
+        let start = Date()
+        let initialized = agent.send(method: "initialize", params: ["protocolVersion": "2025-06-18"], timeout: 30)
+        let initializeTook = Date().timeIntervalSince(start)
+
+        XCTAssertNotNil(initialized)
+        XCTAssertLessThan(initializeTook, 3, "initialize waited on registration: \(initializeTook)s")
+    }
+
     private static let expectedListPeersTimeoutMessage =
         "Atelier did not answer list_peers within 15s. Atelier may be busy rather than stuck, and this call "
             + "changes nothing by running twice, so it is safe to try again."

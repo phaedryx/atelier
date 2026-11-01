@@ -141,6 +141,23 @@ final class IPCServiceTests: XCTestCase {
         XCTAssertEqual(peer.name, "wry-amber-lexer")
     }
 
+    /// A tab spawned into a workstream is a second agent there, and the name it
+    /// was spawned under is its default — not the workstream's, which is its
+    /// spawner's.
+    func test_registerPeer_defaultsToThePeerNameASpawnWasGiven() async {
+        let spawned = IPC.ClientIdentity(
+            workstreamID: UUID().uuidString,
+            workstreamName: "wry-amber-lexer",
+            projectDirectory: projectA,
+            surfaceID: UUID().uuidString,
+            peerID: nil,
+            peerName: "wry-amber-lexer-cursor"
+        )
+        let response = await call(.registerPeer, [:], as: spawned)
+        guard case let .peer(peer) = response.payload else { return XCTFail("expected a peer") }
+        XCTAssertEqual(peer.name, "wry-amber-lexer-cursor")
+    }
+
     func test_registerPeer_calledAgainWithAnExistingID_renamesRatherThanMinting() async throws {
         let id = try await register(name: "planner", role: "writes plans", project: projectA)
 
@@ -1025,6 +1042,81 @@ final class IPCServiceTests: XCTestCase {
 
         XCTAssertNil(response.payload)
         XCTAssertNotEqual(response.error, IPC.ToolError.notInWorkstream.errorDescription)
+    }
+
+    /// An agent the tool does not know how to start is the caller's mistake,
+    /// and it is told so — with the legal values — before anything about the
+    /// app's readiness. Falling back to Claude would start an agent that is not
+    /// what was asked for.
+    func test_openAgentTab_withAnUnknownAgent_isRefusedNamingTheChoices() async {
+        let response = await call(
+            .openAgentTab, ["agent": "codex", "prompt": "look"], as: client(project: projectA)
+        )
+
+        XCTAssertNil(response.payload)
+        let error = response.error ?? ""
+        XCTAssertTrue(error.contains("agent"), error)
+        XCTAssertTrue(error.contains("codex"), error)
+        XCTAssertTrue(error.contains("\"claude\"") && error.contains("\"cursor\""), error)
+    }
+
+    /// Case is not forgiven: `Cursor` reads like it means something, and a
+    /// value that does and does not is worse than a refusal.
+    func test_openAgentTab_agentIsMatchedExactly() async {
+        let response = await call(
+            .openAgentTab, ["agent": "Cursor", "prompt": "look"], as: client(project: projectA)
+        )
+
+        XCTAssertTrue(response.error?.contains("Cursor") == true, String(describing: response.error))
+    }
+
+    /// The two known agents get past the argument check and are refused for
+    /// the app's reason instead.
+    func test_openAgentTab_withAKnownAgent_getsPastTheArgumentCheck() async {
+        for agent in ["claude", "cursor", ""] {
+            let response = await call(
+                .openAgentTab, ["agent": agent, "model": "gpt-5", "prompt": "look"], as: client(project: projectA)
+            )
+            XCTAssertNil(response.payload)
+            XCTAssertFalse(response.error?.contains("`agent`") == true, String(describing: response.error))
+        }
+    }
+
+    /// `model` and `agent` only mean something for an agent, so a plain
+    /// terminal asked for one is refused rather than silently ignoring it.
+    func test_openAgentTab_withAModelButNoPrompt_isRefused() async {
+        let response = await call(.openAgentTab, ["model": "gpt-5"], as: client(project: projectA))
+
+        XCTAssertNil(response.payload)
+        XCTAssertTrue(response.error?.contains("prompt") == true, String(describing: response.error))
+    }
+
+    /// What a spawned agent is called, which is also what its system prompt
+    /// says it is listed as: the tab's title when the caller gave one, else the
+    /// workstream and the agent kind — never the bare workstream name, which is
+    /// the spawner's.
+    func test_spawnedPeerName_isTheTitleOrTheWorkstreamAndKind() {
+        XCTAssertEqual(IPC.Service.spawnedPeerName(title: "reviewer", workstreamName: "ws", kind: .cursor), "reviewer")
+        XCTAssertEqual(IPC.Service.spawnedPeerName(title: "", workstreamName: "ws", kind: .cursor), "ws-cursor")
+        XCTAssertEqual(IPC.Service.spawnedPeerName(title: "", workstreamName: "ws", kind: .claude), "ws-claude")
+    }
+
+    /// `open_agent_tab` names its caller to the child it starts, read from the
+    /// caller's live registration rather than from anything it says about itself.
+    func test_spawner_isTheCallersRegisteredNameAndID() async throws {
+        let id = try await register(name: "another-verify", project: projectA)
+        let request = IPC.Request(token: "unused", tool: .openAgentTab, arguments: [:], client: client(project: projectA, peerID: id))
+
+        let spawner = await service.spawner(of: request)
+        XCTAssertEqual(spawner, SystemPrompts.Spawner(name: "another-verify", id: id))
+    }
+
+    /// No registration, no claim: the child is simply not told who started it.
+    func test_spawner_ofAnUnregisteredCaller_isNil() async {
+        let request = IPC.Request(token: "unused", tool: .openAgentTab, arguments: [:], client: client(project: projectA, peerID: UUID().uuidString))
+
+        let spawner = await service.spawner(of: request)
+        XCTAssertNil(spawner)
     }
 
     // MARK: - request_attention

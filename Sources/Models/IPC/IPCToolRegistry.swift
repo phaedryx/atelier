@@ -464,7 +464,9 @@ extension IPC.Tool {
                 for the same index lock. Returns the new tab's surface id. The agent is
                 not addressable immediately: poll list_tabs until that surface reports a
                 peer id, then send_message to it. Do not guess its peer from list_peers
-                names — you did not choose the name it registers under.
+                names — you did not choose the name it registers under. The agent is
+                Claude Code unless `agent` says "cursor", which starts Cursor CLI
+                (cursor-agent) instead; it reaches you over atelier-ipc the same way.
                 """,
                 arguments: [
                     IPC.ArgumentSpec(
@@ -478,6 +480,18 @@ extension IPC.Tool {
                         kind: .string,
                         isRequired: false,
                         description: "Optional name for the tab, so the user can tell what it is for."
+                    ),
+                    IPC.ArgumentSpec(
+                        name: "agent",
+                        kind: .string,
+                        isRequired: false,
+                        description: "Which coding agent to start: \(IPC.Vocabulary.quotedAgentKinds). Omit for \"claude\". Only with `prompt`."
+                    ),
+                    IPC.ArgumentSpec(
+                        name: "model",
+                        kind: .string,
+                        isRequired: false,
+                        description: "Optional model for the agent, passed to its --model flag as given. Only with `prompt`."
                     ),
                 ]
             )
@@ -1794,6 +1808,22 @@ extension IPC {
         /// interchangeable even now that they list the same kinds.
         static var quotedCloseableTabKinds: String {
             TabKind.allCases
+                .map { "\"\($0.rawValue)\"" }
+                .joined(separator: " or ")
+        }
+
+        /// The coding agents `open_agent_tab` can start. Claude Code is the
+        /// default and the only one the Coding Agent tab and the create tools
+        /// run; Cursor CLI is a peer that speaks atelier-ipc like any other.
+        enum AgentKind: String, CaseIterable, Sendable {
+            case claude
+            case cursor
+        }
+
+        /// The agent kinds as the schema spells them, `"claude" or "cursor"`.
+        /// Derived for the same reason `quotedTabKinds` is.
+        static var quotedAgentKinds: String {
+            AgentKind.allCases
                 .map { "\"\($0.rawValue)\"" }
                 .joined(separator: " or ")
         }

@@ -119,6 +119,11 @@ private struct EnvironmentSettingsPane: View {
                     status: appEnv.toolStatus.tmux,
                     version: appEnv.toolStatus.tmuxVersion
                 )
+                ToolRow(
+                    name: "cursor-agent",
+                    status: appEnv.toolStatus.cursorAgent,
+                    version: appEnv.toolStatus.cursorAgentVersion
+                )
             } header: {
                 HStack {
                     Text("Detected Tools")

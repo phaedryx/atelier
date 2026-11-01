@@ -21,7 +21,8 @@ extension IPC.Service {
         // defaults to. The behaviour changed with the typed read; the
         // promise did not.
         let name = Names.sanitized(
-            arguments.optional("name") ?? request.client.workstreamName ?? request.client.groupName ?? "agent",
+            arguments.optional("name") ?? request.client.peerName ?? request.client.workstreamName
+                ?? request.client.groupName ?? "agent",
             limit: 40,
             fallback: "agent"
         )

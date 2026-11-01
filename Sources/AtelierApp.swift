@@ -149,7 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             PermissionApprovalStore.shared.releaseEverything()
         }
         HookEventReceiver.shared.stop()
-        // `ToolStatus.detect()` would do — but it spawns five probes including
+        // `ToolStatus.detect()` would do — but it spawns six probes including
         // `gh auth status`, which reaches the network, and this runs on the main
         // thread as the app is quitting. All that is wanted is one path lookup.
         let tmuxPath = CommandLineTools.path(for: "tmux")
@@ -197,6 +197,13 @@ struct AtelierApp: App {
         guard !isRunningXCTest() else { return }
 
         UserDefaults.standard.set(200, forKey: "NSInitialToolTipDelay") // 200ms vs system ~700-1000ms
+
+        // Before anything spawns: every child inherits this process's
+        // environment, and `ATELIER_*` must come from Atelier's own state alone
+        // — see `Workstream.Environment.inheritedAtelierNames`.
+        for name in Workstream.Environment.inheritedAtelierNames(in: ProcessInfo.processInfo.environment) {
+            unsetenv(name)
+        }
 
         // Start the hook event receiver and wire it to the router and the
         // sidebar agent-state tracker. `onEvent` is invoked on the main queue.
@@ -272,11 +279,14 @@ struct AtelierApp: App {
         // calls apply() again whenever the switch moves.
         IPC.AgentSettings.apply()
 
-        // Install atelier-hook into ~/.claude/settings.json so Claude Code forwards events
-        if let hookURL = Bundle.main.url(forResource: "atelier-hook", withExtension: nil, subdirectory: "Scripts") {
+        // Install atelier-hook into ~/.claude/settings.json so Claude Code
+        // forwards events, and into ~/.cursor/hooks.json for a Cursor agent's
+        // turn events when Cursor is on this machine.
+        if let hookURL = Bundle.main.url(forResource: "atelier-hook", withExtension: nil, subdirectory: "Scripts")
+            ?? Bundle.main.url(forResource: "atelier-hook", withExtension: nil)
+        {
             HookInstaller.install(hookScriptPath: hookURL.path)
-        } else if let hookURL = Bundle.main.url(forResource: "atelier-hook", withExtension: nil) {
-            HookInstaller.install(hookScriptPath: hookURL.path)
+            HookInstaller.Cursor.installIfCursorIsPresent(hookScriptPath: hookURL.path)
         }
 
         // Verify the delivery path once the install above has had its say. This

@@ -30,6 +30,10 @@ struct ToolStatus {
     var claude: BinaryStatus = .notFound
     var claudeVersion: String?
     var claudeSupportsSessionName: Bool = false
+    /// Cursor CLI. Optional in the way tmux is: only `open_agent_tab` with
+    /// `agent: "cursor"` needs it, and it refuses when this is not found.
+    var cursorAgent: BinaryStatus = .notFound
+    var cursorAgentVersion: String?
     var gh: BinaryStatus = .notFound
     var ghVersion: String?
     /// Display-only. `ghAuthenticated` is the flag to branch on — this string is
@@ -61,6 +65,11 @@ struct ToolStatus {
         if let path = status.claude.path {
             status.claudeVersion = runForVersion(path, args: ["--version"])
             status.claudeSupportsSessionName = helpContainsFlag(path, flag: "--name")
+        }
+
+        status.cursorAgent = findBinary("cursor-agent")
+        if let path = status.cursorAgent.path {
+            status.cursorAgentVersion = runForVersion(path, args: ["--version"])
         }
 
         status.gh = findBinary("gh")

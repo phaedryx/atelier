@@ -360,3 +360,173 @@ final class HookInstallerTests: XCTestCase {
         XCTAssertNil((settings["hooks"] as? [String: Any])?["Stop"])
     }
 }
+
+/// Cursor CLI's TUI fires `stop` and `beforeSubmitPrompt` only when a user or
+/// project hooks file declares them — a plugin's hooks are ignored by that
+/// gate — so the entry has to live in `~/.cursor/hooks.json`, merged.
+final class CursorHookInstallerTests: XCTestCase {
+    private var directory: URL!
+    private var hooksPath: String!
+    private let script = "/Apps/Atelier.app/atelier-hook"
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("cursor-hook-installer-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        hooksPath = directory.appendingPathComponent("hooks.json").path
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: directory)
+        try super.tearDownWithError()
+    }
+
+    private func write(_ object: [String: Any]) throws {
+        let data = try JSONSerialization.data(withJSONObject: object)
+        try data.write(to: URL(fileURLWithPath: hooksPath))
+    }
+
+    private func read() throws -> [String: Any] {
+        let data = try Data(contentsOf: URL(fileURLWithPath: hooksPath))
+        return try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    private func commands(for event: String) throws -> [String] {
+        let hooks = try XCTUnwrap(try read()["hooks"] as? [String: Any])
+        let entries = hooks[event] as? [[String: Any]] ?? []
+        return entries.compactMap { $0["command"] as? String }
+    }
+
+    func testInstallsStopAndBeforeSubmitPromptWhenTheFileDoesNotExist() throws {
+        HookInstaller.Cursor.install(hookScriptPath: script, at: hooksPath)
+
+        XCTAssertEqual(try read()["version"] as? Int, 1)
+        XCTAssertEqual(try commands(for: "stop"), ["\(script) --cursor"])
+        XCTAssertEqual(try commands(for: "beforeSubmitPrompt"), ["\(script) --cursor"])
+    }
+
+    func testInstallIsIdempotent() throws {
+        HookInstaller.Cursor.install(hookScriptPath: script, at: hooksPath)
+        HookInstaller.Cursor.install(hookScriptPath: script, at: hooksPath)
+
+        XCTAssertEqual(try commands(for: "stop").count, 1)
+        XCTAssertEqual(try commands(for: "beforeSubmitPrompt").count, 1)
+    }
+
+    /// The file is the user's: their own hooks and keys survive the merge.
+    func testKeepsTheUsersOwnHooksAndKeys() throws {
+        try write([
+            "version": 1,
+            "hooks": [
+                "stop": [["command": "~/bin/notify-me"]],
+                "afterFileEdit": [["command": "~/bin/format"]],
+            ],
+        ])
+
+        HookInstaller.Cursor.install(hookScriptPath: script, at: hooksPath)
+
+        XCTAssertEqual(try commands(for: "stop"), ["~/bin/notify-me", "\(script) --cursor"])
+        XCTAssertEqual(try commands(for: "afterFileEdit"), ["~/bin/format"])
+    }
+
+    /// A script that exists somewhere else on disk, the way another Atelier's
+    /// bundled copy does.
+    private func liveScript(named name: String) throws -> String {
+        let url = directory.appendingPathComponent(name).appendingPathComponent("atelier-hook")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("#!/bin/sh\n".utf8).write(to: url)
+        return url.path
+    }
+
+    /// A debug build in a worktree whose build directory was cleaned leaves an
+    /// entry every Cursor session runs and fails on. Any build replaces it.
+    func testAnEntryWhoseScriptIsGoneIsReplaced() throws {
+        try write(["version": 1, "hooks": ["stop": [["command": "/gone/worktree/atelier-hook --cursor"]]]])
+
+        HookInstaller.Cursor.install(hookScriptPath: script, at: hooksPath, reclaimsLiveEntries: false)
+
+        XCTAssertEqual(try commands(for: "stop"), ["\(script) --cursor"])
+    }
+
+    /// The release app owns the global file: a live entry another copy of
+    /// Atelier left — a debug build, most often — is taken back.
+    func testTheReleaseBuildReclaimsALiveEntryAtAnotherPath() throws {
+        let other = try liveScript(named: "debug")
+        try write(["version": 1, "hooks": ["stop": [["command": "\(other) --cursor"]]]])
+
+        HookInstaller.Cursor.install(hookScriptPath: script, at: hooksPath, reclaimsLiveEntries: true)
+
+        XCTAssertEqual(try commands(for: "stop"), ["\(script) --cursor"])
+    }
+
+    /// A debug build never displaces a live entry. If it did, debug and release
+    /// running side by side would fight over the file, and a debug launch after
+    /// the release app would put a worktree path back.
+    func testADebugBuildLeavesALiveEntryAtAnotherPathAlone() throws {
+        let other = try liveScript(named: "release")
+        try write(["version": 1, "hooks": ["stop": [["command": "\(other) --cursor"]]]])
+
+        HookInstaller.Cursor.install(hookScriptPath: script, at: hooksPath, reclaimsLiveEntries: false)
+
+        XCTAssertEqual(try commands(for: "stop"), ["\(other) --cursor"])
+    }
+
+    func testAQuotedPathIsReadBackWhole() throws {
+        let other = try liveScript(named: "My Atelier")
+        try write(["version": 1, "hooks": ["stop": [["command": "\"\(other)\" --cursor"]]]])
+
+        HookInstaller.Cursor.install(hookScriptPath: script, at: hooksPath, reclaimsLiveEntries: false)
+
+        XCTAssertEqual(try commands(for: "stop"), ["\"\(other)\" --cursor"], "the quoted path exists, so it is live")
+    }
+
+    /// Ours is the one kept when several Atelier entries piled up, and the
+    /// user's own commands stay where they were.
+    func testDuplicateAtelierEntriesCollapseToOneAndForeignOnesStay() throws {
+        try write(["version": 1, "hooks": ["stop": [
+            ["command": "/gone/a/atelier-hook --cursor"],
+            ["command": "~/bin/notify-me"],
+            ["command": "/gone/b/atelier-hook --cursor"],
+        ]]])
+
+        HookInstaller.Cursor.install(hookScriptPath: script, at: hooksPath, reclaimsLiveEntries: true)
+
+        XCTAssertEqual(try commands(for: "stop"), ["~/bin/notify-me", "\(script) --cursor"])
+    }
+
+    /// A user's command that merely mentions something else is never ours,
+    /// however stale its path.
+    func testAForeignEntryIsNeverReplaced() throws {
+        try write(["version": 1, "hooks": ["stop": [["command": "/gone/bin/notify-me --cursor"]]]])
+
+        HookInstaller.Cursor.install(hookScriptPath: script, at: hooksPath, reclaimsLiveEntries: true)
+
+        XCTAssertEqual(try commands(for: "stop"), ["/gone/bin/notify-me --cursor", "\(script) --cursor"])
+    }
+
+    func testRefusesToOverwriteAFileThatIsNotJSON() throws {
+        try Data("{ not json".utf8).write(to: URL(fileURLWithPath: hooksPath))
+
+        HookInstaller.Cursor.install(hookScriptPath: script, at: hooksPath)
+
+        XCTAssertEqual(try String(contentsOfFile: hooksPath, encoding: .utf8), "{ not json")
+    }
+
+    func testAPathWithASpaceIsQuoted() throws {
+        HookInstaller.Cursor.install(hookScriptPath: "/Apps/My Atelier.app/atelier-hook", at: hooksPath)
+
+        XCTAssertEqual(try commands(for: "stop"), ["\"/Apps/My Atelier.app/atelier-hook\" --cursor"])
+    }
+
+    func testUninstallRemovesOnlyOurEntries() throws {
+        try write(["version": 1, "hooks": ["stop": [["command": "~/bin/notify-me"]]]])
+        HookInstaller.Cursor.install(hookScriptPath: script, at: hooksPath)
+
+        HookInstaller.Cursor.uninstall(at: hooksPath)
+
+        XCTAssertEqual(try commands(for: "stop"), ["~/bin/notify-me"])
+        let hooks = try XCTUnwrap(try read()["hooks"] as? [String: Any])
+        XCTAssertNil(hooks["beforeSubmitPrompt"])
+    }
+}

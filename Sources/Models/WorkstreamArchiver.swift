@@ -272,12 +272,13 @@ extension Workstream {
             // `remove`. A project with no tasks, or a workstream with no claims,
             // makes this a genuine no-op.
             Task { await IPC.Service.shared.releaseTaskClaims(inWorkstream: workstreamID) }
-            // The agent's mcp-config JSON and its `--settings` file, both named
-            // for this workstream id. Nothing re-reads either once the
-            // workstream is gone, so a path that skips them leaks two files into
-            // Caches per archive, for good.
+            // The agent's mcp-config JSON, its `--settings` file and a Cursor
+            // tab's plugin directory, all named for this workstream id. Nothing
+            // re-reads them once the workstream is gone, so a path that skips
+            // them leaks them into Caches per archive, for good.
             IPC.Config.remove(for: workstreamID)
             StatusLine.Config.remove(for: workstreamID)
+            IPC.CursorPlugin.remove(for: workstreamID)
             LaunchLogger.removeLog(for: workstreamID)
             // Retires the slot rather than freeing it: remove leaves the dev
             // stack running, and purge's `dispose` runs after this returns.

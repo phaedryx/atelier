@@ -32,7 +32,9 @@ extension Workstream {
             autoRenameBranch: Bool,
             worktreePath: String,
             workstreamName: String,
-            mcpConfigWritten: Bool
+            mcpConfigWritten: Bool,
+            listedAs peerName: String? = nil,
+            spawnedBy spawner: SystemPrompts.Spawner? = nil
         ) -> String? {
             var parts: [String] = []
             if !allowOutsideWorktree {
@@ -42,7 +44,10 @@ extension Workstream {
                 parts.append(SystemPrompts.autoRenameBranchPrompt)
             }
             if mcpConfigWritten {
-                parts.append(SystemPrompts.agentIPCPrompt(workstreamName: workstreamName))
+                // A spawned tab is a second agent in the workstream: telling it
+                // it is listed under the workstream's name tells it it is its
+                // spawner.
+                parts.append(SystemPrompts.agentIPCPrompt(workstreamName: peerName ?? workstreamName, spawnedBy: spawner))
             }
             return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
         }
@@ -143,12 +148,16 @@ extension Workstream {
             systemPrompt: String?,
             mcpConfigPath: String?,
             settingsPath: String?,
-            initialPrompt: String?
+            initialPrompt: String?,
+            model: String? = nil
         ) -> String {
             var builder = CommandBuilder(claudePath)
             builder.option("--session-id", sessionID)
             if let sessionName, !sessionName.isEmpty {
                 builder.option("--name", sessionName)
+            }
+            if let model, !model.isEmpty {
+                builder.option("--model", model)
             }
             if bypassPermissions {
                 builder.flag("--dangerously-skip-permissions")
@@ -180,6 +189,56 @@ extension Workstream {
             // command is: the agent shells out, and a PATH assembled without the
             // user's profile is missing most of what it will reach for.
             return CommandBuilder.inLoginShell(builder.command)
+        }
+
+        /// A fresh Cursor CLI invocation for a surface that has never held one.
+        ///
+        /// `cursor-agent` has no `--session-id`, `--settings` or
+        /// `--append-system-prompt`, so the system prompt is carried at the head
+        /// of the initial prompt instead (`cursorInitialPrompt`). There is no
+        /// session id to collide on, so the surface id reaches it only through
+        /// `ATELIER_SURFACE_ID` in its environment.
+        ///
+        /// The atelier-ipc server arrives through `--plugin-dir`
+        /// (`IPC.CursorPlugin`), Cursor's per-launch equivalent of
+        /// `--mcp-config`.
+        ///
+        /// `--approve-mcps` and `--trust` because the surface is created with
+        /// nobody necessarily looking at it: an agent stopped on a trust or MCP
+        /// approval prompt in an unwatched tab never reaches atelier-ipc to say
+        /// so. `--force` is Cursor's spelling of bypassing permissions.
+        static func cursorFresh(
+            cursorPath: String,
+            model: String?,
+            bypassPermissions: Bool,
+            systemPrompt: String?,
+            pluginDirectory: String?,
+            initialPrompt: String
+        ) -> String {
+            var builder = CommandBuilder(cursorPath)
+            if let model, !model.isEmpty {
+                builder.option("--model", model)
+            }
+            builder.flag("--approve-mcps")
+            builder.flag("--trust")
+            if bypassPermissions {
+                builder.flag("--force")
+            }
+            if let pluginDirectory {
+                builder.option("--plugin-dir", pluginDirectory)
+            }
+            builder.flag("--")
+            builder.arg(CommandBuilder.shellQuote(
+                cursorInitialPrompt(systemPrompt: systemPrompt, initialPrompt: initialPrompt)
+            ))
+            return CommandBuilder.inLoginShell(builder.command)
+        }
+
+        /// The one positional prompt a Cursor agent starts with: the system
+        /// prompt first, so the rules arrive before the task, then the task.
+        static func cursorInitialPrompt(systemPrompt: String?, initialPrompt: String) -> String {
+            guard let systemPrompt, !systemPrompt.isEmpty else { return initialPrompt }
+            return systemPrompt + "\n\n" + initialPrompt
         }
 
         /// Wraps an agent invocation in the workstream's tmux session, or returns

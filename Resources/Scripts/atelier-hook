@@ -4,6 +4,14 @@
 # ABOUTME: inherited ATELIER_SURFACE_ID, and POSTs to localhost. With
 # ABOUTME: --permission it waits for a decision and prints it for Claude Code.
 INPUT=$(cat)
+# --cursor is how the global ~/.cursor/hooks.json entry calls this. Every
+# Cursor session on the machine runs it, and only an Atelier surface has
+# anything to report, so it leaves without one. Stdin is drained first so the
+# harness never writes into a closed pipe. Nothing is printed on any path,
+# which beforeSubmitPrompt reads as "continue".
+if [ "$1" = "--cursor" ] && [ -z "$ATELIER_SURFACE_ID" ]; then
+  exit 0
+fi
 PORT_FILE="$HOME/Library/Caches/atelier/hook-port"
 [ -f "$PORT_FILE" ] || exit 0
 PORT=$(cat "$PORT_FILE")
@@ -20,7 +28,13 @@ PORT=$(cat "$PORT_FILE")
 escape_json() {
   printf '%s' "$1" | tr -d '\000-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
 }
-PROJECT_DIR=$(escape_json "$CLAUDE_PROJECT_DIR")
+# Cursor exports no CLAUDE_PROJECT_DIR; its hooks run in the workspace, so the
+# working directory keeps the directory fallback behind the surface id.
+PROJECT_DIR_RAW=$CLAUDE_PROJECT_DIR
+if [ "$1" = "--cursor" ] && [ -z "$PROJECT_DIR_RAW" ]; then
+  PROJECT_DIR_RAW=$PWD
+fi
+PROJECT_DIR=$(escape_json "$PROJECT_DIR_RAW")
 SURFACE_ID=$(escape_json "$ATELIER_SURFACE_ID")
 BODY="{\"event_input\": ${INPUT}, \"project_dir\": \"${PROJECT_DIR}\", \"surface_id\": \"${SURFACE_ID}\"}"
 
