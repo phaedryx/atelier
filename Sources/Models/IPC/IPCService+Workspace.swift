@@ -5,10 +5,8 @@ import Foundation
 
 extension IPC.Service {
     func listTabs(for request: Request) async -> Response {
-        let workstreamID: UUID
-        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
-        case let .success(id): workstreamID = id
-        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
+        guard let workstreamID = callerWorkstreamID(request) else {
+            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
         }
         let callerSurfaceID = request.client.surfaceID.flatMap(UUID.init(uuidString:))
         let peers = await peersBySurface()
@@ -27,10 +25,8 @@ extension IPC.Service {
     }
 
     func readReviewComments(for request: Request) async -> Response {
-        let workstreamID: UUID
-        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
-        case let .success(id): workstreamID = id
-        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
+        guard let workstreamID = callerWorkstreamID(request) else {
+            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
         }
         do {
             let comments = try await MainActor.run {
@@ -43,10 +39,8 @@ extension IPC.Service {
     }
 
     func openEditor(for request: Request) async -> Response {
-        let workstreamID: UUID
-        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
-        case let .success(id): workstreamID = id
-        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
+        guard let workstreamID = callerWorkstreamID(request) else {
+            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
         }
         // `line` is optional, but a value that is present and unparseable is
         // a mistake worth reporting rather than silently ignoring — which is
@@ -80,10 +74,8 @@ extension IPC.Service {
     /// `request_attention`. Saying "opened" and leaving the rest implied is
     /// how an agent ends up waiting for a reaction to something nobody saw.
     func openTab(for request: Request) async -> Response {
-        let workstreamID: UUID
-        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
-        case let .success(id): workstreamID = id
-        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
+        guard let workstreamID = callerWorkstreamID(request) else {
+            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
         }
         let kind: String
         do {
@@ -115,10 +107,8 @@ extension IPC.Service {
     /// currently owns is success rather than an error.
     func closeTab(for request: Request) async -> Response {
         let arguments = ToolArguments(request)
-        let workstreamID: UUID
-        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
-        case let .success(id): workstreamID = id
-        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
+        guard let workstreamID = callerWorkstreamID(request) else {
+            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
         }
         do {
             let result = try await MainActor.run {
@@ -143,9 +133,7 @@ extension IPC.Service {
     }
 
     func requestAttention(for request: Request) async -> Response {
-        // The notifier's id is an opaque key (cooldown and notification identifier), so a
-        // coordinator's group id serves where a member's workstream id would.
-        guard let workstreamID = callerWorkstreamID(request) ?? callerGroupID(request) else {
+        guard let workstreamID = callerWorkstreamID(request) else {
             return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
         }
         // Sanitized *before* the emptiness check, not after: a reason of
@@ -155,7 +143,7 @@ extension IPC.Service {
         guard !reason.isEmpty else {
             return .failure(id: request.id, ToolError.missingArgument("reason").localizedDescription)
         }
-        let name = request.client.workstreamName ?? request.client.groupName ?? "Atelier"
+        let name = request.client.workstreamName ?? "Atelier"
         let outcome = await MainActor.run {
             Workstream.AttentionNotifier.shared.notify(
                 workstreamID: workstreamID,

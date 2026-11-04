@@ -17,10 +17,8 @@ extension IPC.Service {
     private static let maxLogTail = 1000
 
     func listProcesses(for request: Request) async -> Response {
-        let workstreamID: UUID
-        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
-        case let .success(id): workstreamID = id
-        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
+        guard let workstreamID = callerWorkstreamID(request) else {
+            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
         }
         guard let controller = execution else {
             return .failure(id: request.id, ExecutionFailure.notAvailable.localizedDescription)
@@ -33,10 +31,8 @@ extension IPC.Service {
     }
 
     func readProcessLogs(for request: Request) async -> Response {
-        let workstreamID: UUID
-        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
-        case let .success(id): workstreamID = id
-        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
+        guard let workstreamID = callerWorkstreamID(request) else {
+            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
         }
         guard let controller = execution else {
             return .failure(id: request.id, ExecutionFailure.notAvailable.localizedDescription)
@@ -56,10 +52,8 @@ extension IPC.Service {
     }
 
     func controlProcess(for request: Request, action: ProcessAction) async -> Response {
-        let workstreamID: UUID
-        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
-        case let .success(id): workstreamID = id
-        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
+        guard let workstreamID = callerWorkstreamID(request) else {
+            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
         }
         guard let controller = execution else {
             return .failure(id: request.id, ExecutionFailure.notAvailable.localizedDescription)
@@ -74,10 +68,8 @@ extension IPC.Service {
     }
 
     func startExecution(for request: Request) async -> Response {
-        let workstreamID: UUID
-        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
-        case let .success(id): workstreamID = id
-        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
+        guard let workstreamID = callerWorkstreamID(request) else {
+            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
         }
         guard let controller = execution else {
             return .failure(id: request.id, ExecutionFailure.notAvailable.localizedDescription)
@@ -113,10 +105,8 @@ extension IPC.Service {
     }
 
     func stopExecution(for request: Request) async -> Response {
-        let workstreamID: UUID
-        switch callerWorkstreamIDOrRefusal(request, tool: request.tool) {
-        case let .success(id): workstreamID = id
-        case let .failure(refusal): return .failure(id: request.id, refusal.localizedDescription)
+        guard let workstreamID = callerWorkstreamID(request) else {
+            return .failure(id: request.id, ToolError.notInWorkstream.localizedDescription)
         }
         guard let controller = execution else {
             return .failure(id: request.id, ExecutionFailure.notAvailable.localizedDescription)
