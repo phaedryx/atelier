@@ -56,6 +56,14 @@
 "Not a Git Repository" = "Not a Git Repository";
 "Workstreams require a git repository. Initialize one with git init or select a different directory." = "Workstreams require a git repository. Initialize one with git init or select a different directory.";
 "Rename…" = "Rename…";
+"Group" = "Group";
+"Red" = "Red";
+"Orange" = "Orange";
+"Yellow" = "Yellow";
+"Green" = "Green";
+"Blue" = "Blue";
+"Purple" = "Purple";
+"Gray" = "Gray";
 "Rename Workstream" = "Rename Workstream";
 
 /* Workstream creation */
