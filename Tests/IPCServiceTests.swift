@@ -987,4 +987,29 @@ final class IPCServiceTests: XCTestCase {
             []
         )
     }
+
+    func test_listPeers_filtersByGroup() async throws {
+        let blueID = UUID(), redID = UUID()
+        Workstream.Group.Mirror.shared.sync(workstreamID: blueID, group: .blue)
+        Workstream.Group.Mirror.shared.sync(workstreamID: redID, group: .red)
+        _ = try await register(name: "blue-one", project: projectA, workstreamID: blueID)
+        _ = try await register(name: "red-one", project: projectA, workstreamID: redID)
+        _ = try await register(name: "plain", project: projectA)
+
+        let listed = try await peers(of: call(.listPeers, ["group": "blue"], as: client(project: projectA)))
+        XCTAssertEqual(listed.map(\.name), ["blue-one"])
+    }
+
+    func test_listPeers_refusesAGroupOutsideTheSeven() async {
+        let response = await call(.listPeers, ["group": "Blue"], as: client(project: projectA))
+        XCTAssertNil(response.payload)
+        XCTAssertTrue(response.error?.contains("red, orange, yellow, green, blue, purple, gray") == true, "\(String(describing: response.error))")
+    }
+
+    /// Empty is absent, by `optionalTrimmed`'s rule, and absent means "no filter".
+    func test_listPeers_emptyGroupIsNoFilter() async throws {
+        _ = try await register(name: "anyone", project: projectA)
+        let listed = try await peers(of: call(.listPeers, ["group": ""], as: client(project: projectA)))
+        XCTAssertEqual(listed.map(\.name), ["anyone"])
+    }
 }

@@ -44,7 +44,27 @@ extension IPC.Service {
         return await .success(id: request.id, .peer(info(for: peer)))
     }
 
+    /// The `group` argument: nil means no filter (absent and empty read alike),
+    /// anything else must be one of the seven names.
+    func groupArgument(_ arguments: ToolArguments) throws -> Workstream.Group? {
+        guard let raw = arguments.optionalTrimmed("group") else { return nil }
+        guard let group = Workstream.Group(rawValue: raw) else {
+            throw ToolError.invalidArgument(
+                name: "group",
+                reason: "\(raw) is not a group. One of: \(IPC.groupNames.joined(separator: ", "))."
+            )
+        }
+        return group
+    }
+
     func listPeers(for request: Request) async -> Response {
+        // Resolved before the store hop, so a refused argument never prunes.
+        let wanted: Workstream.Group?
+        do {
+            wanted = try groupArgument(ToolArguments(request))
+        } catch {
+            return .failure(id: request.id, error.localizedDescription)
+        }
         // Snapshotted **before** the await, and the prune is scoped to it —
         // see `pruneContexts(observed:stillAlive:)` for the registration
         // this would otherwise delete out from under a peer mid-hop.
@@ -52,7 +72,10 @@ extension IPC.Service {
         let peers = await store.listPeers()
         pruneContexts(observed: observed, stillAlive: peers.map(\.id))
 
-        let visible = peers.filter { isVisible($0.id, to: request.client) && $0.id.uuidString != request.client.peerID }
+        var visible = peers.filter { isVisible($0.id, to: request.client) && $0.id.uuidString != request.client.peerID }
+        if let wanted {
+            visible = visible.filter { group(forContext: contexts[$0.id]) == wanted }
+        }
         let counts = await store.inboxCounts(for: visible.map(\.id))
         let now = Date()
         let infos = visible.map { info(for: $0, pending: counts[$0.id] ?? 0, now: now) }

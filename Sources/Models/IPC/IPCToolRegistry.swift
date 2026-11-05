@@ -20,6 +20,12 @@ import Foundation
 /// 15 would still satisfy every deadline test in `IPCProtocolTests`, so the
 /// mistake would ship. The `switch` makes a case without a spec a build failure.
 extension IPC {
+    /// The group names, spelled out because the helper compiles this file
+    /// without `Workstream.Group`. `IPCProtocolTests` pins it to the enum's cases.
+    static let groupNames = ["red", "orange", "yellow", "green", "blue", "purple", "gray"]
+}
+
+extension IPC {
     /// One argument a tool accepts.
     ///
     /// **Everything crosses the wire as a string** — `Request.arguments` is
@@ -271,9 +277,16 @@ extension IPC.Tool {
                 last heard from, how many messages are waiting for it, and how long ago
                 a human last typed directly into its session (null if never, or if it
                 has no terminal of its own). Only agents working in the same project are
-                listed.
+                listed. Each peer line reports its group, and the reply starts with yours.
                 """,
-                arguments: []
+                arguments: [
+                    IPC.ArgumentSpec(
+                        name: "group",
+                        kind: .string,
+                        isRequired: false,
+                        description: "Only peers whose workstream has this group: one of red, orange, yellow, green, blue, purple, gray. A group is a color the user assigns in the sidebar to mark related workstreams; a workstream an agent creates inherits its creator's."
+                    ),
+                ]
             )
         case .sendMessage:
             IPC.ToolSpec(
@@ -324,7 +337,8 @@ extension IPC.Tool {
                 isSafeToReplay: false,
                 description: """
                 Send one message to every other agent in this project. Use it sparingly;
-                prefer send_message when you know who you need.
+                prefer send_message when you know who you need. With `group`, it reaches
+                the workstreams the user marked as related to yours.
                 """,
                 arguments: [
                     IPC.ArgumentSpec(
@@ -332,6 +346,12 @@ extension IPC.Tool {
                         kind: .string,
                         isRequired: true,
                         description: "The message."
+                    ),
+                    IPC.ArgumentSpec(
+                        name: "group",
+                        kind: .string,
+                        isRequired: false,
+                        description: "Only the peers whose workstream has this group; see list_peers. Omit it to reach the whole project."
                     ),
                 ]
             )

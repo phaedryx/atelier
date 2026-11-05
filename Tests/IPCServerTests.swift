@@ -238,6 +238,36 @@ final class IPCServerTests: XCTestCase {
         XCTAssertTrue(listed.contains("quiet-agent"), "an agent that never called a tool should still be reachable, got: \(listed)")
     }
 
+    /// The anti-goal in the spec: a group changed in the sidebar mid-session must be what the next call sees.
+    @MainActor
+    func test_listPeers_overTheSocket_seesAGroupChangedAfterTheAgentStarted() throws {
+        let helper = try XCTUnwrap(MCPHelperLauncher.executableURL(), "atelier-mcp was not found in the host app bundle")
+        _ = try waitForEndpoint()
+
+        func environment(workstream: String, id: UUID = UUID()) -> [String: String] {
+            var environment = ProcessInfo.processInfo.environment
+            environment["ATELIER_PROJECT_DIR"] = "/repos/atelier"
+            environment["ATELIER_WORKSTREAM"] = workstream
+            environment["ATELIER_WORKSTREAM_ID"] = id.uuidString
+            environment["ATELIER_SURFACE_ID"] = UUID().uuidString
+            return environment
+        }
+
+        let ws = Workstream(name: "sibling", group: .blue)
+        let list = ProjectList()
+        list.items = [Project(name: "app", directory: "/repos/atelier", workstreams: [ws])]
+        let sibling = try MCPProcess(helper: helper, environment: environment(workstream: "sibling", id: ws.id))
+        XCTAssertNotNil(sibling.callTool("register_peer", ["name": "sibling"]))
+        let observer = try MCPProcess(helper: helper, environment: environment(workstream: "observer"))
+
+        XCTAssertTrue(try XCTUnwrap(observer.callTool("list_peers")).contains("group=blue"))
+        list.items[0].setGroup(.red, forWorkstream: ws.id)
+        let after = try XCTUnwrap(observer.callTool("list_peers"))
+        XCTAssertTrue(after.contains("group=red"), "got: \(after)")
+        XCTAssertFalse(after.contains("group=blue"))
+        XCTAssertTrue(try XCTUnwrap(sibling.callTool("list_peers")).hasPrefix("You: group=red"))
+    }
+
     // MARK: - Peer ownership
 
     /// Reads from `fd` until it closes or the deadline passes; true if the
