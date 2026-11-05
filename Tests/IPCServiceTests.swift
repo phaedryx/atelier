@@ -188,6 +188,31 @@ final class IPCServiceTests: XCTestCase {
         XCTAssertTrue(none.isEmpty)
     }
 
+    func test_broadcast_withAGroup_reachesOnlyThatGroup() async throws {
+        let blueA = UUID(), blueB = UUID()
+        Workstream.Group.Mirror.shared.sync(workstreamID: blueA, group: .blue)
+        Workstream.Group.Mirror.shared.sync(workstreamID: blueB, group: .blue)
+        let sender = try await register(name: "sender", project: projectA, workstreamID: blueA)
+        let sibling = try await register(name: "sibling", project: projectA, workstreamID: blueB)
+        let plain = try await register(name: "plain", project: projectA)
+
+        let response = await call(.broadcast, ["content": "blue standup", "group": "blue"], as: client(project: projectA, peerID: sender, workstreamID: blueA))
+        guard case let .text(text) = response.payload else { return XCTFail("expected text") }
+        XCTAssertEqual(text, "Delivered to 1 peer.")
+
+        guard case let .messages(got) = await call(.receiveMessages, as: client(project: projectA, peerID: sibling)).payload else { return XCTFail() }
+        XCTAssertEqual(got.first?.content, "blue standup")
+        guard case let .messages(none) = await call(.receiveMessages, as: client(project: projectA, peerID: plain)).payload else { return XCTFail() }
+        XCTAssertTrue(none.isEmpty)
+    }
+
+    func test_broadcast_refusesAGroupOutsideTheSeven() async throws {
+        let sender = try await register(name: "sender", project: projectA)
+        let response = await call(.broadcast, ["content": "x", "group": "teal"], as: client(project: projectA, peerID: sender))
+        XCTAssertNil(response.payload)
+        XCTAssertTrue(response.error?.contains("teal is not a group") == true)
+    }
+
     // MARK: - Sanitization
 
     func test_registerPeer_stripsWhatWouldBeTypedIntoAnotherTerminal() async {

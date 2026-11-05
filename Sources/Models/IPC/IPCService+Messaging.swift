@@ -126,15 +126,21 @@ extension IPC.Service {
             return .failure(id: request.id, Error.unregisteredPeer.localizedDescription)
         }
         let content: String
+        let wanted: Workstream.Group?
         do {
-            content = try ToolArguments(request).nonEmpty("content")
+            let arguments = ToolArguments(request)
+            content = try arguments.nonEmpty("content")
+            wanted = try groupArgument(arguments)
         } catch {
             return .failure(id: request.id, error.localizedDescription)
         }
 
-        let audience = await store.listPeers()
+        var audience = await store.listPeers()
             .map(\.id)
             .filter { $0 != sender && isVisible($0, to: request.client) }
+        if let wanted {
+            audience = audience.filter { group(forContext: contexts[$0]) == wanted }
+        }
 
         do {
             let delivered = try await store.broadcast(from: sender, content: content, to: audience)
