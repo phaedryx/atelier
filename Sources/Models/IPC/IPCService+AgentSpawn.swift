@@ -459,6 +459,8 @@ extension IPC.Service {
         let prompt: String?
         let bypass: Bool
         let inputs: AgentLaunchInputs
+        /// The creator's group, so a spawned workstream lands beside it.
+        let group: Workstream.Group?
     }
 
     /// The preconditions both creation tools check, in the order that keeps
@@ -487,7 +489,18 @@ extension IPC.Service {
             throw ToolError.refused(refusal)
         }
 
-        return CreationPlan(target: target, prompt: prompt, bypass: bypass, inputs: inputs)
+        let group = Self.inheritedGroup(callerWorkstreamID: callerWorkstreamID, in: target)
+        return CreationPlan(target: target, prompt: prompt, bypass: bypass, inputs: inputs, group: group)
+    }
+
+    /// The group a workstream created by `callerWorkstreamID` starts in: the
+    /// caller's group as it is now. An agent Atelier did not launch has no
+    /// workstream id, so it yields nil rather than borrowing a sibling's color.
+    nonisolated static func inheritedGroup(
+        callerWorkstreamID: UUID?,
+        in target: Workstream.Launcher.Target
+    ) -> Workstream.Group? {
+        target.existingWorkstreams.first { $0.id == callerWorkstreamID }?.group
     }
 
     /// The half of a creation that does not care why it was asked for:
@@ -522,6 +535,7 @@ extension IPC.Service {
                 requestedName: name,
                 bypassPermissions: plan.bypass,
                 shortcutStoryID: shortcutStoryID,
+                group: plan.group,
                 beforeReady: { launched in
                     guard let prompt = plan.prompt, !prompt.isEmpty,
                           let claudePath = plan.inputs.claudePath else { return }
