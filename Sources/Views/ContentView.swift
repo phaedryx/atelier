@@ -29,10 +29,15 @@ extension Notification.Name {
 }
 
 final class ProjectList: ObservableObject {
-    @Published var items: [Project]
+    /// `didSet` feeds `Workstream.Group.Mirror`; see its doc for why this is not
+    /// an `.onChange`. `didSet` does not run inside `init`, hence the explicit sync.
+    @Published var items: [Project] {
+        didSet { Workstream.Group.Mirror.shared.sync(items) }
+    }
 
     init() {
         items = ProjectStore.load()
+        Workstream.Group.Mirror.shared.sync(items)
     }
 }
 
