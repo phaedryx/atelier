@@ -24,8 +24,16 @@ struct Workstream: Identifiable, Hashable, Codable {
     /// Optional for the same reason as `shortcutStoryID`: a non-Optional key
     /// would fail to decode every blob written before it existed.
     var slot: Int?
+    /// The raw name of this workstream's `Group`, stored under the key `group`.
+    ///
+    /// Optional for the same reason as `shortcutStoryID`: a non-Optional key
+    /// would fail to decode every blob written before it existed. And a string
+    /// rather than `Group?`, so a name this build does not know (a later build's
+    /// color, a hand edit) decodes fine and reads back as no group, costing the
+    /// color rather than the workstream.
+    private var groupName: String?
 
-    init(name: String, displayName: String? = nil, worktreePath: String? = nil, bypassPermissions: Bool = false, id: UUID = UUID(), lastAccessedAt: Date = Date(), shortcutStoryID: Int? = nil, slot: Int? = nil) {
+    init(name: String, displayName: String? = nil, worktreePath: String? = nil, bypassPermissions: Bool = false, id: UUID = UUID(), lastAccessedAt: Date = Date(), shortcutStoryID: Int? = nil, slot: Int? = nil, group: Group? = nil) {
         self.id = id
         self.name = name
         self.displayName = displayName
@@ -34,6 +42,18 @@ struct Workstream: Identifiable, Hashable, Codable {
         self.lastAccessedAt = lastAccessedAt
         self.shortcutStoryID = shortcutStoryID
         self.slot = slot
+        groupName = group?.rawValue
+    }
+
+    /// The group, or nil when none is set or the stored name is not one this build knows.
+    var group: Group? {
+        get { groupName.flatMap(Group.init(rawValue:)) }
+        set { groupName = newValue?.rawValue }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, displayName, worktreePath, bypassPermissions, lastAccessedAt, shortcutStoryID, slot
+        case groupName = "group"
     }
 
     /// The user-facing label. Falls back to the branch-tracked `name` when no override is set.
@@ -130,6 +150,16 @@ struct Project: Identifiable, Hashable, Codable {
     /// clone and the only one available for a container whose checkout is gone.
     var checkout: String {
         checkoutDirectory ?? directory
+    }
+
+    /// Set or clear one workstream's group. False when the id is not in
+    /// `workstreams` or the value is already that group, so a caller can skip a save.
+    @discardableResult
+    mutating func setGroup(_ group: Workstream.Group?, forWorkstream id: UUID) -> Bool {
+        guard let index = workstreams.firstIndex(where: { $0.id == id }),
+              workstreams[index].group != group else { return false }
+        workstreams[index].group = group
+        return true
     }
 
     /// Hand-written for two reasons.

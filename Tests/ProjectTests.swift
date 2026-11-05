@@ -747,6 +747,53 @@ final class ProjectTests: XCTestCase {
         XCTAssertEqual(decoded.shortcutStoryID, 17411)
     }
 
+    func testGroupRoundTrips() throws {
+        let data = try JSONEncoder().encode(Workstream(name: "a", group: .blue))
+        XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("\"group\":\"blue\""))
+        XCTAssertEqual(try JSONDecoder().decode(Workstream.self, from: data).group, .blue)
+    }
+
+    func testWorkstreamWithoutGroupDecodesToNil() throws {
+        let json = """
+        { "id": "\(UUID().uuidString)", "name": "no-group", "bypassPermissions": false, "lastAccessedAt": 0 }
+        """
+        XCTAssertNil(try JSONDecoder().decode(Workstream.self, from: Data(json.utf8)).group)
+    }
+
+    /// A build that knows more colors than this one, or a hand edit, must cost the color and not the workstream.
+    func testUnknownGroupNameDecodesToNilWithoutDroppingTheWorkstream() throws {
+        let json = """
+        { "id": "\(UUID().uuidString)", "name": "teal-one", "bypassPermissions": false, "lastAccessedAt": 0, "group": "teal" }
+        """
+        let decoded = try JSONDecoder().decode(Workstream.self, from: Data(json.utf8))
+        XCTAssertEqual(decoded.name, "teal-one")
+        XCTAssertNil(decoded.group)
+    }
+
+    /// #235 stored a `groupID` UUID on each workstream; #239 reverted it. The key is unrelated to `group` and must stay ignored.
+    func testBlobFromTheRevertedGroupsBuildDecodesWithNoGroup() throws {
+        let json = """
+        { "id": "\(UUID().uuidString)", "name": "old", "bypassPermissions": false, "lastAccessedAt": 0, "groupID": "\(UUID().uuidString)" }
+        """
+        XCTAssertNil(try JSONDecoder().decode(Workstream.self, from: Data(json.utf8)).group)
+    }
+
+    func testSetGroupChangesOnlyTheNamedWorkstreamAndReportsChange() {
+        let a = Workstream(name: "a"), b = Workstream(name: "b")
+        var project = Project(name: "app", directory: "/tmp/app", workstreams: [a, b])
+        XCTAssertTrue(project.setGroup(.red, forWorkstream: a.id))
+        XCTAssertEqual(project.workstreams[0].group, .red)
+        XCTAssertNil(project.workstreams[1].group)
+        XCTAssertFalse(project.setGroup(.red, forWorkstream: a.id), "unchanged is not a change")
+        XCTAssertFalse(project.setGroup(.red, forWorkstream: UUID()), "unknown id is not a change")
+        XCTAssertTrue(project.setGroup(nil, forWorkstream: a.id))
+        XCTAssertNil(project.workstreams[0].group)
+    }
+
+    func testGroupCasesAreTheSevenInOrder() {
+        XCTAssertEqual(Workstream.Group.allCases.map(\.rawValue), ["red", "orange", "yellow", "green", "blue", "purple", "gray"])
+    }
+
     /// The whole `[Project]` array is decoded from one UserDefaults key with `try?`, so a
     /// single workstream failing to decode silently yields `[]` and wipes every project.
     /// A build written before `shortcutStoryID` existed must therefore still load.
