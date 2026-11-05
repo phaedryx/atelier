@@ -424,11 +424,20 @@ extension IPC {
                 name: peer.name,
                 role: peer.role,
                 workstream: contexts[peer.id]?.workstreamName,
+                group: group(forContext: contexts[peer.id])?.rawValue,
                 surfaceID: surfaceID?.uuidString,
                 lastSeenSecondsAgo: Int(now.timeIntervalSince(peer.lastSeen)),
                 pendingMessages: pending,
                 lastUserPromptSecondsAgo: lastUserPromptSecondsAgo
             )
+        }
+
+        /// The live group of the workstream a context belongs to. Reads the
+        /// lock-guarded mirror, never the main actor — see `info(for:pending:now:)`.
+        nonisolated func group(forContext context: PeerContext?) -> Workstream.Group? {
+            context?.workstreamID
+                .flatMap(UUID.init(uuidString:))
+                .flatMap { Workstream.Group.Mirror.shared.group(forWorkstream: $0) }
         }
 
         // MARK: - Workspace tools

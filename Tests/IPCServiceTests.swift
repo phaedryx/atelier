@@ -21,10 +21,11 @@ final class IPCServiceTests: XCTestCase {
         project: String?,
         peerID: String? = nil,
         workstream: String = "bold-crimson-parser",
-        surfaceID: UUID? = UUID()
+        surfaceID: UUID? = UUID(),
+        workstreamID: UUID = UUID()
     ) -> IPC.ClientIdentity {
         IPC.ClientIdentity(
-            workstreamID: UUID().uuidString,
+            workstreamID: workstreamID.uuidString,
             workstreamName: workstream,
             projectDirectory: project,
             surfaceID: surfaceID?.uuidString,
@@ -37,8 +38,8 @@ final class IPCServiceTests: XCTestCase {
     }
 
     /// Registers a peer and returns its id, as the helper would remember it.
-    private func register(name: String, role: String = "", project: String?, workstream: String = "bold-crimson-parser") async throws -> String {
-        let response = await call(.registerPeer, ["name": name, "role": role], as: client(project: project, workstream: workstream))
+    private func register(name: String, role: String = "", project: String?, workstream: String = "bold-crimson-parser", workstreamID: UUID = UUID()) async throws -> String {
+        let response = await call(.registerPeer, ["name": name, "role": role], as: client(project: project, workstream: workstream, workstreamID: workstreamID))
         guard case let .peer(peer) = response.payload else {
             throw XCTSkip("register_peer did not return a peer: \(String(describing: response.error))")
         }
@@ -46,10 +47,37 @@ final class IPCServiceTests: XCTestCase {
     }
 
     private func peers(of response: IPC.Response) throws -> [IPC.PeerInfo] {
-        guard case let .peers(peers) = response.payload else {
-            throw XCTSkip("expected a peers payload, got \(String(describing: response.payload ?? nil))")
+        guard case let .peerList(list) = response.payload else {
+            throw XCTSkip("expected a peerList payload, got \(String(describing: response.payload ?? nil))")
         }
-        return peers
+        return list.peers
+    }
+
+    private func callerGroup(of response: IPC.Response) throws -> String? {
+        guard case let .peerList(list) = response.payload else {
+            throw XCTSkip("expected a peerList payload, got \(String(describing: response.payload ?? nil))")
+        }
+        return list.callerGroup
+    }
+
+    // MARK: - Groups
+
+    func test_listPeers_reportsEachPeersLiveGroup() async throws {
+        let blueID = UUID()
+        Workstream.Group.Mirror.shared.sync(workstreamID: blueID, group: .blue)
+        _ = try await register(name: "blue-one", project: projectA, workstreamID: blueID)
+        _ = try await register(name: "plain", project: projectA)
+
+        let listed = try await peers(of: call(.listPeers, as: client(project: projectA)))
+        XCTAssertEqual(listed.first { $0.name == "blue-one" }?.group, "blue")
+        XCTAssertNil(listed.first { $0.name == "plain" }?.group)
+    }
+
+    func test_listPeers_tellsTheCallerItsOwnGroup() async throws {
+        let mine = UUID()
+        Workstream.Group.Mirror.shared.sync(workstreamID: mine, group: .purple)
+        let response = await call(.listPeers, as: client(project: projectA, workstreamID: mine))
+        XCTAssertEqual(try callerGroup(of: response), "purple")
     }
 
     // MARK: - Registration

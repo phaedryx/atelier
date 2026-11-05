@@ -239,17 +239,25 @@ func lastUserPromptText(_ secondsAgo: Int?) -> String {
 func renderPeer(_ peer: IPC.PeerInfo) -> String {
     "\(peer.name) [\(peer.role)] id=\(peer.id)"
         + (peer.workstream.map { " workstream=\($0)" } ?? "")
+        + (peer.group.map { " group=\($0)" } ?? "")
         + (peer.surfaceID.map { " surface=\($0)" } ?? "")
         + " last-seen=\(peer.lastSeenSecondsAgo)s-ago pending=\(peer.pendingMessages)"
         + " last-user-prompt=\(lastUserPromptText(peer.lastUserPromptSecondsAgo))"
+}
+
+func renderPeers(_ peers: [IPC.PeerInfo]) -> String {
+    guard !peers.isEmpty else { return "No other agents are registered in this project." }
+    return peers.map(renderPeer).joined(separator: "\n")
 }
 
 /// Renders a payload as the plain text an agent reads.
 func renderText(_ payload: IPC.Payload?) -> String {
     switch payload {
     case let .peers(peers):
-        guard !peers.isEmpty else { return "No other agents are registered in this project." }
-        return peers.map(renderPeer).joined(separator: "\n")
+        return renderPeers(peers)
+    case let .peerList(list):
+        let header = list.callerGroup.map { "You: group=\($0)" } ?? "You: no group"
+        return header + "\n" + renderPeers(list.peers)
     case let .peer(peer):
         return renderPeer(peer)
     case let .messages(messages):

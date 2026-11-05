@@ -152,12 +152,12 @@ final class IPCServerTests: XCTestCase {
 
         XCTAssertNil(response.error)
         XCTAssertEqual(response.id, request.id)
-        guard case let .peers(peers) = response.payload else {
-            return XCTFail("expected a peers payload, got \(String(describing: response.payload))")
+        guard case let .peerList(list) = response.payload else {
+            return XCTFail("expected a peerList payload, got \(String(describing: response.payload))")
         }
-        XCTAssertEqual(peers.count, 1)
-        XCTAssertEqual(peers.first?.name, "reviewer")
-        XCTAssertEqual(peers.first?.workstream, "bold-crimson-parser")
+        XCTAssertEqual(list.peers.count, 1)
+        XCTAssertEqual(list.peers.first?.name, "reviewer")
+        XCTAssertEqual(list.peers.first?.workstream, "bold-crimson-parser")
     }
 
     func test_badToken_isRejected() throws {
@@ -202,14 +202,14 @@ final class IPCServerTests: XCTestCase {
         let observer = try connect(to: endpoint)
         defer { close(observer) }
         let deadline = Date().addingTimeInterval(5)
-        var listed: [IPC.PeerInfo] = [IPC.PeerInfo(id: peer.id, name: peer.name, role: "", workstream: nil, surfaceID: nil, lastSeenSecondsAgo: 0, pendingMessages: 0, lastUserPromptSecondsAgo: nil)]
+        var listed: [IPC.PeerInfo] = [IPC.PeerInfo(id: peer.id, name: peer.name, role: "", workstream: nil, group: nil, surfaceID: nil, lastSeenSecondsAgo: 0, pendingMessages: 0, lastUserPromptSecondsAgo: nil)]
         while Date() < deadline, !listed.isEmpty {
             let response = try roundTrip(
                 IPC.Request(token: endpoint.token, tool: .listPeers, client: identity(project: "/repos/atelier")),
                 on: observer
             )
-            guard case let .peers(peers) = response.payload else { return XCTFail("expected peers") }
-            listed = peers
+            guard case let .peerList(list) = response.payload else { return XCTFail("expected peerList") }
+            listed = list.peers
         }
         XCTAssertTrue(listed.isEmpty, "a peer whose helper exited must not linger for the rest of its TTL")
     }
@@ -369,8 +369,8 @@ final class IPCServerTests: XCTestCase {
                 IPC.Request(token: endpoint.token, tool: .listPeers, client: identity(project: "/repos/atelier")),
                 on: observer
             )
-            guard case let .peers(peers) = response.payload else { return XCTFail("expected peers") }
-            listed = peers
+            guard case let .peerList(list) = response.payload else { return XCTFail("expected peerList") }
+            listed = list.peers
             if listed.isEmpty {
                 break
             }
@@ -413,6 +413,7 @@ final class IPCServerTests: XCTestCase {
             name: "planner",
             role: "writes plans",
             workstream: "wry-amber-lexer",
+            group: nil,
             surfaceID: UUID().uuidString,
             lastSeenSecondsAgo: 0,
             pendingMessages: 0,
@@ -598,7 +599,7 @@ final class IPCServerTests: XCTestCase {
 
         // The first call after the restart hits a dead socket, reconnects, and
         // replays the registration before retrying.
-        XCTAssertEqual(survivor.callTool("list_peers"), "No other agents are registered in this project.")
+        XCTAssertEqual(survivor.callTool("list_peers"), "You: no group\nNo other agents are registered in this project.")
 
         // A fresh helper proves the re-registration actually landed in the new
         // store, rather than the call merely not failing.
@@ -1135,6 +1136,7 @@ private final class HangUpListener {
                 name: "wry-amber-lexer",
                 role: "",
                 workstream: "wry-amber-lexer",
+                group: nil,
                 surfaceID: nil,
                 lastSeenSecondsAgo: 0,
                 pendingMessages: 0,
@@ -1292,6 +1294,7 @@ private final class TrickleListener {
                 name: "wry-amber-lexer",
                 role: "",
                 workstream: "wry-amber-lexer",
+                group: nil,
                 surfaceID: nil,
                 lastSeenSecondsAgo: 0,
                 pendingMessages: 0,

@@ -56,7 +56,8 @@ extension IPC.Service {
         let counts = await store.inboxCounts(for: visible.map(\.id))
         let now = Date()
         let infos = visible.map { info(for: $0, pending: counts[$0.id] ?? 0, now: now) }
-        return .success(id: request.id, .peers(infos))
+        let callerGroup = group(forContext: context(from: request.client))?.rawValue
+        return .success(id: request.id, .peerList(IPC.PeerList(callerGroup: callerGroup, peers: infos)))
     }
 
     func sendMessage(for request: Request) async -> Response {
