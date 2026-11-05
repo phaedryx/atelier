@@ -51,6 +51,21 @@ use the seam (it goes through `disposePlan`, which calls `resolveBinary()` with 
 purpose) and `XCTSkipIf`s instead; that is safe only because `ci.yml` installs process-compose
 and hard-fails if it is not on `searchPaths`, in the same job and immediately before the tests.
 
+**The version is not pinned anywhere, so the `/processes` decoder tolerates more than one
+shape.** Users install from Homebrew and get whatever is current; CI installs the same unpinned
+formula. Pinning CI would only hide from the suite what users are already running. The one
+breakage so far: v1.124.0 changed each entry's `namespace` from a string to an array of
+strings, and `ProcessCompose.ProcessEntry` — which only reads the fields Atelier displays —
+threw `malformedResponse` on every response. `PhaseExecutor.pollToCompletion` reads that
+through `try?` as "the server is not up yet", so every dispose phase ran to its deadline and
+reported "did not finish in time" over a project that had already completed; the Execution
+table and `list_processes` went unreadable at the same time. `ProcessEntry.init(from:)` now
+accepts both shapes and joins an array with `", "` into the single display string every
+consumer already takes. The facts in this file stamped "measured against v1.122.0" are exactly
+that — a later version may move them, and an offline decode test in
+`Tests/ProcessComposeClientTests.swift` carrying the real payload is the cheapest way to pin the
+next one down.
+
 Removing the flag took out a guard in each of three places — `PhasePolicy.plan` (so no
 unattended phase runs), the approval resolution (since removed outright) and
 `DevCommand.Resolver.detectProcessCompose` (so Start has nothing to detect). Only the third was

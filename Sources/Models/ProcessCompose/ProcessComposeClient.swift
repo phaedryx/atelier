@@ -12,6 +12,12 @@ extension ProcessCompose {
     /// decoded; the API carries more and adds more over time.
     struct ProcessEntry: Decodable, Equatable, Identifiable {
         let name: String
+
+        /// The namespace(s) the process belongs to, joined with `", "` when there
+        /// is more than one. A display string rather than an array because every
+        /// consumer — the process table, `ExecutionBridge`, `list_processes` —
+        /// renders it and nothing branches on it. See `init(from:)` for why the
+        /// wire shape is not simply mirrored.
         let namespace: String
         let status: String
         let isReady: String
@@ -33,7 +39,45 @@ extension ProcessCompose {
             case isRunning = "is_running"
         }
     }
+}
 
+extension ProcessCompose.ProcessEntry {
+    /// Hand-written because `namespace` has two wire shapes, and both are in
+    /// the wild at once.
+    ///
+    /// process-compose v1.122.0 sends `"namespace":"execute"`; v1.124.0 changed
+    /// it to `"namespace":["execute"]`, a process now being allowed in several.
+    /// Atelier has no say in which version a user runs — Homebrew serves
+    /// whatever is current, and CI installs the same unpinned formula — so a
+    /// decoder that accepts only one shape is a decoder that breaks on upgrade.
+    /// It did: against v1.124.0 every `/processes` response threw
+    /// `malformedResponse`, which `ProcessCompose.PhaseExecutor.pollToCompletion`
+    /// reads through `try?` as "the server is not up yet", so every dispose
+    /// phase ran to its deadline and reported "did not finish in time" over a
+    /// project that had already completed. The table and `list_processes` went
+    /// unreadable at the same time, for the same reason.
+    ///
+    /// Lives in an extension, not the struct body, so the memberwise initializer
+    /// the tests build entries with is kept.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        if let single = try? container.decode(String.self, forKey: .namespace) {
+            namespace = single
+        } else {
+            namespace = try container.decode([String].self, forKey: .namespace).joined(separator: ", ")
+        }
+        status = try container.decode(String.self, forKey: .status)
+        isReady = try container.decode(String.self, forKey: .isReady)
+        hasReadyProbe = try container.decode(Bool.self, forKey: .hasReadyProbe)
+        restarts = try container.decode(Int.self, forKey: .restarts)
+        exitCode = try container.decode(Int.self, forKey: .exitCode)
+        pid = try container.decode(Int.self, forKey: .pid)
+        isRunning = try container.decode(Bool.self, forKey: .isRunning)
+    }
+}
+
+extension ProcessCompose {
     /// The manager operations the UI needs. A seam, so the process table's polling
     /// and its error suppression can be tested without a live process-compose:
     /// exactly the paths that only ever ran by hand otherwise.

@@ -51,6 +51,46 @@ final class ProcessComposeClientTests: XCTestCase {
         XCTAssertEqual(try ProcessCompose.Client.decodeProcesses(withExtra).count, 1)
     }
 
+    /// process-compose v1.122.0 reports `namespace` as a string. Both this and
+    /// the array form below must keep decoding: users get whichever version
+    /// Homebrew serves, so the two shapes coexist in the wild.
+    func testNamespaceDecodesFromAString() throws {
+        let v1_122 = """
+        {"data":[{"name":"hello","namespace":"dispose","status":"Completed","is_ready":"-",
+        "has_ready_probe":false,"restarts":0,"exit_code":0,"pid":0,"is_running":false}]}
+        """.data(using: .utf8)!
+
+        let hello = try XCTUnwrap(ProcessCompose.Client.decodeProcesses(v1_122).first)
+        XCTAssertEqual(hello.namespace, "dispose")
+    }
+
+    /// Captured verbatim from process-compose v1.124.0, which changed
+    /// `namespace` to an array. Before this was tolerated every `/processes`
+    /// response failed to decode, `PhaseExecutor.pollToCompletion` read that as
+    /// "server not up yet", and every dispose phase timed out.
+    func testNamespaceDecodesFromAnArray() throws {
+        let v1_124 = """
+        {"data":[{"name":"hello","namespace":["dispose"],"status":"Completed","system_time":"0s",
+        "age":0,"is_ready":"-","has_ready_probe":false,"restarts":0,"exit_code":0,"pid":0,
+        "is_elevated":false,"mem":0,"cpu":0,"is_running":false}]}
+        """.data(using: .utf8)!
+
+        let hello = try XCTUnwrap(ProcessCompose.Client.decodeProcesses(v1_124).first)
+        XCTAssertEqual(hello.namespace, "dispose")
+    }
+
+    /// A process in several namespaces is displayed as one joined string, so
+    /// the table, the IPC bridge and `list_processes` keep a single `String`.
+    func testMultipleNamespacesAreJoinedForDisplay() throws {
+        let multi = """
+        {"data":[{"name":"db","namespace":["prepare","execute"],"status":"Running","is_ready":"-",
+        "has_ready_probe":false,"restarts":0,"exit_code":0,"pid":7,"is_running":true}]}
+        """.data(using: .utf8)!
+
+        let db = try XCTUnwrap(ProcessCompose.Client.decodeProcesses(multi).first)
+        XCTAssertEqual(db.namespace, "prepare, execute")
+    }
+
     func testEmptyDataDecodesToNoProcesses() throws {
         XCTAssertTrue(try ProcessCompose.Client.decodeProcesses(XCTUnwrap(#"{"data":[]}"#.data(using: .utf8))).isEmpty)
     }
