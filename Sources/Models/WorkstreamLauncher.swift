@@ -69,9 +69,6 @@ extension Workstream {
             /// second lookup on the main actor would answer against a list that
             /// had moved on.
             let existingWorkstreams: [Workstream]
-            /// The project's groups, from `Project.sortedGroups`. A creation names
-            /// exactly one of these (`launch(groupID:)`).
-            let groups: [Workstream.Group]
             /// What `launch` reads when it has no live `projectList` — a
             /// `Launcher` constructed without the bridge, as a test may. In the
             /// app the live list is always present and wins, because `Target` is
@@ -95,8 +92,6 @@ extension Workstream {
             case invalidName(String)
             case nameInUse(String)
             case worktreeCreationFailed(String)
-            case groupRequired
-            case groupNotFound(String)
 
             var errorDescription: String? {
                 switch self {
@@ -112,10 +107,6 @@ extension Workstream {
                     "A workstream named \(name) already exists in this project. Choose another name, or omit the name to have one generated."
                 case let .worktreeCreationFailed(name):
                     "git worktree add failed for \(name). The branch may already be checked out in another worktree."
-                case .groupRequired:
-                    "This caller is not inside a workstream or a group, so pass `group` naming the group to create the workstream in."
-                case let .groupNotFound(name):
-                    "No group named \(name) exists in this project. list_peers reports each peer's group; pass one of those names or ids."
                 }
             }
         }
@@ -126,7 +117,6 @@ extension Workstream {
             let workstreamID: UUID
             let name: String
             let worktreePath: String
-            let groupID: UUID
             /// `ATELIER_SLOT` for this workstream. See `Workstream.Slot`.
             let slot: Int
         }
@@ -268,50 +258,8 @@ extension Workstream {
                 checkout: project.checkout,
                 directory: project.directory,
                 existingWorkstreams: project.workstreams,
-                groups: project.sortedGroups,
                 retiredSlots: project.retiredSlots
             )
-        }
-
-        /// The group a creation joins: the caller's own workstream's group, else
-        /// the group the caller sits in without a workstream (a coordinator), else
-        /// the one it named. An explicit `requestedGroup` overrides both, by id
-        /// first and then by trimmed name. A caller with none of the three is
-        /// refused rather than defaulted: there is no right guess.
-        ///
-        /// Resolved against the `Target` the launch is about to use rather than a
-        /// second lookup of the project, so the group chosen and the list the
-        /// launch sees cannot disagree. A `callerGroupID` that is not one of this
-        /// target's groups is refused: a coordinator's identity comes from its
-        /// environment and can name a group of another project, or one deleted
-        /// since it launched.
-        nonisolated static func resolveGroup(
-            callerWorkstreamID: UUID?,
-            callerGroupID: UUID?,
-            requestedGroup: String?,
-            in target: Target
-        ) -> Result<UUID, Failure> {
-            if let requested = requestedGroup?.trimmingCharacters(in: .whitespacesAndNewlines), !requested.isEmpty {
-                if let id = UUID(uuidString: requested), let group = target.groups.first(where: { $0.id == id }) {
-                    return .success(group.id)
-                }
-                if let group = target.groups.first(where: { $0.name == requested }) {
-                    return .success(group.id)
-                }
-                return .failure(.groupNotFound(requested))
-            }
-            if let callerWorkstreamID,
-               let groupID = target.existingWorkstreams.first(where: { $0.id == callerWorkstreamID })?.groupID
-            {
-                return .success(groupID)
-            }
-            if let callerGroupID {
-                guard target.groups.contains(where: { $0.id == callerGroupID }) else {
-                    return .failure(.groupNotFound(callerGroupID.uuidString))
-                }
-                return .success(callerGroupID)
-            }
-            return .failure(.groupRequired)
         }
 
         /// The name a launch will use: the caller's, once it is known to be
@@ -422,7 +370,6 @@ extension Workstream {
         /// so nothing can render this workstream however long the hook takes.
         func launch(
             in target: Target,
-            groupID: UUID,
             requestedName: String?,
             bypassPermissions: Bool = false,
             select: Bool = false,
@@ -447,7 +394,6 @@ extension Workstream {
                 worktreePath: nil,
                 bypassPermissions: bypassPermissions,
                 shortcutStoryID: shortcutStoryID,
-                groupID: groupID,
                 slot: slot
             )
             logger.warning("[Atelier] Launcher: creating \(name, privacy: .public) in \(target.projectName, privacy: .public)")
@@ -483,7 +429,7 @@ extension Workstream {
                 throw Failure.worktreeCreationFailed(name)
             }
 
-            let launched = Launched(workstreamID: workstream.id, name: name, worktreePath: worktreePath, groupID: groupID, slot: slot)
+            let launched = Launched(workstreamID: workstream.id, name: name, worktreePath: worktreePath, slot: slot)
             await beforeReady?(launched)
 
             // This is what runs initialization, via ContentView's handler and
@@ -531,7 +477,6 @@ extension Workstream {
         @discardableResult
         func adopt(
             projectID: UUID,
-            groupID: UUID,
             name: String,
             worktreePath: String,
             select: Bool = true
@@ -542,7 +487,7 @@ extension Workstream {
             let retired = projectList?.items.first { $0.id == projectID }?.retiredSlots
             let slot = retired?[Workstream.Slot.key(for: worktreePath)]
                 ?? allocateSlot(projectID: projectID, fallback: nil)
-            let workstream = Workstream(name: name, worktreePath: nil, groupID: groupID, slot: slot)
+            let workstream = Workstream(name: name, worktreePath: nil, slot: slot)
             logger.warning("[Atelier] Launcher: adopting \(name, privacy: .public) at \(worktreePath, privacy: .public)")
 
             NotificationCenter.default.post(
@@ -564,7 +509,7 @@ extension Workstream {
                 ]
             )
 
-            return Launched(workstreamID: workstream.id, name: name, worktreePath: worktreePath, groupID: groupID, slot: slot)
+            return Launched(workstreamID: workstream.id, name: name, worktreePath: worktreePath, slot: slot)
         }
     }
 }

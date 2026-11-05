@@ -1965,9 +1965,7 @@ struct TerminalContainerView: View {
 
 // MARK: - Tab button
 
-/// Internal rather than private so `CoordinatorPaneView` draws its two tabs
-/// with the same control, not a lookalike that drifts.
-struct WorkspaceTabButton: View {
+private struct WorkspaceTabButton: View {
     let tab: WorkspaceTab
     let label: String?
     let icon: String

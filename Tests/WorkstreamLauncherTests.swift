@@ -234,7 +234,6 @@ final class WorkstreamLauncherTests: XCTestCase {
 
         let launched = try await launcher.launch(
             in: target(launcher, projectDirectory: "/repos/app"),
-            groupID: UUID(),
             requestedName: "feat-ipc",
             createWorktree: { _, _, _, name in "/repos/app/\(name)" }
         )
@@ -266,7 +265,6 @@ final class WorkstreamLauncherTests: XCTestCase {
 
         let launched = try await launcher.launch(
             in: target(launcher, projectDirectory: "/repos/app"),
-            groupID: UUID(),
             requestedName: "feat-ipc",
             createWorktree: { _, _, _, name in "/repos/app/\(name)" },
             beforeReady: { launched in
@@ -299,7 +297,6 @@ final class WorkstreamLauncherTests: XCTestCase {
         do {
             _ = try await launcher.launch(
                 in: target(launcher, projectDirectory: "/repos/app"),
-                groupID: UUID(),
                 requestedName: "feat-ipc",
                 createWorktree: { _, _, _, _ in nil },
                 beforeReady: { _ in ran.value = true }
@@ -322,7 +319,6 @@ final class WorkstreamLauncherTests: XCTestCase {
 
         _ = try await launcher.launch(
             in: target(launcher, projectDirectory: "/repos/app"),
-            groupID: UUID(),
             requestedName: "feat-ipc",
             createWorktree: { _, checkout, _, name in
                 seenPath.value = checkout
@@ -343,7 +339,6 @@ final class WorkstreamLauncherTests: XCTestCase {
 
         _ = try await launcher.launch(
             in: target(launcher, projectDirectory: "/repos/app"),
-            groupID: UUID(),
             requestedName: "feat-ipc",
             createWorktree: { _, _, _, name in "/repos/app/\(name)" }
         )
@@ -361,7 +356,6 @@ final class WorkstreamLauncherTests: XCTestCase {
 
         _ = try await launcher.launch(
             in: target(launcher, projectDirectory: "/repos/app"),
-            groupID: UUID(),
             requestedName: "feat-ipc",
             select: true,
             createWorktree: { _, _, _, name in "/repos/app/\(name)" }
@@ -383,7 +377,6 @@ final class WorkstreamLauncherTests: XCTestCase {
 
         _ = try await launcher.launch(
             in: target(launcher, projectDirectory: "/repos/app"),
-            groupID: UUID(),
             requestedName: "sc-482-fix",
             shortcutStoryID: 482,
             createWorktree: { _, _, _, name in "/repos/app/\(name)" }
@@ -402,7 +395,6 @@ final class WorkstreamLauncherTests: XCTestCase {
 
         _ = try await launcher.launch(
             in: target(launcher, projectDirectory: "/repos/app"),
-            groupID: UUID(),
             requestedName: "feat-ipc",
             createWorktree: { _, _, _, name in "/repos/app/\(name)" }
         )
@@ -425,7 +417,6 @@ final class WorkstreamLauncherTests: XCTestCase {
 
         let launched = try await launcher.launch(
             in: target(launcher, projectDirectory: "/repos/app"),
-            groupID: UUID(),
             requestedName: "c",
             createWorktree: { _, _, _, name in "/repos/app/\(name)" }
         )
@@ -444,7 +435,6 @@ final class WorkstreamLauncherTests: XCTestCase {
 
         let launched = try await launcher.launch(
             in: target(launcher, projectDirectory: "/repos/app"),
-            groupID: UUID(),
             requestedName: "c",
             createWorktree: { _, _, _, name in "/repos/app/\(name)" }
         )
@@ -469,7 +459,7 @@ final class WorkstreamLauncherTests: XCTestCase {
         let twoStarted = DispatchSemaphore(value: 0)
 
         async let first = launcher.launch(
-            in: t, groupID: UUID(), requestedName: "one",
+            in: t, requestedName: "one",
             createWorktree: { _, _, _, name in
                 oneStarted.signal()
                 twoStarted.wait()
@@ -477,7 +467,7 @@ final class WorkstreamLauncherTests: XCTestCase {
             }
         )
         async let second = launcher.launch(
-            in: t, groupID: UUID(), requestedName: "two",
+            in: t, requestedName: "two",
             createWorktree: { _, _, _, name in
                 twoStarted.signal()
                 oneStarted.wait()
@@ -497,7 +487,7 @@ final class WorkstreamLauncherTests: XCTestCase {
         app.retiredSlots = [Workstream.Slot.key(for: "/repos/app/old"): 4]
         let launcher = makeLauncher([app])
 
-        let launched = launcher.adopt(projectID: app.id, groupID: UUID(), name: "old", worktreePath: "/repos/app/./old/")
+        let launched = launcher.adopt(projectID: app.id, name: "old", worktreePath: "/repos/app/./old/")
 
         XCTAssertEqual(launched.slot, 4)
     }
@@ -511,7 +501,7 @@ final class WorkstreamLauncherTests: XCTestCase {
         app.retiredSlots = ["/repos/app/old": 2]
         let launcher = makeLauncher([app])
 
-        let launched = launcher.adopt(projectID: app.id, groupID: UUID(), name: "fresh", worktreePath: "/repos/app/fresh")
+        let launched = launcher.adopt(projectID: app.id, name: "fresh", worktreePath: "/repos/app/fresh")
 
         XCTAssertEqual(launched.slot, 3)
     }
@@ -532,7 +522,6 @@ final class WorkstreamLauncherTests: XCTestCase {
 
         _ = try await launcher.launch(
             in: target(launcher, projectDirectory: "/repos/app"),
-            groupID: UUID(),
             requestedName: "renovate/npm-foo-1.x",
             source: .existingRemoteBranch("renovate/npm-foo-1.x"),
             createWorktree: { source, _, _, _ in
@@ -556,7 +545,6 @@ final class WorkstreamLauncherTests: XCTestCase {
 
         _ = try await launcher.launch(
             in: target(launcher, projectDirectory: "/repos/app"),
-            groupID: UUID(),
             requestedName: "feat-ipc",
             createWorktree: { source, _, _, name in
                 seen.value = source
@@ -578,7 +566,6 @@ final class WorkstreamLauncherTests: XCTestCase {
 
         _ = try await launcher.launch(
             in: target(launcher, projectDirectory: "/repos/app"),
-            groupID: UUID(),
             requestedName: "adopt-renovate",
             source: .existingRemoteBranch("renovate/npm-foo-1.x"),
             createWorktree: { source, _, _, _ in
@@ -610,7 +597,6 @@ final class WorkstreamLauncherTests: XCTestCase {
 
         let launched = Workstream.Launcher.shared.adopt(
             projectID: projectID,
-            groupID: UUID(),
             name: "renovate/npm-foo-1.x",
             worktreePath: "/repos/app/renovate--npm-foo-1.x"
         )
@@ -626,108 +612,6 @@ final class WorkstreamLauncherTests: XCTestCase {
         XCTAssertEqual(launched.worktreePath, "/repos/app/renovate--npm-foo-1.x")
     }
 
-    // MARK: - Groups
-
-    func testResolveGroupPrefersTheCallersWorkstreamGroup() {
-        let g = Workstream.Group(name: "A"), h = Workstream.Group(name: "B")
-        var ws = Workstream(name: "w", worktreePath: "/p/w")
-        ws.groupID = h.id
-        let p = Project(name: "P", directory: "/p", workstreams: [ws], groups: [g, h])
-        XCTAssertEqual(
-            Workstream.Launcher.resolveGroup(callerWorkstreamID: ws.id, callerGroupID: g.id, requestedGroup: nil, in: Workstream.Launcher.target(for: p)),
-            .success(h.id)
-        )
-    }
-
-    func testResolveGroupUsesTheCallersGroupWhenItHasNoWorkstream() {
-        let g = Workstream.Group(name: "A"), h = Workstream.Group(name: "B")
-        let p = Project(name: "P", directory: "/p", groups: [g, h])
-        XCTAssertEqual(
-            Workstream.Launcher.resolveGroup(callerWorkstreamID: nil, callerGroupID: g.id, requestedGroup: nil, in: Workstream.Launcher.target(for: p)),
-            .success(g.id)
-        )
-    }
-
-    func testRequestedGroupOverridesBothByNameOrID() {
-        let g = Workstream.Group(name: "A"), h = Workstream.Group(name: "B")
-        var ws = Workstream(name: "w", worktreePath: "/p/w")
-        ws.groupID = h.id
-        let p = Project(name: "P", directory: "/p", workstreams: [ws], groups: [g, h])
-        XCTAssertEqual(
-            Workstream.Launcher.resolveGroup(callerWorkstreamID: ws.id, callerGroupID: h.id, requestedGroup: "A", in: Workstream.Launcher.target(for: p)),
-            .success(g.id)
-        )
-        XCTAssertEqual(
-            Workstream.Launcher.resolveGroup(callerWorkstreamID: ws.id, callerGroupID: h.id, requestedGroup: g.id.uuidString, in: Workstream.Launcher.target(for: p)),
-            .success(g.id)
-        )
-    }
-
-    func testCallerWithOnlyAProjectDirectoryMustNameAGroup() {
-        let p = Project(name: "P", directory: "/p", groups: [Workstream.Group(name: "A")])
-        XCTAssertEqual(
-            Workstream.Launcher.resolveGroup(callerWorkstreamID: nil, callerGroupID: nil, requestedGroup: nil, in: Workstream.Launcher.target(for: p)),
-            .failure(.groupRequired)
-        )
-    }
-
-    func testUnknownRequestedGroupIsRefusedByName() {
-        let p = Project(name: "P", directory: "/p", groups: [Workstream.Group(name: "A")])
-        XCTAssertEqual(
-            Workstream.Launcher.resolveGroup(callerWorkstreamID: nil, callerGroupID: nil, requestedGroup: "Nope", in: Workstream.Launcher.target(for: p)),
-            .failure(.groupNotFound("Nope"))
-        )
-    }
-
-    func testResolveGroupRefusesACallerGroupThatIsNotInThisProject() {
-        let stranger = UUID()
-        let p = Project(name: "P", directory: "/p", groups: [Workstream.Group(name: "A")])
-        XCTAssertEqual(
-            Workstream.Launcher.resolveGroup(callerWorkstreamID: nil, callerGroupID: stranger, requestedGroup: nil, in: Workstream.Launcher.target(for: p)),
-            .failure(.groupNotFound(stranger.uuidString))
-        )
-    }
-
-    @MainActor
-    func testLaunchMintsTheWorkstreamInTheGivenGroup() async throws {
-        let g = Workstream.Group(name: "A")
-        let launcher = makeLauncher([Project(name: "app", directory: "/repos/app", groups: [g])])
-        let recorder = Recorder()
-
-        let launched = try await launcher.launch(
-            in: target(launcher, projectDirectory: "/repos/app"),
-            groupID: g.id,
-            requestedName: "feat-grouped",
-            createWorktree: { _, _, _, name in "/repos/app/\(name)" }
-        )
-
-        XCTAssertEqual(launched.groupID, g.id)
-        XCTAssertEqual((recorder.events[0].userInfo["workstream"] as? Workstream)?.groupID, g.id)
-    }
-
-    @MainActor
-    func testTargetCarriesTheProjectsGroups() throws {
-        let g = Workstream.Group(name: "A")
-        let launcher = makeLauncher([Project(name: "app", directory: "/repos/app", groups: [g])])
-        XCTAssertEqual(try target(launcher, projectDirectory: "/repos/app").groups, [g])
-    }
-
-    @MainActor
-    func testAdoptMintsTheWorkstreamInTheGivenGroup() {
-        let gid = UUID()
-        let recorder = Recorder()
-
-        let launched = Workstream.Launcher.shared.adopt(
-            projectID: UUID(),
-            groupID: gid,
-            name: "feat-adopted",
-            worktreePath: "/repos/app/feat-adopted"
-        )
-
-        XCTAssertEqual(launched.groupID, gid)
-        XCTAssertEqual((recorder.events[0].userInfo["workstream"] as? Workstream)?.groupID, gid)
-    }
-
     /// The one key that separates the two, and it states a fact rather than a
     /// decision: `ContentView` is what decides that a worktree the user already
     /// had does not get `initialization.yaml` run in it unprompted.
@@ -737,7 +621,6 @@ final class WorkstreamLauncherTests: XCTestCase {
 
         Workstream.Launcher.shared.adopt(
             projectID: UUID(),
-            groupID: UUID(),
             name: "feat-b",
             worktreePath: "/repos/app/feat-b"
         )
@@ -755,7 +638,6 @@ final class WorkstreamLauncherTests: XCTestCase {
 
         _ = try await launcher.launch(
             in: target(launcher, projectDirectory: "/repos/app"),
-            groupID: UUID(),
             requestedName: "feat-ipc",
             createWorktree: { _, _, _, name in "/repos/app/\(name)" }
         )
@@ -772,7 +654,6 @@ final class WorkstreamLauncherTests: XCTestCase {
 
         Workstream.Launcher.shared.adopt(
             projectID: UUID(),
-            groupID: UUID(),
             name: "feat-b",
             worktreePath: "/repos/app/feat-b"
         )
@@ -788,7 +669,6 @@ final class WorkstreamLauncherTests: XCTestCase {
         do {
             _ = try await launcher.launch(
                 in: target(launcher, projectDirectory: "/repos/app"),
-                groupID: UUID(),
                 requestedName: "feat-ipc",
                 createWorktree: { _, _, _, _ in nil }
             )
@@ -810,7 +690,6 @@ final class WorkstreamLauncherTests: XCTestCase {
 
         _ = try? await launcher.launch(
             in: target(launcher, projectDirectory: "/repos/app"),
-            groupID: UUID(),
             requestedName: "feat-ipc",
             createWorktree: { _, _, _, _ in nil }
         )
@@ -841,7 +720,6 @@ final class WorkstreamLauncherTests: XCTestCase {
 
         _ = try? await launcher.launch(
             in: target(launcher, projectDirectory: "/repos/app"),
-            groupID: UUID(),
             requestedName: "feat-ipc",
             createWorktree: { _, _, _, name in "/repos/app/\(name)" }
         )

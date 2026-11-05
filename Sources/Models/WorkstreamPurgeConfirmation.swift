@@ -97,7 +97,7 @@ extension Workstream {
         /// **The selection move is here, not in the callers' closures**, and
         /// that is the whole point of the type: it is the one thing the two
         /// copies disagreed about. The fallback is the project's first
-        /// remaining workstream in its group, then the group, then the project. It is guarded on the
+        /// remaining workstream, or the project itself. It is guarded on the
         /// selection actually naming the removed workstream, so removing a row
         /// from the context menu while looking at another one does not move the
         /// user.
@@ -118,7 +118,6 @@ extension Workstream {
                 $0.workstreams.contains(where: { $0.id == workstreamID })
             }) else { return }
             let projectID = projects[index].id
-            let groupID = projects[index].workstreams.first(where: { $0.id == workstreamID })?.groupID
             Workstream.Archiver.remove(
                 workstreamID,
                 in: &projects[index],
@@ -127,17 +126,14 @@ extension Workstream {
                 verificationRunner: context.verificationRunner,
                 agentStateTracker: context.agentStateTracker
             )
-            let nextWorkstreamID = groupID.flatMap { projects[index].workstreams(in: $0).first?.id }
-            let groupExists = groupID.map { projects[index].group(with: $0) != nil } ?? false
+            let nextWorkstreamID = projects[index].workstreams.first?.id
             context.projects.wrappedValue = projects
 
             selection.wrappedValue = Self.selectionAfterRemoving(
                 workstreamID,
                 from: selection.wrappedValue,
                 projectID: projectID,
-                nextWorkstreamID: nextWorkstreamID,
-                groupID: groupID,
-                groupExists: groupExists
+                nextWorkstreamID: nextWorkstreamID
             )
             then(Completion(workstreamID: workstreamID, projectID: projectID))
         }
@@ -153,9 +149,7 @@ extension Workstream {
             _ workstreamID: UUID,
             from selection: SidebarSelection?,
             projectID: UUID,
-            nextWorkstreamID: UUID?,
-            groupID: UUID? = nil,
-            groupExists: Bool = false
+            nextWorkstreamID: UUID?
         ) -> SidebarSelection? {
             // Anything else stands: removing a row from the context menu while
             // looking at a different workstream, or at Settings, must not move
@@ -163,30 +157,7 @@ extension Workstream {
             guard case let .workstream(selected) = selection, selected == workstreamID else {
                 return selection
             }
-            return fallbackSelection(
-                projectID: projectID, groupID: groupID,
-                nextInGroup: nextWorkstreamID, groupExists: groupExists
-            )
-        }
-
-        /// The one preference both Remove and Purge land on: the next workstream
-        /// in the same group, then the group itself, then the project. Never a
-        /// workstream from a different group. `nextInGroup` is the caller's
-        /// choice of "next" (Purge uses the sidebar's visible order, Remove
-        /// storage order).
-        static func fallbackSelection(
-            projectID: UUID,
-            groupID: UUID?,
-            nextInGroup: UUID?,
-            groupExists: Bool
-        ) -> SidebarSelection {
-            if let nextInGroup {
-                return .workstream(nextInGroup)
-            }
-            if let groupID, groupExists {
-                return .group(groupID)
-            }
-            return .project(projectID)
+            return nextWorkstreamID.map { .workstream($0) } ?? .project(projectID)
         }
     }
 
