@@ -255,7 +255,12 @@ None, a divider, then the seven swatches, the current value checked. A `Picker` 
 checked single choice in a context menu for free. `commitGroup` goes through
 `Project.setGroup` and then `onProjectsChanged()` by hand, as `commitRename` does, because the
 debounced save cannot see an id-preserving change. The colours are on `Workstream.Group` in
-`WorkstreamGroupSwatch.swift`, not the model file, so the model stays free of SwiftUI.
+`WorkstreamGroupSwatch.swift`, not the model file, so the model stays free of SwiftUI. **The
+submenu swatches are bitmaps (`swatchImage`, a non-template `NSImage`), not
+`Image(systemName: "circle.fill").foregroundStyle(_:)`.** The `.contextMenu` is bridged to an
+`NSMenu`, which renders a symbol image as a template and drops its tint: every swatch came out
+white on first launch while the row's dot, drawn by SwiftUI, was coloured. One mapping,
+`nsColor`, feeds both the bitmap and `color`, so the dot and the swatch cannot disagree.
 
 **Two absences are decisions.** There is no menu-bar item: nothing in `AtelierApp.swift` knows
 the selected workstream or its group (Rename Workstream just posts a notification), so "current

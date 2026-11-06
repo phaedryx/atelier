@@ -1762,7 +1762,7 @@ private struct WorkstreamRow: View {
                     Label {
                         Text(candidate.title)
                     } icon: {
-                        Image(systemName: "circle.fill").foregroundStyle(candidate.color)
+                        Image(nsImage: candidate.swatchImage)
                     }
                     .tag(Workstream.Group?.some(candidate))
                 }
