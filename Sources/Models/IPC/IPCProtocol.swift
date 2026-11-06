@@ -330,6 +330,11 @@ extension IPC {
         let name: String
         let role: String
         let workstream: String?
+        /// The color group of this peer's workstream, as its raw name ("blue"),
+        /// read live. Nil when the workstream has none, or the peer has no
+        /// workstream. A string rather than `Workstream.Group` because the helper
+        /// compiles this file without the app's models.
+        let group: String?
         /// The terminal surface this peer's agent is running in, when Atelier
         /// launched it.
         ///
@@ -799,8 +804,16 @@ extension IPC {
         }
     }
 
+    /// `list_peers`' answer: the visible peers plus the caller's own group, which
+    /// the peers list cannot carry because the caller is not in it.
+    struct PeerList: Codable {
+        let callerGroup: String?
+        let peers: [PeerInfo]
+    }
+
     enum Payload: Codable {
         case peers([PeerInfo])
+        case peerList(PeerList)
         case peer(PeerInfo)
         case messages([MessageInfo])
         case tabs([TabInfo])

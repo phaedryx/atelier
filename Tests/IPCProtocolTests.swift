@@ -211,4 +211,15 @@ final class IPCProtocolTests: XCTestCase {
     func test_theWhiteboardWriteTools_addNoNewSurface() {
         XCTAssertEqual(IPC.Surface.allCases.count, 4)
     }
+
+    func test_groupNames_matchTheModelsCases() {
+        XCTAssertEqual(IPC.groupNames, Workstream.Group.allCases.map(\.rawValue))
+    }
+
+    func test_listPeersAndBroadcast_advertiseAnOptionalGroupArgument() {
+        for tool in [IPC.Tool.listPeers, .broadcast] {
+            let spec = tool.spec.arguments.first { $0.name == "group" }
+            XCTAssertEqual(spec?.isRequired, false, "\(tool)")
+        }
+    }
 }

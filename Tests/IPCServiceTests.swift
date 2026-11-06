@@ -21,10 +21,11 @@ final class IPCServiceTests: XCTestCase {
         project: String?,
         peerID: String? = nil,
         workstream: String = "bold-crimson-parser",
-        surfaceID: UUID? = UUID()
+        surfaceID: UUID? = UUID(),
+        workstreamID: UUID = UUID()
     ) -> IPC.ClientIdentity {
         IPC.ClientIdentity(
-            workstreamID: UUID().uuidString,
+            workstreamID: workstreamID.uuidString,
             workstreamName: workstream,
             projectDirectory: project,
             surfaceID: surfaceID?.uuidString,
@@ -37,8 +38,8 @@ final class IPCServiceTests: XCTestCase {
     }
 
     /// Registers a peer and returns its id, as the helper would remember it.
-    private func register(name: String, role: String = "", project: String?, workstream: String = "bold-crimson-parser") async throws -> String {
-        let response = await call(.registerPeer, ["name": name, "role": role], as: client(project: project, workstream: workstream))
+    private func register(name: String, role: String = "", project: String?, workstream: String = "bold-crimson-parser", workstreamID: UUID = UUID()) async throws -> String {
+        let response = await call(.registerPeer, ["name": name, "role": role], as: client(project: project, workstream: workstream, workstreamID: workstreamID))
         guard case let .peer(peer) = response.payload else {
             throw XCTSkip("register_peer did not return a peer: \(String(describing: response.error))")
         }
@@ -46,10 +47,37 @@ final class IPCServiceTests: XCTestCase {
     }
 
     private func peers(of response: IPC.Response) throws -> [IPC.PeerInfo] {
-        guard case let .peers(peers) = response.payload else {
-            throw XCTSkip("expected a peers payload, got \(String(describing: response.payload ?? nil))")
+        guard case let .peerList(list) = response.payload else {
+            throw XCTSkip("expected a peerList payload, got \(String(describing: response.payload ?? nil))")
         }
-        return peers
+        return list.peers
+    }
+
+    private func callerGroup(of response: IPC.Response) throws -> String? {
+        guard case let .peerList(list) = response.payload else {
+            throw XCTSkip("expected a peerList payload, got \(String(describing: response.payload ?? nil))")
+        }
+        return list.callerGroup
+    }
+
+    // MARK: - Groups
+
+    func test_listPeers_reportsEachPeersLiveGroup() async throws {
+        let blueID = UUID()
+        Workstream.Group.Mirror.shared.sync(workstreamID: blueID, group: .blue)
+        _ = try await register(name: "blue-one", project: projectA, workstreamID: blueID)
+        _ = try await register(name: "plain", project: projectA)
+
+        let listed = try await peers(of: call(.listPeers, as: client(project: projectA)))
+        XCTAssertEqual(listed.first { $0.name == "blue-one" }?.group, "blue")
+        XCTAssertNil(listed.first { $0.name == "plain" }?.group)
+    }
+
+    func test_listPeers_tellsTheCallerItsOwnGroup() async throws {
+        let mine = UUID()
+        Workstream.Group.Mirror.shared.sync(workstreamID: mine, group: .purple)
+        let response = await call(.listPeers, as: client(project: projectA, workstreamID: mine))
+        XCTAssertEqual(try callerGroup(of: response), "purple")
     }
 
     // MARK: - Registration
@@ -158,6 +186,31 @@ final class IPCServiceTests: XCTestCase {
         let strangerInbox = await call(.receiveMessages, as: client(project: projectB, peerID: stranger))
         guard case let .messages(none) = strangerInbox.payload else { return XCTFail("expected messages") }
         XCTAssertTrue(none.isEmpty)
+    }
+
+    func test_broadcast_withAGroup_reachesOnlyThatGroup() async throws {
+        let blueA = UUID(), blueB = UUID()
+        Workstream.Group.Mirror.shared.sync(workstreamID: blueA, group: .blue)
+        Workstream.Group.Mirror.shared.sync(workstreamID: blueB, group: .blue)
+        let sender = try await register(name: "sender", project: projectA, workstreamID: blueA)
+        let sibling = try await register(name: "sibling", project: projectA, workstreamID: blueB)
+        let plain = try await register(name: "plain", project: projectA)
+
+        let response = await call(.broadcast, ["content": "blue standup", "group": "blue"], as: client(project: projectA, peerID: sender, workstreamID: blueA))
+        guard case let .text(text) = response.payload else { return XCTFail("expected text") }
+        XCTAssertEqual(text, "Delivered to 1 peer.")
+
+        guard case let .messages(got) = await call(.receiveMessages, as: client(project: projectA, peerID: sibling)).payload else { return XCTFail() }
+        XCTAssertEqual(got.first?.content, "blue standup")
+        guard case let .messages(none) = await call(.receiveMessages, as: client(project: projectA, peerID: plain)).payload else { return XCTFail() }
+        XCTAssertTrue(none.isEmpty)
+    }
+
+    func test_broadcast_refusesAGroupOutsideTheSeven() async throws {
+        let sender = try await register(name: "sender", project: projectA)
+        let response = await call(.broadcast, ["content": "x", "group": "teal"], as: client(project: projectA, peerID: sender))
+        XCTAssertNil(response.payload)
+        XCTAssertTrue(response.error?.contains("teal is not a group") == true)
     }
 
     // MARK: - Sanitization
@@ -958,5 +1011,30 @@ final class IPCServiceTests: XCTestCase {
             IPC.Service.expiredContexts(observed: [known], stillAlive: [known, stranger]),
             []
         )
+    }
+
+    func test_listPeers_filtersByGroup() async throws {
+        let blueID = UUID(), redID = UUID()
+        Workstream.Group.Mirror.shared.sync(workstreamID: blueID, group: .blue)
+        Workstream.Group.Mirror.shared.sync(workstreamID: redID, group: .red)
+        _ = try await register(name: "blue-one", project: projectA, workstreamID: blueID)
+        _ = try await register(name: "red-one", project: projectA, workstreamID: redID)
+        _ = try await register(name: "plain", project: projectA)
+
+        let listed = try await peers(of: call(.listPeers, ["group": "blue"], as: client(project: projectA)))
+        XCTAssertEqual(listed.map(\.name), ["blue-one"])
+    }
+
+    func test_listPeers_refusesAGroupOutsideTheSeven() async {
+        let response = await call(.listPeers, ["group": "Blue"], as: client(project: projectA))
+        XCTAssertNil(response.payload)
+        XCTAssertTrue(response.error?.contains("red, orange, yellow, green, blue, purple, gray") == true, "\(String(describing: response.error))")
+    }
+
+    /// Empty is absent, by `optionalTrimmed`'s rule, and absent means "no filter".
+    func test_listPeers_emptyGroupIsNoFilter() async throws {
+        _ = try await register(name: "anyone", project: projectA)
+        let listed = try await peers(of: call(.listPeers, ["group": ""], as: client(project: projectA)))
+        XCTAssertEqual(listed.map(\.name), ["anyone"])
     }
 }

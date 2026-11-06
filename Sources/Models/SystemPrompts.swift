@@ -38,6 +38,10 @@ enum SystemPrompts {
         user said.
         Prefer `send_message` to one agent you have identified with `list_peers`; keep `broadcast` \
         for something every agent in the project needs.
+        The user can mark workstreams as related by giving them the same group, a color; \
+        `list_peers` shows every peer's group and starts with yours, and both it and `broadcast` \
+        take a `group` to reach only those. Read it from `list_peers` each time: it can change \
+        while you work.
         """
     }
 

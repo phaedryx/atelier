@@ -374,6 +374,7 @@ extension Workstream {
             bypassPermissions: Bool = false,
             select: Bool = false,
             shortcutStoryID: Int? = nil,
+            group: Group? = nil,
             source: WorktreeSource = .newBranch,
             createWorktree: @escaping WorktreeCreator = Launcher.gitWorktreeCreator,
             beforeReady: (@Sendable (Launched) async -> Void)? = nil
@@ -394,7 +395,8 @@ extension Workstream {
                 worktreePath: nil,
                 bypassPermissions: bypassPermissions,
                 shortcutStoryID: shortcutStoryID,
-                slot: slot
+                slot: slot,
+                group: group
             )
             logger.warning("[Atelier] Launcher: creating \(name, privacy: .public) in \(target.projectName, privacy: .public)")
 

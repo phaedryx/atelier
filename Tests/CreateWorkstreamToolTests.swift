@@ -484,4 +484,23 @@ final class AgentCommandTmuxWrappingTests: XCTestCase {
             "expected the workstream's agent session \(expected) in: \(wrapped)"
         )
     }
+
+    func test_inheritedGroup_isTheCallersCurrentGroup() {
+        let caller = Workstream(name: "caller", group: .green)
+        let target = Workstream.Launcher.target(for: Project(name: "app", directory: "/repos/app", workstreams: [caller]))
+        XCTAssertEqual(IPC.Service.inheritedGroup(callerWorkstreamID: caller.id, in: target), .green)
+    }
+
+    func test_inheritedGroup_isNilForAnUncoloredCaller() {
+        let caller = Workstream(name: "caller")
+        let target = Workstream.Launcher.target(for: Project(name: "app", directory: "/repos/app", workstreams: [caller]))
+        XCTAssertNil(IPC.Service.inheritedGroup(callerWorkstreamID: caller.id, in: target))
+    }
+
+    /// An agent Atelier did not launch has no workstream id; colored siblings in the project do not rub off.
+    func test_inheritedGroup_isNilForAnUnlaunchedCaller() {
+        let colored = Workstream(name: "x", group: .red)
+        let target = Workstream.Launcher.target(for: Project(name: "app", directory: "/repos/app", workstreams: [colored]))
+        XCTAssertNil(IPC.Service.inheritedGroup(callerWorkstreamID: nil, in: target))
+    }
 }

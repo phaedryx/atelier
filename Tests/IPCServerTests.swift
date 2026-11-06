@@ -152,12 +152,12 @@ final class IPCServerTests: XCTestCase {
 
         XCTAssertNil(response.error)
         XCTAssertEqual(response.id, request.id)
-        guard case let .peers(peers) = response.payload else {
-            return XCTFail("expected a peers payload, got \(String(describing: response.payload))")
+        guard case let .peerList(list) = response.payload else {
+            return XCTFail("expected a peerList payload, got \(String(describing: response.payload))")
         }
-        XCTAssertEqual(peers.count, 1)
-        XCTAssertEqual(peers.first?.name, "reviewer")
-        XCTAssertEqual(peers.first?.workstream, "bold-crimson-parser")
+        XCTAssertEqual(list.peers.count, 1)
+        XCTAssertEqual(list.peers.first?.name, "reviewer")
+        XCTAssertEqual(list.peers.first?.workstream, "bold-crimson-parser")
     }
 
     func test_badToken_isRejected() throws {
@@ -202,14 +202,14 @@ final class IPCServerTests: XCTestCase {
         let observer = try connect(to: endpoint)
         defer { close(observer) }
         let deadline = Date().addingTimeInterval(5)
-        var listed: [IPC.PeerInfo] = [IPC.PeerInfo(id: peer.id, name: peer.name, role: "", workstream: nil, surfaceID: nil, lastSeenSecondsAgo: 0, pendingMessages: 0, lastUserPromptSecondsAgo: nil)]
+        var listed: [IPC.PeerInfo] = [IPC.PeerInfo(id: peer.id, name: peer.name, role: "", workstream: nil, group: nil, surfaceID: nil, lastSeenSecondsAgo: 0, pendingMessages: 0, lastUserPromptSecondsAgo: nil)]
         while Date() < deadline, !listed.isEmpty {
             let response = try roundTrip(
                 IPC.Request(token: endpoint.token, tool: .listPeers, client: identity(project: "/repos/atelier")),
                 on: observer
             )
-            guard case let .peers(peers) = response.payload else { return XCTFail("expected peers") }
-            listed = peers
+            guard case let .peerList(list) = response.payload else { return XCTFail("expected peerList") }
+            listed = list.peers
         }
         XCTAssertTrue(listed.isEmpty, "a peer whose helper exited must not linger for the rest of its TTL")
     }
@@ -236,6 +236,36 @@ final class IPCServerTests: XCTestCase {
         let observer = try MCPProcess(helper: helper, environment: environment(workstream: "observer"))
         let listed = try XCTUnwrap(observer.callTool("list_peers"))
         XCTAssertTrue(listed.contains("quiet-agent"), "an agent that never called a tool should still be reachable, got: \(listed)")
+    }
+
+    /// The anti-goal in the spec: a group changed in the sidebar mid-session must be what the next call sees.
+    @MainActor
+    func test_listPeers_overTheSocket_seesAGroupChangedAfterTheAgentStarted() throws {
+        let helper = try XCTUnwrap(MCPHelperLauncher.executableURL(), "atelier-mcp was not found in the host app bundle")
+        _ = try waitForEndpoint()
+
+        func environment(workstream: String, id: UUID = UUID()) -> [String: String] {
+            var environment = ProcessInfo.processInfo.environment
+            environment["ATELIER_PROJECT_DIR"] = "/repos/atelier"
+            environment["ATELIER_WORKSTREAM"] = workstream
+            environment["ATELIER_WORKSTREAM_ID"] = id.uuidString
+            environment["ATELIER_SURFACE_ID"] = UUID().uuidString
+            return environment
+        }
+
+        let ws = Workstream(name: "sibling", group: .blue)
+        let list = ProjectList()
+        list.items = [Project(name: "app", directory: "/repos/atelier", workstreams: [ws])]
+        let sibling = try MCPProcess(helper: helper, environment: environment(workstream: "sibling", id: ws.id))
+        XCTAssertNotNil(sibling.callTool("register_peer", ["name": "sibling"]))
+        let observer = try MCPProcess(helper: helper, environment: environment(workstream: "observer"))
+
+        XCTAssertTrue(try XCTUnwrap(observer.callTool("list_peers")).contains("group=blue"))
+        list.items[0].setGroup(.red, forWorkstream: ws.id)
+        let after = try XCTUnwrap(observer.callTool("list_peers"))
+        XCTAssertTrue(after.contains("group=red"), "got: \(after)")
+        XCTAssertFalse(after.contains("group=blue"))
+        XCTAssertTrue(try XCTUnwrap(sibling.callTool("list_peers")).hasPrefix("You: group=red"))
     }
 
     // MARK: - Peer ownership
@@ -369,8 +399,8 @@ final class IPCServerTests: XCTestCase {
                 IPC.Request(token: endpoint.token, tool: .listPeers, client: identity(project: "/repos/atelier")),
                 on: observer
             )
-            guard case let .peers(peers) = response.payload else { return XCTFail("expected peers") }
-            listed = peers
+            guard case let .peerList(list) = response.payload else { return XCTFail("expected peerList") }
+            listed = list.peers
             if listed.isEmpty {
                 break
             }
@@ -413,6 +443,7 @@ final class IPCServerTests: XCTestCase {
             name: "planner",
             role: "writes plans",
             workstream: "wry-amber-lexer",
+            group: nil,
             surfaceID: UUID().uuidString,
             lastSeenSecondsAgo: 0,
             pendingMessages: 0,
@@ -598,7 +629,7 @@ final class IPCServerTests: XCTestCase {
 
         // The first call after the restart hits a dead socket, reconnects, and
         // replays the registration before retrying.
-        XCTAssertEqual(survivor.callTool("list_peers"), "No other agents are registered in this project.")
+        XCTAssertEqual(survivor.callTool("list_peers"), "You: no group\nNo other agents are registered in this project.")
 
         // A fresh helper proves the re-registration actually landed in the new
         // store, rather than the call merely not failing.
@@ -1135,6 +1166,7 @@ private final class HangUpListener {
                 name: "wry-amber-lexer",
                 role: "",
                 workstream: "wry-amber-lexer",
+                group: nil,
                 surfaceID: nil,
                 lastSeenSecondsAgo: 0,
                 pendingMessages: 0,
@@ -1292,6 +1324,7 @@ private final class TrickleListener {
                 name: "wry-amber-lexer",
                 role: "",
                 workstream: "wry-amber-lexer",
+                group: nil,
                 surfaceID: nil,
                 lastSeenSecondsAgo: 0,
                 pendingMessages: 0,

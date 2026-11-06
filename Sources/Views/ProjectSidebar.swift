@@ -379,13 +379,15 @@ struct ProjectSidebar: View {
                         prTitle: pr?.title,
                         prNumber: pr?.number,
                         prStatus: pr?.status,
+                        group: workstream.group,
                         isRenaming: Binding(
                             get: { renamingWorkstreamID == workstream.id },
                             set: { renamingWorkstreamID = $0 ? workstream.id : nil }
                         ),
                         onRemove: { removeConfirmation.confirm(workstreamID: workstream.id) },
                         onPurge: { confirmPurge(workstream) },
-                        onRenameCommit: { commitRename(workstreamID: workstream.id, input: $0) }
+                        onRenameCommit: { commitRename(workstreamID: workstream.id, input: $0) },
+                        onGroupChange: { commitGroup(workstreamID: workstream.id, group: $0) }
                     )
 
                     if !subRuns.isEmpty {
@@ -1107,6 +1109,12 @@ struct ProjectSidebar: View {
         rebuildSortOrder()
     }
 
+    private func commitGroup(workstreamID: UUID, group: Workstream.Group?) {
+        guard let pi = projects.firstIndex(where: { $0.id == workstreamProjectID(for: workstreamID) }),
+              projects[pi].setGroup(group, forWorkstream: workstreamID) else { return }
+        onProjectsChanged()
+    }
+
     /// Begin an inline rename of the selected workstream (⌘⇧R / palette),
     /// expanding its project so the row is visible.
     private func beginRenameOfSelectedWorkstream() {
@@ -1516,12 +1524,15 @@ private struct WorkstreamRow: View {
     /// Carrying the status rather than the string is what keeps the string from
     /// reaching the badge at all.
     var prStatus: GitHub.PR.Status?
+    /// The workstream's group, drawn as a dot before the headline. Nil draws nothing.
+    var group: Workstream.Group?
     /// True while the row shows the inline rename field. Owned by the
     /// sidebar so the edit survives row rebuilds and stays exclusive.
     @Binding var isRenaming: Bool
     let onRemove: () -> Void
     let onPurge: () -> Void
     let onRenameCommit: (String) -> Void
+    let onGroupChange: (Workstream.Group?) -> Void
 
     @State private var isHovering = false
 
@@ -1626,37 +1637,49 @@ private struct WorkstreamRow: View {
             }
 
             VStack(alignment: .leading, spacing: 3) {
-                if isRenaming {
-                    // Edits the workstream label (not the PR/task headline),
-                    // so it is prefilled with `name` rather than `headline`.
-                    InlineTextField(
-                        initialText: name,
-                        accessibilityID: "workstream-rename-field",
-                        onCommit: { value in
-                            isRenaming = false
-                            onRenameCommit(value)
-                        },
-                        onCancel: { isRenaming = false }
-                    )
-                } else {
-                    Text(headline)
-                        .font(.system(size: 11))
-                        .strikethrough(!isPathValid)
-                        .foregroundStyle(isPathValid ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-                        .lineLimit(2)
-                        // Rename is armed only on the selected row, and even then
-                        // recognizes simultaneously rather than exclusively. Both
-                        // halves are about the *first* click: a gesture attached here
-                        // swallows mouse-down inside the label's own bounds, so the
-                        // enclosing List never sees it and the row will not select
-                        // when clicked on its name — the one part of the row users
-                        // aim at. `.none` leaves no recognizer to swallow anything,
-                        // so an unselected row selects on a plain click; once it is
-                        // selected there is no selection left to lose.
-                        .simultaneousGesture(
-                            TapGesture(count: 2).onEnded { isRenaming = true },
-                            including: isSelected ? .gesture : .none
+                // The group dot rides the headline line only, and is outside the
+                // rename branch so it stays visible while renaming. No group, no
+                // dot, no reserved space.
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    if let group {
+                        Circle()
+                            .fill(group.color)
+                            .frame(width: 7, height: 7)
+                            .alignmentGuide(.firstTextBaseline) { $0[.bottom] + 1 }
+                            .accessibilityLabel(Text(group.title))
+                    }
+                    if isRenaming {
+                        // Edits the workstream label (not the PR/task headline),
+                        // so it is prefilled with `name` rather than `headline`.
+                        InlineTextField(
+                            initialText: name,
+                            accessibilityID: "workstream-rename-field",
+                            onCommit: { value in
+                                isRenaming = false
+                                onRenameCommit(value)
+                            },
+                            onCancel: { isRenaming = false }
                         )
+                    } else {
+                        Text(headline)
+                            .font(.system(size: 11))
+                            .strikethrough(!isPathValid)
+                            .foregroundStyle(isPathValid ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                            .lineLimit(2)
+                            // Rename is armed only on the selected row, and even then
+                            // recognizes simultaneously rather than exclusively. Both
+                            // halves are about the *first* click: a gesture attached here
+                            // swallows mouse-down inside the label's own bounds, so the
+                            // enclosing List never sees it and the row will not select
+                            // when clicked on its name — the one part of the row users
+                            // aim at. `.none` leaves no recognizer to swallow anything,
+                            // so an unselected row selects on a plain click; once it is
+                            // selected there is no selection left to lose.
+                            .simultaneousGesture(
+                                TapGesture(count: 2).onEnded { isRenaming = true },
+                                including: isSelected ? .gesture : .none
+                            )
+                    }
                 }
 
                 if let subtitle {
@@ -1732,6 +1755,18 @@ private struct WorkstreamRow: View {
                     Label("Copy worktree path", systemImage: "doc.on.doc")
                 }
             }
+            Picker(selection: Binding(get: { group }, set: onGroupChange)) {
+                Text("None").tag(Workstream.Group?.none)
+                Divider()
+                ForEach(Workstream.Group.allCases, id: \.self) { candidate in
+                    Label {
+                        Text(candidate.title)
+                    } icon: {
+                        Image(nsImage: candidate.swatchImage)
+                    }
+                    .tag(Workstream.Group?.some(candidate))
+                }
+            } label: { Text("Group") }
             Divider()
             Button { isRenaming = true } label: {
                 Label("Rename…", systemImage: "pencil")
