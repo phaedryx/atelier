@@ -19,6 +19,16 @@ final class SystemPromptsTests: XCTestCase {
         XCTAssertTrue(prompt.contains("pull"), "an agent that expects to be interrupted will never read its inbox")
     }
 
+    /// The prompt says groups exist and where to read them; it never states this agent's group, which the sidebar can change at any time.
+    func test_agentIPCPrompt_pointsAtListPeersForGroupsWithoutStatingOne() {
+        let prompt = SystemPrompts.agentIPCPrompt(workstreamName: "x")
+        XCTAssertTrue(prompt.contains("group"))
+        XCTAssertTrue(prompt.contains("list_peers"))
+        for name in ["red", "orange", "yellow", "green", "blue", "purple", "gray"] {
+            XCTAssertFalse(prompt.contains("group=\(name)"), "the prompt must not claim a group")
+        }
+    }
+
     func test_agentIPCPrompt_explainsTheInjectedNotice() {
         // The nudge types this marker into the agent's own input; without
         // context an agent reads it as something the user typed.

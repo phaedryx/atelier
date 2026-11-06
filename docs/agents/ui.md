@@ -246,6 +246,25 @@ so a row offering "Open Pull Request" and a receiver finding no URL cannot happe
 three "open" rows are `.hidden` with nothing to open, the same choice the context menu
 makes by omitting the item.
 
+**A workstream's group is a 7pt dot before the headline and a `Group` submenu, and nothing
+else.** The dot (`WorkstreamRow`) rides the headline line only, not the subtitle or status line,
+sits **outside** the rename branch so it stays visible while the row is renaming, and takes no
+space when there is no group. The thick coloured spine was mocked up and rejected: the tree-guide
+spine is untouched. Assignment is a `Picker` inside the row's `.contextMenu`, labelled `Group`:
+None, a divider, then the seven swatches, the current value checked. A `Picker` is what gives a
+checked single choice in a context menu for free. `commitGroup` goes through
+`Project.setGroup` and then `onProjectsChanged()` by hand, as `commitRename` does, because the
+debounced save cannot see an id-preserving change. The colours are on `Workstream.Group` in
+`WorkstreamGroupSwatch.swift`, not the model file, so the model stays free of SwiftUI.
+
+**Two absences are decisions.** There is no menu-bar item: nothing in `AtelierApp.swift` knows
+the selected workstream or its group (Rename Workstream just posts a notification), so "current
+value checked, disabled with no selection" would need new plumbing, and the context menu is the
+only assignment path. There is no sort or clustering by group, and the answer to "shouldn't
+same-coloured rows sit together" is no: Tad, "I don't need same color together". Both sort
+orders stay as they were. A hover swatch on the row and palette commands were mocked up too, and
+Tad chose the context menu alone.
+
 **`AppCommand.purgeWorkstream` and `.addNew` carry optional payloads**, and the absent
 case is load-bearing in both. `purgeWorkstream(nil)` means "the selected workstream" —
 a command closure is built once and never learns which one is active — and it still

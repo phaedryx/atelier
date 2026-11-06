@@ -4,6 +4,26 @@ Atelier was forked from [Factory Floor](https://github.com/alltuner/factoryfloor
 at v0.1.79. Everything below that release is Factory Floor's history; those links
 point at the upstream repository.
 
+## Unreleased
+
+### Features
+
+* **groups:** a workstream can carry one of seven named colors as its group, and
+  agents can see it. The sidebar stays flat: a 7pt dot before the headline and a
+  `Group` submenu in the row's context menu, with no sort or clustering, because
+  the dot is enough to tell related rows apart and Tad did not want them moved.
+  The word is "group" and the value a color since what an agent cares about is
+  relatedness, not hue. It is not the group record #235 added and #239 reverted;
+  there is no group object, name or coordinator, and two workstreams are related
+  exactly when they carry the same color. `list_peers` reports every peer's group
+  and the caller's own, and takes a `group` filter; `broadcast` takes the same
+  argument; a workstream an agent creates inherits its creator's group. All of it
+  is read live from the sidebar through a lock-guarded mirror fed by `didSet` on
+  `ProjectList.items`, because `.onChange` cannot see a change that leaves every
+  id in place and an `ATELIER_GROUP` variable would be stale after the first
+  recolor. A stored name this build does not know decodes to no group rather than
+  dropping the workstream.
+
 ## [0.2.7](https://github.com/phaedryx/atelier/compare/v0.2.6...v0.2.7) (2026-09-27)
 
 ### Features

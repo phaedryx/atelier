@@ -199,6 +199,60 @@ own "since I dispatched" comparison naturally reads this as unremarkable rather 
 of a human redirect. Suppressing it would also require assuming a fact about Claude Code's own
 hook semantics for a CLI-argument-supplied first turn that has not been verified here.
 
+### Groups
+
+**A group is a color tag on a flat list, and it is not #235's group.** `Workstream.Group` is a
+seven-case enum (`red`, `orange`, `yellow`, `green`, `blue`, `purple`, `gray`) and
+`Workstream.group` is optional; two workstreams are related exactly when they carry the same
+name. #235 added a `Workstream.Group` *record* with a `groupID` and a coordinator agent, and #239
+reverted it: the tree and the coordinator were more structure than "which of these belong
+together" needed. If git history or a reviewer suggests a group record "to hold the color", that
+is #235 again. The word is "group" and the value is a color because what an agent cares about is
+relatedness, not hue: `group: "blue"` says what it is for where `color: "blue"` reads as cosmetic.
+It is stored as a string (`Project.swift`'s `groupName`, keyed `group`) and the enum is derived
+on read, so a stored name this build does not know decodes to no group instead of throwing and
+taking the workstream with it.
+
+**The group is read live, through `Workstream.Group.Mirror`, and it is not read from the
+registration context.** `info(for:)` looks like the model and is not: its
+`contexts[peer.id]?.workstreamName` is `ATELIER_WORKSTREAM` captured at registration, which is
+why a renamed workstream still shows its old name in `list_peers`. A group changes in the sidebar
+while agents run, so a launch-time value would send `broadcast(group:)` to the wrong set within
+minutes and nothing would say so. The live record is `ProjectList.items`, on the main actor, and
+the service cannot hop there for the reason the `lastUserPromptSecondsAgo` section gives. So
+`Mirror` is a `nonisolated`, lock-guarded `workstreamID -> Group` map, `UserPromptClock`'s shape.
+**It is fed by `didSet` on `ProjectList.items`, not by `.onChange(of: items)`**: `Project` and
+`Workstream` equate by id, a group change leaves every id in place, and `.onChange` never fires
+for it. `didSet` does not run inside `init`, so `ProjectList.init` syncs once by hand. `sync(_:)`
+replaces the whole map, so a removed workstream stops reporting a group. Do not feed it per write
+site: the one that is missed is the stale-color bug.
+
+**Three tools change.** `list_peers` puts `group` on every `PeerInfo` and takes an optional
+`group` argument that narrows the list; its answer is `Payload.peerList(PeerList)`, whose
+`callerGroup` is the caller's own, and the helper renders it as a `You: group=<name>` (or
+`You: no group`) header ahead of the peer lines, each of which gains a trailing ` group=<name>`
+with `name` untouched. The header is printed with no other peers too, ahead of the existing
+empty-list sentence. `broadcast` takes the same `group` and reaches only peers currently in it,
+sender excluded as always. `create_workstream` and `create_shortcut_workstream` give the new
+workstream the **caller's** group: `Launcher.launch(group:)` carries it onto the record, read by
+`IPC.Service.inheritedGroup(callerWorkstreamID:in:)` from the launcher `Target`'s
+`existingWorkstreams`, which is already in hand, rather than a second lookup against a list that
+may have moved. An unlaunched caller, or an ungrouped one, spawns an ungrouped workstream. An
+unknown `group` name is an invalid-argument failure naming the seven.
+
+**`IPC.groupNames` is a literal that duplicates the enum, on purpose.** The helper target
+compiles only `IPCProtocol.swift` and `IPCToolRegistry.swift` out of the app (the `AtelierMCP`
+`includes:` in `project.yml`), so `IPCToolRegistry.swift` cannot name `Workstream.Group`.
+`IPCProtocolTests.test_groupNames_matchTheModelsCases` pins the literal to
+`Workstream.Group.allCases`; add a case to the enum and that test is what tells you the schema
+did not follow.
+
+**There is no `ATELIER_GROUP` or `ATELIER_COLOR` environment variable, and that is the same
+decision.** An environment is captured when the agent launches and would lie after the first
+sidebar change. The system prompt (`SystemPrompts.agentIPCPrompt`) says groups exist and sends the
+agent to `list_peers`; it must never state the agent's own group, and
+`SystemPromptsTests` fails if it does.
+
 **A tool call that is interrupted is never re-sent unless re-sending it changes nothing.**
 `IPC.Tool` carries two properties the helper reads — `replyDeadline` and `isSafeToReplay` —
 and both exist because one 15-second socket timeout with one reconnect-and-replay policy
