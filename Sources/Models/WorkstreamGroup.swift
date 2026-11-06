@@ -31,8 +31,9 @@ extension Workstream.Group {
     ///
     /// It is fed by `didSet` on `ProjectList.items`, not `.onChange(of: items)`.
     /// `Project` and `Workstream` equate by id, so a group change leaves every
-    /// id in place and `onChange` never fires. Writes come only from MainActor
-    /// code; `sync(_:)` replaces the whole map, so a removed workstream stops
+    /// id in place and `onChange` never fires. Production writes come only from
+    /// `ProjectList.items`' `didSet`; `sync(workstreamID:group:)` is a test seam.
+    /// `sync(_:)` replaces the whole map, so a removed workstream stops
     /// reporting a group.
     final class Mirror: @unchecked Sendable {
         nonisolated static let shared = Mirror()

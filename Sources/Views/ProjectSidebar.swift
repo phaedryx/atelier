@@ -1759,8 +1759,12 @@ private struct WorkstreamRow: View {
                 Text("None").tag(Workstream.Group?.none)
                 Divider()
                 ForEach(Workstream.Group.allCases, id: \.self) { candidate in
-                    Label { Text(candidate.title) } icon: { Image(systemName: "circle.fill").foregroundStyle(candidate.color) }
-                        .tag(Workstream.Group?.some(candidate))
+                    Label {
+                        Text(candidate.title)
+                    } icon: {
+                        Image(systemName: "circle.fill").foregroundStyle(candidate.color)
+                    }
+                    .tag(Workstream.Group?.some(candidate))
                 }
             } label: { Text("Group") }
             Divider()

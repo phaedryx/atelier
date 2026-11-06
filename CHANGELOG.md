@@ -11,7 +11,7 @@ point at the upstream repository.
 * **groups:** a workstream can carry one of seven named colors as its group, and
   agents can see it. The sidebar stays flat: a 7pt dot before the headline and a
   `Group` submenu in the row's context menu, with no sort or clustering, because
-  the dot is enough to tell related rows apart and Tad did not want them moved.
+  the dot is enough to tell related rows apart and clustering was rejected as more movement than the problem needs.
   The word is "group" and the value a color since what an agent cares about is
   relatedness, not hue. It is not the group record #235 added and #239 reverted;
   there is no group object, name or coordinator, and two workstreams are related

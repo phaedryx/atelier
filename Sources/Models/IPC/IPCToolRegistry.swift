@@ -20,12 +20,6 @@ import Foundation
 /// 15 would still satisfy every deadline test in `IPCProtocolTests`, so the
 /// mistake would ship. The `switch` makes a case without a spec a build failure.
 extension IPC {
-    /// The group names, spelled out because the helper compiles this file
-    /// without `Workstream.Group`. `IPCProtocolTests` pins it to the enum's cases.
-    static let groupNames = ["red", "orange", "yellow", "green", "blue", "purple", "gray"]
-}
-
-extension IPC {
     /// One argument a tool accepts.
     ///
     /// **Everything crosses the wire as a string** — `Request.arguments` is
@@ -232,6 +226,12 @@ extension IPC {
             .getShortcutStory,
         ]
     }
+}
+
+extension IPC {
+    /// The group names, spelled out because the helper compiles this file
+    /// without `Workstream.Group`. `IPCProtocolTests` pins it to the enum's cases.
+    static let groupNames = ["red", "orange", "yellow", "green", "blue", "purple", "gray"]
 }
 
 extension IPC.Tool {
