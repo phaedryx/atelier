@@ -227,14 +227,15 @@ for it. `didSet` does not run inside `init`, so `ProjectList.init` syncs once by
 replaces the whole map, so a removed workstream stops reporting a group. Do not feed it per write
 site: the one that is missed is the stale-color bug.
 
-**Three tools change.** `list_peers` puts `group` on every `PeerInfo` and takes an optional
+**Three tools report or filter by group.** `list_peers` puts `group` on every `PeerInfo` and takes an optional
 `group` argument that narrows the list; its answer is `Payload.peerList(PeerList)`, whose
 `callerGroup` is the caller's own, and the helper renders it as a `You: group=<name>` (or
-`You: no group`) header ahead of the peer lines, each of which gains a trailing ` group=<name>`
-with `name` untouched. The header is printed with no other peers too, ahead of the existing
+`You: no group`) header ahead of the peer lines, each of which gains a ` group=<name>` right
+after `workstream=`, with `name` and its position unchanged (Tad's skills read `name` by eye). The header is printed with no other peers too, ahead of the existing
 empty-list sentence. `broadcast` takes the same `group` and reaches only peers currently in it,
-sender excluded as always. `create_workstream` and `create_shortcut_workstream` give the new
-workstream the **caller's** group: `Launcher.launch(group:)` carries it onto the record, read by
+sender excluded as always. The `register_peer` reply carries the caller's `group` on its
+`PeerInfo` for free, since `info(for:)` sets it. Separately, `create_workstream` and
+`create_shortcut_workstream` give the new workstream the **caller's** group: `Launcher.launch(group:)` carries it onto the record, read by
 `IPC.Service.inheritedGroup(callerWorkstreamID:in:)` from the launcher `Target`'s
 `existingWorkstreams`, which is already in hand, rather than a second lookup against a list that
 may have moved. An unlaunched caller, or an ungrouped one, spawns an ungrouped workstream. An
