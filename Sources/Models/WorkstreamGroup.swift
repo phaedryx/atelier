@@ -1,10 +1,10 @@
 // ABOUTME: Workstream.Group, the optional named color that marks related workstreams.
-// ABOUTME: A fixed palette of seven; the raw value is the name stored and sent over IPC.
+// ABOUTME: A fixed palette of six; the raw value is the name stored and sent over IPC.
 
 import Foundation
 
 extension Workstream {
-    /// An optional label on a workstream, one of seven named colors, so related
+    /// An optional label on a workstream, one of six named colors, so related
     /// workstreams can be recognised at a glance in the sidebar and over agent IPC.
     ///
     /// A group is only the color. It is not #235's group record (a `groupID`
@@ -14,7 +14,7 @@ extension Workstream {
     ///
     /// Case order is the order the picker lists them in; do not reorder.
     enum Group: String, Codable, CaseIterable, Sendable {
-        case red, orange, yellow, green, blue, purple, gray
+        case red, orange, yellow, green, cyan, purple
     }
 }
 

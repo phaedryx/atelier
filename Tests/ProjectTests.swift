@@ -748,9 +748,9 @@ final class ProjectTests: XCTestCase {
     }
 
     func testGroupRoundTrips() throws {
-        let data = try JSONEncoder().encode(Workstream(name: "a", group: .blue))
-        XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("\"group\":\"blue\""))
-        XCTAssertEqual(try JSONDecoder().decode(Workstream.self, from: data).group, .blue)
+        let data = try JSONEncoder().encode(Workstream(name: "a", group: .cyan))
+        XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("\"group\":\"cyan\""))
+        XCTAssertEqual(try JSONDecoder().decode(Workstream.self, from: data).group, .cyan)
     }
 
     func testWorkstreamWithoutGroupDecodesToNil() throws {
@@ -790,8 +790,8 @@ final class ProjectTests: XCTestCase {
         XCTAssertNil(project.workstreams[0].group)
     }
 
-    func testGroupCasesAreTheSevenInOrder() {
-        XCTAssertEqual(Workstream.Group.allCases.map(\.rawValue), ["red", "orange", "yellow", "green", "blue", "purple", "gray"])
+    func testGroupCasesAreTheSixInOrder() {
+        XCTAssertEqual(Workstream.Group.allCases.map(\.rawValue), ["red", "orange", "yellow", "green", "cyan", "purple"])
     }
 
     /// The whole `[Project]` array is decoded from one UserDefaults key with `try?`, so a

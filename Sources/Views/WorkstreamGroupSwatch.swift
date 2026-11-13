@@ -12,10 +12,19 @@ extension Workstream.Group {
         case .orange: .systemOrange
         case .yellow: .systemYellow
         case .green: .systemGreen
-        case .blue: .systemBlue
+        case .cyan: .systemCyan
         case .purple: .systemPurple
-        case .gray: .systemGray
         }
+    }
+
+    /// What "no group" is drawn with: the spine and the menu's None swatch.
+    /// Gray is not a group for that reason, and blue is not one because the
+    /// sidebar's selection fill is the accent, so a blue spine vanished on the
+    /// selected row.
+    static let noneNSColor: NSColor = .systemGray
+
+    static var noneColor: Color {
+        Color(nsColor: noneNSColor)
     }
 
     var color: Color {
@@ -29,6 +38,15 @@ extension Workstream.Group {
     /// symbol image as a template and discards its tint, so every swatch came
     /// out white. A non-template `NSImage` is drawn as-is.
     var swatchImage: NSImage {
+        Self.swatchImage(nsColor)
+    }
+
+    /// The None item's swatch, so "no group" shows the gray the spine draws.
+    static var noneSwatchImage: NSImage {
+        swatchImage(noneNSColor)
+    }
+
+    private static func swatchImage(_ nsColor: NSColor) -> NSImage {
         let image = NSImage(size: NSSize(width: 10, height: 10), flipped: false) { rect in
             nsColor.setFill()
             NSBezierPath(ovalIn: rect).fill()
@@ -44,9 +62,8 @@ extension Workstream.Group {
         case .orange: "Orange"
         case .yellow: "Yellow"
         case .green: "Green"
-        case .blue: "Blue"
+        case .cyan: "Cyan"
         case .purple: "Purple"
-        case .gray: "Gray"
         }
     }
 }

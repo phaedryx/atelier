@@ -231,7 +231,7 @@ extension IPC {
 extension IPC {
     /// The group names, spelled out because the helper compiles this file
     /// without `Workstream.Group`. `IPCProtocolTests` pins it to the enum's cases.
-    static let groupNames = ["red", "orange", "yellow", "green", "blue", "purple", "gray"]
+    static let groupNames = ["red", "orange", "yellow", "green", "cyan", "purple"]
 }
 
 extension IPC.Tool {
@@ -284,7 +284,7 @@ extension IPC.Tool {
                         name: "group",
                         kind: .string,
                         isRequired: false,
-                        description: "Only peers whose workstream has this group: one of red, orange, yellow, green, blue, purple, gray. A group is a color the user assigns in the sidebar to mark related workstreams; a workstream an agent creates inherits its creator's."
+                        description: "Only peers whose workstream has this group: one of red, orange, yellow, green, cyan, purple. A group is a color the user assigns in the sidebar to mark related workstreams; a workstream an agent creates inherits its creator's."
                     ),
                 ]
             )

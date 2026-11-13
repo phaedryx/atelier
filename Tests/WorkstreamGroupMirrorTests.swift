@@ -6,10 +6,10 @@ import XCTest
 
 final class WorkstreamGroupMirrorTests: XCTestCase {
     func test_syncFromProjects_answersEachWorkstreamsGroup() {
-        let blue = Workstream(name: "a", group: .blue), plain = Workstream(name: "b")
+        let blue = Workstream(name: "a", group: .cyan), plain = Workstream(name: "b")
         let mirror = Workstream.Group.Mirror()
         mirror.sync([Project(name: "app", directory: "/tmp/app", workstreams: [blue, plain])])
-        XCTAssertEqual(mirror.group(forWorkstream: blue.id), .blue)
+        XCTAssertEqual(mirror.group(forWorkstream: blue.id), .cyan)
         XCTAssertNil(mirror.group(forWorkstream: plain.id))
         XCTAssertNil(mirror.group(forWorkstream: UUID()))
     }

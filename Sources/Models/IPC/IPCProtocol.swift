@@ -330,7 +330,7 @@ extension IPC {
         let name: String
         let role: String
         let workstream: String?
-        /// The color group of this peer's workstream, as its raw name ("blue"),
+        /// The color group of this peer's workstream, as its raw name ("cyan"),
         /// read live. Nil when the workstream has none, or the peer has no
         /// workstream. A string rather than `Workstream.Group` because the helper
         /// compiles this file without the app's models.

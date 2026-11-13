@@ -61,9 +61,8 @@
 "Orange" = "Orange";
 "Yellow" = "Yellow";
 "Green" = "Green";
-"Blue" = "Blue";
+"Cyan" = "Cyan";
 "Purple" = "Purple";
-"Gray" = "Gray";
 "Rename Workstream" = "Rename Workstream";
 
 /* Workstream creation */

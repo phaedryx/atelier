@@ -64,12 +64,12 @@ final class IPCServiceTests: XCTestCase {
 
     func test_listPeers_reportsEachPeersLiveGroup() async throws {
         let blueID = UUID()
-        Workstream.Group.Mirror.shared.sync(workstreamID: blueID, group: .blue)
+        Workstream.Group.Mirror.shared.sync(workstreamID: blueID, group: .cyan)
         _ = try await register(name: "blue-one", project: projectA, workstreamID: blueID)
         _ = try await register(name: "plain", project: projectA)
 
         let listed = try await peers(of: call(.listPeers, as: client(project: projectA)))
-        XCTAssertEqual(listed.first { $0.name == "blue-one" }?.group, "blue")
+        XCTAssertEqual(listed.first { $0.name == "blue-one" }?.group, "cyan")
         XCTAssertNil(listed.first { $0.name == "plain" }?.group)
     }
 
@@ -190,13 +190,13 @@ final class IPCServiceTests: XCTestCase {
 
     func test_broadcast_withAGroup_reachesOnlyThatGroup() async throws {
         let blueA = UUID(), blueB = UUID()
-        Workstream.Group.Mirror.shared.sync(workstreamID: blueA, group: .blue)
-        Workstream.Group.Mirror.shared.sync(workstreamID: blueB, group: .blue)
+        Workstream.Group.Mirror.shared.sync(workstreamID: blueA, group: .cyan)
+        Workstream.Group.Mirror.shared.sync(workstreamID: blueB, group: .cyan)
         let sender = try await register(name: "sender", project: projectA, workstreamID: blueA)
         let sibling = try await register(name: "sibling", project: projectA, workstreamID: blueB)
         let plain = try await register(name: "plain", project: projectA)
 
-        let response = await call(.broadcast, ["content": "blue standup", "group": "blue"], as: client(project: projectA, peerID: sender, workstreamID: blueA))
+        let response = await call(.broadcast, ["content": "blue standup", "group": "cyan"], as: client(project: projectA, peerID: sender, workstreamID: blueA))
         guard case let .text(text) = response.payload else { return XCTFail("expected text") }
         XCTAssertEqual(text, "Delivered to 1 peer.")
 
@@ -1015,20 +1015,20 @@ final class IPCServiceTests: XCTestCase {
 
     func test_listPeers_filtersByGroup() async throws {
         let blueID = UUID(), redID = UUID()
-        Workstream.Group.Mirror.shared.sync(workstreamID: blueID, group: .blue)
+        Workstream.Group.Mirror.shared.sync(workstreamID: blueID, group: .cyan)
         Workstream.Group.Mirror.shared.sync(workstreamID: redID, group: .red)
         _ = try await register(name: "blue-one", project: projectA, workstreamID: blueID)
         _ = try await register(name: "red-one", project: projectA, workstreamID: redID)
         _ = try await register(name: "plain", project: projectA)
 
-        let listed = try await peers(of: call(.listPeers, ["group": "blue"], as: client(project: projectA)))
+        let listed = try await peers(of: call(.listPeers, ["group": "cyan"], as: client(project: projectA)))
         XCTAssertEqual(listed.map(\.name), ["blue-one"])
     }
 
     func test_listPeers_refusesAGroupOutsideTheSeven() async {
-        let response = await call(.listPeers, ["group": "Blue"], as: client(project: projectA))
+        let response = await call(.listPeers, ["group": "Cyan"], as: client(project: projectA))
         XCTAssertNil(response.payload)
-        XCTAssertTrue(response.error?.contains("red, orange, yellow, green, blue, purple, gray") == true, "\(String(describing: response.error))")
+        XCTAssertTrue(response.error?.contains("red, orange, yellow, green, cyan, purple") == true, "\(String(describing: response.error))")
     }
 
     /// Empty is absent, by `optionalTrimmed`'s rule, and absent means "no filter".
