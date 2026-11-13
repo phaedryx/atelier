@@ -143,7 +143,7 @@ case "${1:-build}" in
   release)
     RELEASE_DIR="build/release-local/derived"
     # ARCHS=arm64 for the same reason release.yml pins it: a Release build
-    # otherwise takes ARCHS_STANDARD (arm64 + x86_64), and libghostty.a is a
+    # otherwise takes ARCHS_STANDARD (arm64 + x86_64), and a native libghostty is a
     # thin arm64 archive, so the x86_64 half fails to link on every ghostty_*
     # symbol -- and would ship for no one even if it linked.
     ensure_ghostty_resources

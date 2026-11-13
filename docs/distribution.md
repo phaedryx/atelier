@@ -25,20 +25,19 @@ leads with the architecture for that reason.
 Release configuration otherwise takes `ARCHS_STANDARD`, which is arm64 + x86_64.
 
 libghostty is still built `-Dxcframework-target=universal`, which looks
-wasteful and is deliberate. `native` does not link. It routes through
-`GhosttyLib.initStatic`, which emits **`libghostty-fat.a`** — "fat" meaning all
-static dependencies combined into one archive, not multiple architectures —
-while the app links with `-lghostty` and so needs `libghostty.a`, the name only
-`initMacOSUniversal` produces. `native` also names its slice directory
-`macos-arm64` instead of `macos-arm64_x86_64`. Both couplings are invisible
-until the link fails, and both cost a release run to discover.
+wasteful and is deliberate: it is what CI builds by default, so CI tests the
+artifact the release ships. Under ghostty v1.3.1 `native` also did not link: it
+emitted `libghostty-fat.a` while the app's `-lghostty` needed `libghostty.a`.
 
-So the universal xcframework is built and the linker takes its arm64 slice out
-of the fat static lib; the x86_64 slice goes unused. The waste is a cold zig
-build compiling slices nothing installs, once per submodule bump. Making
-`native` work would mean redirecting `-lghostty` at `libghostty-fat.a` as well
-as resolving the slice directory — more moving parts than the wasted
-compilation is worth.
+Since v1.4.0 the app does not link by name at all. The two targets disagree on
+the slice directory (`macos-arm64` against `macos-arm64_x86_64`) and on the
+library (`libghostty-internal.a` against `ghostty-internal.a`, which no `-l`
+flag can reach), so `project.yml` links the xcframework as an Xcode dependency
+that reads both from its `Info.plist`. Either target now links, so the reason
+to build `universal` is consistency with CI, not necessity. The linker takes
+the arm64 slice out of the fat static lib and the x86_64 slice goes unused; the
+waste is a cold zig build compiling slices nothing installs, once per submodule
+bump.
 
 ## Builds are not notarized
 

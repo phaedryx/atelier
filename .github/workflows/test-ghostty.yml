@@ -83,11 +83,11 @@ jobs:
           cd ghostty
           zig build -Demit-xcframework=true -Demit-macos-app=false -Doptimize=ReleaseFast
 
+      # Names the library the xcframework's Info.plist declares, rather than
+      # testing that directories exist: a slice without its library passed
+      # that check and failed at link (the first v1.4.0 run).
       - name: Verify Ghostty artifacts
-        run: |
-          test -d ghostty/macos/GhosttyKit.xcframework
-          test -d ghostty/zig-out/share/terminfo
-          test -d ghostty/zig-out/share/ghostty
+        run: ./scripts/verify-ghostty-artifacts.sh
 
       # Two toolchains, for the reason ci.yml states: zig 0.15.2 could not
       # link against the macOS 26 SDK, so ghostty built under the image's

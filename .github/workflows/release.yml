@@ -111,16 +111,12 @@ jobs:
         if: steps.ghostty-cache.outputs.cache-hit != 'true'
         run: |
           cd ghostty
-          # `universal`, even though the release ships arm64 only. Under
-          # ghostty v1.3.1 `native` did not link: it emitted `libghostty-fat.a`
-          # where the app's `-lghostty` wanted `libghostty.a`, the name only
-          # initMacOSUniversal produced. v1.4.0 names both targets' output
-          # `libghostty-internal.a`, so the only remaining difference is the
-          # slice directory (`macos-arm64` against `macos-arm64_x86_64`), which
-          # the step below resolves rather than hardcodes. `native` is
-          # therefore viable now, and deliberately not switched to here: the
-          # artifact a release restores from cache and ships is the universal
-          # one, and changing that is its own decision.
+          # `universal`, even though the release ships arm64 only — the same
+          # target ci.yml builds by default, so CI tests what ships. Under
+          # ghostty v1.3.1 `native` did not link with `-lghostty`. The app now
+          # links the xcframework as a dependency, which reads the slice and
+          # library name from its Info.plist, so the target no longer has to
+          # match a name in project.yml (v1.4.0's two targets disagree on both).
           #
           # ARCHS=arm64 on the app build is what makes the shipped binary
           # arm64: the linker takes that slice out of the fat static lib and
@@ -128,35 +124,13 @@ jobs:
           # slices nothing installs, once per submodule bump.
           zig build -Demit-xcframework=true -Demit-macos-app=false -Dxcframework-target=universal -Doptimize=ReleaseFast
 
-      # The slice directory's name is decided by the xcframework target, so it
-      # is resolved rather than hardcoded a second time — `project.yml` already
-      # names `macos-arm64_x86_64` for local builds and `.shared/`, and the two
-      # agreeing by coincidence is what made the last failure look like a
-      # missing library rather than a renamed directory.
-      #
-      # The glob is unambiguous: the iOS slices are `ios-arm64*`, so `macos-*`
-      # matches exactly one directory under either target.
-      - name: Resolve the Ghostty slice and resources
-        id: ghostty-slice
-        run: |
-          root=ghostty/macos/GhosttyKit.xcframework
-          slice=$(ls -d "$root"/macos-* 2>/dev/null | head -1)
-          if [ -z "$slice" ]; then
-            echo "::error::no macos-* slice in $root"
-            ls -la "$root" || true
-            exit 1
-          fi
-          # All three failures surface here, in a second, rather than at three
-          # different depths of a ten-minute build: a missing library fails at
-          # link, missing resources fail at Copy Bundle Resources.
-          fail=0
-          test -f "$slice/libghostty-internal.a" || { echo "::error::$slice has no libghostty-internal.a"; ls -la "$slice"; fail=1; }
-          test -d ghostty/zig-out/share/terminfo || { echo "::error::no ghostty/zig-out/share/terminfo"; fail=1; }
-          test -d ghostty/zig-out/share/ghostty || { echo "::error::no ghostty/zig-out/share/ghostty"; fail=1; }
-          [ "$fail" -eq 0 ] || exit 1
-          echo "Slice: $slice"
-          lipo -info "$slice/libghostty-internal.a"
-          echo "path=$PWD/$slice" >> "$GITHUB_OUTPUT"
+      # Every failure surfaces here, in a second, rather than at different
+      # depths of a ten-minute build: a missing library fails at link, missing
+      # resources fail at Copy Bundle Resources. The script reads the slice
+      # and library name from the xcframework's Info.plist instead of
+      # hardcoding either.
+      - name: Verify Ghostty artifacts
+        run: ./scripts/verify-ghostty-artifacts.sh
 
       # Two toolchains, deliberately — the same split ci.yml makes, for the
       # same reasons. zig 0.15.2 (required by ghostty v1.3.1) could not link
@@ -194,16 +168,14 @@ jobs:
         # local entitlements file, and no --timestamp (a secure timestamp needs
         # a real certificate). Plus `ARCHS=arm64`: a Release build otherwise
         # takes ARCHS_STANDARD, which is arm64 + x86_64, and the x86_64 half
-        # would be linked and shipped for no one. And the resolved slice path,
-        # so the build does not depend on project.yml and the xcframework
-        # target happening to agree on a directory name.
+        # would be linked and shipped for no one. No library search path: the
+        # app links the xcframework, which names its own slice.
         run: |
           xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
             -destination 'generic/platform=macOS' \
             -derivedDataPath build/derived \
             -clonedSourcePackagesDirPath build/derived/SourcePackages \
             ARCHS=arm64 \
-            LIBRARY_SEARCH_PATHS="${{ steps.ghostty-slice.outputs.path }}" \
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGN_STYLE=Manual \
             ENABLE_HARDENED_RUNTIME=YES \

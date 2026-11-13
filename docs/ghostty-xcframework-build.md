@@ -26,7 +26,7 @@ The build produces two things that are **not in git** and are **not built per wo
 
 | Artifact | What it holds |
 |----------|---------------|
-| `GhosttyKit.xcframework/` | `libghostty-internal.a` (~135MB) and its headers — what the linker needs. ghostty v1.4.0 renamed it from `libghostty.a`; the app links `-lghostty-internal` |
+| `GhosttyKit.xcframework/` | The static library and its headers — what the linker needs. ghostty v1.4.0 renamed it from `libghostty.a`; see below for the name each target writes |
 | `zig-out/share/` | terminfo and shell-integration files — what `scripts/dev.sh` checks for before building |
 
 In the README's bare-repo layout they are built once and stored in a **`.shared/`
@@ -93,11 +93,21 @@ The xcframework is output to `macos/GhosttyKit.xcframework/` and the resources t
 `zig-out/share/`. Install both as described in [Step 3](#step-3-install-the-artifacts).
 
 `-Demit-macos-app=false` skips the `xcodebuild` of Ghostty.app itself, which is
-not needed and is the one step that fails without a full Xcode. The slice
-directory inside the xcframework is named by the target: `native` on Apple
-silicon gives `macos-arm64`, `universal` (what `release.yml` builds, at twice
-the compile time) gives `macos-arm64_x86_64`. `project.yml` searches both, so
-either links.
+not needed and is the one step that fails without a full Xcode.
+
+The target decides both the slice directory and the library's file name, and
+since v1.4.0 they differ in both:
+
+| Target | Slice | Library |
+|--------|-------|---------|
+| `native` (Apple silicon) | `macos-arm64` | `libghostty-internal.a` |
+| `universal` (CI and `release.yml`; about twice the compile time) | `macos-arm64_x86_64` | `ghostty-internal.a` |
+
+The universal name has no `lib` prefix, so no `-l` flag can reach it. That is
+why the app links the xcframework as an Xcode dependency: Xcode reads the slice
+and file from the xcframework's `Info.plist`, so either target links unchanged.
+`./scripts/verify-ghostty-artifacts.sh` reads the same `Info.plist` and checks
+the library and resources are there.
 
 This is the whole procedure on macOS 26.6 with Zig 0.17.1 and ghostty v1.4.0:
 the build fetched every dependency and completed without the patching below.
@@ -286,9 +296,7 @@ xcodegen generate
 ## Verifying the Build
 
 ```bash
-ls -lh ghostty/macos/GhosttyKit.xcframework/macos-*/libghostty-internal.a
-# Should show a file in the 100-200MB range
-
-nm ghostty/macos/GhosttyKit.xcframework/macos-*/libghostty-internal.a | grep " T _ghostty_app_new"
+lib=$(./scripts/verify-ghostty-artifacts.sh)   # the library the xcframework declares
+nm "$lib" | grep " T _ghostty_app_new"
 # Should show the symbol
 ```
