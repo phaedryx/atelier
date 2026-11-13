@@ -8,6 +8,23 @@ point at the upstream repository.
 
 ### Features
 
+* **sidebar:** agent detail — the status line, the context meter and the subagent
+  roster — is drawn for the selected workstream only. Every row ends with a
+  status dot in a fixed slot at its trailing edge (filled while the agent is live, a hollow ring when
+  dormant, the warning triangle when the worktree is gone), so a working or
+  waiting workstream still says so without a status line per row. The branch
+  line under the headline is gone; the PR status glyph moved onto the headline
+  line. The group dot is gone: a workstream's group is now the colour of its
+  tree-guide spine, 2pt wide, gray for no group. Blue and gray are no longer
+  groups and cyan is new, so there are six; a workstream an earlier build stored
+  as blue or gray loads with no group. No row draws a separator line. The list is now `.plain` on a surface
+  tinted with the accent, and the selection is a flat, edge-to-edge fill in the
+  emphasised selection colour whether or not the sidebar has focus — the
+  `.sidebar` capsule went grey whenever the terminal had focus, which is nearly
+  always, and read as a hover. Labels on the selected row derive from one root
+  foreground style; the three blue leaves that would vanish on an accent fill
+  (the status word, the roster word, the context bar's healthy band) take the
+  row's foreground there.
 * **groups:** a workstream can carry one of seven named colors as its group, and
   agents can see it. The sidebar stays flat: a 7pt dot before the headline and a
   `Group` submenu in the row's context menu, with no sort or clustering, because

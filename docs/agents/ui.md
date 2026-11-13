@@ -246,12 +246,14 @@ so a row offering "Open Pull Request" and a receiver finding no URL cannot happe
 three "open" rows are `.hidden` with nothing to open, the same choice the context menu
 makes by omitting the item.
 
-**A workstream's group is a 7pt dot before the headline and a `Group` submenu, and nothing
-else.** The dot (`WorkstreamRow`) rides the headline line only, not the subtitle or status line,
-sits **outside** the rename branch so it stays visible while the row is renaming, and takes no
-space when there is no group. The thick coloured spine was mocked up and rejected: the tree-guide
-spine is untouched. Assignment is a `Picker` inside the row's `.contextMenu`, labelled `Group`:
-None, a divider, then the seven swatches, the current value checked. A `Picker` is what gives a
+**A workstream's group is the colour of its tree-guide spine and a `Group` submenu, and nothing
+else.** The spine segment each `workstreamRows` row draws is 2pt (`Layout.spineWidth`) and takes
+the group's colour, or gray (`Workstream.Group.noneColor`) with no group — which is why gray is
+not a group, and the `Group` submenu's None item carries a gray swatch. Blue is not a group
+either: the selection fill is the accent, and a blue spine vanished on the selected row. This reverses an
+earlier call: the coloured spine was mocked up and rejected in favour of a 7pt dot before the
+headline, and the user chose it once the leading slot went to the agent-status dot. Assignment is a `Picker` inside the row's `.contextMenu`, labelled `Group`:
+None with a gray swatch, a divider, then the six swatches, the current value checked. A `Picker` is what gives a
 checked single choice in a context menu for free. `commitGroup` goes through
 `Project.setGroup` and then `onProjectsChanged()` by hand, as `commitRename` does, because the
 debounced save cannot see an id-preserving change. The colours are on `Workstream.Group` in
@@ -261,6 +263,43 @@ submenu swatches are bitmaps (`swatchImage`, a non-template `NSImage`), not
 `NSMenu`, which renders a symbol image as a template and drops its tint: every swatch came out
 white on first launch while the row's dot, drawn by SwiftUI, was coloured. One mapping,
 `nsColor`, feeds both the bitmap and `color`, so the dot and the swatch cannot disagree.
+
+**The sidebar is a `.plain` `List` on a tinted surface, and the selection is the rows' own
+flat fill.** `SidebarStyle` (`Sources/Views/SidebarStyle.swift`) holds the three colours and the
+reasons: the tint is the accent washed over the window colour, so it follows the user's accent
+in both appearances; the fill is `selectedContentBackgroundColor` whether or not the list has
+focus, because the sidebar almost never does — the terminal does — and the system's unfocused
+grey read as a hover; and the `NSTableView` highlight is switched off by a representable in each
+row's `listRowBackground`, because SwiftUI exposes no modifier for it and under either list
+style AppKit paints its highlight *over* the row background. `.sidebar` was the capsule and the
+vibrancy material; both went. **A selected row sets one `foregroundStyle` at its root** and
+everything hierarchical inside (`.primary` through `.quaternary`) derives from it, so no label
+checks `isSelected` for its colour. The consequence to keep in mind: a leaf that names a concrete
+`Color` keeps it on the fill, and the status word, the roster word and `MeterBand`'s band 0 are
+all blue — the default accent — so those three take `.primary` on the fill instead
+(`ContextMeter.onSelectionFill`). Do not put a status-coloured word back on the selected row.
+
+**Agent detail is drawn for the selected workstream only.** The status line, the context meter
+and the subagent roster (`WorkstreamRow.showsAgentDetail`, and the `isSelected` gate around
+`WorkstreamAgentRosterView` in `workstreamRows`) were on every row, and a sidebar of twenty
+workstreams was twenty status lines and twenty bars to scan past to find a name.
+
+**Every row ends with one status marker, in a fixed 12pt slot at the trailing edge**
+(`WorkstreamRow.statusMarker`): a 7pt dot in the status colour while the agent has a live
+session, a hollow ring when it is dormant, and the orange triangle when the worktree is gone. The
+slot is always there, so every marker sits at one x and the column can be scanned. It is pinned
+to the headline's first line rather than centred on the row, because the selected row grows a
+status line and a meter underneath. On hover the remove button replaces it in the same slot, as an
+overlay so its larger hit area does not shift the headline. The selected row's status line has
+**no dot of its own** — one dot per row. It led the row briefly and moved right at the user's
+request, leaving the leading edge to the group-coloured spine.
+
+**There is no branch line under the headline.** It showed the branch, or the workstream's own
+name when the headline was a PR title or task description, and it went because the user asked
+for denser rows. The consequence to know: a workstream whose headline is a PR title or task now
+shows its own name nowhere in the sidebar. The branch is still in the row's context menu ("Copy
+branch name") and the Info tab. The PR status glyph that rode that line moved onto the headline
+line, after the text.
 
 **Two absences are decisions.** There is no menu-bar item: nothing in `AtelierApp.swift` knows
 the selected workstream or its group (Rename Workstream just posts a notification), so "current

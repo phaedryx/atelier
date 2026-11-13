@@ -32,6 +32,13 @@ struct ContextMeter: View {
     /// more to this one" — stays at full strength.
     var isActive: Bool = true
 
+    /// Whether the meter is drawn on the sidebar's selection fill. The fill is
+    /// the accent, and band 0 of `MeterBand` is blue — the default accent — so
+    /// a healthy bar disappeared into the selected row. On the fill, band 0
+    /// takes the row's foreground instead; the other four bands read fine on
+    /// it and keep their colour, so the scale stays shared with the usage bars.
+    var onSelectionFill: Bool = false
+
     /// Resting opacity for the bar. Light, because the bar draws from
     /// `MeterBand`, the same palette as the plan usage bars right above it, and
     /// a heavy dim turns a shared color into a different, muddier one.
@@ -67,8 +74,12 @@ struct ContextMeter: View {
         Int(fraction * 100)
     }
 
-    private var fillColor: Color {
-        MeterBand.color(MeterBand.band(percentUsed: percentUsed))
+    private var fillStyle: AnyShapeStyle {
+        let band = MeterBand.band(percentUsed: percentUsed)
+        if onSelectionFill, band == 0 {
+            return AnyShapeStyle(.primary)
+        }
+        return AnyShapeStyle(MeterBand.color(band))
     }
 
     /// Secondary while healthy, so the count only takes on color once the
@@ -115,7 +126,7 @@ struct ContextMeter: View {
                     Capsule()
                         .fill(.quaternary)
                     Capsule()
-                        .fill(fillColor)
+                        .fill(fillStyle)
                         .frame(width: max(0, proxy.size.width * fraction))
                 }
             }

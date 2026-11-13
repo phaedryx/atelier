@@ -8,7 +8,8 @@ import SwiftUI
 /// elapsed). The main agent is not listed — its status line and context bar
 /// live on the workstream row itself. Cards
 /// exist exactly while their run is live — Claude Code's stop hooks remove
-/// them the moment an agent finishes.
+/// them the moment an agent finishes — and are shown under the selected
+/// workstream only, with the rest of the row's agent detail.
 struct WorkstreamAgentRosterView: View {
     let runs: [Workstream.AgentStateTracker.AgentRun]
     /// Whether hook events are reaching the app at all. A card cannot report
@@ -96,8 +97,10 @@ private struct RosterCard: View {
                 .frame(width: 5, height: 5)
                 .padding(.trailing, 4)
 
+            // Row foreground, not the status colour: the roster is drawn under
+            // the selected row only, so it always sits on the selection fill.
             Text(status.text)
-                .foregroundStyle(status.color)
+                .foregroundStyle(.primary)
 
             if let activity = run.activity {
                 metaSeparator

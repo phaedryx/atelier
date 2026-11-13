@@ -271,7 +271,8 @@ struct ProjectSidebar: View {
     /// becomes a phantom row inside `List(selection:)` — untagged, but highlightable
     /// and reachable with the arrow keys.
     private func projectHeaderRow(project: Project, isFirst: Bool) -> some View {
-        ProjectHeaderRow(
+        let isSelected = selection == .project(project.id)
+        return ProjectHeaderRow(
             project: project,
             isGitRepo: appEnv.isGitRepo(project.directory),
             githubURL: appEnv.githubURL(for: project.directory),
@@ -295,7 +296,7 @@ struct ProjectSidebar: View {
                 hasGitHubRemote: appEnv.hasGitHubRemote(project.directory)
             ),
             onAddFromGitHub: { addWorkstreamFromGitHub(for: project.id) },
-            isSelected: selection == .project(project.id),
+            isSelected: isSelected,
             isRenaming: Binding(
                 get: { renamingProjectID == project.id },
                 set: { renamingProjectID = $0 ? project.id : nil }
@@ -305,6 +306,11 @@ struct ProjectSidebar: View {
         )
         .padding(.leading, Layout.projectTitleGap)
         .padding(.top, isFirst ? 0 : Layout.projectGroupGap)
+        .foregroundStyle(isSelected ? SidebarStyle.selectedForeground : Color.primary)
+        .listRowBackground(SidebarStyle.rowBackground(isSelected: isSelected))
+        // `.plain` draws a separator under every row; the sidebar groups by
+        // spacing and the spine, so none is wanted under projects or workstreams.
+        .listRowSeparator(.hidden)
     }
 
     /// Sizes for the sidebar's grouping. Collected rather than inlined because the
@@ -324,7 +330,9 @@ struct ProjectSidebar: View {
         /// `DisclosureGroup`'s own indent is generous for rows this dense.
         static let workstreamIndentTrim: CGFloat = -10
         /// Between the spine and the workstream row's content.
-        static let spineGap: CGFloat = 8
+        static let spineGap: CGFloat = 11
+        /// The spine's thickness. Wide enough to read as the group's colour.
+        static let spineWidth: CGFloat = 2
         /// How far each row's spine segment overhangs its own bounds, so adjacent
         /// segments meet instead of leaving a dotted trail down the group. Half the
         /// inter-row spacing at each end.
@@ -355,6 +363,7 @@ struct ProjectSidebar: View {
                 let wsRuns = agentStateTracker.runs(for: workstream.id)
                 let mainRun = wsRuns.first(where: \.isMain)
                 let subRuns = wsRuns.filter { !$0.isMain }
+                let isSelected = selection == .workstream(workstream.id)
 
                 VStack(alignment: .leading, spacing: 2) {
                     WorkstreamRow(
@@ -362,7 +371,7 @@ struct ProjectSidebar: View {
                         branchName: facts?.branch,
                         worktreePath: workstream.worktreePath,
                         isPathValid: facts?.isPathValid ?? true,
-                        isSelected: selection == .workstream(workstream.id),
+                        isSelected: isSelected,
                         agentState: agentStateTracker.state(for: workstream.id),
                         hasLiveSession: agentStateTracker.hasLiveSession(for: workstream.id),
                         channelDown: channelProbe.state.isDown,
@@ -390,7 +399,9 @@ struct ProjectSidebar: View {
                         onGroupChange: { commitGroup(workstreamID: workstream.id, group: $0) }
                     )
 
-                    if !subRuns.isEmpty {
+                    // The roster is agent detail, and agent detail is shown for
+                    // the selected workstream only — see `WorkstreamRow.body`.
+                    if isSelected, !subRuns.isEmpty {
                         WorkstreamAgentRosterView(runs: subRuns, channelDown: channelProbe.state.isDown) {
                             selectAndFocusAgent(workstreamID: workstream.id)
                         }
@@ -399,12 +410,18 @@ struct ProjectSidebar: View {
                 }
                 .padding(.leading, Layout.spineGap)
                 .overlay(alignment: .leading) {
+                    // The spine segment is the group: the group's colour when the
+                    // workstream has one, gray when it does not.
                     Rectangle()
-                        .fill(.quaternary)
-                        .frame(width: 1)
+                        .fill(workstream.group?.color ?? Workstream.Group.noneColor)
+                        .frame(width: Layout.spineWidth)
                         .padding(.vertical, -Layout.spineOverhang)
+                        .accessibilityHidden(true)
                 }
                 .padding(.leading, Layout.workstreamIndentTrim)
+                .listRowSeparator(.hidden)
+                .foregroundStyle(isSelected ? SidebarStyle.selectedForeground : Color.primary)
+                .listRowBackground(SidebarStyle.rowBackground(isSelected: isSelected))
                 .tag(SidebarSelection.workstream(workstream.id))
             }
         }
@@ -677,7 +694,12 @@ struct ProjectSidebar: View {
                 List(selection: $selection) {
                     projectRows()
                 }
-                .listStyle(.sidebar)
+                // `.plain` on a hidden scroll background, as `ChangesFileTreeSidebar`
+                // does, so the tinted surface below shows through instead of the
+                // `.sidebar` vibrancy material. The selection is the rows' own
+                // flat fill — `SidebarStyle` says why the system one is turned off.
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
                 .onChange(of: selection) { _, sel in
                     guard let sel else { return }
                     deferSelectionExpansion(sel, projectIDByWorkstreamID: projectIDByWorkstreamIDSnapshot(), scrollProxy: scrollProxy)
@@ -687,6 +709,7 @@ struct ProjectSidebar: View {
             // Bottom bar (always visible)
             bottomBar
         }
+        .background(SidebarStyle.surface.ignoresSafeArea())
         .onReceive(NotificationCenter.default.publisher(for: .terminalActivity)) { notification in
             guard let wsID = notification.object as? UUID else { return }
             guard let pi = projects.firstIndex(where: { $0.workstreams.contains(where: { $0.id == wsID }) }),
@@ -721,10 +744,9 @@ struct ProjectSidebar: View {
         }
         .overlay {
             if isDropTargeted {
-                RoundedRectangle(cornerRadius: 8)
+                Rectangle()
                     .strokeBorder(Color.accentColor, lineWidth: 2)
                     .background(Color.accentColor.opacity(0.08))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
             }
         }
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
@@ -1546,21 +1568,6 @@ private struct WorkstreamRow: View {
         return name
     }
 
-    private var hasRichHeadline: Bool {
-        prTitle != nil || taskDescription != nil
-    }
-
-    private var subtitle: String? {
-        guard isPathValid else { return nil }
-        if hasRichHeadline {
-            return branchName ?? name
-        }
-        if let branchName, branchName != name {
-            return branchName
-        }
-        return nil
-    }
-
     /// The main session's context bar stays visible once usage is known so a
     /// finished turn's consumption remains readable; `ContextMeter` dims its
     /// track — and only its track — while the agent isn't actively spending
@@ -1588,18 +1595,16 @@ private struct WorkstreamRow: View {
         )
     }
 
-    /// "● Working · Editing AuthView.swift · 4m" — colored dot + localized
-    /// status word, current tool activity while active, and time since the
-    /// run started. Rendered only for workstreams with a live session.
-    private func statusMeta(word: LocalizedStringKey, color: Color) -> some View {
+    /// "Working · Editing AuthView.swift · 4m" — localized status word, current
+    /// tool activity while active, and time since the run started. No dot: the
+    /// row's leading dot is the one status dot. Rendered on the selected row only.
+    private func statusMeta(word: LocalizedStringKey) -> some View {
         HStack(spacing: 0) {
-            Circle()
-                .fill(color)
-                .frame(width: 5, height: 5)
-                .padding(.trailing, 4)
-
+            // The word takes the row's foreground, not the status colour: this
+            // line is drawn on the selected row only, so it always sits on the
+            // selection fill, and "Working" blue on accent blue vanished.
             Text(word)
-                .foregroundStyle(color)
+                .foregroundStyle(.primary)
 
             if isAgentActive, let activity = mainActivity {
                 metaSeparator
@@ -1624,30 +1629,44 @@ private struct WorkstreamRow: View {
             .padding(.horizontal, 3)
     }
 
-    var body: some View {
-        HStack(alignment: .center, spacing: 6) {
-            // No status dot here: the meta line below the name already
-            // carries one, with the state word beside it. A missing worktree
-            // has no such line, so it keeps a marker.
+    /// Agent detail — the status line, the context meter and (in the sidebar)
+    /// the subagent roster — is drawn for the selected row only. Every row
+    /// carried all of it, and a sidebar of twenty workstreams was twenty status
+    /// lines and twenty bars to scan past to find a name. Every row keeps the
+    /// trailing status dot, so a workstream that is working or waiting for
+    /// approval still says so from across the sidebar.
+    private var showsAgentDetail: Bool {
+        isSelected
+    }
+
+    /// The status marker, at the row's trailing edge: a filled dot in the
+    /// status colour while the agent has a live session, a hollow ring when it
+    /// is dormant, and the warning triangle when the worktree is gone. All
+    /// three take the same 12pt slot, so every row's marker sits at one x.
+    private var statusMarker: some View {
+        Group {
             if !isPathValid {
                 Image(systemName: "exclamationmark.triangle")
                     .font(.system(size: 10))
                     .foregroundStyle(.orange)
-                    .frame(width: 12)
+            } else if let statusLabel {
+                Circle()
+                    .fill(statusLabel.color)
+                    .frame(width: 7, height: 7)
+                    .accessibilityLabel(Text(statusLabel.text))
+            } else {
+                Circle()
+                    .strokeBorder(.quaternary, lineWidth: 1)
+                    .frame(width: 7, height: 7)
             }
+        }
+        .frame(width: 12)
+    }
 
+    var body: some View {
+        HStack(alignment: .top, spacing: 6) {
             VStack(alignment: .leading, spacing: 3) {
-                // The group dot rides the headline line only, and is outside the
-                // rename branch so it stays visible while renaming. No group, no
-                // dot, no reserved space.
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
-                    if let group {
-                        Circle()
-                            .fill(group.color)
-                            .frame(width: 7, height: 7)
-                            .alignmentGuide(.firstTextBaseline) { $0[.bottom] + 1 }
-                            .accessibilityLabel(Text(group.title))
-                    }
                     if isRenaming {
                         // Edits the workstream label (not the PR/task headline),
                         // so it is prefilled with `name` rather than `headline`.
@@ -1680,44 +1699,41 @@ private struct WorkstreamRow: View {
                                 including: isSelected ? .gesture : .none
                             )
                     }
-                }
-
-                if let subtitle {
-                    HStack(spacing: 3) {
-                        // Colour and glyph from `GitHubPRStatusStyle`, which
-                        // `PRStatusBadge` and the Info tab already share — its
-                        // own words are "so the two PR badges and the Info tab
-                        // cannot drift apart". Deliberately *not* its `label`:
-                        // the subtitle here is a short "#123" and a word beside
-                        // it would change every row's density.
-                        if let prStatus {
-                            Image(systemName: prStatus.symbolName)
-                                .font(.system(size: 8))
-                                .foregroundStyle(prStatus.color)
-                        }
-                        Text(subtitle)
-                            .lineLimit(1)
+                    // Colour and glyph from `GitHubPRStatusStyle`, which
+                    // `PRStatusBadge` and the Info tab already share. It rode the
+                    // branch line until that line went; the glyph alone stays
+                    // because merged/closed is worth a glance in the sidebar.
+                    if let prStatus {
+                        Image(systemName: prStatus.symbolName)
+                            .font(.system(size: 8))
+                            .foregroundStyle(prStatus.color)
                     }
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(prStatus.map { AnyShapeStyle($0.color) } ?? AnyShapeStyle(.tertiary))
                 }
 
-                if let statusLabel {
-                    statusMeta(word: statusLabel.text, color: statusLabel.color)
+                if showsAgentDetail, let statusLabel {
+                    statusMeta(word: statusLabel.text)
                 }
 
-                if showsMainContextMeter, let usage = mainContextUsage {
-                    ContextMeter(usage: usage, isActive: isAgentActive)
+                if showsAgentDetail, showsMainContextMeter, let usage = mainContextUsage {
+                    ContextMeter(usage: usage, isActive: isAgentActive, onSelectionFill: true)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            Spacer(minLength: 0)
-        }
-        .overlay(alignment: .trailing) {
-            SidebarIconButton(icon: "xmark", action: onRemove)
-                .accessibilityLabel("Remove workstream")
-                .opacity(isHovering ? 1 : 0)
+            statusMarker
+                // Pinned to the headline's first line, not centred on the row:
+                // the selected row grows a status line and a meter below the
+                // name, and the dot should stay level with the name.
+                .frame(height: 14)
+                .opacity(isHovering ? 0 : 1)
+                // The remove button takes the marker's place on hover rather
+                // than covering it. An overlay, so its 22pt hit area does not
+                // widen the slot and shift the headline.
+                .overlay {
+                    SidebarIconButton(icon: "xmark", action: onRemove)
+                        .accessibilityLabel("Remove workstream")
+                        .opacity(isHovering ? 1 : 0)
+                }
         }
         .contentShape(Rectangle())
         .help(taskDescription ?? "")
@@ -1756,7 +1772,12 @@ private struct WorkstreamRow: View {
                 }
             }
             Picker(selection: Binding(get: { group }, set: onGroupChange)) {
-                Text("None").tag(Workstream.Group?.none)
+                Label {
+                    Text("None")
+                } icon: {
+                    Image(nsImage: Workstream.Group.noneSwatchImage)
+                }
+                .tag(Workstream.Group?.none)
                 Divider()
                 ForEach(Workstream.Group.allCases, id: \.self) { candidate in
                     Label {
