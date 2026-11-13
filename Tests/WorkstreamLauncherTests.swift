@@ -252,11 +252,11 @@ final class WorkstreamLauncherTests: XCTestCase {
         _ = try await launcher.launch(
             in: target(launcher, projectDirectory: "/repos/app"),
             requestedName: "feat-sibling",
-            group: .blue,
+            group: .cyan,
             createWorktree: { _, _, _, name in "/repos/app/\(name)" }
         )
         let created = recorder.events[0].userInfo["workstream"] as? Workstream
-        XCTAssertEqual(created?.group, .blue)
+        XCTAssertEqual(created?.group, .cyan)
     }
 
     /// The ordering `create_workstream` depends on, and the reason `beforeReady`

@@ -253,18 +253,18 @@ final class IPCServerTests: XCTestCase {
             return environment
         }
 
-        let ws = Workstream(name: "sibling", group: .blue)
+        let ws = Workstream(name: "sibling", group: .cyan)
         let list = ProjectList()
         list.items = [Project(name: "app", directory: "/repos/atelier", workstreams: [ws])]
         let sibling = try MCPProcess(helper: helper, environment: environment(workstream: "sibling", id: ws.id))
         XCTAssertNotNil(sibling.callTool("register_peer", ["name": "sibling"]))
         let observer = try MCPProcess(helper: helper, environment: environment(workstream: "observer"))
 
-        XCTAssertTrue(try XCTUnwrap(observer.callTool("list_peers")).contains("group=blue"))
+        XCTAssertTrue(try XCTUnwrap(observer.callTool("list_peers")).contains("group=cyan"))
         list.items[0].setGroup(.red, forWorkstream: ws.id)
         let after = try XCTUnwrap(observer.callTool("list_peers"))
         XCTAssertTrue(after.contains("group=red"), "got: \(after)")
-        XCTAssertFalse(after.contains("group=blue"))
+        XCTAssertFalse(after.contains("group=cyan"))
         XCTAssertTrue(try XCTUnwrap(sibling.callTool("list_peers")).hasPrefix("You: group=red"))
     }
 

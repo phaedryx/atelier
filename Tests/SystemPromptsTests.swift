@@ -24,7 +24,7 @@ final class SystemPromptsTests: XCTestCase {
         let prompt = SystemPrompts.agentIPCPrompt(workstreamName: "x")
         XCTAssertTrue(prompt.contains("group"))
         XCTAssertTrue(prompt.contains("list_peers"))
-        for name in ["red", "orange", "yellow", "green", "blue", "purple", "gray"] {
+        for name in ["red", "orange", "yellow", "green", "cyan", "purple"] {
             XCTAssertFalse(prompt.contains("group=\(name)"), "the prompt must not claim a group")
         }
     }

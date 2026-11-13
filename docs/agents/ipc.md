@@ -458,13 +458,16 @@ Two further things about it that are not guesses:
 ### Groups
 
 **A group is a color tag on a flat list, and it is not #235's group.** `Workstream.Group` is a
-seven-case enum (`red`, `orange`, `yellow`, `green`, `blue`, `purple`, `gray`) and
+six-case enum (`red`, `orange`, `yellow`, `green`, `cyan`, `purple`) and
 `Workstream.group` is optional; two workstreams are related exactly when they carry the same
 name. #235 added a `Workstream.Group` *record* with a `groupID` and a coordinator agent, and #239
 reverted it: the tree and the coordinator were more structure than "which of these belong
 together" needed. If git history or a reviewer suggests a group record "to hold the color", that
 is #235 again. The word is "group" and the value is a color because what an agent cares about is
-relatedness, not hue: `group: "blue"` says what it is for where `color: "blue"` reads as cosmetic.
+relatedness, not hue: `group: "cyan"` says what it is for where `color: "cyan"` reads as cosmetic.
+**Blue and gray were dropped and cyan added.** Gray is what the sidebar draws for *no* group, and
+a blue spine vanished on the accent-coloured selection fill. A workstream stored as `blue` or
+`gray` by an earlier build decodes to no group by the rule above, which is the intended migration.
 It is stored as a string (`Project.swift`'s `groupName`, keyed `group`) and the enum is derived
 on read, so a stored name this build does not know decodes to no group instead of throwing and
 taking the workstream with it.
@@ -495,7 +498,7 @@ sender excluded as always. The `register_peer` reply carries the caller's `group
 `IPC.Service.inheritedGroup(callerWorkstreamID:in:)` from the launcher `Target`'s
 `existingWorkstreams`, which is already in hand, rather than a second lookup against a list that
 may have moved. An unlaunched caller, or an ungrouped one, spawns an ungrouped workstream. An
-unknown `group` name is an invalid-argument failure naming the seven.
+unknown `group` name is an invalid-argument failure naming the six.
 
 **`IPC.groupNames` is a literal that duplicates the enum, on purpose.** The helper target
 compiles only `IPCProtocol.swift` and `IPCToolRegistry.swift` out of the app (the `AtelierMCP`
