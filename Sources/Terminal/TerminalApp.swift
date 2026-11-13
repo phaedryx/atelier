@@ -108,19 +108,97 @@ private func handleTerminalAction(
 
 private func readTerminalClipboard(
     _ userdata: UnsafeMutableRawPointer?,
-    _: ghostty_clipboard_e,
-    _ state: UnsafeMutableRawPointer?
-) -> Bool {
-    guard let userdata else { return false }
-    guard let state else { return false }
+    _ location: ghostty_clipboard_e,
+    _ state: UnsafeMutableRawPointer?,
+    _ mimes: UnsafePointer<UnsafePointer<CChar>?>?,
+    _ mimesLen: Int,
+    _ list: Bool
+) -> ghostty_clipboard_read_result_e {
+    guard let userdata, let state else { return GHOSTTY_CLIPBOARD_READ_UNSUPPORTED }
+    // Refusing a location is the read callback's job (the write path checks
+    // for itself). macOS has no primary selection, and answering a Kitty
+    // read of it with the general pasteboard would hand over the clipboard
+    // for a request that should get ENOSYS.
+    guard location != GHOSTTY_CLIPBOARD_PRIMARY else { return GHOSTTY_CLIPBOARD_READ_UNSUPPORTED }
+
+    // libghostty 1.4 asks for specific representations. Atelier serves one,
+    // `text/plain`, so a request that wants only something else (a Kitty
+    // clipboard read of an image, say) is unavailable rather than answered
+    // with text it did not ask for. `list` is a mode 5522 paste event, which
+    // wants the available types and no data.
+    var wantsText = false
+    if let mimes {
+        for index in 0 ..< mimesLen {
+            guard let mime = mimes[index] else { continue }
+            if strcmp(mime, "text/plain") == 0 {
+                wantsText = true
+                break
+            }
+        }
+    }
+    guard wantsText || list else { return GHOSTTY_CLIPBOARD_READ_UNAVAILABLE }
+
     let userdataBits = UInt(bitPattern: userdata)
     let stateBits = UInt(bitPattern: state)
-
     if Thread.isMainThread {
-        return completeClipboardRead(userdataBits: userdataBits, stateBits: stateBits)
+        return completeClipboardRead(
+            userdataBits: userdataBits, stateBits: stateBits, serveText: wantsText, list: list
+        )
     }
     return DispatchQueue.main.sync {
-        completeClipboardRead(userdataBits: userdataBits, stateBits: stateBits)
+        completeClipboardRead(
+            userdataBits: userdataBits, stateBits: stateBits, serveText: wantsText, list: list
+        )
+    }
+}
+
+/// Approves whatever libghostty asks to confirm.
+///
+/// Atelier has never prompted: it completes every read as already confirmed,
+/// so for reads this is never called. It exists because 1.4 added the Kitty
+/// clipboard protocol, whose *write* path asks for confirmation under
+/// `clipboard-write = ask` (a setting read from the user's own ghostty config)
+/// with no read Atelier could pre-confirm — and the Zig side holds the
+/// callback as a non-optional function pointer, so `nil` is a crash on that
+/// path. Approving extends the no-prompt policy to Kitty writes, which is what
+/// the OSC 52 write path already does by ignoring its `confirm` flag. The
+/// contents are borrowed only for the duration of this call, which is why the
+/// completion happens inside it rather than after a hop.
+private func confirmTerminalClipboardRead(
+    _ userdata: UnsafeMutableRawPointer?,
+    _ confirm: UnsafePointer<ghostty_clipboard_confirm_s>?,
+    _ state: UnsafeMutableRawPointer?,
+    _: ghostty_clipboard_request_e
+) {
+    guard let userdata, let state else { return }
+    let userdataBits = UInt(bitPattern: userdata)
+    let stateBits = UInt(bitPattern: state)
+    let confirmBits = confirm.map { UInt(bitPattern: $0) }
+    let approve = {
+        let userdata = UnsafeMutableRawPointer(bitPattern: userdataBits)!
+        let state = UnsafeMutableRawPointer(bitPattern: stateBits)!
+        let surfaceView = Unmanaged<TerminalView>.fromOpaque(userdata).takeUnretainedValue()
+        guard let surface = surfaceView.surface else { return }
+        guard let confirmBits,
+              let confirm = UnsafePointer<ghostty_clipboard_confirm_s>(bitPattern: confirmBits)
+        else {
+            ghostty_surface_deny_clipboard_request(surface, state)
+            return
+        }
+        var complete = ghostty_clipboard_complete_s(
+            contents: confirm.pointee.contents,
+            contents_len: confirm.pointee.contents_len,
+            available: confirm.pointee.available,
+            available_len: confirm.pointee.available_len,
+            confirmed: true,
+            remember: false
+        )
+        ghostty_surface_complete_clipboard_request(surface, &complete, state)
+    }
+    if Thread.isMainThread {
+        approve()
+    } else {
+        DispatchQueue.main.sync(execute: approve)
     }
 }
 
@@ -134,10 +212,11 @@ private func writeTerminalClipboard(
     guard let content, len > 0 else { return }
     let entries = (0 ..< len).compactMap { index -> String? in
         let item = content[index]
-        guard let mime = item.mime, let data = item.data else { return nil }
-        let mimeStr = String(cString: mime)
-        guard mimeStr == "text/plain" else { return nil }
-        return String(cString: data)
+        guard let mime = item.mime, let data = item.data,
+              strcmp(mime, "text/plain") == 0 else { return nil }
+        // `data` carries an explicit length since 1.4 and is not promised a
+        // terminating NUL, so it is read as bytes, never as a C string.
+        return String(decoding: UnsafeRawBufferPointer(start: data, count: item.len), as: UTF8.self)
     }
     guard let plainText = entries.first else { return }
 
@@ -177,18 +256,80 @@ private func closeTerminalSurface(
     }
 }
 
-private func completeClipboardRead(userdataBits: UInt, stateBits: UInt) -> Bool {
+private func completeClipboardRead(
+    userdataBits: UInt,
+    stateBits: UInt,
+    serveText: Bool,
+    list: Bool
+) -> ghostty_clipboard_read_result_e {
     let pasteboard = NSPasteboard.general
-    guard let str = pasteboard.string(forType: .string) else { return false }
+    // A listing only asks whether text exists; reading it is for `serveText`.
+    let hasText = pasteboard.availableType(from: [.string]) != nil
+    let text = serveText ? pasteboard.string(forType: .string) : nil
+    // A read with nothing to serve cannot start. A listing can: an empty
+    // pasteboard is a valid answer to "what types are available".
+    guard text != nil || list else { return GHOSTTY_CLIPBOARD_READ_UNAVAILABLE }
 
     let userdata = UnsafeMutableRawPointer(bitPattern: userdataBits)!
     let state = UnsafeMutableRawPointer(bitPattern: stateBits)!
     let surfaceView = Unmanaged<TerminalView>.fromOpaque(userdata).takeUnretainedValue()
-    guard let surface = surfaceView.surface else { return false }
-    str.withCString { cstr in
-        ghostty_surface_complete_clipboard_request(surface, cstr, state, true)
+    guard let surface = surfaceView.surface else { return GHOSTTY_CLIPBOARD_READ_UNSUPPORTED }
+
+    let available: [String] = list && hasText ? ["text/plain"] : []
+    withTextPlainMime { mimeStr in
+        withOptionalBytes(text) { servedBytes in
+            var contents: [ghostty_clipboard_content_s] = []
+            if let servedBytes {
+                contents.append(ghostty_clipboard_content_s(
+                    mime: mimeStr, data: servedBytes.baseAddress, len: servedBytes.count
+                ))
+            }
+            let availablePointers: [UnsafePointer<CChar>?] = available.map { _ in UnsafePointer(mimeStr) }
+            contents.withUnsafeBufferPointer { contentsBuffer in
+                availablePointers.withUnsafeBufferPointer { availableBuffer in
+                    // `confirmed` is Atelier's standing policy, not a shortcut:
+                    // pastes are never held for a prompt. See
+                    // `confirmTerminalClipboardRead`.
+                    var complete = ghostty_clipboard_complete_s(
+                        contents: contentsBuffer.baseAddress,
+                        contents_len: contentsBuffer.count,
+                        available: availableBuffer.baseAddress,
+                        available_len: availableBuffer.count,
+                        confirmed: true,
+                        remember: false
+                    )
+                    ghostty_surface_complete_clipboard_request(surface, &complete, state)
+                }
+            }
+        }
     }
-    return true
+    return GHOSTTY_CLIPBOARD_READ_STARTED
+}
+
+private func withTextPlainMime<R>(_ body: (UnsafePointer<CChar>) -> R) -> R {
+    "text/plain".withCString(body)
+}
+
+/// Runs `body` with `text`'s UTF-8 bytes, or with `nil` when there is no text.
+///
+/// Bytes, not a C string: the 1.4 content struct carries a length, so text
+/// with an embedded NUL goes across whole instead of stopping at it.
+private func withOptionalBytes<R>(
+    _ text: String?,
+    _ body: (UnsafeBufferPointer<CChar>?) -> R
+) -> R {
+    guard let text else { return body(nil) }
+    // A trailing byte the count excludes, so the buffer is never empty: an
+    // empty Array may hand out a nil base address, and the Zig side declares
+    // `data` as a non-optional pointer even when `len` is zero.
+    var bytes = Array(text.utf8)
+    let count = bytes.count
+    bytes.append(0)
+    return bytes.withUnsafeBufferPointer { buffer in
+        buffer.withMemoryRebound(to: CChar.self) { chars in
+            body(UnsafeBufferPointer(rebasing: chars[0 ..< count]))
+        }
+    }
 }
 
 private func writeClipboardText(_ plainText: String) {
@@ -266,7 +407,7 @@ final class TerminalApp {
             wakeup_cb: handleTerminalWakeup,
             action_cb: handleTerminalAction,
             read_clipboard_cb: readTerminalClipboard,
-            confirm_read_clipboard_cb: nil,
+            confirm_read_clipboard_cb: confirmTerminalClipboardRead,
             write_clipboard_cb: writeTerminalClipboard,
             close_surface_cb: closeTerminalSurface
         )

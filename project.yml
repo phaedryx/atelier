@@ -10,9 +10,6 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
-    SWIFT_OBJC_BRIDGING_HEADER: Resources/Atelier-Bridging-Header.h
-    HEADER_SEARCH_PATHS:
-      - $(PROJECT_DIR)/ghostty/include
     OTHER_SWIFT_FLAGS:
       - "-Xcc"
       - "-Wno-incomplete-umbrella"
@@ -108,10 +105,20 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         LD_RUNPATH_SEARCH_PATHS:
           - "@executable_path/../Frameworks"
-        LIBRARY_SEARCH_PATHS:
-          - $(PROJECT_DIR)/ghostty/macos/GhosttyKit.xcframework/macos-arm64_x86_64
+        # libghostty is linked as an xcframework dependency (below), not with
+        # `-l` and a search path. Since ghostty v1.4.0 the two xcframework
+        # targets disagree on both names: `native` writes
+        # `macos-arm64/libghostty-internal.a`, `universal` writes
+        # `macos-arm64_x86_64/ghostty-internal.a` with no `lib` prefix, which
+        # `-l` cannot find at all. Xcode reads the slice and the file name from
+        # the xcframework's Info.plist, so either build links unchanged.
+        # Only this target sees ghostty.h, and only through the xcframework,
+        # which Xcode copies into the products directory with its own
+        # module.modulemap. Adding `ghostty/include` to the header search path
+        # as well defines module GhosttyKit twice and fails dependency
+        # scanning. The helpers and the test bundle use no ghostty symbol.
+        SWIFT_OBJC_BRIDGING_HEADER: Resources/Atelier-Bridging-Header.h
         OTHER_LDFLAGS:
-          - -lghostty
           - -lz
           - -lc++
           - -framework Metal
@@ -139,6 +146,10 @@ targets:
     dependencies:
       - target: AtelierRun
       - target: AtelierMCP
+      # A static library: linked, never embedded, and the one source of the
+      # ghostty headers (see SWIFT_OBJC_BRIDGING_HEADER below).
+      - framework: ghostty/macos/GhosttyKit.xcframework
+        embed: false
       - package: swift-cmark
         product: cmark-gfm
       - package: swift-cmark

@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       ghostty_tag:
-        description: 'Ghostty tag to test against (e.g., v1.3.1). Leave empty for latest.'
+        description: 'Ghostty tag to test against (e.g., v1.4.0). Leave empty for latest.'
         required: false
         default: ''
 
@@ -39,7 +39,7 @@ jobs:
       - name: Install Zig
         uses: ./.github/actions/install-zig
         with:
-          version: 0.15.2
+          version: 0.17.1
 
       - uses: oven-sh/setup-bun@v2
 
@@ -83,14 +83,14 @@ jobs:
           cd ghostty
           zig build -Demit-xcframework=true -Demit-macos-app=false -Doptimize=ReleaseFast
 
+      # Names the library the xcframework's Info.plist declares, rather than
+      # testing that directories exist: a slice without its library passed
+      # that check and failed at link (the first v1.4.0 run).
       - name: Verify Ghostty artifacts
-        run: |
-          test -d ghostty/macos/GhosttyKit.xcframework
-          test -d ghostty/zig-out/share/terminfo
-          test -d ghostty/zig-out/share/ghostty
+        run: ./scripts/verify-ghostty-artifacts.sh
 
-      # Two toolchains, for the reason ci.yml states: zig 0.15.2 cannot link
-      # against the macOS 26 SDK, so ghostty must build under the image's
+      # Two toolchains, for the reason ci.yml states: zig 0.15.2 could not
+      # link against the macOS 26 SDK, so ghostty built under the image's
       # default Xcode, while the app needs Swift 6.2 rules the older one
       # rejects. Switch only once the xcframework exists.
       - name: Select newest Xcode for the Swift build

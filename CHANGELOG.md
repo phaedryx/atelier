@@ -24,6 +24,31 @@ point at the upstream repository.
   recolor. A stored name this build does not know decodes to no group rather than
   dropping the workstream.
 
+### Build System
+
+* **ghostty:** the submodule is pinned to v1.4.0 (from v1.3.1), which wants Zig
+  0.17 instead of 0.15.2; the three workflows and `docs/ghostty-xcframework-build.md`
+  name 0.17.1. Three things in the embedder API moved and are followed: the
+  library was renamed, and the two xcframework targets now disagree on its name
+  (`native` writes `libghostty-internal.a`, `universal` writes
+  `ghostty-internal.a`, which `-l` cannot find), so the app links the
+  xcframework as an Xcode dependency that reads the slice and file from its
+  `Info.plist`, and the bridging header moves to the app target alone because
+  the xcframework's module map and `ghostty/include`'s collide; clipboard reads name the representations they want and complete with a
+  `ghostty_clipboard_complete_s`, so the read callback serves `text/plain` only
+  when asked for it, refuses the primary selection macOS does not have, and
+  answers a mode 5522 listing without reading data; and
+  clipboard content carries an explicit length and is no longer promised a NUL,
+  so writes decode bytes rather than a C string. The `confirm_read_clipboard_cb`
+  slot, `nil` until now, gets a callback that approves — Atelier's standing
+  policy — because 1.4's Kitty clipboard protocol can ask for confirmation on a
+  write, where no read exists to pre-confirm, and the Zig side holds that
+  pointer as non-optional. The three workflows check artifacts through
+  `scripts/verify-ghostty-artifacts.sh`, which names the library the
+  xcframework declares; CI's old check tested only that directories existed and
+  passed over a slice the linker then could not use. Every `.shared/` must be rebuilt: an artifact built from v1.3.1 has no
+  `libghostty-internal.a` and the link fails.
+
 ## [0.2.7](https://github.com/phaedryx/atelier/compare/v0.2.6...v0.2.7) (2026-09-27)
 
 ### Features

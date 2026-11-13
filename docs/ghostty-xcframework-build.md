@@ -4,7 +4,10 @@ Atelier depends on `libghostty` via an xcframework built from the [Ghostty](http
 
 ## Requirements
 
-- **Zig 0.15.2** (exact version required; check with `zig version`)
+- **Zig 0.17.1** — ghostty v1.4.0 requires 0.17.x (`build.zig.zon`'s
+  `minimum_zig_version`; the check is exact on major and minor, and the patch
+  may be newer). Check with `zig version`. `brew install zig` currently
+  provides it; `mise` users need `mise use zig@0.17.1`.
 - **Xcode** (not just Command Line Tools)
 - **Metal Toolchain**: install via `xcodebuild -downloadComponent MetalToolchain`
 - **gettext**: `brew install gettext`
@@ -23,7 +26,7 @@ The build produces two things that are **not in git** and are **not built per wo
 
 | Artifact | What it holds |
 |----------|---------------|
-| `GhosttyKit.xcframework/` | `libghostty.a` (~135MB) and its headers — what the linker needs |
+| `GhosttyKit.xcframework/` | The static library and its headers — what the linker needs. ghostty v1.4.0 renamed it from `libghostty.a`; see below for the name each target writes |
 | `zig-out/share/` | terminfo and shell-integration files — what `scripts/dev.sh` checks for before building |
 
 In the README's bare-repo layout they are built once and stored in a **`.shared/`
@@ -79,17 +82,45 @@ Outside the bare-repo layout (an ordinary clone with no `.shared/`) the artifact
 directly at `ghostty/zig-out/` and `ghostty/macos/GhosttyKit.xcframework/`, and the
 hook falls back to linking against the main checkout.
 
-## Standard Build (macOS 15 and earlier)
+## Standard Build
 
 ```bash
 cd ghostty
-zig build -Demit-xcframework=true -Dxcframework-target=native -Doptimize=ReleaseFast
+zig build -Demit-xcframework=true -Demit-macos-app=false -Dxcframework-target=native -Doptimize=ReleaseFast
 ```
 
 The xcframework is output to `macos/GhosttyKit.xcframework/` and the resources to
 `zig-out/share/`. Install both as described in [Step 3](#step-3-install-the-artifacts).
 
+`-Demit-macos-app=false` skips the `xcodebuild` of Ghostty.app itself, which is
+not needed and is the one step that fails without a full Xcode.
+
+The target decides both the slice directory and the library's file name, and
+since v1.4.0 they differ in both:
+
+| Target | Slice | Library |
+|--------|-------|---------|
+| `native` (Apple silicon) | `macos-arm64` | `libghostty-internal.a` |
+| `universal` (CI and `release.yml`; about twice the compile time) | `macos-arm64_x86_64` | `ghostty-internal.a` |
+
+The universal name has no `lib` prefix, so no `-l` flag can reach it. That is
+why the app links the xcframework as an Xcode dependency: Xcode reads the slice
+and file from the xcframework's `Info.plist`, so either target links unchanged.
+`./scripts/verify-ghostty-artifacts.sh` reads the same `Info.plist` and checks
+the library and resources are there.
+
+This is the whole procedure on macOS 26.6 with Zig 0.17.1 and ghostty v1.4.0:
+the build fetched every dependency and completed without the patching below.
+Try it before reaching for the workaround.
+
 ## macOS 26 (Tahoe) Workaround
+
+> **Status:** written for ghostty v1.3.1 and wuffs 0.4.0-alpha.9, and kept as
+> the record of what was tried. With v1.4.0 (wuffs `7411f488`) the standard
+> build above succeeded on macOS 26.6 with no patching, so this section is not
+> known to be needed any more. The commands still name 1.3.1 on purpose: they
+> describe that build. If a `PermissionDenied` on a wuffs test JPEG comes back,
+> the same approach applies with the URL from `pkg/wuffs/build.zig.zon`.
 
 On macOS 26+, Apple's XProtect content scanning blocks a deliberately malformed JPEG test file (`hippopotamus-bad-comment-length.jpeg`) in the `wuffs` image decoding dependency. This causes Zig's package manager to fail with:
 
@@ -195,7 +226,7 @@ Zig's `zig build` produces `libghostty.a` plus ~15 dependency `.a` files in `.zi
 2. **Verify the combined library has the required symbols**:
 
    ```bash
-   nm /tmp/libghostty-final.a | grep " T _ghostty_app_new"   # ghostty API
+   nm /tmp/libghostty-final.a | grep " T _ghostty_app_new"   # ghostty API (1.4.0: _ghostty_surface_deny_clipboard_request is a good second check)
    nm /tmp/libghostty-final.a | grep " T _FT_Activate_Size"  # FreeType
    nm /tmp/libghostty-final.a | grep " T _zig_os_log_with_type"  # Zig runtime
    ```
@@ -211,9 +242,33 @@ SHARED="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/.s
 
 mkdir -p "$SHARED/GhosttyKit.xcframework/macos-arm64_x86_64"
 cp /tmp/libghostty-final.a \
-   "$SHARED/GhosttyKit.xcframework/macos-arm64_x86_64/libghostty.a"
+   "$SHARED/GhosttyKit.xcframework/macos-arm64_x86_64/libghostty-internal.a"
 cp -R /tmp/ghostty-1.3.1/zig-out/. "$SHARED/zig-out/"
 ```
+
+From the standard build the same two copies are the xcframework directory and
+`zig-out/`, taken whole:
+
+```bash
+cd <worktree>
+SHARED="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/.shared"
+rm -rf "$SHARED/GhosttyKit.xcframework" "$SHARED/zig-out"
+cp -R ghostty/macos/GhosttyKit.xcframework "$SHARED/GhosttyKit.xcframework"
+cp -R ghostty/zig-out "$SHARED/zig-out"
+```
+
+Then remove the worktree's real directories and relink:
+
+```bash
+rm -rf ghostty/zig-out ghostty/macos/GhosttyKit.xcframework
+./scripts/setup.sh ghostty
+```
+
+The `rm` is not optional. A build in place replaced the symlinks with real
+directories, and `ln -sfn` aimed at an existing directory does not replace it:
+it creates the link *inside* it, as `zig-out/zig-out`. The worktree then keeps
+linking its own copy, the setup check passes because that copy is complete, and
+nothing reports that `.shared/` is not what is in use.
 
 The `Info.plist` and `Headers/` in the xcframework come from the Zig build's own
 `macos/GhosttyKit.xcframework/`; copy them across if you are populating `.shared/`
@@ -241,9 +296,7 @@ xcodegen generate
 ## Verifying the Build
 
 ```bash
-ls -lh ghostty/macos/GhosttyKit.xcframework/macos-arm64_x86_64/libghostty.a
-# Should show ~188MB file
-
-nm ghostty/macos/GhosttyKit.xcframework/macos-arm64_x86_64/libghostty.a | grep " T _ghostty_app_new"
+lib=$(./scripts/verify-ghostty-artifacts.sh)   # the library the xcframework declares
+nm "$lib" | grep " T _ghostty_app_new"
 # Should show the symbol
 ```
