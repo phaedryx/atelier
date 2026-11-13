@@ -108,10 +108,18 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         LD_RUNPATH_SEARCH_PATHS:
           - "@executable_path/../Frameworks"
+        # The slice directory is named by the xcframework target: `universal`
+        # (what release.yml builds, and what `.shared/` holds) is
+        # `macos-arm64_x86_64`, `native` on Apple silicon is `macos-arm64`.
+        # Both are searched so a local native build links without renaming.
         LIBRARY_SEARCH_PATHS:
           - $(PROJECT_DIR)/ghostty/macos/GhosttyKit.xcframework/macos-arm64_x86_64
+          - $(PROJECT_DIR)/ghostty/macos/GhosttyKit.xcframework/macos-arm64
         OTHER_LDFLAGS:
-          - -lghostty
+          # ghostty v1.4.0 renamed the embedder library to
+          # `libghostty-internal.a` (both xcframework targets); `libghostty.a`
+          # no longer exists.
+          - -lghostty-internal
           - -lz
           - -lc++
           - -framework Metal

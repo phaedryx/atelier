@@ -75,7 +75,7 @@ jobs:
       - name: Install Zig
         uses: ./.github/actions/install-zig
         with:
-          version: 0.15.2
+          version: 0.17.1
 
       - uses: oven-sh/setup-bun@v2
 
@@ -96,7 +96,7 @@ jobs:
       # under one must never be restored for the other.
       - name: Compute Ghostty cache key
         id: ghostty-key
-        run: echo "key=ghostty-release-$(git -C ghostty rev-parse HEAD)-zig-0.15.2-universal" >> "$GITHUB_OUTPUT"
+        run: echo "key=ghostty-release-$(git -C ghostty rev-parse HEAD)-zig-0.17.1-universal" >> "$GITHUB_OUTPUT"
 
       - name: Cache Ghostty xcframework
         id: ghostty-cache
@@ -111,14 +111,16 @@ jobs:
         if: steps.ghostty-cache.outputs.cache-hit != 'true'
         run: |
           cd ghostty
-          # `universal`, even though the release ships arm64 only. `native`
-          # looks like the economical choice and does not link: it routes
-          # through GhosttyLib.initStatic, which emits `libghostty-fat.a`
-          # ("fat" as in all static deps combined, not multi-arch), while the
-          # app links with `-lghostty` and so needs `libghostty.a` — the name
-          # only initMacOSUniversal produces. It also names its slice directory
-          # `macos-arm64` rather than `macos-arm64_x86_64`. Two couplings, both
-          # invisible until the link fails.
+          # `universal`, even though the release ships arm64 only. Under
+          # ghostty v1.3.1 `native` did not link: it emitted `libghostty-fat.a`
+          # where the app's `-lghostty` wanted `libghostty.a`, the name only
+          # initMacOSUniversal produced. v1.4.0 names both targets' output
+          # `libghostty-internal.a`, so the only remaining difference is the
+          # slice directory (`macos-arm64` against `macos-arm64_x86_64`), which
+          # the step below resolves rather than hardcodes. `native` is
+          # therefore viable now, and deliberately not switched to here: the
+          # artifact a release restores from cache and ships is the universal
+          # one, and changing that is its own decision.
           #
           # ARCHS=arm64 on the app build is what makes the shipped binary
           # arm64: the linker takes that slice out of the fat static lib and
@@ -148,19 +150,20 @@ jobs:
           # different depths of a ten-minute build: a missing library fails at
           # link, missing resources fail at Copy Bundle Resources.
           fail=0
-          test -f "$slice/libghostty.a" || { echo "::error::$slice has no libghostty.a"; ls -la "$slice"; fail=1; }
+          test -f "$slice/libghostty-internal.a" || { echo "::error::$slice has no libghostty-internal.a"; ls -la "$slice"; fail=1; }
           test -d ghostty/zig-out/share/terminfo || { echo "::error::no ghostty/zig-out/share/terminfo"; fail=1; }
           test -d ghostty/zig-out/share/ghostty || { echo "::error::no ghostty/zig-out/share/ghostty"; fail=1; }
           [ "$fail" -eq 0 ] || exit 1
           echo "Slice: $slice"
-          lipo -info "$slice/libghostty.a"
+          lipo -info "$slice/libghostty-internal.a"
           echo "path=$PWD/$slice" >> "$GITHUB_OUTPUT"
 
       # Two toolchains, deliberately — the same split ci.yml makes, for the
-      # same reasons. zig 0.15.2 (required by ghostty v1.3.1) cannot link
-      # against the macOS 26 SDK — every libc symbol comes back undefined — so
-      # ghostty must build under the image's default Xcode 16.4 and its macOS
-      # 15 SDK. The app is the opposite: ChangesView.swift relies on Swift 6.2
+      # same reasons. zig 0.15.2 (required by ghostty v1.3.1) could not link
+      # against the macOS 26 SDK — every libc symbol came back undefined — so
+      # ghostty built under the image's default Xcode 16.4 and its macOS 15
+      # SDK; whether zig 0.17.1 still needs that is untested and the split is
+      # kept. The app is the opposite: ChangesView.swift relies on Swift 6.2
       # actor-isolation rules that 16.4 rejects. So switch only after the
       # xcframework exists. Without this step the Release build fails with
       # actor-isolation errors in AboutPanel, ChangesView, InlineTextField and

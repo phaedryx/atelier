@@ -57,7 +57,7 @@ jobs:
       - name: Install Zig
         uses: ./.github/actions/install-zig
         with:
-          version: 0.15.2
+          version: 0.17.1
 
       - uses: oven-sh/setup-bun@v2
 
@@ -73,7 +73,7 @@ jobs:
       # whose contents never change when the pinned commit moves.
       - name: Compute Ghostty cache key
         id: ghostty-key
-        run: echo "key=ghostty-ci-$(git -C ghostty rev-parse HEAD)-zig-0.15.2-macos15" >> "$GITHUB_OUTPUT"
+        run: echo "key=ghostty-ci-$(git -C ghostty rev-parse HEAD)-zig-0.17.1-macos15" >> "$GITHUB_OUTPUT"
 
       # Deliberately a different key namespace from release.yml: CI builds a
       # host-arch-only xcframework, and a release must never restore it.
@@ -99,11 +99,13 @@ jobs:
           test -d ghostty/zig-out/share/ghostty
 
       # Two toolchains, deliberately. zig 0.15.2 (required by ghostty v1.3.1)
-      # cannot link against the macOS 26 SDK — every libc symbol comes back
-      # undefined — so ghostty must build under the image's default Xcode 16.4
-      # and its macOS 15 SDK. The app is the opposite: ChangesView.swift relies
-      # on Swift 6.2 actor-isolation rules that 16.4 rejects. So switch only
-      # after the xcframework exists.
+      # could not link against the macOS 26 SDK — every libc symbol came back
+      # undefined — so ghostty built under the image's default Xcode 16.4 and
+      # its macOS 15 SDK. Whether zig 0.17.1 (ghostty v1.4.0) still has that
+      # problem is untested; the split is kept because it costs nothing and
+      # the app side needs it regardless: ChangesView.swift relies on Swift
+      # 6.2 actor-isolation rules that 16.4 rejects. So switch only after the
+      # xcframework exists.
       - name: Select newest Xcode for the Swift build
         run: |
           ls -d /Applications/Xcode_*.app
