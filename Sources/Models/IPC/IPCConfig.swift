@@ -117,8 +117,8 @@ extension IPC {
         }
 
         /// What the helper reads from its environment, and a spawned tab always
-        /// sets. The group variables are absent on purpose: a workstream tab
-        /// never has them, and Cursor leaves an unset reference literal.
+        /// sets. Only those: Cursor leaves a reference to an unset variable as
+        /// the literal `${env:NAME}`.
         static let identityVariables = [
             "ATELIER_WORKSTREAM_ID", "ATELIER_WORKSTREAM", "ATELIER_PROJECT_DIR",
             "ATELIER_SURFACE_ID", "ATELIER_PEER_NAME",

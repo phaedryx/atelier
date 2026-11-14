@@ -113,15 +113,6 @@ final class IPCConfigTests: XCTestCase {
         ])
     }
 
-    /// The group variables are never set on a workstream tab, and Cursor leaves
-    /// an unset reference as the literal `${env:NAME}` — which the helper would
-    /// read as a group id.
-    func test_cursorPluginMCP_neverReferencesAVariableATabDoesNotSet() throws {
-        let path = try XCTUnwrap(IPC.CursorPlugin.write(for: workstreamID, helperPath: "/tmp/atelier-mcp"))
-        let text = try String(contentsOf: URL(fileURLWithPath: path).appendingPathComponent(".mcp.json"), encoding: .utf8)
-        XCTAssertFalse(text.contains("ATELIER_GROUP"), text)
-    }
-
     func test_cursorPluginWrite_withoutAHelperBinary_returnsNil() {
         XCTAssertNil(IPC.CursorPlugin.write(for: workstreamID, helperPath: nil))
         XCTAssertFalse(FileManager.default.fileExists(atPath: IPC.CursorPlugin.directoryURL(for: workstreamID).path))

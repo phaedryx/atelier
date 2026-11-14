@@ -36,7 +36,7 @@ final class SystemPromptsTests: XCTestCase {
     }
 
     /// A spawned agent asked to "report back to whoever started you" has no
-    /// way to work that out from `list_peers` — it guessed the coordinator in
+    /// way to work that out from `list_peers` — it guessed the wrong peer in
     /// an end-to-end run. The id is what `send_message` takes, so it has to be
     /// there, not just the name.
     func test_agentIPCPrompt_namesTheSpawnerByNameAndID() {
