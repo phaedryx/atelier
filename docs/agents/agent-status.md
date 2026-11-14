@@ -58,8 +58,9 @@ facts behind the wiring, all observed against cursor-agent 2026.10.19:
   `stop`/`beforeSubmitPrompt` only when a *user or project* hooks file declares them, the user
   path is hard-coded, and the project path is the worktree. `-p` fires no hooks at all.
 - **`atelier-hook --cursor` exits silently without `ATELIER_SURFACE_ID`**, because every Cursor
-  session on the machine runs that entry. Cursor exports no `CLAUDE_PROJECT_DIR`, so ownership
-  is the surface id alone.
+  session on the machine runs that entry. Cursor exports no `CLAUDE_PROJECT_DIR`, and the
+  tracker attributes an event by its directory alone, so the script reports `$PWD` — the
+  workspace Cursor runs the hook in — in its place (`AtelierHookScriptTests`).
 - **Release wins the global entry, and that is not path-blindness left half-done.** An
   Atelier entry whose script is gone is replaced by any build; one at another *live* path is
   replaced only by the release build (`reclaimsLiveEntries`). Path-blind (the Claude half's rule)

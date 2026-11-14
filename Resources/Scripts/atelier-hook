@@ -28,8 +28,8 @@ PORT=$(cat "$PORT_FILE")
 escape_json() {
   printf '%s' "$1" | tr -d '\000-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
 }
-# Cursor exports no CLAUDE_PROJECT_DIR; its hooks run in the workspace, so the
-# working directory keeps the directory fallback behind the surface id.
+# Cursor exports no CLAUDE_PROJECT_DIR; its hooks run in the workspace, and the
+# app attributes an event by its directory, so the working directory stands in.
 PROJECT_DIR_RAW=$CLAUDE_PROJECT_DIR
 if [ "$1" = "--cursor" ] && [ -z "$PROJECT_DIR_RAW" ]; then
   PROJECT_DIR_RAW=$PWD
