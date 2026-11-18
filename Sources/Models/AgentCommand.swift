@@ -47,6 +47,30 @@ extension Workstream {
             return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
         }
 
+        /// The channels passed to `--dangerously-load-development-channels`.
+        ///
+        /// A toggle plus a list, because the flag is `<servers...>` and
+        /// takes no bare form: on with an empty list passes nothing rather
+        /// than a flag the CLI would reject. Read from UserDefaults directly,
+        /// like the other agent settings, so `IPC.Service` — which has no
+        /// `@AppStorage` — reads the same answer the Coding Agent tab does.
+        enum DevelopmentChannels {
+            static let enabledKey = "atelier.loadDevelopmentChannels"
+            static let listKey = "atelier.developmentChannels"
+
+            static var current: [String] {
+                let defaults = UserDefaults.standard
+                guard defaults.bool(forKey: enabledKey) else { return [] }
+                return parse(defaults.string(forKey: listKey) ?? "")
+            }
+
+            /// Split on whitespace and commas, so a pasted
+            /// `server:a, plugin:b@market` works as well as a space-separated one.
+            static func parse(_ raw: String) -> [String] {
+                raw.split(whereSeparator: { $0.isWhitespace || $0 == "," }).map(String.init)
+            }
+        }
+
         /// A fresh agent invocation for a surface that has never held one.
         ///
         /// No resume half, deliberately: `--resume` names a session that must
@@ -63,6 +87,7 @@ extension Workstream {
             sessionID: String,
             sessionName: String?,
             bypassPermissions: Bool,
+            developmentChannels: [String],
             systemPrompt: String?,
             mcpConfigPath: String?,
             settingsPath: String?,
@@ -76,6 +101,7 @@ extension Workstream {
             if bypassPermissions {
                 builder.flag("--dangerously-skip-permissions")
             }
+            builder.option("--dangerously-load-development-channels", values: developmentChannels)
             if let systemPrompt {
                 builder.option("--append-system-prompt", systemPrompt)
             }
@@ -86,8 +112,9 @@ extension Workstream {
                 builder.option("--settings", settingsPath)
             }
             if let initialPrompt, !initialPrompt.isEmpty {
-                // `--` ends option parsing: `--mcp-config <configs...>` is
-                // variadic in the CLI, so without it a prompt following that
+                // `--` ends option parsing: `--mcp-config <configs...>` (and
+                // `--dangerously-load-development-channels`) is variadic in
+                // the CLI, so without it a prompt following that
                 // option is consumed as a second config path — a ~2KB
                 // "filename" the CLI dies opening (ENAMETOOLONG), before any
                 // session exists, losing the prompt. Emitted with the prompt

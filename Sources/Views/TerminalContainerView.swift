@@ -297,6 +297,8 @@ struct TerminalContainerView: View {
     @AppStorage("atelier.autoRenameBranch") private var autoRenameBranch: Bool = false
     @AppStorage("atelier.allowOutsideWorktree") private var allowOutsideWorktree: Bool = false
     @AppStorage(IPC.AgentSettings.enabledKey) private var agentIPC: Bool = false
+    @AppStorage(Workstream.AgentCommand.DevelopmentChannels.enabledKey) private var loadDevelopmentChannels: Bool = false
+    @AppStorage(Workstream.AgentCommand.DevelopmentChannels.listKey) private var developmentChannelList: String = ""
     @AppStorage("atelier.editorTabActive") private var editorTabActive: Bool = false
     @AppStorage("atelier.editorFileDirty") private var editorFileDirty: Bool = false
     @State private var fileTree: [FileNode] = []
@@ -549,6 +551,9 @@ struct TerminalContainerView: View {
         // user's own status line. Nil when they have none configured, and then
         // the meter falls back to reading the transcript.
         let settingsPath = StatusLine.Config.write(for: workstreamID, cwd: workingDirectory)
+        let developmentChannels = loadDevelopmentChannels
+            ? Workstream.AgentCommand.DevelopmentChannels.parse(developmentChannelList)
+            : []
 
         var resume = CommandBuilder(basePath)
         resume.option("--resume", sessionID)
@@ -558,6 +563,7 @@ struct TerminalContainerView: View {
         if bypassPermissions {
             resume.flag("--dangerously-skip-permissions")
         }
+        resume.option("--dangerously-load-development-channels", values: developmentChannels)
         if let combinedSystemPrompt {
             resume.option("--append-system-prompt", combinedSystemPrompt)
         }
@@ -576,6 +582,7 @@ struct TerminalContainerView: View {
         if bypassPermissions {
             fresh.flag("--dangerously-skip-permissions")
         }
+        fresh.option("--dangerously-load-development-channels", values: developmentChannels)
         if let combinedSystemPrompt {
             fresh.option("--append-system-prompt", combinedSystemPrompt)
         }
@@ -964,6 +971,8 @@ struct TerminalContainerView: View {
             .onChange(of: bypassPermissions) { rebuildClaudeCommand() }
             .onChange(of: autoRenameBranch) { rebuildClaudeCommand() }
             .onChange(of: allowOutsideWorktree) { rebuildClaudeCommand() }
+            .onChange(of: loadDevelopmentChannels) { rebuildClaudeCommand() }
+            .onChange(of: developmentChannelList) { rebuildClaudeCommand() }
             .onChange(of: workstreamName) { rebuildClaudeCommand() }
             .onChange(of: appEnv.isDetecting) {
                 rebuildClaudeCommand()

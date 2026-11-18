@@ -173,6 +173,10 @@
 "Auto-rename branch" = "Auto-rename branch";
 "On the first request, the agent renames the branch to match the task and writes a short description visible in the sidebar." = "On the first request, the agent renames the branch to match the task and writes a short description visible in the sidebar.";
 "External Browser" = "External Browser";
+"Load development channels" = "Load development channels";
+"Starts the Coding Agent with --dangerously-load-development-channels, so it loads the channels listed below even though they are not on Claude Code's approved list. For local channel development only. Takes effect the next time a Coding Agent starts." = "Starts the Coding Agent with --dangerously-load-development-channels, so it loads the channels listed below even though they are not on Claude Code's approved list. For local channel development only. Takes effect the next time a Coding Agent starts.";
+"Channels" = "Channels";
+"No channels listed, so the flag is not passed." = "No channels listed, so the flag is not passed.";
 
 /* Settings - Prompts */
 "Prompts" = "Prompts";

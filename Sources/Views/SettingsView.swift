@@ -339,6 +339,8 @@ private struct CodingAgentSettingsPane: View {
     @AppStorage("atelier.tmuxMode") private var tmuxMode: Bool = false
     @AppStorage("atelier.bypassPermissions") private var bypassPermissions: Bool = false
     @AppStorage("atelier.allowOutsideWorktree") private var allowOutsideWorktree: Bool = false
+    @AppStorage(Workstream.AgentCommand.DevelopmentChannels.enabledKey) private var loadDevelopmentChannels: Bool = false
+    @AppStorage(Workstream.AgentCommand.DevelopmentChannels.listKey) private var developmentChannelList: String = ""
     @AppStorage("atelier.autoRenameBranch") private var autoRenameBranch: Bool = false
     @AppStorage(Workstream.PermissionNotifier.enabledKey) private var notifyOnPermission: Bool = true
     @AppStorage(IPC.AgentSettings.enabledKey) private var agentIPC: Bool = false
@@ -385,6 +387,27 @@ private struct CodingAgentSettingsPane: View {
                     description: "When enabled, the coding agent can modify files anywhere on disk. When disabled, writes are restricted to the worktree directory.",
                     descriptionStyle: allowOutsideWorktree ? .warning : .secondary
                 )
+
+                SettingToggle(
+                    "Load development channels",
+                    isOn: $loadDevelopmentChannels,
+                    description: "Starts the Coding Agent with --dangerously-load-development-channels, so it loads the channels listed below even though they are not on Claude Code's approved list. For local channel development only. Takes effect the next time a Coding Agent starts.",
+                    descriptionStyle: loadDevelopmentChannels ? .warning : .secondary
+                )
+
+                if loadDevelopmentChannels {
+                    TextField(
+                        "Channels",
+                        text: $developmentChannelList,
+                        prompt: Text(verbatim: "server:fakechat plugin:name@marketplace")
+                    )
+                    .font(.callout.monospaced())
+                    if developmentChannelList.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text("No channels listed, so the flag is not passed.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
 
                 SettingToggle(
                     "Notify when an agent needs approval",
