@@ -122,6 +122,9 @@ extension IPC.Service {
                 sessionID: surfaceID.uuidString.lowercased(),
                 sessionName: nil,
                 bypassPermissions: bypassPermissions,
+                // Development channels are for the Coding Agent tab alone;
+                // a spawned tab is a helper on that agent's branch.
+                developmentChannels: [],
                 systemPrompt: systemPrompt,
                 mcpConfigPath: mcpConfigPath,
                 settingsPath: settingsPath,
@@ -320,6 +323,9 @@ extension IPC.Service {
             sessionID: launched.workstreamID.uuidString.lowercased(),
             sessionName: inputs.supportsSessionName ? launched.name : nil,
             bypassPermissions: bypassPermissions,
+            // This *is* the new workstream's Coding Agent tab, seeded before
+            // the view builds its own command, so it carries the channels too.
+            developmentChannels: Workstream.AgentCommand.DevelopmentChannels.current,
             systemPrompt: systemPrompt,
             mcpConfigPath: mcpConfigPath,
             settingsPath: settingsPath,

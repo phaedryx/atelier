@@ -23,6 +23,14 @@ struct CommandBuilder {
         parts.append(Self.shellQuote(value))
     }
 
+    /// An option that takes several values, each quoted. Emits nothing for an
+    /// empty list, since a variadic option with no values is a CLI error.
+    mutating func option(_ name: String, values: [String]) {
+        guard !values.isEmpty else { return }
+        parts.append(name)
+        parts.append(contentsOf: values.map(Self.shellQuote))
+    }
+
     var command: String {
         parts.joined(separator: " ")
     }

@@ -308,6 +308,7 @@ final class AgentCommandTests: XCTestCase {
     private func fresh(
         sessionID: String = "11111111-1111-1111-1111-111111111111",
         bypassPermissions: Bool = false,
+        developmentChannels: [String] = [],
         systemPrompt: String? = nil,
         mcpConfigPath: String? = nil,
         settingsPath: String? = nil,
@@ -318,6 +319,7 @@ final class AgentCommandTests: XCTestCase {
             sessionID: sessionID,
             sessionName: nil,
             bypassPermissions: bypassPermissions,
+            developmentChannels: developmentChannels,
             systemPrompt: systemPrompt,
             mcpConfigPath: mcpConfigPath,
             settingsPath: settingsPath,
@@ -348,6 +350,27 @@ final class AgentCommandTests: XCTestCase {
         XCTAssertFalse(command.contains("--dangerously-skip-permissions"))
         XCTAssertFalse(command.contains("--append-system-prompt"))
         XCTAssertFalse(command.contains("--mcp-config"))
+    }
+
+    /// The flag is `<servers...>` with no bare form, so an empty list must
+    /// leave it off entirely rather than emit a flag the CLI rejects.
+    func testDevelopmentChannelsFlagIsAbsentWithoutChannels() {
+        XCTAssertFalse(fresh().contains("--dangerously-load-development-channels"))
+    }
+
+    func testDevelopmentChannelsArePassedAsSeparateValues() {
+        let command = fresh(developmentChannels: ["server:fakechat", "plugin:x@market"])
+        XCTAssertTrue(command.contains("--dangerously-load-development-channels"))
+        XCTAssertTrue(command.contains("server:fakechat"))
+        XCTAssertTrue(command.contains("plugin:x@market"))
+    }
+
+    func testDevelopmentChannelsParseSplitsOnWhitespaceAndCommas() {
+        XCTAssertEqual(
+            Workstream.AgentCommand.DevelopmentChannels.parse("  server:a, plugin:b@m\nserver:c "),
+            ["server:a", "plugin:b@m", "server:c"]
+        )
+        XCTAssertEqual(Workstream.AgentCommand.DevelopmentChannels.parse("   "), [])
     }
 
     func testMCPConfigIsPassedWhenPresent() {
