@@ -309,14 +309,44 @@ extension IPC {
         let surfaceID: String?
         /// The peer this session registered, once it has one.
         let peerID: String?
+        /// `ATELIER_PEER_NAME`: the name a tab `open_agent_tab` spawned was
+        /// given, which is the default it registers under. Absent for the
+        /// Coding Agent, which defaults to the workstream's name.
+        let peerName: String?
 
+        init(
+            workstreamID: String?,
+            workstreamName: String?,
+            projectDirectory: String?,
+            surfaceID: String?,
+            peerID: String?,
+            peerName: String? = nil
+        ) {
+            self.workstreamID = workstreamID
+            self.workstreamName = workstreamName
+            self.projectDirectory = projectDirectory
+            self.surfaceID = surfaceID
+            self.peerID = peerID
+            self.peerName = peerName
+        }
+
+        /// A blank value, or a `${…}` reference a harness left unexpanded, reads
+        /// as absent. Cursor hands this helper its identity through `${env:NAME}`
+        /// references in `.mcp.json` and leaves one literally in place when NAME
+        /// is unset — and a literal surface id would point a nudge at a surface
+        /// that does not exist.
         static func fromEnvironment(_ env: [String: String] = ProcessInfo.processInfo.environment, peerID: String? = nil) -> ClientIdentity {
-            ClientIdentity(
-                workstreamID: env["ATELIER_WORKSTREAM_ID"],
-                workstreamName: env["ATELIER_WORKSTREAM"],
-                projectDirectory: env["ATELIER_PROJECT_DIR"],
-                surfaceID: env["ATELIER_SURFACE_ID"],
-                peerID: peerID
+            func value(_ name: String) -> String? {
+                guard let value = env[name], !value.isEmpty, !value.hasPrefix("${") else { return nil }
+                return value
+            }
+            return ClientIdentity(
+                workstreamID: value("ATELIER_WORKSTREAM_ID"),
+                workstreamName: value("ATELIER_WORKSTREAM"),
+                projectDirectory: value("ATELIER_PROJECT_DIR"),
+                surfaceID: value("ATELIER_SURFACE_ID"),
+                peerID: peerID,
+                peerName: value("ATELIER_PEER_NAME")
             )
         }
     }

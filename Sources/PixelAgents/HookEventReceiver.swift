@@ -720,7 +720,11 @@ final class HookEventReceiver: @unchecked Sendable {
     private func mapHookEvent(hookEventName: String, eventInput: [String: Any], projectDir: String) -> [AgentEvent] {
         // Every Claude Code hook payload carries the session transcript path;
         // attach it so the tracker can read context-window usage from its tail.
-        let transcriptPath = eventInput["transcript_path"] as? String
+        // A Cursor payload (it alone carries `cursor_version`) names a Cursor
+        // transcript, whose format the meter would misread, so it is dropped.
+        let transcriptPath = eventInput["cursor_version"] == nil
+            ? eventInput["transcript_path"] as? String
+            : nil
         let events = baseHookEvents(hookEventName: hookEventName, eventInput: eventInput, projectDir: projectDir)
         guard let transcriptPath else { return events }
         return events.map { event in
@@ -747,11 +751,13 @@ final class HookEventReceiver: @unchecked Sendable {
             logger.info("Hook PostToolUse: \(toolName, privacy: .public) agent=\(aid, privacy: .public)")
             return [AgentEvent.toolDone(agentId: aid)]
 
-        case "Stop":
+        // `stop` and `beforeSubmitPrompt` are Cursor CLI's names for the same
+        // two moments; its hooks post through the same `atelier-hook`.
+        case "Stop", "stop":
             logger.info("Hook Stop: main agent goes idle")
             return [AgentEvent.idle(agentId: "main")]
 
-        case "UserPromptSubmit":
+        case "UserPromptSubmit", "beforeSubmitPrompt":
             logger.info("Hook UserPromptSubmit: main agent waiting")
             return [AgentEvent.waiting(agentId: "main")]
 

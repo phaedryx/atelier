@@ -402,6 +402,35 @@ final class HookEventReceiverTests: XCTestCase {
         XCTAssertEqual(events.first?.agentId, "main")
     }
 
+    // MARK: - Cursor's turn events
+
+    /// Cursor CLI names its end-of-turn hook `stop`, lowercase. It means what
+    /// Claude Code's `Stop` means: the turn is over and the agent is idle.
+    func test_cursorStop_readsAsTheMainAgentGoingIdle() throws {
+        let events = try post(sessionEnvelope(["hook_event_name": "stop", "status": "completed"]))
+        XCTAssertEqual(events.map(\.type), [.agentIdle])
+        XCTAssertEqual(events.first?.agentId, "main")
+    }
+
+    /// Cursor's `beforeSubmitPrompt` is Claude Code's `UserPromptSubmit`.
+    func test_cursorBeforeSubmitPrompt_readsAsThePromptBeingSubmitted() throws {
+        let events = try post(sessionEnvelope(["hook_event_name": "beforeSubmitPrompt", "prompt": "hi"]))
+        XCTAssertEqual(events.map(\.type), [.agentWaiting])
+        XCTAssertEqual(events.first?.agentId, "main")
+    }
+
+    /// A Cursor payload's `transcript_path` names a Cursor transcript, which
+    /// the context meter would read as Claude's format. It is not attached.
+    func test_cursorEvents_doNotCarryTheirTranscriptPath() throws {
+        let events = try post(sessionEnvelope([
+            "hook_event_name": "stop",
+            "cursor_version": "2026.10.19",
+            "transcript_path": "/Users/me/.cursor/projects/x/agent-transcripts/a/a.jsonl",
+        ]))
+        XCTAssertEqual(events.map(\.type), [.agentIdle])
+        XCTAssertNil(events.first?.transcriptPath)
+    }
+
     // MARK: - Compaction
 
     func test_preCompact_carriesAnActivity() throws {

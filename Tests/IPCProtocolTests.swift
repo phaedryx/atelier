@@ -222,4 +222,28 @@ final class IPCProtocolTests: XCTestCase {
             XCTAssertEqual(spec?.isRequired, false, "\(tool)")
         }
     }
+
+    // MARK: - Client identity from the environment
+
+    /// A blank value, or a reference a harness left unexpanded, is no value.
+    /// Cursor leaves `${env:NAME}` in place when NAME is unset, and a literal
+    /// like that read as a surface id would aim a nudge at nothing.
+    func test_clientIdentity_readsBlankAndUnexpandedValuesAsAbsent() {
+        let identity = IPC.ClientIdentity.fromEnvironment([
+            "ATELIER_WORKSTREAM_ID": "abc",
+            "ATELIER_WORKSTREAM": "",
+            "ATELIER_SURFACE_ID": "${env:ATELIER_SURFACE_ID}",
+            "ATELIER_PROJECT_DIR": "${ATELIER_PROJECT_DIR}",
+        ])
+        XCTAssertEqual(identity.workstreamID, "abc")
+        XCTAssertNil(identity.workstreamName)
+        XCTAssertNil(identity.surfaceID)
+        XCTAssertNil(identity.projectDirectory)
+    }
+
+    func test_clientIdentity_carriesThePeerNameASpawnWasGiven() {
+        let identity = IPC.ClientIdentity.fromEnvironment(["ATELIER_PEER_NAME": "reviewer"])
+        XCTAssertEqual(identity.peerName, "reviewer")
+        XCTAssertNil(IPC.ClientIdentity.fromEnvironment([:]).peerName)
+    }
 }
